@@ -23,6 +23,7 @@ import ReportsPage from "./pages/app/reports";
 import ContentTypesPage from "./pages/app/content-types";
 import EmbeddedContainersPage from "./pages/app/embedded-containers";
 import ArchiveBackupPage from "./pages/app/archive-backup";
+import DiscoverDashboard from "./pages/app/discover";
 import ServicePlansPage from "./pages/app/admin/service-plans";
 import UserManagementPage from "./pages/app/admin/users";
 import OrganizationSettingsPage from "./pages/app/admin/organization";
@@ -69,6 +70,7 @@ function AppRoutes() {
                 <Route path="/app/content-types" component={ContentTypesPage} />
                 <Route path="/app/embedded-containers" component={EmbeddedContainersPage} />
                 <Route path="/app/archive-backup" component={ArchiveBackupPage} />
+                <Route path="/app/discover" component={DiscoverDashboard} />
                 <Route path="/app/admin/plans" component={ServicePlansPage} />
                 <Route path="/app/admin/users" component={UserManagementPage} />
                 <Route path="/app/admin/organization" component={OrganizationSettingsPage} />
