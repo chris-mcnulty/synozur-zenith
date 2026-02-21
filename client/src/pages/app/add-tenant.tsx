@@ -75,15 +75,15 @@ export default function AddTenantPage() {
                 </div>
                 
                 <div className="space-y-2">
-                  <Label htmlFor="tenantId">Microsoft Entra Tenant ID</Label>
+                  <Label htmlFor="tenantIdentifier">Tenant Domain or ID</Label>
                   <Input 
-                    id="tenantId" 
-                    placeholder="00000000-0000-0000-0000-000000000000" 
+                    id="tenantIdentifier" 
+                    placeholder="e.g. contoso.onmicrosoft.com or Tenant ID" 
                     required
                     className="bg-background/50 font-mono text-sm focus-visible:ring-primary/50"
                   />
                   <p className="text-xs text-muted-foreground">
-                    You can find this in your Azure Portal under Azure Active Directory.
+                    Enter your primary M365 domain (e.g. company.onmicrosoft.com) or your Azure Tenant ID. We will auto-discover the configuration.
                   </p>
                 </div>
 

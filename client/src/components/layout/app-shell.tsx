@@ -325,7 +325,7 @@ export default function AppShell({ children }: AppShellProps) {
                   </DropdownMenuItem>
                   <DropdownMenuSeparator className="my-2" />
                   <DropdownMenuItem asChild className="rounded-lg p-2.5 cursor-pointer group">
-                    <Link href="/app/admin" className="flex items-center text-muted-foreground">
+                    <Link href="/app/admin/tenants" className="flex items-center text-muted-foreground">
                       <Settings className="w-4 h-4 mr-2" />
                       Manage connections
                     </Link>

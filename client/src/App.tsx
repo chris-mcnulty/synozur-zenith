@@ -27,6 +27,7 @@ import ServicePlansPage from "./pages/app/admin/service-plans";
 import UserManagementPage from "./pages/app/admin/users";
 import OrganizationSettingsPage from "./pages/app/admin/organization";
 import SystemAdminPage from "./pages/app/admin/system";
+import TenantConnectionsPage from "./pages/app/admin/tenant-connections";
 import AppShell from "./components/layout/app-shell";
 
 // Fallback empty pages for other routes
@@ -72,6 +73,7 @@ function AppRoutes() {
                 <Route path="/app/admin/users" component={UserManagementPage} />
                 <Route path="/app/admin/organization" component={OrganizationSettingsPage} />
                 <Route path="/app/admin/system" component={SystemAdminPage} />
+                <Route path="/app/admin/tenants" component={TenantConnectionsPage} />
                 <Route path="/app/admin" component={AdminTemplatesPage} />
                 <Route component={NotFound} />
               </Switch>
