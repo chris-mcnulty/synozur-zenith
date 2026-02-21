@@ -11,6 +11,8 @@ import EntraCallbackPage from "./pages/auth/callback";
 import SelectTenantPage from "./pages/app/select-tenant";
 import AddTenantPage from "./pages/app/add-tenant";
 import DashboardPage from "./pages/app/dashboard";
+import GovernancePage from "./pages/app/governance";
+import WorkspaceDetailsPage from "./pages/app/workspace-details";
 import AppShell from "./components/layout/app-shell";
 
 // Fallback empty pages for other routes
@@ -41,7 +43,8 @@ function AppRoutes() {
                 <Route path="/app/dashboard" component={DashboardPage} />
                 <Route path="/app/provision/new" component={() => <EmptyPage title="New Workspace Request" />} />
                 <Route path="/app/provision" component={() => <EmptyPage title="Provisioning Requests" />} />
-                <Route path="/app/governance" component={() => <EmptyPage title="Workspace Governance" />} />
+                <Route path="/app/governance" component={GovernancePage} />
+                <Route path="/app/governance/workspaces/:id" component={WorkspaceDetailsPage} />
                 <Route path="/app/purview" component={() => <EmptyPage title="Purview Configuration" />} />
                 <Route path="/app/lifecycle" component={() => <EmptyPage title="Lifecycle Management" />} />
                 <Route path="/app/reports" component={() => <EmptyPage title="Governance Reports" />} />
