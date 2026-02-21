@@ -30,7 +30,8 @@ import {
   Cloud,
   Users as UsersIcon,
   Server,
-  CheckCircle2
+  CheckCircle2,
+  KeyRound
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -177,6 +178,16 @@ export default function AppShell({ children }: AppShellProps) {
               <div className="flex items-center gap-3">
                 <Server className={`w-5 h-5 ${location.startsWith("/app/admin/system") ? "text-primary" : "text-muted-foreground/70"}`} />
                 System Administration
+              </div>
+            </Link>
+            <Link href="/app/admin/entra" className={`flex items-center justify-between px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
+              location.startsWith("/app/admin/entra") 
+                ? "bg-primary/10 text-primary shadow-sm shadow-primary/5" 
+                : "text-muted-foreground hover:bg-muted/80 hover:text-foreground"
+            }`}>
+              <div className="flex items-center gap-3">
+                <KeyRound className={`w-5 h-5 ${location.startsWith("/app/admin/entra") ? "text-primary" : "text-muted-foreground/70"}`} />
+                Entra ID Setup
               </div>
             </Link>
           </div>

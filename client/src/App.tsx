@@ -6,6 +6,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import NotFound from "@/pages/not-found";
 
 import SplashPage from "./pages/splash";
+import LoginPage from "./pages/auth/login";
 import EntraCallbackPage from "./pages/auth/callback";
 import SelectTenantPage from "./pages/app/select-tenant";
 import AddTenantPage from "./pages/app/add-tenant";
@@ -32,6 +33,7 @@ import OrganizationSettingsPage from "./pages/app/admin/organization";
 import SystemAdminPage from "./pages/app/admin/system";
 import TenantConnectionsPage from "./pages/app/admin/tenant-connections";
 import PolicyBuilderPage from "./pages/app/admin/policy-builder";
+import EntraSetupPage from "./pages/app/admin/entra-setup";
 import AppShell from "./components/layout/app-shell";
 
 const EmptyPage = ({ title }: { title: string }) => (
@@ -43,7 +45,7 @@ const EmptyPage = ({ title }: { title: string }) => (
   </div>
 );
 
-const NO_SHELL_ROUTES = ["/", "/auth/entra/callback", "/app/select-tenant", "/app/add-tenant"];
+const NO_SHELL_ROUTES = ["/", "/login", "/auth/entra/callback", "/app/select-tenant", "/app/add-tenant"];
 
 function AppShellWrapper({ children }: { children: React.ReactNode }) {
   const [location] = useLocation();
@@ -60,6 +62,7 @@ function AppRoutes() {
     <AppShellWrapper>
       <Switch>
         <Route path="/" component={SplashPage} />
+        <Route path="/login" component={LoginPage} />
         <Route path="/auth/entra/callback" component={EntraCallbackPage} />
         <Route path="/app/select-tenant" component={SelectTenantPage} />
         <Route path="/app/add-tenant" component={AddTenantPage} />
@@ -86,6 +89,7 @@ function AppRoutes() {
         <Route path="/app/admin/system" component={SystemAdminPage} />
         <Route path="/app/admin/tenants" component={TenantConnectionsPage} />
         <Route path="/app/admin/policies" component={PolicyBuilderPage} />
+        <Route path="/app/admin/entra" component={EntraSetupPage} />
         <Route path="/app/admin" component={AdminTemplatesPage} />
         <Route component={NotFound} />
       </Switch>

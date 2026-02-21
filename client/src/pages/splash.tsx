@@ -29,9 +29,9 @@ export default function SplashPage() {
             <a href="#docs" className="hover:text-foreground transition-colors">Docs</a>
           </div>
           <div className="flex items-center">
-            <Link href="/auth/entra/callback">
+            <Link href="/login">
               <Button data-testid="button-signin" className="gap-2 shadow-lg shadow-primary/20 rounded-full px-6">
-                Sign in with Microsoft <ArrowRight className="w-4 h-4" />
+                Sign In <ArrowRight className="w-4 h-4" />
               </Button>
             </Link>
           </div>

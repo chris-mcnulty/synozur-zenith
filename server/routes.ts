@@ -4,11 +4,16 @@ import { storage } from "./storage";
 import { insertWorkspaceSchema, insertProvisioningRequestSchema, insertTenantConnectionSchema, PLAN_FEATURES, SERVICE_PLANS, type ServicePlanTier } from "@shared/schema";
 import { testConnection, fetchSharePointSites, clearTokenCache } from "./services/graph";
 import { requireFeature, getPlanFeatures } from "./services/feature-gate";
+import authRouter from "./routes-auth";
+import entraRouter from "./routes-entra";
 
 export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
+
+  app.use("/api/auth", authRouter);
+  app.use("/auth/entra", entraRouter);
 
   // ── Workspaces ──
   app.get("/api/workspaces", async (req, res) => {
