@@ -15,6 +15,7 @@ import ProvisionNewPage from "./pages/app/provision-new";
 import GovernancePage from "./pages/app/governance";
 import WorkspaceDetailsPage from "./pages/app/workspace-details";
 import PurviewConfigPage from "./pages/app/purview";
+import SyntexPage from "./pages/app/syntex";
 import AdminTemplatesPage from "./pages/app/admin/templates";
 import AppShell from "./components/layout/app-shell";
 
@@ -48,6 +49,7 @@ function AppRoutes() {
                 <Route path="/app/provision" component={() => <EmptyPage title="Provisioning Requests" />} />
                 <Route path="/app/governance" component={GovernancePage} />
                 <Route path="/app/governance/workspaces/:id" component={WorkspaceDetailsPage} />
+                <Route path="/app/syntex" component={SyntexPage} />
                 <Route path="/app/purview" component={PurviewConfigPage} />
                 <Route path="/app/lifecycle" component={() => <EmptyPage title="Lifecycle Management" />} />
                 <Route path="/app/reports" component={() => <EmptyPage title="Governance Reports" />} />

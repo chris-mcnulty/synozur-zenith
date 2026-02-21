@@ -19,7 +19,8 @@ import {
   User,
   SunMoon,
   Layers,
-  Check
+  Check,
+  BrainCircuit
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -51,6 +52,7 @@ const navGroups = [
     label: "Management",
     items: [
       { name: "Governance", href: "/app/governance", icon: ShieldCheck },
+      { name: "Syntex", href: "/app/syntex", icon: BrainCircuit },
       { name: "Purview", href: "/app/purview", icon: Fingerprint },
       { name: "Lifecycle", href: "/app/lifecycle", icon: Clock },
     ]
