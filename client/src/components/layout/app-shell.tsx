@@ -68,9 +68,8 @@ const navGroups = [
       { name: "Embedded Containers", href: "/app/embedded-containers", icon: Box },
       { name: "Discover & Migrate", href: "/app/discover", icon: Search, badge: "Ent+" },
       { name: "Archive & Backup", href: "/app/archive-backup", icon: Archive },
-      { name: "Syntex", href: "/app/syntex", icon: BrainCircuit },
-      { name: "Purview", href: "/app/purview", icon: Fingerprint },
       { name: "Lifecycle", href: "/app/lifecycle", icon: Clock },
+      { name: "Syntex", href: "/app/syntex", icon: BrainCircuit },
     ]
   },
   {
