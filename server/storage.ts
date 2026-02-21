@@ -1,4 +1,4 @@
-import { eq, desc, ilike, or } from "drizzle-orm";
+import { eq, desc, ilike, or, and } from "drizzle-orm";
 import { db } from "./db";
 import {
   workspaces,
@@ -6,6 +6,9 @@ import {
   copilotRules,
   tenantConnections,
   organizations,
+  users,
+  graphTokens,
+  auditLog,
   type Workspace,
   type InsertWorkspace,
   type ProvisioningRequest,
@@ -16,6 +19,12 @@ import {
   type InsertTenantConnection,
   type Organization,
   type InsertOrganization,
+  type User,
+  type InsertUser,
+  type GraphToken,
+  type InsertGraphToken,
+  type AuditLog,
+  type InsertAuditLog,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -44,6 +53,20 @@ export interface IStorage {
   getOrganizations(): Promise<Organization[]>;
   upsertOrganization(org: InsertOrganization): Promise<Organization>;
   updateOrganizationPlan(id: string, plan: string): Promise<Organization | undefined>;
+
+  getUser(id: string): Promise<User | undefined>;
+  getUserByEmail(email: string): Promise<User | undefined>;
+  getUserByVerificationToken(token: string): Promise<User | undefined>;
+  getUserByResetToken(token: string): Promise<User | undefined>;
+  createUser(user: InsertUser): Promise<User>;
+  updateUser(id: string, updates: Partial<InsertUser>): Promise<User | undefined>;
+  getUsersByOrganization(orgId: string): Promise<User[]>;
+
+  upsertGraphToken(token: InsertGraphToken): Promise<GraphToken>;
+  getGraphToken(userId: string, service?: string): Promise<GraphToken | undefined>;
+
+  createAuditEntry(entry: InsertAuditLog): Promise<AuditLog>;
+  getAuditLog(orgId?: string, limit?: number): Promise<AuditLog[]>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -164,6 +187,74 @@ export class DatabaseStorage implements IStorage {
   async updateOrganizationPlan(id: string, plan: string): Promise<Organization | undefined> {
     const [updated] = await db.update(organizations).set({ servicePlan: plan, planStartedAt: new Date() }).where(eq(organizations.id, id)).returning();
     return updated;
+  }
+
+  async getUser(id: string): Promise<User | undefined> {
+    const [user] = await db.select().from(users).where(eq(users.id, id));
+    return user;
+  }
+
+  async getUserByEmail(email: string): Promise<User | undefined> {
+    const [user] = await db.select().from(users).where(eq(users.email, email.toLowerCase()));
+    return user;
+  }
+
+  async getUserByVerificationToken(token: string): Promise<User | undefined> {
+    const [user] = await db.select().from(users).where(eq(users.verificationToken, token));
+    return user;
+  }
+
+  async getUserByResetToken(token: string): Promise<User | undefined> {
+    const [user] = await db.select().from(users).where(eq(users.resetToken, token));
+    return user;
+  }
+
+  async createUser(user: InsertUser): Promise<User> {
+    const [created] = await db.insert(users).values({ ...user, email: user.email.toLowerCase() }).returning();
+    return created;
+  }
+
+  async updateUser(id: string, updates: Partial<InsertUser>): Promise<User | undefined> {
+    const [updated] = await db.update(users).set(updates).where(eq(users.id, id)).returning();
+    return updated;
+  }
+
+  async getUsersByOrganization(orgId: string): Promise<User[]> {
+    return db.select().from(users).where(eq(users.organizationId, orgId)).orderBy(users.createdAt);
+  }
+
+  async upsertGraphToken(token: InsertGraphToken): Promise<GraphToken> {
+    const existing = await this.getGraphToken(token.userId, token.service || 'default');
+    if (existing) {
+      const [updated] = await db.update(graphTokens)
+        .set({ ...token, updatedAt: new Date() })
+        .where(eq(graphTokens.id, existing.id))
+        .returning();
+      return updated;
+    }
+    const [created] = await db.insert(graphTokens).values(token).returning();
+    return created;
+  }
+
+  async getGraphToken(userId: string, service: string = 'default'): Promise<GraphToken | undefined> {
+    const [token] = await db.select().from(graphTokens)
+      .where(and(eq(graphTokens.userId, userId), eq(graphTokens.service, service)));
+    return token;
+  }
+
+  async createAuditEntry(entry: InsertAuditLog): Promise<AuditLog> {
+    const [created] = await db.insert(auditLog).values(entry).returning();
+    return created;
+  }
+
+  async getAuditLog(orgId?: string, limit: number = 100): Promise<AuditLog[]> {
+    if (orgId) {
+      return db.select().from(auditLog)
+        .where(eq(auditLog.organizationId, orgId))
+        .orderBy(desc(auditLog.createdAt))
+        .limit(limit);
+    }
+    return db.select().from(auditLog).orderBy(desc(auditLog.createdAt)).limit(limit);
   }
 }
 
