@@ -108,25 +108,48 @@ Entra answers WHO you are. Zenith answers WHETHER you're allowed.
 - Copilot eligibility displayed with clear pass/fail criteria
 - "Discover & Migrate" marked as Enterprise+ feature
 
+## Service Plan Feature Gating
+- Plans: TRIAL, STANDARD, PROFESSIONAL, ENTERPRISE (defined in shared/schema.ts PLAN_FEATURES)
+- TRIAL/Free: Read-only. No M365 write-back. Inventory sync and governance views only.
+- STANDARD+: M365 write-back enabled (provisioning, site creation, config changes)
+- PROFESSIONAL+: Copilot readiness, lifecycle automation, self-service portal
+- ENTERPRISE: All features + advanced reporting + unlimited retention
+- Backend enforcement: requireFeature middleware in server/services/feature-gate.ts
+- Frontend: useServicePlan hook + UpgradeGate component for conditional rendering
+- Organization record stored in `organizations` table with servicePlan field
+- Plan can be changed via PATCH /api/organization/plan
+
 ## Project Structure
-- `shared/schema.ts` - Drizzle schema definitions for workspaces, provisioning_requests, copilot_rules
+- `shared/schema.ts` - Drizzle schema definitions for workspaces, provisioning_requests, copilot_rules, tenant_connections, organizations + PLAN_FEATURES
 - `server/db.ts` - Database connection (pg + drizzle)
 - `server/storage.ts` - DatabaseStorage class implementing IStorage interface
 - `server/routes.ts` - API routes (/api/workspaces, /api/provisioning-requests, /api/stats, etc.)
+- `server/services/graph.ts` - Microsoft Graph API client (token acquisition, site inventory)
+- `server/services/feature-gate.ts` - Service plan feature gating middleware
 - `server/seed.ts` - Database seeding script with 12 realistic workspaces
 - `client/src/pages/app/` - All app pages (dashboard, governance, provision-new, workspace-details, etc.)
 - `client/src/components/layout/app-shell.tsx` - Main layout shell
+- `client/src/components/upgrade-gate.tsx` - UpgradeGate, UpgradeBadge, WriteBackGate components
+- `client/src/hooks/use-service-plan.ts` - Hook for plan status and feature checks
 
 ## API Endpoints
 - GET/POST /api/workspaces - List/create workspaces (search via ?search=)
 - GET/PATCH/DELETE /api/workspaces/:id - Single workspace CRUD
 - PATCH /api/workspaces/bulk/update - Bulk update workspaces
 - GET/POST /api/provisioning-requests - List/create provisioning requests
-- PATCH /api/provisioning-requests/:id/status - Update request status
+- PATCH /api/provisioning-requests/:id/status - Update request status (PROVISIONED gated by m365WriteBack)
 - GET/PUT /api/workspaces/:id/copilot-rules - Copilot eligibility rules
 - GET /api/stats - Dashboard statistics
+- GET /api/organization - Current org with plan features
+- PATCH /api/organization/plan - Change plan tier
+- GET /api/feature-check/:feature - Check if specific feature is enabled
+- GET/POST /api/admin/tenants - Tenant connection CRUD
+- POST /api/admin/tenants/test - Test tenant connection
+- POST /api/admin/tenants/:id/sync - Sync SharePoint site inventory
 
 ## Recent Changes
+- 2026-02-21: Added service plan feature gating — TRIAL plan blocks M365 write-back, enforced server-side + frontend upgrade prompts
+- 2026-02-21: Added organizations table, useServicePlan hook, UpgradeGate component, dynamic service plans page
 - 2026-02-21: Confirmed security design — multi-tenant, MSP-safe, zero existence leakage architecture
 - 2026-02-21: Rebuilt Document Library page as governance tool for library structures, columns, versioning
 - 2026-02-21: Flattened routing structure to fix wouter v3 nested Switch 404 issue
