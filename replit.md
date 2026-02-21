@@ -124,14 +124,41 @@ Entra answers WHO you are. Zenith answers WHETHER you're allowed.
 - Organization record stored in `organizations` table with servicePlan field
 - Plan can be changed via PATCH /api/organization/plan
 
+## Authentication Architecture
+- **Dual auth**: Password login OR Azure AD SSO (following Vega's patterns)
+- **Session**: PostgreSQL-backed via connect-pg-simple, 30-day cookie expiry
+- **Password**: bcryptjs (12 rounds), min 8 chars
+- **SSO**: MSAL-node with PKCE authorization code flow, multi-tenant app
+- **JIT Provisioning**: First SSO user from new org becomes tenant_admin
+- **Token encryption**: AES-256-GCM for Graph tokens at rest (server/utils/encryption.ts)
+- **RBAC middleware**: server/middleware/rbac.ts — loadCurrentUser, requireAuth, requireRole, requirePermission
+- **Auth routes**: server/routes-auth.ts (local auth), server/routes-entra.ts (SSO)
+- **Login page**: /login with email/password + Microsoft SSO button
+- **Entra setup**: /app/admin/entra — step-by-step app registration guide
+
+### Required Environment Variables for SSO
+- AZURE_CLIENT_ID — App registration client ID
+- AZURE_CLIENT_SECRET — App registration client secret
+- AZURE_TENANT_ID — "common" for multi-tenant or specific tenant ID
+- TOKEN_ENCRYPTION_SECRET — Min 32 chars, for Graph token encryption
+- SESSION_SECRET — Auto-generated if not set
+
 ## Project Structure
-- `shared/schema.ts` - Drizzle schema definitions for workspaces, provisioning_requests, copilot_rules, tenant_connections, organizations + PLAN_FEATURES
+- `shared/schema.ts` - Drizzle schema: workspaces, provisioning_requests, copilot_rules, tenant_connections, organizations, users, graph_tokens, audit_log + PLAN_FEATURES + ZENITH_ROLES
 - `server/db.ts` - Database connection (pg + drizzle)
 - `server/storage.ts` - DatabaseStorage class implementing IStorage interface
 - `server/routes.ts` - API routes (/api/workspaces, /api/provisioning-requests, /api/stats, etc.)
+- `server/routes-auth.ts` - Local auth routes (login, signup, logout, verify-email, password-reset)
+- `server/routes-entra.ts` - Entra SSO routes (login, callback, logout, check-policy)
+- `server/auth.ts` - Password hashing, token generation utilities
+- `server/utils/encryption.ts` - AES-256-GCM token encryption/decryption
+- `server/middleware/rbac.ts` - RBAC middleware (loadCurrentUser, requireAuth, requireRole, requirePermission)
 - `server/services/graph.ts` - Microsoft Graph API client (token acquisition, site inventory)
 - `server/services/feature-gate.ts` - Service plan feature gating middleware
 - `server/seed.ts` - Database seeding script with 12 realistic workspaces
+- `client/src/pages/auth/login.tsx` - Login/signup page
+- `client/src/pages/auth/callback.tsx` - Entra SSO callback page
+- `client/src/pages/app/admin/entra-setup.tsx` - Entra app registration setup guide
 - `client/src/pages/app/` - All app pages (dashboard, governance, provision-new, workspace-details, etc.)
 - `client/src/components/layout/app-shell.tsx` - Main layout shell
 - `client/src/components/upgrade-gate.tsx` - UpgradeGate, UpgradeBadge, WriteBackGate components
@@ -151,8 +178,24 @@ Entra answers WHO you are. Zenith answers WHETHER you're allowed.
 - GET/POST /api/admin/tenants - Tenant connection CRUD
 - POST /api/admin/tenants/test - Test tenant connection
 - POST /api/admin/tenants/:id/sync - Sync SharePoint site inventory
+- POST /api/auth/signup - Create account (email, password, name)
+- POST /api/auth/login - Sign in (email, password)
+- GET /api/auth/me - Get current user + organization
+- POST /api/auth/logout - Destroy session
+- POST /api/auth/verify-email - Verify email token
+- POST /api/auth/request-password-reset - Request password reset
+- POST /api/auth/reset-password - Reset password with token
+- GET /auth/entra/status - Check if SSO is configured
+- GET /auth/entra/login - Initiate SSO flow
+- GET /auth/entra/callback - SSO callback (JIT provisioning)
+- POST /auth/entra/logout - SSO logout
+- POST /auth/entra/check-policy - Check SSO enforcement for email domain
 
 ## Recent Changes
+- 2026-02-21: Implemented comprehensive auth system — local login + Entra SSO, sessions, RBAC, JIT provisioning (Vega pattern)
+- 2026-02-21: Added users, graph_tokens, audit_log tables; organizations table extended with SSO fields
+- 2026-02-21: Created login page (/login) with email/password + Microsoft SSO button
+- 2026-02-21: Created Entra ID setup admin page (/app/admin/entra) with step-by-step registration guide
 - 2026-02-21: Added service plan feature gating — TRIAL plan blocks M365 write-back, enforced server-side + frontend upgrade prompts
 - 2026-02-21: Added organizations table, useServicePlan hook, UpgradeGate component, dynamic service plans page
 - 2026-02-21: Confirmed security design — multi-tenant, MSP-safe, zero existence leakage architecture
