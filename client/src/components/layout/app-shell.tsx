@@ -13,7 +13,11 @@ import {
   Search,
   ChevronDown,
   Building2,
-  Menu
+  Menu,
+  ChevronRight,
+  LogOut,
+  User,
+  SunMoon
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -21,6 +25,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
@@ -32,75 +37,109 @@ interface AppShellProps {
   children: React.ReactNode;
 }
 
-const navItems = [
-  { name: "Dashboard", href: "/app/dashboard", icon: LayoutDashboard },
-  { name: "Provision", href: "/app/provision", icon: FolderPlus },
-  { name: "Governance", href: "/app/governance", icon: ShieldCheck },
-  { name: "Purview", href: "/app/purview", icon: Fingerprint },
-  { name: "Lifecycle", href: "/app/lifecycle", icon: Clock },
-  { name: "Reports", href: "/app/reports", icon: BarChart3 },
+const navGroups = [
+  {
+    label: "Overview",
+    items: [
+      { name: "Dashboard", href: "/app/dashboard", icon: LayoutDashboard },
+      { name: "Provision", href: "/app/provision", icon: FolderPlus, badge: "3" },
+    ]
+  },
+  {
+    label: "Management",
+    items: [
+      { name: "Governance", href: "/app/governance", icon: ShieldCheck },
+      { name: "Purview", href: "/app/purview", icon: Fingerprint },
+      { name: "Lifecycle", href: "/app/lifecycle", icon: Clock },
+    ]
+  },
+  {
+    label: "Insights",
+    items: [
+      { name: "Reports", href: "/app/reports", icon: BarChart3 },
+    ]
+  }
 ];
 
 export default function AppShell({ children }: AppShellProps) {
   const [location] = useLocation();
 
   const NavLinks = () => (
-    <>
-      <div className="space-y-1 py-4">
-        {navItems.map((item) => {
-          const isActive = location.startsWith(item.href);
-          return (
-            <Link key={item.name} href={item.href}>
-              <a className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
-                isActive 
-                  ? "bg-primary/10 text-primary" 
-                  : "text-muted-foreground hover:bg-muted hover:text-foreground"
-              }`}>
-                <item.icon className={`w-5 h-5 ${isActive ? "text-primary" : ""}`} />
-                {item.name}
-              </a>
-            </Link>
-          );
-        })}
-      </div>
+    <div className="space-y-6 py-4">
+      {navGroups.map((group, i) => (
+        <div key={i} className="space-y-2">
+          <h4 className="px-4 text-xs font-bold text-muted-foreground uppercase tracking-widest mb-2">
+            {group.label}
+          </h4>
+          <div className="space-y-1">
+            {group.items.map((item) => {
+              const isActive = location.startsWith(item.href);
+              return (
+                <Link key={item.name} href={item.href}>
+                  <a className={`flex items-center justify-between px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
+                    isActive 
+                      ? "bg-primary/10 text-primary shadow-sm shadow-primary/5" 
+                      : "text-muted-foreground hover:bg-muted/80 hover:text-foreground"
+                  }`}>
+                    <div className="flex items-center gap-3">
+                      <item.icon className={`w-5 h-5 ${isActive ? "text-primary" : "text-muted-foreground/70"}`} />
+                      {item.name}
+                    </div>
+                    {item.badge && (
+                      <span className={`flex h-5 items-center justify-center rounded-full px-2 text-[10px] font-bold ${isActive ? 'bg-primary text-primary-foreground' : 'bg-primary/20 text-primary'}`}>
+                        {item.badge}
+                      </span>
+                    )}
+                  </a>
+                </Link>
+              );
+            })}
+          </div>
+        </div>
+      ))}
 
-      <div className="mt-8 space-y-1">
-        <h4 className="px-4 text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">
+      <div className="space-y-2 pt-4 border-t border-border/50">
+        <h4 className="px-4 text-xs font-bold text-muted-foreground uppercase tracking-widest mb-2">
           Administration
         </h4>
         <Link href="/app/admin">
-          <a className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+          <a className={`flex items-center justify-between px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
             location.startsWith("/app/admin") 
-              ? "bg-primary/10 text-primary" 
-              : "text-muted-foreground hover:bg-muted hover:text-foreground"
+              ? "bg-primary/10 text-primary shadow-sm shadow-primary/5" 
+              : "text-muted-foreground hover:bg-muted/80 hover:text-foreground"
           }`}>
-            <Settings className="w-5 h-5" />
-            Admin Center
+            <div className="flex items-center gap-3">
+              <Settings className={`w-5 h-5 ${location.startsWith("/app/admin") ? "text-primary" : "text-muted-foreground/70"}`} />
+              Admin Center
+            </div>
           </a>
         </Link>
       </div>
-    </>
+    </div>
   );
 
   return (
-    <div className="min-h-screen bg-background flex">
+    <div className="min-h-screen bg-background flex text-foreground">
       {/* Desktop Sidebar */}
-      <aside className="hidden md:flex w-64 flex-col border-r border-border bg-card/50 backdrop-blur-xl">
-        <div className="h-16 flex items-center px-6 border-b border-border">
-          <div className="flex items-center gap-2 text-primary">
-            <ShieldCheck className="w-6 h-6" />
-            <span className="font-bold text-lg tracking-tight text-foreground">Zenith</span>
-          </div>
+      <aside className="hidden lg:flex w-72 flex-col border-r border-border/40 bg-card/40 backdrop-blur-xl">
+        <div className="h-16 flex items-center px-6 border-b border-border/40">
+          <Link href="/app/dashboard" className="flex items-center gap-2 cursor-pointer group">
+            <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-primary to-secondary flex items-center justify-center text-primary-foreground shadow-md shadow-primary/20 transition-transform group-hover:scale-105">
+              <ShieldCheck className="w-5 h-5" />
+            </div>
+            <span className="font-bold text-xl tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-foreground to-foreground/80">Zenith</span>
+          </Link>
         </div>
         
-        <div className="flex-1 overflow-y-auto px-3 py-4">
+        <div className="flex-1 overflow-y-auto px-4 py-4 scrollbar-hide">
           <NavLinks />
         </div>
 
-        <div className="p-4 border-t border-border mt-auto">
-          <a href="#" className="flex items-center gap-3 px-3 py-2 text-sm text-muted-foreground hover:text-foreground transition-colors">
-            <BookOpen className="w-4 h-4" />
-            User Guide
+        <div className="p-4 border-t border-border/40 bg-card/50">
+          <a href="#" className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium text-muted-foreground hover:bg-muted/80 hover:text-foreground transition-all">
+            <BookOpen className="w-5 h-5 text-muted-foreground/70" />
+            Documentation
+            <ChevronRight className="w-4 h-4 ml-auto opacity-50" />
           </a>
         </div>
       </aside>
@@ -108,23 +147,31 @@ export default function AppShell({ children }: AppShellProps) {
       {/* Main Content */}
       <main className="flex-1 flex flex-col min-w-0">
         {/* Top Header */}
-        <header className="h-16 border-b border-border bg-background/80 backdrop-blur-md flex items-center justify-between px-4 sm:px-6 sticky top-0 z-30">
+        <header className="h-16 border-b border-border/40 bg-background/80 backdrop-blur-md flex items-center justify-between px-4 lg:px-8 sticky top-0 z-30">
           <div className="flex items-center gap-4">
             <Sheet>
               <SheetTrigger asChild>
-                <Button variant="ghost" size="icon" className="md:hidden -ml-2">
+                <Button variant="ghost" size="icon" className="lg:hidden -ml-2">
                   <Menu className="w-5 h-5" />
                 </Button>
               </SheetTrigger>
-              <SheetContent side="left" className="w-64 p-0">
-                <div className="h-16 flex items-center px-6 border-b border-border">
-                  <div className="flex items-center gap-2 text-primary">
-                    <ShieldCheck className="w-6 h-6" />
-                    <span className="font-bold text-lg tracking-tight text-foreground">Zenith</span>
+              <SheetContent side="left" className="w-72 p-0 border-r-border/40 bg-card/95 backdrop-blur-xl">
+                <div className="h-16 flex items-center px-6 border-b border-border/40">
+                  <div className="flex items-center gap-2">
+                    <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-primary to-secondary flex items-center justify-center text-primary-foreground shadow-md shadow-primary/20">
+                      <ShieldCheck className="w-5 h-5" />
+                    </div>
+                    <span className="font-bold text-xl tracking-tight">Zenith</span>
                   </div>
                 </div>
-                <div className="px-3 py-4">
+                <div className="px-4 py-2 overflow-y-auto h-[calc(100vh-4rem)]">
                   <NavLinks />
+                  <div className="mt-8 pt-4 border-t border-border/40">
+                    <a href="#" className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium text-muted-foreground hover:bg-muted/80 hover:text-foreground transition-all">
+                      <BookOpen className="w-5 h-5 text-muted-foreground/70" />
+                      Documentation
+                    </a>
+                  </div>
                 </div>
               </SheetContent>
             </Sheet>
@@ -132,74 +179,94 @@ export default function AppShell({ children }: AppShellProps) {
             {/* Tenant / Env Selector */}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="outline" className="h-9 gap-2 border-border/50 bg-muted/30 hidden sm:flex">
-                  <Building2 className="w-4 h-4 text-muted-foreground" />
-                  <span className="font-medium">Synozur Demo</span>
-                  <Badge variant="secondary" className="ml-2 h-5 px-1.5 text-[10px]">PROD</Badge>
-                  <ChevronDown className="w-4 h-4 text-muted-foreground ml-1" />
+                <Button variant="outline" className="h-10 gap-3 border-border/50 bg-card/50 hover:bg-accent/50 hidden md:flex rounded-full px-4 shadow-sm">
+                  <Building2 className="w-4 h-4 text-primary" />
+                  <div className="flex flex-col items-start text-left">
+                    <span className="font-semibold text-sm leading-none">Synozur Demo</span>
+                  </div>
+                  <Badge variant="secondary" className="ml-1 h-5 px-1.5 text-[10px] font-bold tracking-wider">PROD</Badge>
+                  <ChevronDown className="w-4 h-4 text-muted-foreground ml-1 opacity-50" />
                 </Button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="start" className="w-56">
-                <DropdownMenuLabel>Tenant & Environment</DropdownMenuLabel>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem className="flex justify-between">
-                  <span>Synozur Demo</span>
-                  <Badge variant="outline">PROD</Badge>
+              <DropdownMenuContent align="start" className="w-64 rounded-xl p-2">
+                <DropdownMenuLabel className="text-xs text-muted-foreground uppercase tracking-wider">Current Environment</DropdownMenuLabel>
+                <DropdownMenuItem className="flex justify-between rounded-lg p-3 bg-primary/5 cursor-default">
+                  <span className="font-medium">Synozur Demo</span>
+                  <Badge variant="default" className="text-[10px]">PROD</Badge>
                 </DropdownMenuItem>
-                <DropdownMenuItem className="flex justify-between text-muted-foreground">
-                  <span>Synozur Demo</span>
-                  <Badge variant="outline">TEST</Badge>
+                <DropdownMenuItem className="flex justify-between rounded-lg p-3 cursor-pointer mt-1">
+                  <span className="text-muted-foreground">Synozur Demo</span>
+                  <Badge variant="outline" className="text-[10px]">TEST</Badge>
                 </DropdownMenuItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem asChild>
-                  <Link href="/app/select-tenant" className="cursor-pointer text-primary">
-                    Change Tenant...
-                  </Link>
-                </DropdownMenuItem>
+                <DropdownMenuSeparator className="my-2" />
+                <DropdownMenuGroup>
+                  <DropdownMenuItem asChild className="rounded-lg p-3 cursor-pointer group">
+                    <Link href="/app/select-tenant" className="flex items-center">
+                      <Building2 className="w-4 h-4 mr-2 text-muted-foreground group-hover:text-primary" />
+                      Switch Tenant...
+                    </Link>
+                  </DropdownMenuItem>
+                </DropdownMenuGroup>
               </DropdownMenuContent>
             </DropdownMenu>
           </div>
 
-          <div className="flex items-center gap-3">
-            <div className="relative hidden lg:block w-64">
-              <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+          <div className="flex items-center gap-2 sm:gap-4">
+            <div className="relative hidden md:block w-72">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
               <Input
                 type="search"
-                placeholder="Search workspaces..."
-                className="h-9 pl-9 bg-muted/30 border-border/50 rounded-full"
+                placeholder="Search resources..."
+                className="h-10 pl-9 pr-12 bg-muted/40 border-border/50 rounded-full focus-visible:ring-primary/30 focus-visible:border-primary/50 transition-all"
               />
+              <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-1">
+                <kbd className="inline-flex h-5 items-center gap-1 rounded border border-border bg-background px-1.5 font-mono text-[10px] font-medium text-muted-foreground">
+                  <span className="text-xs">⌘</span>K
+                </kbd>
+              </div>
             </div>
 
-            <Button variant="ghost" size="icon" className="rounded-full relative">
+            <Button variant="ghost" size="icon" className="rounded-full relative hover:bg-muted">
               <Bell className="w-5 h-5 text-muted-foreground" />
-              <span className="absolute top-2 right-2 w-2 h-2 bg-primary rounded-full border-2 border-background"></span>
+              <span className="absolute top-2 right-2.5 w-2 h-2 bg-primary rounded-full border-2 border-background"></span>
             </Button>
+
+            <div className="h-6 w-px bg-border/50 mx-1 hidden sm:block"></div>
 
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="ghost" className="relative h-9 w-9 rounded-full ml-1">
-                  <Avatar className="h-9 w-9 border border-border/50">
+                <Button variant="ghost" className="relative h-10 w-10 rounded-full p-0">
+                  <Avatar className="h-10 w-10 border-2 border-background shadow-sm hover:border-primary/20 transition-colors">
                     <AvatarImage src="https://github.com/shadcn.png" alt="User" />
-                    <AvatarFallback>AD</AvatarFallback>
+                    <AvatarFallback className="bg-primary/10 text-primary font-semibold">AD</AvatarFallback>
                   </Avatar>
                 </Button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-56">
-                <DropdownMenuLabel className="font-normal">
-                  <div className="flex flex-col space-y-1">
-                    <p className="text-sm font-medium leading-none">Admin User</p>
+              <DropdownMenuContent align="end" className="w-60 rounded-xl p-2">
+                <DropdownMenuLabel className="font-normal p-3">
+                  <div className="flex flex-col space-y-1.5">
+                    <p className="text-sm font-semibold leading-none">Admin User</p>
                     <p className="text-xs leading-none text-muted-foreground">
                       admin@synozur.demo
                     </p>
                   </div>
                 </DropdownMenuLabel>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem>Profile Settings</DropdownMenuItem>
-                <DropdownMenuItem>Theme (Dark)</DropdownMenuItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem asChild>
-                  <Link href="/" className="cursor-pointer text-destructive">
-                    Sign out
+                <DropdownMenuSeparator className="mb-2" />
+                <DropdownMenuGroup className="space-y-1">
+                  <DropdownMenuItem className="rounded-lg cursor-pointer p-2.5">
+                    <User className="mr-2 h-4 w-4 text-muted-foreground" />
+                    <span>Profile Settings</span>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem className="rounded-lg cursor-pointer p-2.5">
+                    <SunMoon className="mr-2 h-4 w-4 text-muted-foreground" />
+                    <span>Toggle Theme</span>
+                  </DropdownMenuItem>
+                </DropdownMenuGroup>
+                <DropdownMenuSeparator className="my-2" />
+                <DropdownMenuItem asChild className="rounded-lg cursor-pointer p-2.5 text-destructive focus:text-destructive focus:bg-destructive/10">
+                  <Link href="/" className="flex items-center">
+                    <LogOut className="mr-2 h-4 w-4" />
+                    <span>Sign out</span>
                   </Link>
                 </DropdownMenuItem>
               </DropdownMenuContent>
@@ -208,15 +275,15 @@ export default function AppShell({ children }: AppShellProps) {
         </header>
 
         {/* Page Content */}
-        <div className="flex-1 overflow-auto bg-muted/10 p-6 lg:p-8">
-          <div className="max-w-7xl mx-auto">
+        <div className="flex-1 overflow-auto bg-background/50 p-4 sm:p-6 lg:p-8">
+          <div className="max-w-[1600px] mx-auto">
             {children}
           </div>
         </div>
 
         {/* Global Help Button */}
         <div className="fixed bottom-6 right-6 z-50">
-          <Button size="icon" className="h-12 w-12 rounded-full shadow-lg shadow-primary/20">
+          <Button size="icon" className="h-14 w-14 rounded-full shadow-xl shadow-primary/20 bg-primary hover:bg-primary/90 text-primary-foreground transition-transform hover:scale-105">
             <HelpCircle className="w-6 h-6" />
           </Button>
         </div>
@@ -227,5 +294,5 @@ export default function AppShell({ children }: AppShellProps) {
 
 // Needed to wrap badge component inside dropdowns properly
 function Badge({ className, variant, ...props }: any) {
-  return <span className={`inline-flex items-center rounded-md border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 ${variant === 'secondary' ? 'border-transparent bg-secondary text-secondary-foreground hover:bg-secondary/80' : 'text-foreground'} ${className}`} {...props} />;
+  return <span className={`inline-flex items-center rounded-md border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 ${variant === 'secondary' ? 'border-transparent bg-secondary/80 text-secondary-foreground' : variant === 'outline' ? 'text-foreground border-border/50' : 'border-transparent bg-primary text-primary-foreground'} ${className}`} {...props} />;
 }
