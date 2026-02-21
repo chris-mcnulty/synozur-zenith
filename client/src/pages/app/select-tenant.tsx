@@ -70,8 +70,16 @@ export default function SelectTenantPage() {
           ))}
         </div>
 
-        <div className="mt-12 text-center text-sm text-muted-foreground">
-          Need access to a different tenant? <a href="#" className="text-primary hover:underline">Contact your administrator</a>.
+        <div className="mt-12 flex flex-col items-center gap-4 text-sm text-muted-foreground">
+          <Link href="/app/add-tenant">
+            <Button variant="outline" className="gap-2 rounded-full border-dashed border-2 hover:border-primary hover:text-primary">
+              <Building2 className="w-4 h-4" />
+              Connect another tenant
+            </Button>
+          </Link>
+          <div>
+            Need access to a different tenant? <a href="#" className="text-primary hover:underline">Contact your administrator</a>.
+          </div>
         </div>
       </div>
     </div>

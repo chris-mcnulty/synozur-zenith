@@ -9,6 +9,7 @@ import NotFound from "@/pages/not-found";
 import SplashPage from "./pages/splash";
 import EntraCallbackPage from "./pages/auth/callback";
 import SelectTenantPage from "./pages/app/select-tenant";
+import AddTenantPage from "./pages/app/add-tenant";
 import DashboardPage from "./pages/app/dashboard";
 import AppShell from "./components/layout/app-shell";
 
@@ -32,6 +33,7 @@ function AppRoutes() {
       <Route path="/app/:rest*">
         <Switch>
           <Route path="/app/select-tenant" component={SelectTenantPage} />
+          <Route path="/app/add-tenant" component={AddTenantPage} />
           
           <Route>
             <AppShell>
