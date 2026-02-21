@@ -75,3 +75,30 @@ export const insertCopilotRuleSchema = createInsertSchema(copilotRules).omit({
 
 export type InsertCopilotRule = z.infer<typeof insertCopilotRuleSchema>;
 export type CopilotRule = typeof copilotRules.$inferSelect;
+
+export const tenantConnections = pgTable("tenant_connections", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: text("tenant_id").notNull(),
+  tenantName: text("tenant_name").notNull(),
+  domain: text("domain").notNull(),
+  clientId: text("client_id").notNull(),
+  clientSecret: text("client_secret").notNull(),
+  ownershipType: text("ownership_type").notNull().default("MSP"),
+  status: text("status").notNull().default("PENDING"),
+  lastSyncAt: timestamp("last_sync_at"),
+  lastSyncStatus: text("last_sync_status"),
+  lastSyncSiteCount: integer("last_sync_site_count"),
+  consentGranted: boolean("consent_granted").notNull().default(false),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertTenantConnectionSchema = createInsertSchema(tenantConnections).omit({
+  id: true,
+  createdAt: true,
+  lastSyncAt: true,
+  lastSyncStatus: true,
+  lastSyncSiteCount: true,
+});
+
+export type InsertTenantConnection = z.infer<typeof insertTenantConnectionSchema>;
+export type TenantConnection = typeof tenantConnections.$inferSelect;

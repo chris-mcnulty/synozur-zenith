@@ -4,12 +4,15 @@ import {
   workspaces,
   provisioningRequests,
   copilotRules,
+  tenantConnections,
   type Workspace,
   type InsertWorkspace,
   type ProvisioningRequest,
   type InsertProvisioningRequest,
   type CopilotRule,
   type InsertCopilotRule,
+  type TenantConnection,
+  type InsertTenantConnection,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -27,6 +30,12 @@ export interface IStorage {
 
   getCopilotRules(workspaceId: string): Promise<CopilotRule[]>;
   setCopilotRules(workspaceId: string, rules: InsertCopilotRule[]): Promise<CopilotRule[]>;
+
+  getTenantConnections(): Promise<TenantConnection[]>;
+  getTenantConnection(id: string): Promise<TenantConnection | undefined>;
+  createTenantConnection(connection: InsertTenantConnection): Promise<TenantConnection>;
+  updateTenantConnection(id: string, updates: Partial<TenantConnection>): Promise<TenantConnection | undefined>;
+  deleteTenantConnection(id: string): Promise<void>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -96,6 +105,29 @@ export class DatabaseStorage implements IStorage {
     if (rules.length === 0) return [];
     const created = await db.insert(copilotRules).values(rules).returning();
     return created;
+  }
+
+  async getTenantConnections(): Promise<TenantConnection[]> {
+    return db.select().from(tenantConnections).orderBy(desc(tenantConnections.createdAt));
+  }
+
+  async getTenantConnection(id: string): Promise<TenantConnection | undefined> {
+    const [connection] = await db.select().from(tenantConnections).where(eq(tenantConnections.id, id));
+    return connection;
+  }
+
+  async createTenantConnection(connection: InsertTenantConnection): Promise<TenantConnection> {
+    const [created] = await db.insert(tenantConnections).values(connection).returning();
+    return created;
+  }
+
+  async updateTenantConnection(id: string, updates: Partial<TenantConnection>): Promise<TenantConnection | undefined> {
+    const [updated] = await db.update(tenantConnections).set(updates).where(eq(tenantConnections.id, id)).returning();
+    return updated;
+  }
+
+  async deleteTenantConnection(id: string): Promise<void> {
+    await db.delete(tenantConnections).where(eq(tenantConnections.id, id));
   }
 }
 

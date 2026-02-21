@@ -1,7 +1,8 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { insertWorkspaceSchema, insertProvisioningRequestSchema } from "@shared/schema";
+import { insertWorkspaceSchema, insertProvisioningRequestSchema, insertTenantConnectionSchema } from "@shared/schema";
+import { testConnection, fetchSharePointSites, clearTokenCache } from "./services/graph";
 
 export async function registerRoutes(
   httpServer: Server,
@@ -113,6 +114,100 @@ export async function registerRoutes(
       pendingRequests,
       totalRequests: requests.length,
     });
+  });
+
+  // ── Tenant Connections ──
+  app.get("/api/admin/tenants", async (_req, res) => {
+    const connections = await storage.getTenantConnections();
+    const safe = connections.map(c => ({
+      ...c,
+      clientSecret: c.clientSecret ? "••••••••" : "",
+    }));
+    res.json(safe);
+  });
+
+  app.get("/api/admin/tenants/:id", async (req, res) => {
+    const connection = await storage.getTenantConnection(req.params.id);
+    if (!connection) return res.status(404).json({ message: "Tenant connection not found" });
+    res.json({ ...connection, clientSecret: "••••••••" });
+  });
+
+  app.post("/api/admin/tenants", async (req, res) => {
+    const parsed = insertTenantConnectionSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ message: parsed.error.message });
+    const connection = await storage.createTenantConnection(parsed.data);
+    res.status(201).json({ ...connection, clientSecret: "••••••••" });
+  });
+
+  app.patch("/api/admin/tenants/:id", async (req, res) => {
+    const connection = await storage.updateTenantConnection(req.params.id, req.body);
+    if (!connection) return res.status(404).json({ message: "Tenant connection not found" });
+    res.json({ ...connection, clientSecret: "••••••••" });
+  });
+
+  app.delete("/api/admin/tenants/:id", async (req, res) => {
+    const conn = await storage.getTenantConnection(req.params.id);
+    if (conn) clearTokenCache(conn.tenantId, conn.clientId);
+    await storage.deleteTenantConnection(req.params.id);
+    res.status(204).send();
+  });
+
+  app.post("/api/admin/tenants/test", async (req, res) => {
+    const { tenantId, clientId, clientSecret } = req.body;
+    if (!tenantId || !clientId || !clientSecret) {
+      return res.status(400).json({ message: "tenantId, clientId, and clientSecret are required" });
+    }
+    const result = await testConnection(tenantId, clientId, clientSecret);
+    res.json(result);
+  });
+
+  app.post("/api/admin/tenants/:id/sync", async (req, res) => {
+    const connection = await storage.getTenantConnection(req.params.id);
+    if (!connection) return res.status(404).json({ message: "Tenant connection not found" });
+
+    try {
+      const result = await fetchSharePointSites(connection.tenantId, connection.clientId, connection.clientSecret);
+
+      if (result.error) {
+        await storage.updateTenantConnection(req.params.id, {
+          lastSyncAt: new Date(),
+          lastSyncStatus: `ERROR: ${result.error}`,
+          lastSyncSiteCount: result.sites.length,
+        });
+        return res.json({
+          success: false,
+          error: result.error,
+          sitesFound: result.sites.length,
+        });
+      }
+
+      await storage.updateTenantConnection(req.params.id, {
+        lastSyncAt: new Date(),
+        lastSyncStatus: "SUCCESS",
+        lastSyncSiteCount: result.sites.length,
+        status: "ACTIVE",
+        consentGranted: true,
+      });
+
+      res.json({
+        success: true,
+        sitesFound: result.sites.length,
+        sites: result.sites.map(s => ({
+          graphId: s.id,
+          displayName: s.displayName,
+          webUrl: s.webUrl,
+          description: s.description,
+          createdDateTime: s.createdDateTime,
+          lastModifiedDateTime: s.lastModifiedDateTime,
+        })),
+      });
+    } catch (err: any) {
+      await storage.updateTenantConnection(req.params.id, {
+        lastSyncAt: new Date(),
+        lastSyncStatus: `ERROR: ${err.message}`,
+      });
+      res.status(500).json({ success: false, error: err.message });
+    }
   });
 
   return httpServer;
