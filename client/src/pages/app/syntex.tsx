@@ -21,7 +21,10 @@ import {
   CheckCircle2,
   AlertCircle,
   MoreHorizontal,
-  BarChart3
+  BarChart3,
+  ListTree,
+  ArrowRight,
+  Database
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -34,6 +37,30 @@ import {
 import { Progress } from "@/components/ui/progress";
 
 // Mock Data for Syntex Models
+const autofillRules = [
+  {
+    id: "ar-1",
+    modelName: "Master Service Agreement Analyzer",
+    targetLibrary: "Legal Contracts Hub",
+    mappings: [
+      { extracted: "EffectiveDate", targetColumn: "Contract Start Date" },
+      { extracted: "VendorName", targetColumn: "Party A" },
+      { extracted: "ContractValue", targetColumn: "Total Value" }
+    ],
+    status: "Active"
+  },
+  {
+    id: "ar-2",
+    modelName: "Vendor Invoice Processor",
+    targetLibrary: "AP Processing Drop",
+    mappings: [
+      { extracted: "InvoiceTotal", targetColumn: "Amount Due" },
+      { extracted: "VendorId", targetColumn: "Vendor ID" }
+    ],
+    status: "Active"
+  }
+];
+
 const models = [
   {
     id: "mod-1",
@@ -164,6 +191,12 @@ export default function SyntexPage() {
             <BrainCircuit className="w-4 h-4 mr-2" /> Model Directory
           </TabsTrigger>
           <TabsTrigger 
+            value="autofill" 
+            className="data-[state=active]:bg-transparent data-[state=active]:shadow-none data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:text-foreground rounded-none px-1 h-12 text-muted-foreground data-[state=active]:font-semibold"
+          >
+            <ListTree className="w-4 h-4 mr-2" /> Autofill Rules
+          </TabsTrigger>
+          <TabsTrigger 
             value="reports" 
             className="data-[state=active]:bg-transparent data-[state=active]:shadow-none data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:text-foreground rounded-none px-1 h-12 text-muted-foreground data-[state=active]:font-semibold"
           >
@@ -257,6 +290,44 @@ export default function SyntexPage() {
                   ))}
                 </TableBody>
               </Table>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="autofill" className="m-0 space-y-6">
+          <Card className="glass-panel border-border/50 shadow-xl">
+            <CardHeader className="pb-4 border-b border-border/40">
+              <CardTitle>Metadata Autofill Mappings</CardTitle>
+              <CardDescription>Configure how extracted AI values map to SharePoint column properties.</CardDescription>
+            </CardHeader>
+            <CardContent className="p-6">
+              <div className="space-y-6">
+                {autofillRules.map((rule) => (
+                  <div key={rule.id} className="p-4 rounded-xl border border-border/50 bg-background/50">
+                    <div className="flex items-center justify-between mb-4">
+                      <div className="flex items-center gap-3">
+                        <div className="w-8 h-8 rounded-lg bg-blue-500/10 flex items-center justify-center text-blue-500">
+                          <Database className="w-4 h-4" />
+                        </div>
+                        <div>
+                          <h4 className="font-semibold text-sm">{rule.targetLibrary}</h4>
+                          <p className="text-xs text-muted-foreground">Using Model: {rule.modelName}</p>
+                        </div>
+                      </div>
+                      <Badge variant="outline" className="bg-emerald-500/10 text-emerald-500 border-emerald-500/20">{rule.status}</Badge>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-2">
+                      {rule.mappings.map((mapping, i) => (
+                        <div key={i} className="flex items-center justify-between p-2.5 rounded-lg bg-muted/30 border border-border/40 text-sm">
+                          <span className="font-mono text-xs text-muted-foreground w-1/2 truncate" title={mapping.extracted}>{mapping.extracted}</span>
+                          <ArrowRight className="w-3.5 h-3.5 text-muted-foreground/50 mx-2 shrink-0" />
+                          <span className="font-medium text-primary w-1/2 text-right truncate" title={mapping.targetColumn}>{mapping.targetColumn}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
             </CardContent>
           </Card>
         </TabsContent>
