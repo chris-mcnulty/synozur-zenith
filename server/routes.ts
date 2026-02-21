@@ -1,8 +1,9 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { insertWorkspaceSchema, insertProvisioningRequestSchema, insertTenantConnectionSchema } from "@shared/schema";
+import { insertWorkspaceSchema, insertProvisioningRequestSchema, insertTenantConnectionSchema, PLAN_FEATURES, SERVICE_PLANS, type ServicePlanTier } from "@shared/schema";
 import { testConnection, fetchSharePointSites, clearTokenCache } from "./services/graph";
+import { requireFeature, getPlanFeatures } from "./services/feature-gate";
 
 export async function registerRoutes(
   httpServer: Server,
@@ -73,6 +74,19 @@ export async function registerRoutes(
     if (!["PENDING", "APPROVED", "PROVISIONED", "REJECTED"].includes(status)) {
       return res.status(400).json({ message: "Invalid status" });
     }
+    if (status === "PROVISIONED") {
+      const org = await storage.getOrganization();
+      const plan = (org?.servicePlan || "TRIAL") as ServicePlanTier;
+      const features = getPlanFeatures(plan);
+      if (!features.m365WriteBack) {
+        return res.status(403).json({
+          error: "FEATURE_GATED",
+          message: `Provisioning to Microsoft 365 is not available on the ${features.label} plan. Requests can be submitted and approved, but write-back to M365 requires a Standard plan or higher.`,
+          currentPlan: plan,
+          requiredFeature: "m365WriteBack",
+        });
+      }
+    }
     const request = await storage.updateProvisioningRequestStatus(req.params.id, status);
     if (!request) return res.status(404).json({ message: "Request not found" });
     res.json(request);
@@ -113,6 +127,51 @@ export async function registerRoutes(
       highlyConfidential,
       pendingRequests,
       totalRequests: requests.length,
+    });
+  });
+
+  // ── Organization & Service Plan ──
+  app.get("/api/organization", async (_req, res) => {
+    let org = await storage.getOrganization();
+    if (!org) {
+      org = await storage.upsertOrganization({
+        name: "The Synozur Alliance",
+        domain: "synozur.onmicrosoft.com",
+        servicePlan: "TRIAL",
+        supportEmail: "it-support@synozur.demo",
+      });
+    }
+    const plan = org.servicePlan as ServicePlanTier;
+    const features = getPlanFeatures(plan);
+    res.json({ ...org, features });
+  });
+
+  app.patch("/api/organization/plan", async (req, res) => {
+    const { plan } = req.body;
+    if (!SERVICE_PLANS.includes(plan)) {
+      return res.status(400).json({ message: `Invalid plan. Must be one of: ${SERVICE_PLANS.join(", ")}` });
+    }
+    const org = await storage.getOrganization();
+    if (!org) return res.status(404).json({ message: "Organization not found" });
+    const updated = await storage.updateOrganizationPlan(org.id, plan);
+    if (!updated) return res.status(500).json({ message: "Failed to update plan" });
+    const features = getPlanFeatures(plan as ServicePlanTier);
+    res.json({ ...updated, features });
+  });
+
+  app.get("/api/feature-check/:feature", async (req, res) => {
+    const org = await storage.getOrganization();
+    const plan = (org?.servicePlan || "TRIAL") as ServicePlanTier;
+    const features = getPlanFeatures(plan);
+    const feature = req.params.feature as keyof typeof features;
+    if (!(feature in features)) {
+      return res.status(400).json({ message: "Unknown feature" });
+    }
+    res.json({
+      feature,
+      enabled: !!features[feature],
+      currentPlan: plan,
+      planLabel: features.label,
     });
   });
 

@@ -102,3 +102,81 @@ export const insertTenantConnectionSchema = createInsertSchema(tenantConnections
 
 export type InsertTenantConnection = z.infer<typeof insertTenantConnectionSchema>;
 export type TenantConnection = typeof tenantConnections.$inferSelect;
+
+export const SERVICE_PLANS = ["TRIAL", "STANDARD", "PROFESSIONAL", "ENTERPRISE"] as const;
+export type ServicePlanTier = typeof SERVICE_PLANS[number];
+
+export const PLAN_FEATURES = {
+  TRIAL: {
+    label: "Trial",
+    m365WriteBack: false,
+    provisioning: true,
+    inventorySync: true,
+    copilotReadiness: false,
+    lifecycleAutomation: false,
+    selfServicePortal: false,
+    advancedReporting: false,
+    maxUsers: 25,
+    maxTenants: 1,
+    auditRetentionDays: 30,
+  },
+  STANDARD: {
+    label: "Standard",
+    m365WriteBack: true,
+    provisioning: true,
+    inventorySync: true,
+    copilotReadiness: false,
+    lifecycleAutomation: false,
+    selfServicePortal: false,
+    advancedReporting: false,
+    maxUsers: 500,
+    maxTenants: 2,
+    auditRetentionDays: 365,
+  },
+  PROFESSIONAL: {
+    label: "Professional",
+    m365WriteBack: true,
+    provisioning: true,
+    inventorySync: true,
+    copilotReadiness: true,
+    lifecycleAutomation: true,
+    selfServicePortal: true,
+    advancedReporting: false,
+    maxUsers: 5000,
+    maxTenants: 10,
+    auditRetentionDays: 365 * 7,
+  },
+  ENTERPRISE: {
+    label: "Unlimited Enterprise",
+    m365WriteBack: true,
+    provisioning: true,
+    inventorySync: true,
+    copilotReadiness: true,
+    lifecycleAutomation: true,
+    selfServicePortal: true,
+    advancedReporting: true,
+    maxUsers: -1,
+    maxTenants: -1,
+    auditRetentionDays: -1,
+  },
+} as const;
+
+export type PlanFeatures = typeof PLAN_FEATURES[ServicePlanTier];
+
+export const organizations = pgTable("organizations", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  name: text("name").notNull(),
+  domain: text("domain").notNull(),
+  servicePlan: text("service_plan").notNull().default("TRIAL"),
+  planStartedAt: timestamp("plan_started_at").defaultNow(),
+  supportEmail: text("support_email"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertOrganizationSchema = createInsertSchema(organizations).omit({
+  id: true,
+  createdAt: true,
+});
+
+export type InsertOrganization = z.infer<typeof insertOrganizationSchema>;
+export type Organization = typeof organizations.$inferSelect;

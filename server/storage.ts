@@ -5,6 +5,7 @@ import {
   provisioningRequests,
   copilotRules,
   tenantConnections,
+  organizations,
   type Workspace,
   type InsertWorkspace,
   type ProvisioningRequest,
@@ -13,6 +14,8 @@ import {
   type InsertCopilotRule,
   type TenantConnection,
   type InsertTenantConnection,
+  type Organization,
+  type InsertOrganization,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -36,6 +39,10 @@ export interface IStorage {
   createTenantConnection(connection: InsertTenantConnection): Promise<TenantConnection>;
   updateTenantConnection(id: string, updates: Partial<TenantConnection>): Promise<TenantConnection | undefined>;
   deleteTenantConnection(id: string): Promise<void>;
+
+  getOrganization(): Promise<Organization | undefined>;
+  upsertOrganization(org: InsertOrganization): Promise<Organization>;
+  updateOrganizationPlan(id: string, plan: string): Promise<Organization | undefined>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -128,6 +135,26 @@ export class DatabaseStorage implements IStorage {
 
   async deleteTenantConnection(id: string): Promise<void> {
     await db.delete(tenantConnections).where(eq(tenantConnections.id, id));
+  }
+
+  async getOrganization(): Promise<Organization | undefined> {
+    const [org] = await db.select().from(organizations).limit(1);
+    return org;
+  }
+
+  async upsertOrganization(org: InsertOrganization): Promise<Organization> {
+    const existing = await this.getOrganization();
+    if (existing) {
+      const [updated] = await db.update(organizations).set(org).where(eq(organizations.id, existing.id)).returning();
+      return updated;
+    }
+    const [created] = await db.insert(organizations).values(org).returning();
+    return created;
+  }
+
+  async updateOrganizationPlan(id: string, plan: string): Promise<Organization | undefined> {
+    const [updated] = await db.update(organizations).set({ servicePlan: plan, planStartedAt: new Date() }).where(eq(organizations.id, id)).returning();
+    return updated;
   }
 }
 
