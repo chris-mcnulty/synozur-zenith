@@ -20,6 +20,7 @@ import AdminTemplatesPage from "./pages/app/admin/templates";
 import DocumentLibraryPage from "./pages/app/document-library";
 import StructuresPage from "./pages/app/structures";
 import ReportsPage from "./pages/app/reports";
+import ContentTypesPage from "./pages/app/content-types";
 import AppShell from "./components/layout/app-shell";
 
 // Fallback empty pages for other routes
@@ -58,6 +59,7 @@ function AppRoutes() {
                 <Route path="/app/reports" component={ReportsPage} />
                 <Route path="/app/document-library" component={DocumentLibraryPage} />
                 <Route path="/app/structures" component={StructuresPage} />
+                <Route path="/app/content-types" component={ContentTypesPage} />
                 <Route path="/app/admin" component={AdminTemplatesPage} />
                 <Route component={NotFound} />
               </Switch>

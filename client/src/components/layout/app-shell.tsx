@@ -22,7 +22,8 @@ import {
   Check,
   BrainCircuit,
   Library,
-  LayoutTemplate
+  LayoutTemplate,
+  FileText
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -56,6 +57,7 @@ const navGroups = [
       { name: "Governance", href: "/app/governance", icon: ShieldCheck },
       { name: "Structures", href: "/app/structures", icon: Layers },
       { name: "Document Library", href: "/app/document-library", icon: Library },
+      { name: "Content Types", href: "/app/content-types", icon: FileText },
       { name: "Syntex", href: "/app/syntex", icon: BrainCircuit },
       { name: "Purview", href: "/app/purview", icon: Fingerprint },
       { name: "Lifecycle", href: "/app/lifecycle", icon: Clock },
