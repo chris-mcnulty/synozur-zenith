@@ -24,7 +24,8 @@ import {
   Library,
   LayoutTemplate,
   FileText,
-  Box
+  Box,
+  Archive
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -60,6 +61,7 @@ const navGroups = [
       { name: "Document Library", href: "/app/document-library", icon: Library },
       { name: "Content Types", href: "/app/content-types", icon: FileText },
       { name: "Embedded Containers", href: "/app/embedded-containers", icon: Box },
+      { name: "Archive & Backup", href: "/app/archive-backup", icon: Archive },
       { name: "Syntex", href: "/app/syntex", icon: BrainCircuit },
       { name: "Purview", href: "/app/purview", icon: Fingerprint },
       { name: "Lifecycle", href: "/app/lifecycle", icon: Clock },
