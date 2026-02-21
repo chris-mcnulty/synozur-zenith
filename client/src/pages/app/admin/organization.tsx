@@ -12,8 +12,12 @@ import {
   CreditCard,
   Bell
 } from "lucide-react";
+import { Link } from "wouter";
+import { useServicePlan } from "@/hooks/use-service-plan";
+import { PLAN_FEATURES } from "@shared/schema";
 
 export default function OrganizationSettingsPage() {
+  const { plan, features, org } = useServicePlan();
   return (
     <div className="space-y-6 animate-in fade-in duration-500 pb-12">
       <div>
@@ -90,12 +94,18 @@ export default function OrganizationSettingsPage() {
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="p-4 rounded-xl bg-primary/10 border border-primary/20 flex flex-col items-center justify-center text-center">
-                <Badge className="mb-2 uppercase tracking-widest text-[10px]">Professional Tier</Badge>
-                <div className="text-2xl font-bold mt-1">142<span className="text-sm text-muted-foreground font-normal">/5000 users</span></div>
-                <div className="text-xs text-primary mt-2">Active Subscription</div>
+              <div className={`p-4 rounded-xl flex flex-col items-center justify-center text-center ${plan === 'TRIAL' ? 'bg-amber-500/10 border border-amber-500/20' : 'bg-primary/10 border border-primary/20'}`}>
+                <Badge className={`mb-2 uppercase tracking-widest text-[10px] ${plan === 'TRIAL' ? 'bg-amber-500/20 text-amber-600 border-amber-500/30' : ''}`}>{features.label}</Badge>
+                <div className="text-2xl font-bold mt-1">
+                  {features.maxUsers === -1 ? 'Unlimited' : <>{features.maxUsers.toLocaleString()}<span className="text-sm text-muted-foreground font-normal"> max users</span></>}
+                </div>
+                <div className={`text-xs mt-2 ${plan === 'TRIAL' ? 'text-amber-600' : 'text-primary'}`}>
+                  {plan === 'TRIAL' ? 'Trial (No M365 Write-Back)' : 'Active Subscription'}
+                </div>
               </div>
-              <Button variant="outline" className="w-full mt-4">Manage Billing</Button>
+              <Link href="/app/admin/service-plans">
+                <Button variant="outline" className="w-full mt-4">{plan === 'TRIAL' ? 'Upgrade Plan' : 'Manage Plan'}</Button>
+              </Link>
             </CardContent>
           </Card>
           

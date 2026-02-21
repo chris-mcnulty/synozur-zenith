@@ -3,6 +3,8 @@ import { Link, useLocation } from "wouter";
 import { useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { useServicePlan } from "@/hooks/use-service-plan";
+import { UpgradeGate } from "@/components/upgrade-gate";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -37,6 +39,7 @@ export default function ProvisionNewPage() {
   const [, setLocation] = useLocation();
   const [isSuccess, setIsSuccess] = useState(false);
   const { toast } = useToast();
+  const { canWriteBack } = useServicePlan();
   
   const [workspaceType, setWorkspaceType] = useState("TEAM_SITE");
   const [teamsConnected, setTeamsConnected] = useState(true);
@@ -312,14 +315,21 @@ export default function ProvisionNewPage() {
                 <Switch disabled={sensitivity === 'highly_confidential'} checked={sensitivity !== 'highly_confidential'} />
               </div>
             </CardContent>
-            <CardFooter className="pt-6 border-t border-border/50 flex justify-end gap-3 bg-muted/10 rounded-b-xl">
-              <Button type="button" variant="ghost" onClick={() => setLocation("/app/dashboard")}>
-                Cancel
-              </Button>
-              <Button type="submit" disabled={isSubmitting || !name || !owner || !secondaryOwner} className="shadow-md shadow-primary/20 px-8 gap-2">
-                {isSubmitting ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
-                {isSubmitting ? "Provisioning..." : "Provision Governed Workspace"}
-              </Button>
+            <CardFooter className="pt-6 border-t border-border/50 flex flex-col gap-4 bg-muted/10 rounded-b-xl">
+              {!canWriteBack && (
+                <UpgradeGate feature="m365WriteBack">
+                  <span />
+                </UpgradeGate>
+              )}
+              <div className="flex justify-end gap-3 w-full">
+                <Button type="button" variant="ghost" onClick={() => setLocation("/app/dashboard")}>
+                  Cancel
+                </Button>
+                <Button type="submit" disabled={isSubmitting || !name || !owner || !secondaryOwner} className="shadow-md shadow-primary/20 px-8 gap-2">
+                  {isSubmitting ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+                  {isSubmitting ? "Submitting..." : canWriteBack ? "Provision Governed Workspace" : "Submit Request (Read-Only)"}
+                </Button>
+              </div>
             </CardFooter>
           </Card>
         </div>

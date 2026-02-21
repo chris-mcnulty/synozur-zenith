@@ -9,10 +9,12 @@ import {
   Clock, 
   ArrowUpRight,
   Database,
-  Users
+  Users,
+  Lock
 } from "lucide-react";
 import { Link } from "wouter";
 import { useQuery } from "@tanstack/react-query";
+import { useServicePlan } from "@/hooks/use-service-plan";
 
 export default function DashboardPage() {
   const { data: stats, isLoading } = useQuery<{
@@ -26,6 +28,8 @@ export default function DashboardPage() {
     totalRequests: number;
   }>({ queryKey: ["/api/stats"] });
 
+  const { plan, isTrial, canWriteBack, features } = useServicePlan();
+
   const totalWorkspaces = stats?.totalWorkspaces ?? 0;
   const metadataCompliance = totalWorkspaces > 0 ? Math.round((stats!.metadataComplete / totalWorkspaces) * 100) : 0;
   const copilotReadiness = totalWorkspaces > 0 ? Math.round((stats!.copilotReady / totalWorkspaces) * 100) : 0;
@@ -33,6 +37,25 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-8 animate-in fade-in duration-500 pb-10">
+      {isTrial && (
+        <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/20 flex flex-col sm:flex-row gap-4 items-start sm:items-center justify-between" data-testid="banner-trial">
+          <div className="flex items-center gap-3">
+            <div className="w-8 h-8 rounded-lg bg-amber-500/20 flex items-center justify-center">
+              <Lock className="w-4 h-4 text-amber-600" />
+            </div>
+            <div>
+              <p className="text-sm font-semibold text-amber-700 dark:text-amber-400">Trial Plan Active</p>
+              <p className="text-xs text-amber-600/80 dark:text-amber-400/70">Read-only mode: inventory sync and governance views are available. Microsoft 365 write-back (provisioning, site creation) requires a Standard plan or higher.</p>
+            </div>
+          </div>
+          <Link href="/app/admin/service-plans">
+            <Button size="sm" className="gap-1.5 shrink-0 shadow-sm">
+              View Plans <ArrowUpRight className="w-3.5 h-3.5" />
+            </Button>
+          </Link>
+        </div>
+      )}
+
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Dashboard</h1>
