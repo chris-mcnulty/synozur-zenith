@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, integer, boolean, timestamp, jsonb } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, integer, boolean, timestamp, jsonb, unique } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -171,6 +171,9 @@ export const organizations = pgTable("organizations", {
   servicePlan: text("service_plan").notNull().default("TRIAL"),
   planStartedAt: timestamp("plan_started_at").defaultNow(),
   supportEmail: text("support_email"),
+  azureTenantId: text("azure_tenant_id"),
+  enforceSso: boolean("enforce_sso").default(false),
+  allowLocalAuth: boolean("allow_local_auth").default(true),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -181,3 +184,86 @@ export const insertOrganizationSchema = createInsertSchema(organizations).omit({
 
 export type InsertOrganization = z.infer<typeof insertOrganizationSchema>;
 export type Organization = typeof organizations.$inferSelect;
+
+export const ZENITH_ROLES = {
+  PLATFORM_OWNER: 'platform_owner',
+  TENANT_ADMIN: 'tenant_admin',
+  GOVERNANCE_ADMIN: 'governance_admin',
+  OPERATOR: 'operator',
+  VIEWER: 'viewer',
+  AUDITOR: 'read_only_auditor',
+} as const;
+
+export type ZenithRole = typeof ZENITH_ROLES[keyof typeof ZENITH_ROLES];
+
+export const users = pgTable("users", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  email: text("email").notNull().unique(),
+  password: text("password").notNull(),
+  name: text("name"),
+  role: text("role").notNull().default("viewer"),
+  organizationId: varchar("organization_id").references(() => organizations.id, { onDelete: 'cascade' }),
+  emailVerified: boolean("email_verified").notNull().default(false),
+  verificationToken: text("verification_token"),
+  resetToken: text("reset_token"),
+  resetTokenExpiry: timestamp("reset_token_expiry"),
+  authProvider: text("auth_provider").default("local"),
+  azureObjectId: text("azure_object_id"),
+  azureTenantId: text("azure_tenant_id"),
+  lastLoginAt: timestamp("last_login_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertUserSchema = createInsertSchema(users).omit({
+  id: true,
+  createdAt: true,
+});
+
+export type InsertUser = z.infer<typeof insertUserSchema>;
+export type User = typeof users.$inferSelect;
+
+export const graphTokens = pgTable("graph_tokens", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: 'cascade' }),
+  organizationId: varchar("organization_id").notNull().references(() => organizations.id, { onDelete: 'cascade' }),
+  service: varchar("service").notNull().default('default'),
+  accessToken: text("access_token"),
+  refreshToken: text("refresh_token"),
+  expiresAt: timestamp("expires_at"),
+  scopes: jsonb("scopes").$type<string[]>(),
+  lastUsedAt: timestamp("last_used_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const insertGraphTokenSchema = createInsertSchema(graphTokens).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export type InsertGraphToken = z.infer<typeof insertGraphTokenSchema>;
+export type GraphToken = typeof graphTokens.$inferSelect;
+
+export const auditLog = pgTable("audit_log", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id"),
+  userEmail: text("user_email"),
+  action: text("action").notNull(),
+  resource: text("resource").notNull(),
+  resourceId: varchar("resource_id"),
+  organizationId: varchar("organization_id"),
+  tenantConnectionId: varchar("tenant_connection_id"),
+  details: jsonb("details").$type<Record<string, any>>(),
+  result: text("result").notNull().default("SUCCESS"),
+  ipAddress: text("ip_address"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertAuditLogSchema = createInsertSchema(auditLog).omit({
+  id: true,
+  createdAt: true,
+});
+
+export type InsertAuditLog = z.infer<typeof insertAuditLogSchema>;
+export type AuditLog = typeof auditLog.$inferSelect;
