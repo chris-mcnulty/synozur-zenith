@@ -24,6 +24,9 @@ import ContentTypesPage from "./pages/app/content-types";
 import EmbeddedContainersPage from "./pages/app/embedded-containers";
 import ArchiveBackupPage from "./pages/app/archive-backup";
 import ServicePlansPage from "./pages/app/admin/service-plans";
+import UserManagementPage from "./pages/app/admin/users";
+import OrganizationSettingsPage from "./pages/app/admin/organization";
+import SystemAdminPage from "./pages/app/admin/system";
 import AppShell from "./components/layout/app-shell";
 
 // Fallback empty pages for other routes
@@ -66,6 +69,9 @@ function AppRoutes() {
                 <Route path="/app/embedded-containers" component={EmbeddedContainersPage} />
                 <Route path="/app/archive-backup" component={ArchiveBackupPage} />
                 <Route path="/app/admin/plans" component={ServicePlansPage} />
+                <Route path="/app/admin/users" component={UserManagementPage} />
+                <Route path="/app/admin/organization" component={OrganizationSettingsPage} />
+                <Route path="/app/admin/system" component={SystemAdminPage} />
                 <Route path="/app/admin" component={AdminTemplatesPage} />
                 <Route component={NotFound} />
               </Switch>
