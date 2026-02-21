@@ -23,7 +23,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 
 const organizations = [
-  { id: "ORG-001", name: "Synozur Group", domain: "synozur.demo", plan: "Professional", status: "Active", tenants: 2 },
+  { id: "ORG-001", name: "The Synozur Alliance", domain: "synozur.demo", plan: "Professional", status: "Active", tenants: 2 },
   { id: "ORG-002", name: "Contoso Corp", domain: "contoso.com", plan: "Enterprise", status: "Active", tenants: 4 },
   { id: "ORG-003", name: "Fabrikam Inc", domain: "fabrikam.local", plan: "Standard", status: "Suspended", tenants: 1 },
   { id: "ORG-004", name: "Tailspin Toys", domain: "tailspin.net", plan: "Standard", status: "Active", tenants: 1 },

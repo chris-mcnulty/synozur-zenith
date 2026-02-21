@@ -19,19 +19,14 @@ import {
   Search, 
   Filter, 
   MoreHorizontal, 
-  Users, 
   Globe, 
-  FolderGit2,
   ShieldAlert,
   ShieldCheck,
   CheckSquare,
   X,
   Settings2,
   Save,
-  Loader2,
-  BarChart2,
-  BookOpen,
-  Infinity
+  Loader2
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -129,13 +124,19 @@ export default function GovernancePage() {
 
   const getIconForType = (type: string) => {
     switch(type) {
-      case 'TEAM': return <Users className="w-4 h-4 text-blue-500" />;
-      case 'SHAREPOINT_SITE': return <Globe className="w-4 h-4 text-teal-500" />;
-      case 'M365_GROUP': return <FolderGit2 className="w-4 h-4 text-orange-500" />;
-      case 'POWER_BI': return <BarChart2 className="w-4 h-4 text-yellow-500" />;
-      case 'LOOP_WORKSPACE': return <Infinity className="w-4 h-4 text-indigo-500" />;
-      case 'COPILOT_NOTEBOOK': return <BookOpen className="w-4 h-4 text-purple-500" />;
-      default: return <FolderGit2 className="w-4 h-4" />;
+      case 'TEAM_SITE': return <Globe className="w-4 h-4 text-teal-500" />;
+      case 'COMMUNICATION_SITE': return <Globe className="w-4 h-4 text-blue-500" />;
+      case 'HUB_SITE': return <Globe className="w-4 h-4 text-purple-500" />;
+      default: return <Globe className="w-4 h-4 text-teal-500" />;
+    }
+  };
+
+  const getSiteTypeLabel = (type: string) => {
+    switch(type) {
+      case 'TEAM_SITE': return 'Team Site';
+      case 'COMMUNICATION_SITE': return 'Communication Site';
+      case 'HUB_SITE': return 'Hub Site';
+      default: return 'SharePoint Site';
     }
   };
 
@@ -155,7 +156,7 @@ export default function GovernancePage() {
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div>
             <h1 className="text-3xl font-bold tracking-tight">Workspace Governance</h1>
-            <p className="text-muted-foreground mt-1">Enumerate and inspect Microsoft 365 objects</p>
+            <p className="text-muted-foreground mt-1">Enumerate and inspect SharePoint sites across your tenant</p>
           </div>
         </div>
         <Card className="glass-panel border-border/50">
@@ -172,7 +173,7 @@ export default function GovernancePage() {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Workspace Governance</h1>
-          <p className="text-muted-foreground mt-1">Enumerate and inspect Microsoft 365 objects</p>
+          <p className="text-muted-foreground mt-1">Enumerate and inspect SharePoint sites across your tenant</p>
         </div>
         <div className="flex gap-3">
           <Button variant="outline" className="gap-2 rounded-full" onClick={() => setShowFilterDrawer(true)}>
@@ -264,7 +265,12 @@ export default function GovernancePage() {
                           </div>
                           <div className="flex flex-col">
                             <span className="text-foreground text-sm">{ws.displayName}</span>
-                            <span className="text-xs text-muted-foreground font-normal">Last active: {ws.lastActive}</span>
+                            <div className="flex items-center gap-1.5">
+                              <span className="text-xs text-muted-foreground font-normal">{getSiteTypeLabel(ws.type)}</span>
+                              {ws.teamsConnected && (
+                                <span className="text-[10px] font-semibold text-blue-500 bg-blue-500/10 px-1.5 py-0.5 rounded">Teams</span>
+                              )}
+                            </div>
                           </div>
                         </div>
                       </TableCell>
@@ -416,12 +422,9 @@ export default function GovernancePage() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All Types</SelectItem>
-                  <SelectItem value="team">Microsoft Team</SelectItem>
-                  <SelectItem value="site">SharePoint Site</SelectItem>
-                  <SelectItem value="group">M365 Group</SelectItem>
-                  <SelectItem value="loop">Loop Workspace</SelectItem>
-                  <SelectItem value="powerbi">Power BI Workspace</SelectItem>
-                  <SelectItem value="copilot">Copilot Notebook</SelectItem>
+                  <SelectItem value="team_site">Team Site</SelectItem>
+                  <SelectItem value="communication_site">Communication Site</SelectItem>
+                  <SelectItem value="hub_site">Hub Site</SelectItem>
                 </SelectContent>
               </Select>
             </div>

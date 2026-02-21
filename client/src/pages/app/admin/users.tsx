@@ -39,7 +39,7 @@ export default function UserManagementPage() {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">User Management</h1>
-          <p className="text-muted-foreground mt-1">Manage users, roles, and access for Synozur Group.</p>
+          <p className="text-muted-foreground mt-1">Manage users, roles, and access for The Synozur Alliance.</p>
         </div>
         <div className="flex gap-3">
           <Button variant="outline" className="gap-2">
@@ -60,7 +60,7 @@ export default function UserManagementPage() {
           </CardHeader>
           <CardContent>
             <div className="text-3xl font-bold">142</div>
-            <p className="text-xs text-muted-foreground mt-1">In Synozur Group</p>
+            <p className="text-xs text-muted-foreground mt-1">In The Synozur Alliance</p>
           </CardContent>
         </Card>
         <Card className="glass-panel border-border/50">

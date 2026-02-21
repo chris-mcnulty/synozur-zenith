@@ -12,7 +12,7 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Switch } from "@/components/ui/switch";
 import { 
   ArrowLeft, 
-  Users, 
+  
   Globe, 
   FolderGit2, 
   ShieldAlert, 
@@ -38,7 +38,8 @@ export default function ProvisionNewPage() {
   const [isSuccess, setIsSuccess] = useState(false);
   const { toast } = useToast();
   
-  const [workspaceType, setWorkspaceType] = useState("TEAM");
+  const [workspaceType, setWorkspaceType] = useState("TEAM_SITE");
+  const [teamsConnected, setTeamsConnected] = useState(true);
   const [projectType, setProjectType] = useState("DEAL");
   const [name, setName] = useState("");
   const [owner, setOwner] = useState("");
@@ -123,7 +124,7 @@ export default function ProvisionNewPage() {
         </Link>
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Governed Workspace Provisioning</h1>
-          <p className="text-muted-foreground mt-1">Create Deal & PortCo safe-by-default collaboration spaces.</p>
+          <p className="text-muted-foreground mt-1">Provision governed SharePoint sites for Deal & PortCo collaboration.</p>
         </div>
       </div>
 
@@ -188,34 +189,55 @@ export default function ProvisionNewPage() {
 
           <Card className="glass-panel border-border/50 shadow-sm">
             <CardHeader>
-              <CardTitle>2. Workspace Type</CardTitle>
-              <CardDescription>Select the underlying Microsoft 365 capability.</CardDescription>
+              <CardTitle>2. SharePoint Site Template</CardTitle>
+              <CardDescription>All workspaces are provisioned as SharePoint sites. Select the site template.</CardDescription>
             </CardHeader>
-            <CardContent>
-              <RadioGroup defaultValue="TEAM" value={workspaceType} onValueChange={setWorkspaceType} className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <CardContent className="space-y-6">
+              <RadioGroup defaultValue="TEAM_SITE" value={workspaceType} onValueChange={setWorkspaceType} className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div>
-                  <RadioGroupItem value="TEAM" id="type-team" className="peer sr-only" />
+                  <RadioGroupItem value="TEAM_SITE" id="type-team" className="peer sr-only" />
                   <Label
                     htmlFor="type-team"
                     className="flex flex-col items-center justify-between rounded-xl border-2 border-muted bg-popover p-4 hover:bg-accent hover:text-accent-foreground peer-data-[state=checked]:border-primary peer-data-[state=checked]:bg-primary/5 cursor-pointer transition-all h-full"
                   >
-                    <Users className="mb-3 h-8 w-8 text-blue-500" />
-                    <span className="font-semibold text-center">Microsoft Team</span>
-                    <span className="text-[10px] text-muted-foreground mt-1 text-center font-normal">Chat, files, and meetings</span>
+                    <Globe className="mb-3 h-8 w-8 text-teal-500" />
+                    <span className="font-semibold text-center">Team Site</span>
+                    <span className="text-[10px] text-muted-foreground mt-1 text-center font-normal">Collaboration & document storage</span>
                   </Label>
                 </div>
                 <div>
-                  <RadioGroupItem value="SHAREPOINT_SITE" id="type-site" className="peer sr-only" />
+                  <RadioGroupItem value="COMMUNICATION_SITE" id="type-comm" className="peer sr-only" />
                   <Label
-                    htmlFor="type-site"
+                    htmlFor="type-comm"
                     className="flex flex-col items-center justify-between rounded-xl border-2 border-muted bg-popover p-4 hover:bg-accent hover:text-accent-foreground peer-data-[state=checked]:border-primary peer-data-[state=checked]:bg-primary/5 cursor-pointer transition-all h-full"
                   >
-                    <Globe className="mb-3 h-8 w-8 text-teal-500" />
-                    <span className="font-semibold text-center">SharePoint Site</span>
-                    <span className="text-[10px] text-muted-foreground mt-1 text-center font-normal">Intranet and structured document storage</span>
+                    <Globe className="mb-3 h-8 w-8 text-blue-500" />
+                    <span className="font-semibold text-center">Communication Site</span>
+                    <span className="text-[10px] text-muted-foreground mt-1 text-center font-normal">Intranet, news & publishing</span>
+                  </Label>
+                </div>
+                <div>
+                  <RadioGroupItem value="HUB_SITE" id="type-hub" className="peer sr-only" />
+                  <Label
+                    htmlFor="type-hub"
+                    className="flex flex-col items-center justify-between rounded-xl border-2 border-muted bg-popover p-4 hover:bg-accent hover:text-accent-foreground peer-data-[state=checked]:border-primary peer-data-[state=checked]:bg-primary/5 cursor-pointer transition-all h-full"
+                  >
+                    <Globe className="mb-3 h-8 w-8 text-purple-500" />
+                    <span className="font-semibold text-center">Hub Site</span>
+                    <span className="text-[10px] text-muted-foreground mt-1 text-center font-normal">Central hub connecting related sites</span>
                   </Label>
                 </div>
               </RadioGroup>
+
+              <div className="flex flex-row items-center justify-between rounded-xl border border-border/50 p-4 bg-background/30">
+                <div className="space-y-0.5">
+                  <Label className="text-base font-semibold">Connect Microsoft Teams</Label>
+                  <p className="text-sm text-muted-foreground">
+                    Enable Teams chat, channels, and meetings for this SharePoint site.
+                  </p>
+                </div>
+                <Switch checked={teamsConnected} onCheckedChange={setTeamsConnected} />
+              </div>
             </CardContent>
           </Card>
 

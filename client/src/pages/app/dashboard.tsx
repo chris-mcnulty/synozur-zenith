@@ -36,7 +36,7 @@ export default function DashboardPage() {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Dashboard</h1>
-          <p className="text-muted-foreground mt-1">Governance overview for Synozur Demo (PROD)</p>
+          <p className="text-muted-foreground mt-1">Governance overview for The Synozur Alliance (PROD)</p>
         </div>
         <div className="flex gap-3">
           <Link href="/app/provision/new">

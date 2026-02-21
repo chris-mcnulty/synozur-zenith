@@ -18,7 +18,7 @@ export default function OrganizationSettingsPage() {
     <div className="space-y-6 animate-in fade-in duration-500 pb-12">
       <div>
         <h1 className="text-3xl font-bold tracking-tight">Organization Settings</h1>
-        <p className="text-muted-foreground mt-1">Manage profile, security, and preferences for Synozur Group.</p>
+        <p className="text-muted-foreground mt-1">Manage profile, security, and preferences for The Synozur Alliance.</p>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
@@ -35,7 +35,7 @@ export default function OrganizationSettingsPage() {
               <div className="grid grid-cols-2 gap-6">
                 <div className="space-y-2 col-span-2 sm:col-span-1">
                   <Label>Organization Name</Label>
-                  <Input defaultValue="Synozur Group" className="bg-background/50" />
+                  <Input defaultValue="The Synozur Alliance" className="bg-background/50" />
                 </div>
                 <div className="space-y-2 col-span-2 sm:col-span-1">
                   <Label>Primary Domain</Label>

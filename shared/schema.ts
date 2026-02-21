@@ -6,7 +6,8 @@ import { z } from "zod";
 export const workspaces = pgTable("workspaces", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   displayName: text("display_name").notNull(),
-  type: text("type").notNull(), // TEAM, SHAREPOINT_SITE, M365_GROUP, POWER_BI, LOOP_WORKSPACE, COPILOT_NOTEBOOK
+  type: text("type").notNull(), // TEAM_SITE, COMMUNICATION_SITE, HUB_SITE
+  teamsConnected: boolean("teams_connected").notNull().default(false),
   projectType: text("project_type").notNull().default("GENERAL"), // DEAL, PORTCO, GENERAL
   sensitivity: text("sensitivity").notNull().default("INTERNAL"), // PUBLIC, INTERNAL, CONFIDENTIAL, HIGHLY_CONFIDENTIAL
   retentionPolicy: text("retention_policy").notNull().default("Default 7 Year"),

@@ -10,7 +10,7 @@ export default function SelectTenantPage() {
   const tenants = [
     {
       id: "t1",
-      name: "Synozur Demo",
+      name: "The Synozur Alliance",
       plan: "BASE",
       environments: 2,
       active: true

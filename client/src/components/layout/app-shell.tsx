@@ -253,7 +253,7 @@ export default function AppShell({ children }: AppShellProps) {
                     <Building2 className="w-4 h-4 text-primary shrink-0" />
                     <div className="flex flex-col items-start -space-y-0.5">
                       <span className="text-[9px] font-bold text-muted-foreground uppercase tracking-widest">Platform Org</span>
-                      <span className="font-semibold text-sm leading-none text-foreground">Synozur Group</span>
+                      <span className="font-semibold text-sm leading-none text-foreground">The Synozur Alliance</span>
                     </div>
                     <ChevronDown className="w-3 h-3 text-muted-foreground opacity-50 ml-1 shrink-0" />
                   </Button>
@@ -266,7 +266,7 @@ export default function AppShell({ children }: AppShellProps) {
                       <div className="w-6 h-6 rounded bg-primary/20 flex items-center justify-center">
                         <Building2 className="w-3.5 h-3.5 text-primary" />
                       </div>
-                      <span className="font-semibold text-primary">Synozur Group</span>
+                      <span className="font-semibold text-primary">The Synozur Alliance</span>
                     </div>
                     <Check className="w-4 h-4 text-primary" />
                   </DropdownMenuItem>
@@ -306,14 +306,14 @@ export default function AppShell({ children }: AppShellProps) {
                   <DropdownMenuItem className="flex justify-between rounded-lg p-2.5 bg-secondary/10 cursor-default items-start">
                     <div className="space-y-0.5">
                       <span className="font-semibold text-secondary block">synozur.onmicrosoft.com</span>
-                      <span className="text-xs text-muted-foreground block">Production Environment</span>
+                      <span className="text-xs text-muted-foreground block">Synozur Production</span>
                     </div>
                     <Badge variant="default" className="text-[10px] bg-secondary text-secondary-foreground hover:bg-secondary uppercase tracking-wider h-5 px-1.5 shadow-sm shadow-secondary/20">Active</Badge>
                   </DropdownMenuItem>
                   <DropdownMenuItem className="rounded-lg p-2.5 cursor-pointer text-muted-foreground hover:text-foreground mt-1 items-start">
                     <div className="space-y-0.5">
-                      <span className="font-medium block">synozurtest.onmicrosoft.com</span>
-                      <span className="text-xs text-muted-foreground block">UAT / Sandbox</span>
+                      <span className="font-medium block text-emerald-600">cascadiaoceanic.onmicrosoft.com</span>
+                      <span className="text-xs text-muted-foreground block">Cascadia Oceanic</span>
                     </div>
                   </DropdownMenuItem>
                   <DropdownMenuSeparator className="my-2" />

@@ -34,17 +34,19 @@ const tenants = [
     status: "Healthy", 
     lastSync: "10 mins ago",
     appId: "c8a4...",
-    m365Users: "1,248"
+    m365Users: "1,248",
+    color: ""
   },
   { 
     id: "TEN-002", 
-    domain: "synozurtest.onmicrosoft.com", 
-    name: "Synozur UAT", 
-    type: "Sandbox", 
-    status: "Warning", 
-    lastSync: "2 days ago",
+    domain: "cascadiaoceanic.onmicrosoft.com", 
+    name: "Cascadia Oceanic", 
+    type: "Production", 
+    status: "Healthy", 
+    lastSync: "25 mins ago",
     appId: "f9b2...",
-    m365Users: "42"
+    m365Users: "672",
+    color: "text-emerald-600"
   },
   { 
     id: "TEN-003", 
@@ -54,7 +56,8 @@ const tenants = [
     status: "Error", 
     lastSync: "Failed",
     appId: "Pending",
-    m365Users: "840"
+    m365Users: "840",
+    color: ""
   }
 ];
 
@@ -150,8 +153,8 @@ export default function TenantConnectionsPage() {
                 <TableRow key={tenant.id} className="hover:bg-muted/10 transition-colors">
                   <TableCell className="pl-6">
                     <div className="flex flex-col">
-                      <span className="font-semibold text-sm">{tenant.name}</span>
-                      <span className="text-xs font-mono text-muted-foreground mt-0.5">{tenant.domain}</span>
+                      <span className={`font-semibold text-sm ${tenant.color}`}>{tenant.name}</span>
+                      <span className={`text-xs font-mono mt-0.5 ${tenant.color || 'text-muted-foreground'}`}>{tenant.domain}</span>
                     </div>
                   </TableCell>
                   <TableCell>
