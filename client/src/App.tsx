@@ -14,6 +14,7 @@ import DashboardPage from "./pages/app/dashboard";
 import ProvisionNewPage from "./pages/app/provision-new";
 import GovernancePage from "./pages/app/governance";
 import WorkspaceDetailsPage from "./pages/app/workspace-details";
+import AdminTemplatesPage from "./pages/app/admin/templates";
 import AppShell from "./components/layout/app-shell";
 
 // Fallback empty pages for other routes
@@ -49,7 +50,7 @@ function AppRoutes() {
                 <Route path="/app/purview" component={() => <EmptyPage title="Purview Configuration" />} />
                 <Route path="/app/lifecycle" component={() => <EmptyPage title="Lifecycle Management" />} />
                 <Route path="/app/reports" component={() => <EmptyPage title="Governance Reports" />} />
-                <Route path="/app/admin" component={() => <EmptyPage title="Admin Center" />} />
+                <Route path="/app/admin" component={AdminTemplatesPage} />
                 <Route component={NotFound} />
               </Switch>
             </AppShell>
