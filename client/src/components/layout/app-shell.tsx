@@ -20,7 +20,9 @@ import {
   SunMoon,
   Layers,
   Check,
-  BrainCircuit
+  BrainCircuit,
+  Library,
+  LayoutTemplate
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -52,6 +54,8 @@ const navGroups = [
     label: "Management",
     items: [
       { name: "Governance", href: "/app/governance", icon: ShieldCheck },
+      { name: "Structures", href: "/app/structures", icon: Layers },
+      { name: "Document Library", href: "/app/document-library", icon: Library },
       { name: "Syntex", href: "/app/syntex", icon: BrainCircuit },
       { name: "Purview", href: "/app/purview", icon: Fingerprint },
       { name: "Lifecycle", href: "/app/lifecycle", icon: Clock },
@@ -113,8 +117,8 @@ export default function AppShell({ children }: AppShellProps) {
               : "text-muted-foreground hover:bg-muted/80 hover:text-foreground"
           }`}>
             <div className="flex items-center gap-3">
-              <Settings className={`w-5 h-5 ${location.startsWith("/app/admin") ? "text-primary" : "text-muted-foreground/70"}`} />
-              Admin Center
+              <LayoutTemplate className={`w-5 h-5 ${location.startsWith("/app/admin") ? "text-primary" : "text-muted-foreground/70"}`} />
+              Provisioning Templates
             </div>
           </a>
         </Link>

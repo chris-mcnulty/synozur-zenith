@@ -17,6 +17,9 @@ import WorkspaceDetailsPage from "./pages/app/workspace-details";
 import PurviewConfigPage from "./pages/app/purview";
 import SyntexPage from "./pages/app/syntex";
 import AdminTemplatesPage from "./pages/app/admin/templates";
+import DocumentLibraryPage from "./pages/app/document-library";
+import StructuresPage from "./pages/app/structures";
+import ReportsPage from "./pages/app/reports";
 import AppShell from "./components/layout/app-shell";
 
 // Fallback empty pages for other routes
@@ -52,7 +55,9 @@ function AppRoutes() {
                 <Route path="/app/syntex" component={SyntexPage} />
                 <Route path="/app/purview" component={PurviewConfigPage} />
                 <Route path="/app/lifecycle" component={() => <EmptyPage title="Lifecycle Management" />} />
-                <Route path="/app/reports" component={() => <EmptyPage title="Governance Reports" />} />
+                <Route path="/app/reports" component={ReportsPage} />
+                <Route path="/app/document-library" component={DocumentLibraryPage} />
+                <Route path="/app/structures" component={StructuresPage} />
                 <Route path="/app/admin" component={AdminTemplatesPage} />
                 <Route component={NotFound} />
               </Switch>
