@@ -89,6 +89,7 @@ export const tenantConnections = pgTable("tenant_connections", {
   lastSyncStatus: text("last_sync_status"),
   lastSyncSiteCount: integer("last_sync_site_count"),
   consentGranted: boolean("consent_granted").notNull().default(false),
+  isDemo: boolean("is_demo").notNull().default(false),
   createdAt: timestamp("created_at").defaultNow(),
 });
 

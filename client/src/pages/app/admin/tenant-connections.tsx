@@ -406,7 +406,12 @@ export default function TenantConnectionsPage() {
                       <TableRow key={conn.id} className="hover:bg-muted/10 transition-colors" data-testid={`row-tenant-${conn.id}`}>
                         <TableCell className="pl-6">
                           <div className="flex flex-col">
-                            <span className="font-semibold text-sm">{conn.tenantName}</span>
+                            <span className="font-semibold text-sm flex items-center gap-2">
+                              {conn.tenantName}
+                              {(conn as any).isDemo && (
+                                <Badge variant="outline" className="text-[9px] bg-violet-500/10 text-violet-500 border-violet-500/20">DEMO</Badge>
+                              )}
+                            </span>
                             <span className="text-xs font-mono text-muted-foreground mt-0.5">{conn.domain}</span>
                           </div>
                         </TableCell>

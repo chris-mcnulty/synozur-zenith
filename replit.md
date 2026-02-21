@@ -6,13 +6,18 @@ Zenith is a Microsoft 365 governance platform MVP built for The Synozur Alliance
 ## Architecture
 - **Frontend**: React + Vite + TanStack Query + shadcn/ui + wouter routing
 - **Backend**: Express.js + Drizzle ORM + PostgreSQL (Neon)
-- **Database**: PostgreSQL with tables: workspaces, provisioning_requests, copilot_rules
+- **Database**: PostgreSQL with tables: workspaces, provisioning_requests, copilot_rules, tenant_connections, organizations
 - **Auth**: Microsoft Entra ID (SSO) + Zenith-managed RBAC (planned)
 
-## Organization & Tenants
-- Organization: "The Synozur Alliance"
-- Tenant 1: synozur.onmicrosoft.com (primary, production)
-- Tenant 2: cascadiaoceanic.onmicrosoft.com (Cascadia Oceanic, shown in green)
+## Synozur Product Suite
+- **Zenith** — Microsoft 365 governance platform (this project)
+- **Vega** — Strategy and OKR app. Code at: https://github.com/chris-mcnulty/synozur-vega
+
+## Organizations & Tenants
+- **Organization 1**: "The Synozur Alliance" — parent org, ENTERPRISE (unlimited) plan
+- **Organization 2**: "Contoso" — demo/sample org, TRIAL (free) plan
+- **Tenant 1**: Fabrikam (fabrikam.onmicrosoft.com) — DEMO, MSP ownership, no real M365 behind it
+- **Tenant 2**: Cascadia Oceanic (cascadiaoceanic.onmicrosoft.com) — DEMO, Hybrid ownership, no real M365 behind it
 
 ## Security Architecture (Confirmed Design)
 

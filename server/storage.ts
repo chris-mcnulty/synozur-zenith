@@ -40,7 +40,8 @@ export interface IStorage {
   updateTenantConnection(id: string, updates: Partial<TenantConnection>): Promise<TenantConnection | undefined>;
   deleteTenantConnection(id: string): Promise<void>;
 
-  getOrganization(): Promise<Organization | undefined>;
+  getOrganization(id?: string): Promise<Organization | undefined>;
+  getOrganizations(): Promise<Organization[]>;
   upsertOrganization(org: InsertOrganization): Promise<Organization>;
   updateOrganizationPlan(id: string, plan: string): Promise<Organization | undefined>;
 }
@@ -137,9 +138,17 @@ export class DatabaseStorage implements IStorage {
     await db.delete(tenantConnections).where(eq(tenantConnections.id, id));
   }
 
-  async getOrganization(): Promise<Organization | undefined> {
-    const [org] = await db.select().from(organizations).limit(1);
+  async getOrganization(id?: string): Promise<Organization | undefined> {
+    if (id) {
+      const [org] = await db.select().from(organizations).where(eq(organizations.id, id));
+      return org;
+    }
+    const [org] = await db.select().from(organizations).orderBy(organizations.createdAt).limit(1);
     return org;
+  }
+
+  async getOrganizations(): Promise<Organization[]> {
+    return db.select().from(organizations).orderBy(organizations.name);
   }
 
   async upsertOrganization(org: InsertOrganization): Promise<Organization> {

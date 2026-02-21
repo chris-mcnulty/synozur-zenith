@@ -131,19 +131,29 @@ export async function registerRoutes(
   });
 
   // ── Organization & Service Plan ──
-  app.get("/api/organization", async (_req, res) => {
-    let org = await storage.getOrganization();
+  app.get("/api/organization", async (req, res) => {
+    const id = req.query.id as string | undefined;
+    let org = await storage.getOrganization(id);
     if (!org) {
       org = await storage.upsertOrganization({
         name: "The Synozur Alliance",
         domain: "synozur.onmicrosoft.com",
-        servicePlan: "TRIAL",
+        servicePlan: "ENTERPRISE",
         supportEmail: "it-support@synozur.demo",
       });
     }
     const plan = org.servicePlan as ServicePlanTier;
     const features = getPlanFeatures(plan);
     res.json({ ...org, features });
+  });
+
+  app.get("/api/organizations", async (_req, res) => {
+    const orgs = await storage.getOrganizations();
+    const withFeatures = orgs.map(org => ({
+      ...org,
+      features: getPlanFeatures(org.servicePlan as ServicePlanTier),
+    }));
+    res.json(withFeatures);
   });
 
   app.patch("/api/organization/plan", async (req, res) => {
