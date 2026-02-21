@@ -1,5 +1,8 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Link } from "wouter";
+import { useQuery, useMutation } from "@tanstack/react-query";
+import type { Workspace } from "@shared/schema";
+import { apiRequest, queryClient } from "@/lib/queryClient";
 import { 
   Table, 
   TableBody, 
@@ -56,120 +59,42 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 
-// Mock Data
-const workspaces = [
-  {
-    id: "ws-1",
-    displayName: "Project Phoenix",
-    type: "TEAM",
-    sensitivity: "CONFIDENTIAL",
-    retention: "Default 7 Year",
-    metadataStatus: "COMPLETE",
-    copilotReady: true,
-    owners: 3,
-    lastActive: "2 days ago",
-    size: "450 MB",
-    usage: "High"
-  },
-  {
-    id: "ws-2",
-    displayName: "HR Leadership",
-    type: "SHAREPOINT_SITE",
-    sensitivity: "HIGHLY_CONFIDENTIAL",
-    retention: "Executive 10 Year",
-    metadataStatus: "MISSING_REQUIRED",
-    copilotReady: false,
-    owners: 1,
-    lastActive: "5 hours ago",
-    size: "1.2 GB",
-    usage: "Medium"
-  },
-  {
-    id: "ws-3",
-    displayName: "Marketing Q3 Campaign",
-    type: "TEAM",
-    sensitivity: "INTERNAL",
-    retention: "Default 7 Year",
-    metadataStatus: "COMPLETE",
-    copilotReady: true,
-    owners: 4,
-    lastActive: "Just now",
-    size: "2.8 GB",
-    usage: "Very High"
-  },
-  {
-    id: "ws-4",
-    displayName: "All Company Updates",
-    type: "M365_GROUP",
-    sensitivity: "PUBLIC",
-    retention: "Default 7 Year",
-    metadataStatus: "COMPLETE",
-    copilotReady: true,
-    owners: 2,
-    lastActive: "1 day ago",
-    size: "8.5 GB",
-    usage: "High"
-  },
-  {
-    id: "ws-5",
-    displayName: "Mergers & Acquisitions",
-    type: "TEAM",
-    sensitivity: "HIGHLY_CONFIDENTIAL",
-    retention: "Executive 10 Year",
-    metadataStatus: "MISSING_REQUIRED",
-    copilotReady: false,
-    owners: 2,
-    lastActive: "1 week ago",
-    size: "310 MB",
-    usage: "Low"
-  },
-  {
-    id: "ws-6",
-    displayName: "Q4 Finance Reporting",
-    type: "POWER_BI",
-    sensitivity: "CONFIDENTIAL",
-    retention: "Default 7 Year",
-    metadataStatus: "COMPLETE",
-    copilotReady: true,
-    owners: 2,
-    lastActive: "10 mins ago",
-    size: "15 MB",
-    usage: "Medium"
-  },
-  {
-    id: "ws-7",
-    displayName: "Engineering Specs Sync",
-    type: "LOOP_WORKSPACE",
-    sensitivity: "INTERNAL",
-    retention: "Default 7 Year",
-    metadataStatus: "COMPLETE",
-    copilotReady: true,
-    owners: 5,
-    lastActive: "1 hour ago",
-    size: "45 MB",
-    usage: "High"
-  },
-  {
-    id: "ws-8",
-    displayName: "R&D Competitor Research",
-    type: "COPILOT_NOTEBOOK",
-    sensitivity: "HIGHLY_CONFIDENTIAL",
-    retention: "Executive 10 Year",
-    metadataStatus: "MISSING_REQUIRED",
-    copilotReady: false,
-    owners: 1,
-    lastActive: "2 days ago",
-    size: "5 MB",
-    usage: "Medium"
-  }
-];
-
 export default function GovernancePage() {
   const [searchTerm, setSearchTerm] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [isBulkEditOpen, setIsBulkEditOpen] = useState(false);
-  const [isSavingBulk, setIsSavingBulk] = useState(false);
   const [showFilterDrawer, setShowFilterDrawer] = useState(false);
+
+  const [bulkSensitivity, setBulkSensitivity] = useState("");
+  const [bulkRetention, setBulkRetention] = useState("");
+  const [bulkDepartment, setBulkDepartment] = useState("");
+  const [bulkCostCenter, setBulkCostCenter] = useState("");
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(searchTerm);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [searchTerm]);
+
+  const { data: workspaces = [], isLoading, isError } = useQuery<Workspace[]>({
+    queryKey: ["/api/workspaces", debouncedSearch],
+    queryFn: () => fetch(`/api/workspaces?search=${debouncedSearch}`).then(r => r.json()),
+  });
+
+  const bulkMutation = useMutation({
+    mutationFn: (data: any) => apiRequest("PATCH", "/api/workspaces/bulk/update", data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/workspaces"] });
+      setIsBulkEditOpen(false);
+      setSelectedIds(new Set());
+      setBulkSensitivity("");
+      setBulkRetention("");
+      setBulkDepartment("");
+      setBulkCostCenter("");
+    },
+  });
 
   const toggleSelectAll = () => {
     if (selectedIds.size === workspaces.length) {
@@ -190,12 +115,16 @@ export default function GovernancePage() {
   };
 
   const handleBulkSave = () => {
-    setIsSavingBulk(true);
-    setTimeout(() => {
-      setIsSavingBulk(false);
-      setIsBulkEditOpen(false);
-      setSelectedIds(new Set());
-    }, 1500);
+    const updates: Record<string, string> = {};
+    if (bulkSensitivity) updates.sensitivity = bulkSensitivity;
+    if (bulkRetention) updates.retentionPolicy = bulkRetention;
+    if (bulkDepartment) updates.department = bulkDepartment;
+    if (bulkCostCenter) updates.costCenter = bulkCostCenter;
+
+    bulkMutation.mutate({
+      ids: Array.from(selectedIds),
+      updates,
+    });
   };
 
   const getIconForType = (type: string) => {
@@ -219,6 +148,24 @@ export default function GovernancePage() {
       default: return <Badge variant="outline">{sensitivity}</Badge>;
     }
   };
+
+  if (isError) {
+    return (
+      <div className="space-y-6 animate-in fade-in duration-500 pb-10">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div>
+            <h1 className="text-3xl font-bold tracking-tight">Workspace Governance</h1>
+            <p className="text-muted-foreground mt-1">Enumerate and inspect Microsoft 365 objects</p>
+          </div>
+        </div>
+        <Card className="glass-panel border-border/50">
+          <CardContent className="p-8 text-center">
+            <p className="text-destructive font-medium">Failed to load workspaces. Please try again later.</p>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6 animate-in fade-in duration-500 pb-10">
@@ -271,109 +218,117 @@ export default function GovernancePage() {
           </div>
         </CardHeader>
         <CardContent className="p-0">
-          <Table>
-            <TableHeader className="bg-muted/30">
-              <TableRow className="hover:bg-transparent">
-                <TableHead className="w-[40px] pl-4">
-                  <Checkbox 
-                    checked={selectedIds.size === workspaces.length && workspaces.length > 0} 
-                    onCheckedChange={toggleSelectAll}
-                    aria-label="Select all"
-                  />
-                </TableHead>
-                <TableHead className="w-[280px]">Workspace</TableHead>
-                <TableHead>Size & Usage</TableHead>
-                <TableHead>Sensitivity</TableHead>
-                <TableHead>Metadata Status</TableHead>
-                <TableHead>Copilot Readiness</TableHead>
-                <TableHead className="text-right">Owners</TableHead>
-                <TableHead className="w-[80px]"></TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {workspaces.map((ws) => (
-                <TableRow 
-                  key={ws.id} 
-                  className={`group transition-colors relative ${selectedIds.has(ws.id) ? 'bg-primary/5 hover:bg-primary/10' : 'hover:bg-muted/20'}`}
-                >
-                  <TableCell className="pl-4 relative z-20" onClick={(e) => e.stopPropagation()}>
-                    <Checkbox 
-                      checked={selectedIds.has(ws.id)}
-                      onCheckedChange={() => toggleSelect(ws.id)}
-                      aria-label={`Select ${ws.displayName}`}
-                    />
-                  </TableCell>
-                  <TableCell className="font-medium cursor-pointer relative">
-                    <Link href={`/app/governance/workspaces/${ws.id}`} className="absolute inset-0 z-0" />
-                    <div className="flex items-center gap-3 relative z-10">
-                      <div className="w-8 h-8 rounded-lg bg-background border border-border/50 flex items-center justify-center shadow-sm">
-                        {getIconForType(ws.type)}
-                      </div>
-                      <div className="flex flex-col">
-                        <span className="text-foreground text-sm">{ws.displayName}</span>
-                        <span className="text-xs text-muted-foreground font-normal">Last active: {ws.lastActive}</span>
-                      </div>
-                    </div>
-                  </TableCell>
-                  <TableCell className="relative z-10">
-                    <div className="flex flex-col">
-                      <span className="text-sm font-medium">{ws.size}</span>
-                      <span className="text-xs text-muted-foreground">{ws.usage} Activity</span>
-                    </div>
-                  </TableCell>
-                  <TableCell className="relative z-10">
-                    {getSensitivityBadge(ws.sensitivity)}
-                  </TableCell>
-                  <TableCell className="relative z-10">
-                    {ws.metadataStatus === 'COMPLETE' ? (
-                      <div className="flex items-center text-sm text-emerald-500 gap-1.5">
-                        <ShieldCheck className="w-4 h-4" /> Complete
-                      </div>
-                    ) : (
-                      <div className="flex items-center text-sm text-amber-500 gap-1.5">
-                        <ShieldAlert className="w-4 h-4" /> Missing
-                      </div>
-                    )}
-                  </TableCell>
-                  <TableCell className="relative z-10">
-                    {ws.copilotReady ? (
-                      <Badge variant="outline" className="bg-primary/10 text-primary border-primary/20 hover:bg-primary/20">Ready</Badge>
-                    ) : (
-                      <Badge variant="secondary" className="text-muted-foreground">Not Eligible</Badge>
-                    )}
-                  </TableCell>
-                  <TableCell className="text-right text-muted-foreground relative z-10">
-                    <span className={ws.owners < 2 ? "text-destructive font-medium" : ""}>
-                      {ws.owners}
-                    </span>
-                  </TableCell>
-                  <TableCell className="relative z-10">
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Button variant="ghost" className="h-8 w-8 p-0">
-                          <span className="sr-only">Open menu</span>
-                          <MoreHorizontal className="h-4 w-4" />
-                        </Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end" className="w-[160px]">
-                        <DropdownMenuLabel>Actions</DropdownMenuLabel>
-                        <DropdownMenuSeparator />
-                        <DropdownMenuItem asChild>
-                           <Link href={`/app/governance/workspaces/${ws.id}`}>Inspect Properties</Link>
-                        </DropdownMenuItem>
-                        <DropdownMenuItem>Request Attestation</DropdownMenuItem>
-                        <DropdownMenuItem className="text-destructive">Archive Workspace</DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-          
-          <div className="p-4 border-t border-border/50 text-xs text-center text-muted-foreground">
-            Showing 5 of 1,284 total workspaces. End of preview data.
-          </div>
+          {isLoading ? (
+            <div className="flex items-center justify-center p-12">
+              <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
+            </div>
+          ) : (
+            <>
+              <Table>
+                <TableHeader className="bg-muted/30">
+                  <TableRow className="hover:bg-transparent">
+                    <TableHead className="w-[40px] pl-4">
+                      <Checkbox 
+                        checked={selectedIds.size === workspaces.length && workspaces.length > 0} 
+                        onCheckedChange={toggleSelectAll}
+                        aria-label="Select all"
+                      />
+                    </TableHead>
+                    <TableHead className="w-[280px]">Workspace</TableHead>
+                    <TableHead>Size & Usage</TableHead>
+                    <TableHead>Sensitivity</TableHead>
+                    <TableHead>Metadata Status</TableHead>
+                    <TableHead>Copilot Readiness</TableHead>
+                    <TableHead className="text-right">Owners</TableHead>
+                    <TableHead className="w-[80px]"></TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {workspaces.map((ws) => (
+                    <TableRow 
+                      key={ws.id} 
+                      className={`group transition-colors relative ${selectedIds.has(ws.id) ? 'bg-primary/5 hover:bg-primary/10' : 'hover:bg-muted/20'}`}
+                    >
+                      <TableCell className="pl-4 relative z-20" onClick={(e) => e.stopPropagation()}>
+                        <Checkbox 
+                          checked={selectedIds.has(ws.id)}
+                          onCheckedChange={() => toggleSelect(ws.id)}
+                          aria-label={`Select ${ws.displayName}`}
+                        />
+                      </TableCell>
+                      <TableCell className="font-medium cursor-pointer relative">
+                        <Link href={`/app/governance/workspaces/${ws.id}`} className="absolute inset-0 z-0" />
+                        <div className="flex items-center gap-3 relative z-10">
+                          <div className="w-8 h-8 rounded-lg bg-background border border-border/50 flex items-center justify-center shadow-sm">
+                            {getIconForType(ws.type)}
+                          </div>
+                          <div className="flex flex-col">
+                            <span className="text-foreground text-sm">{ws.displayName}</span>
+                            <span className="text-xs text-muted-foreground font-normal">Last active: {ws.lastActive}</span>
+                          </div>
+                        </div>
+                      </TableCell>
+                      <TableCell className="relative z-10">
+                        <div className="flex flex-col">
+                          <span className="text-sm font-medium">{ws.size}</span>
+                          <span className="text-xs text-muted-foreground">{ws.usage} Activity</span>
+                        </div>
+                      </TableCell>
+                      <TableCell className="relative z-10">
+                        {getSensitivityBadge(ws.sensitivity)}
+                      </TableCell>
+                      <TableCell className="relative z-10">
+                        {ws.metadataStatus === 'COMPLETE' ? (
+                          <div className="flex items-center text-sm text-emerald-500 gap-1.5">
+                            <ShieldCheck className="w-4 h-4" /> Complete
+                          </div>
+                        ) : (
+                          <div className="flex items-center text-sm text-amber-500 gap-1.5">
+                            <ShieldAlert className="w-4 h-4" /> Missing
+                          </div>
+                        )}
+                      </TableCell>
+                      <TableCell className="relative z-10">
+                        {ws.copilotReady ? (
+                          <Badge variant="outline" className="bg-primary/10 text-primary border-primary/20 hover:bg-primary/20">Ready</Badge>
+                        ) : (
+                          <Badge variant="secondary" className="text-muted-foreground">Not Eligible</Badge>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-right text-muted-foreground relative z-10">
+                        <span className={ws.owners < 2 ? "text-destructive font-medium" : ""}>
+                          {ws.owners}
+                        </span>
+                      </TableCell>
+                      <TableCell className="relative z-10">
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button variant="ghost" className="h-8 w-8 p-0">
+                              <span className="sr-only">Open menu</span>
+                              <MoreHorizontal className="h-4 w-4" />
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end" className="w-[160px]">
+                            <DropdownMenuLabel>Actions</DropdownMenuLabel>
+                            <DropdownMenuSeparator />
+                            <DropdownMenuItem asChild>
+                               <Link href={`/app/governance/workspaces/${ws.id}`}>Inspect Properties</Link>
+                            </DropdownMenuItem>
+                            <DropdownMenuItem>Request Attestation</DropdownMenuItem>
+                            <DropdownMenuItem className="text-destructive">Archive Workspace</DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+              
+              <div className="p-4 border-t border-border/50 text-xs text-center text-muted-foreground">
+                Showing {workspaces.length} workspaces
+              </div>
+            </>
+          )}
         </CardContent>
       </Card>
 
@@ -390,41 +345,41 @@ export default function GovernancePage() {
             <div className="space-y-4">
               <div className="space-y-2">
                 <Label>Sensitivity Label</Label>
-                <Select>
+                <Select value={bulkSensitivity} onValueChange={setBulkSensitivity}>
                   <SelectTrigger className="w-full bg-background/50">
                     <SelectValue placeholder="Select new label..." />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="public">Public</SelectItem>
-                    <SelectItem value="internal">Internal</SelectItem>
-                    <SelectItem value="confidential">Confidential</SelectItem>
-                    <SelectItem value="highly_confidential">Highly Confidential</SelectItem>
+                    <SelectItem value="PUBLIC">Public</SelectItem>
+                    <SelectItem value="INTERNAL">Internal</SelectItem>
+                    <SelectItem value="CONFIDENTIAL">Confidential</SelectItem>
+                    <SelectItem value="HIGHLY_CONFIDENTIAL">Highly Confidential</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
 
               <div className="space-y-2">
                 <Label>Retention Policy</Label>
-                <Select>
+                <Select value={bulkRetention} onValueChange={setBulkRetention}>
                   <SelectTrigger className="w-full bg-background/50">
                     <SelectValue placeholder="Select retention policy..." />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="default_7_year">Default 7 Year</SelectItem>
-                    <SelectItem value="executive_10_year">Executive 10 Year</SelectItem>
-                    <SelectItem value="no_retention">No Retention (Delete)</SelectItem>
+                    <SelectItem value="Default 7 Year">Default 7 Year</SelectItem>
+                    <SelectItem value="Executive 10 Year">Executive 10 Year</SelectItem>
+                    <SelectItem value="No Retention (Delete)">No Retention (Delete)</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
 
               <div className="space-y-2">
                 <Label>Department Metadata</Label>
-                <Input placeholder="Update department value..." className="bg-background/50" />
+                <Input placeholder="Update department value..." className="bg-background/50" value={bulkDepartment} onChange={(e) => setBulkDepartment(e.target.value)} />
               </div>
 
               <div className="space-y-2">
                 <Label>Cost Center</Label>
-                <Input placeholder="Update cost center..." className="bg-background/50" />
+                <Input placeholder="Update cost center..." className="bg-background/50" value={bulkCostCenter} onChange={(e) => setBulkCostCenter(e.target.value)} />
               </div>
             </div>
 
@@ -435,9 +390,9 @@ export default function GovernancePage() {
           </div>
           <SheetFooter>
             <Button variant="outline" onClick={() => setIsBulkEditOpen(false)}>Cancel</Button>
-            <Button onClick={handleBulkSave} disabled={isSavingBulk} className="gap-2 shadow-md shadow-primary/20">
-              {isSavingBulk ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-              {isSavingBulk ? "Applying..." : "Apply Changes"}
+            <Button onClick={handleBulkSave} disabled={bulkMutation.isPending} className="gap-2 shadow-md shadow-primary/20">
+              {bulkMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+              {bulkMutation.isPending ? "Applying..." : "Apply Changes"}
             </Button>
           </SheetFooter>
         </SheetContent>

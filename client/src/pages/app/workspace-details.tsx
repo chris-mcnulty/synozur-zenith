@@ -1,5 +1,9 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Link, useParams } from "wouter";
+import { useQuery, useMutation } from "@tanstack/react-query";
+import { apiRequest, queryClient } from "@/lib/queryClient";
+import { useToast } from "@/hooks/use-toast";
+import type { Workspace, CopilotRule } from "@shared/schema";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -25,36 +29,89 @@ import {
 
 export default function WorkspaceDetailsPage() {
   const { id } = useParams<{ id: string }>();
-  const [isSaving, setIsSaving] = useState(false);
-  const [showSaveSuccess, setShowSaveSuccess] = useState(false);
-  
-  // Mock metadata state
-  const [metadata, setMetadata] = useState({
-    department: "Human Resources",
-    costCenter: "",
-    dataClassification: "Highly Confidential",
-    externalSharing: "Blocked",
-    retentionPolicy: "7 Years (Default)",
-    projectCode: "PRJ-992"
+  const { toast } = useToast();
+
+  const { data: workspace, isLoading, error } = useQuery<Workspace>({
+    queryKey: [`/api/workspaces/${id}`],
+    enabled: !!id,
   });
 
-  const rawJson = JSON.stringify({
-    "m365ObjectId": "b3e944b0-c6d9-4822-a9b0-a541703e2c65",
-    "displayName": "HR Leadership",
-    "type": "SHAREPOINT_SITE",
-    "sensitivity": "HIGHLY_CONFIDENTIAL",
-    "copilotReady": false,
-    "metadata": metadata
-  }, null, 2);
+  const { data: copilotRules = [] } = useQuery<CopilotRule[]>({
+    queryKey: [`/api/workspaces/${id}/copilot-rules`],
+    enabled: !!id,
+  });
+
+  const [metadata, setMetadata] = useState({
+    department: "",
+    costCenter: "",
+    projectCode: "",
+  });
+
+  useEffect(() => {
+    if (workspace) {
+      setMetadata({
+        department: workspace.department || "",
+        costCenter: workspace.costCenter || "",
+        projectCode: workspace.projectCode || "",
+      });
+    }
+  }, [workspace]);
+
+  const saveMutation = useMutation({
+    mutationFn: async (data: { department: string; costCenter: string; projectCode: string }) => {
+      const res = await apiRequest("PATCH", `/api/workspaces/${id}`, data);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [`/api/workspaces/${id}`] });
+      toast({ title: "Changes saved", description: "Workspace metadata updated successfully." });
+    },
+  });
 
   const handleSave = () => {
-    setIsSaving(true);
-    setTimeout(() => {
-      setIsSaving(false);
-      setShowSaveSuccess(true);
-      setTimeout(() => setShowSaveSuccess(false), 3000);
-    }, 800);
+    saveMutation.mutate(metadata);
   };
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <Loader2 className="w-8 h-8 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+
+  if (error || !workspace) {
+    return (
+      <div className="flex flex-col items-center justify-center h-64 gap-4">
+        <ShieldAlert className="w-10 h-10 text-destructive" />
+        <p className="text-destructive font-medium">{error?.message || "Workspace not found"}</p>
+        <Link href="/app/governance">
+          <Button variant="outline" className="gap-2">
+            <ArrowLeft className="w-4 h-4" /> Back to Governance
+          </Button>
+        </Link>
+      </div>
+    );
+  }
+
+  const sensitivityLabel = workspace.sensitivity.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase()).replace(/\B\w+/g, c => c.toLowerCase());
+  const sensitivityVariant = workspace.sensitivity === "HIGHLY_CONFIDENTIAL" ? "destructive" : "secondary";
+
+  const typeLabel = workspace.type.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase()).replace(/\B\w+/g, c => c.toLowerCase());
+
+  const computedRules: { ruleName: string; ruleResult: string }[] = copilotRules.length > 0
+    ? copilotRules.map(r => ({ ruleName: r.ruleName, ruleResult: r.ruleResult }))
+    : [
+        { ruleName: "Sensitivity Labeled", ruleResult: workspace.sensitivity ? "PASS" : "FAIL" },
+        { ruleName: "Metadata Complete", ruleResult: workspace.metadataStatus === "COMPLETE" ? "PASS" : "FAIL" },
+        { ruleName: "Sharing Policy", ruleResult: (!workspace.externalSharing || workspace.sensitivity !== "HIGHLY_CONFIDENTIAL") ? "PASS" : "FAIL" },
+      ];
+
+  const rawJson = JSON.stringify(workspace, null, 2);
+
+  const primaryInitials = workspace.primarySteward
+    ? workspace.primarySteward.split(" ").map(w => w[0]).join("").toUpperCase().slice(0, 2)
+    : "??";
 
   return (
     <div className="space-y-6 animate-in fade-in duration-500 pb-10">
@@ -65,11 +122,11 @@ export default function WorkspaceDetailsPage() {
           </Button>
         </Link>
         <div>
-          <h1 className="text-3xl font-bold tracking-tight flex items-center gap-3">
-            HR Leadership 
-            <Badge variant="destructive" className="bg-destructive/10 text-destructive border-destructive/20 ml-2">Highly Confidential</Badge>
+          <h1 className="text-3xl font-bold tracking-tight flex items-center gap-3" data-testid="text-workspace-name">
+            {workspace.displayName} 
+            <Badge variant={sensitivityVariant} className={`${sensitivityVariant === "destructive" ? "bg-destructive/10 text-destructive border-destructive/20" : ""} ml-2`} data-testid="badge-sensitivity">{sensitivityLabel}</Badge>
           </h1>
-          <p className="text-muted-foreground mt-1 font-mono text-xs">ID: b3e944b0-c6d9-4822-a9b0-a541703e2c65 • SharePoint Site</p>
+          <p className="text-muted-foreground mt-1 font-mono text-xs" data-testid="text-workspace-id">ID: {workspace.m365ObjectId} • {typeLabel}</p>
         </div>
       </div>
 
@@ -89,9 +146,9 @@ export default function WorkspaceDetailsPage() {
                 <Button variant="outline" className="gap-2 text-primary border-primary/30 hover:bg-primary/10">
                   <Wand2 className="w-4 h-4" /> Apply Required Defaults
                 </Button>
-                <Button onClick={handleSave} disabled={isSaving} className="gap-2 shadow-md shadow-primary/20 transition-all">
-                  {isSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : showSaveSuccess ? <CheckCircle2 className="w-4 h-4" /> : <Save className="w-4 h-4" />}
-                  {showSaveSuccess ? "Saved" : "Save Changes"}
+                <Button onClick={handleSave} disabled={saveMutation.isPending} className="gap-2 shadow-md shadow-primary/20 transition-all" data-testid="button-save">
+                  {saveMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : saveMutation.isSuccess ? <CheckCircle2 className="w-4 h-4" /> : <Save className="w-4 h-4" />}
+                  {saveMutation.isSuccess ? "Saved" : "Save Changes"}
                 </Button>
               </div>
             </div>
@@ -110,7 +167,8 @@ export default function WorkspaceDetailsPage() {
                         id="dept" 
                         value={metadata.department} 
                         onChange={(e) => setMetadata({...metadata, department: e.target.value})}
-                        className="bg-background/50" 
+                        className="bg-background/50"
+                        data-testid="input-department"
                       />
                     </div>
                     <div className="space-y-2">
@@ -122,28 +180,30 @@ export default function WorkspaceDetailsPage() {
                         placeholder="Missing value..."
                         value={metadata.costCenter} 
                         onChange={(e) => setMetadata({...metadata, costCenter: e.target.value})}
-                        className={`bg-background/50 ${!metadata.costCenter ? 'border-amber-500/50 focus-visible:ring-amber-500' : ''}`} 
+                        className={`bg-background/50 ${!metadata.costCenter ? 'border-amber-500/50 focus-visible:ring-amber-500' : ''}`}
+                        data-testid="input-cost-center"
                       />
                     </div>
                     <div className="space-y-2">
                       <Label>Data Classification</Label>
-                      <Input value={metadata.dataClassification} disabled className="bg-muted/50 text-muted-foreground opacity-70" />
+                      <Input value={sensitivityLabel} disabled className="bg-muted/50 text-muted-foreground opacity-70" />
                       <p className="text-[10px] text-muted-foreground">Derived from sensitivity label.</p>
                     </div>
                     <div className="space-y-2">
                       <Label>External Sharing</Label>
-                      <Input value={metadata.externalSharing} disabled className="bg-muted/50 text-muted-foreground opacity-70" />
+                      <Input value={workspace.externalSharing ? "Allowed" : "Blocked"} disabled className="bg-muted/50 text-muted-foreground opacity-70" />
                     </div>
                     <div className="space-y-2">
                       <Label>Retention Policy</Label>
-                      <Input value={metadata.retentionPolicy} disabled className="bg-muted/50 text-muted-foreground opacity-70" />
+                      <Input value={workspace.retentionPolicy} disabled className="bg-muted/50 text-muted-foreground opacity-70" />
                     </div>
                     <div className="space-y-2">
                       <Label>Project Code (Optional)</Label>
                       <Input 
                         value={metadata.projectCode} 
                         onChange={(e) => setMetadata({...metadata, projectCode: e.target.value})}
-                        className="bg-background/50" 
+                        className="bg-background/50"
+                        data-testid="input-project-code"
                       />
                     </div>
                   </div>
@@ -177,11 +237,11 @@ export default function WorkspaceDetailsPage() {
                       </div>
                       <div className="grid grid-cols-3 gap-2 py-1.5 bg-primary/5 rounded px-2 -mx-2">
                         <span className="font-mono text-xs col-span-1 break-all text-primary">Zenith_DataClass</span>
-                        <span className="font-mono text-xs col-span-2 break-all font-medium text-foreground">Highly Confidential</span>
+                        <span className="font-mono text-xs col-span-2 break-all font-medium text-foreground">{sensitivityLabel}</span>
                       </div>
                       <div className="grid grid-cols-3 gap-2 py-1.5 bg-primary/5 rounded px-2 -mx-2">
                         <span className="font-mono text-xs col-span-1 break-all text-primary">Zenith_DeptId</span>
-                        <span className="font-mono text-xs col-span-2 break-all font-medium text-foreground">HR-01</span>
+                        <span className="font-mono text-xs col-span-2 break-all font-medium text-foreground">{workspace.department || "—"}</span>
                       </div>
                       <div className="grid grid-cols-3 gap-2 py-1.5">
                         <span className="font-mono text-xs col-span-1 break-all text-primary">vti_siteusagedata</span>
@@ -236,6 +296,7 @@ export default function WorkspaceDetailsPage() {
                     className="font-mono text-sm h-[400px] bg-background/80 resize-none p-4"
                     value={rawJson}
                     readOnly
+                    data-testid="textarea-raw-json"
                   />
                 </CardContent>
               </Card>
@@ -267,22 +328,37 @@ export default function WorkspaceDetailsPage() {
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="flex items-center gap-4 mb-4">
-                <div className="w-10 h-10 rounded-full bg-primary/20 flex items-center justify-center text-primary font-bold">
-                  SJ
+              {workspace.primarySteward && (
+                <div className="flex items-center gap-4 mb-4" data-testid="text-primary-steward">
+                  <div className="w-10 h-10 rounded-full bg-primary/20 flex items-center justify-center text-primary font-bold">
+                    {primaryInitials}
+                  </div>
+                  <div>
+                    <p className="text-sm font-medium">{workspace.primarySteward}</p>
+                    <p className="text-xs text-muted-foreground">Primary Steward</p>
+                  </div>
                 </div>
-                <div>
-                  <p className="text-sm font-medium">Sarah Jenkins</p>
-                  <p className="text-xs text-muted-foreground">VP, Human Resources</p>
+              )}
+              {workspace.secondarySteward && (
+                <div className="flex items-center gap-4 mb-4" data-testid="text-secondary-steward">
+                  <div className="w-10 h-10 rounded-full bg-primary/20 flex items-center justify-center text-primary font-bold">
+                    {workspace.secondarySteward.split(" ").map(w => w[0]).join("").toUpperCase().slice(0, 2)}
+                  </div>
+                  <div>
+                    <p className="text-sm font-medium">{workspace.secondarySteward}</p>
+                    <p className="text-xs text-muted-foreground">Secondary Steward</p>
+                  </div>
                 </div>
-              </div>
-              <div className="p-3 rounded-lg bg-destructive/10 border border-destructive/20 flex items-start gap-3">
-                <ShieldAlert className="w-4 h-4 text-destructive shrink-0 mt-0.5" />
-                <div className="text-xs text-destructive">
-                  <span className="font-semibold block mb-0.5">Policy Violation</span>
-                  This workspace requires a minimum of 2 active owners.
+              )}
+              {workspace.owners < 2 && (
+                <div className="p-3 rounded-lg bg-destructive/10 border border-destructive/20 flex items-start gap-3" data-testid="alert-policy-violation">
+                  <ShieldAlert className="w-4 h-4 text-destructive shrink-0 mt-0.5" />
+                  <div className="text-xs text-destructive">
+                    <span className="font-semibold block mb-0.5">Policy Violation</span>
+                    This workspace requires a minimum of 2 active owners.
+                  </div>
                 </div>
-              </div>
+              )}
             </CardContent>
           </Card>
 
@@ -292,27 +368,33 @@ export default function WorkspaceDetailsPage() {
             </CardHeader>
             <CardContent>
               <div className="flex items-center gap-3 mb-3">
-                <div className="w-12 h-12 rounded-full bg-muted flex items-center justify-center shrink-0">
-                  <ShieldAlert className="w-6 h-6 text-muted-foreground" />
+                <div className={`w-12 h-12 rounded-full flex items-center justify-center shrink-0 ${workspace.copilotReady ? 'bg-emerald-500/10' : 'bg-muted'}`}>
+                  {workspace.copilotReady 
+                    ? <ShieldCheck className="w-6 h-6 text-emerald-500" />
+                    : <ShieldAlert className="w-6 h-6 text-muted-foreground" />
+                  }
                 </div>
                 <div>
-                  <h4 className="font-semibold text-sm">Not Eligible</h4>
-                  <p className="text-xs text-muted-foreground">Blocked by policy rules</p>
+                  <h4 className="font-semibold text-sm" data-testid="text-copilot-status">{workspace.copilotReady ? "Eligible" : "Not Eligible"}</h4>
+                  <p className="text-xs text-muted-foreground">{workspace.copilotReady ? "All policy rules passed" : "Blocked by policy rules"}</p>
                 </div>
               </div>
               <div className="space-y-2 mt-4">
-                <div className="flex items-center justify-between text-xs">
-                  <span className="text-muted-foreground flex items-center gap-1"><CheckCircle2 className="w-3 h-3 text-emerald-500"/> Sensitivity Labeled</span>
-                  <span>Pass</span>
-                </div>
-                <div className="flex items-center justify-between text-xs">
-                  <span className="text-muted-foreground flex items-center gap-1"><ShieldAlert className="w-3 h-3 text-destructive"/> Metadata Complete</span>
-                  <span className="text-destructive font-medium">Fail</span>
-                </div>
-                <div className="flex items-center justify-between text-xs">
-                  <span className="text-muted-foreground flex items-center gap-1"><CheckCircle2 className="w-3 h-3 text-emerald-500"/> Sharing Policy</span>
-                  <span>Pass</span>
-                </div>
+                {computedRules.map((rule, idx) => {
+                  const pass = rule.ruleResult === "PASS";
+                  return (
+                    <div key={idx} className="flex items-center justify-between text-xs" data-testid={`copilot-rule-${idx}`}>
+                      <span className="text-muted-foreground flex items-center gap-1">
+                        {pass 
+                          ? <CheckCircle2 className="w-3 h-3 text-emerald-500"/>
+                          : <ShieldAlert className="w-3 h-3 text-destructive"/>
+                        }
+                        {rule.ruleName}
+                      </span>
+                      <span className={pass ? "" : "text-destructive font-medium"}>{pass ? "Pass" : "Fail"}</span>
+                    </div>
+                  );
+                })}
               </div>
             </CardContent>
           </Card>

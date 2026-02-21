@@ -1,5 +1,8 @@
 import { useState } from "react";
 import { Link, useLocation } from "wouter";
+import { useMutation } from "@tanstack/react-query";
+import { apiRequest, queryClient } from "@/lib/queryClient";
+import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -32,8 +35,8 @@ import {
 
 export default function ProvisionNewPage() {
   const [, setLocation] = useLocation();
-  const [isSubmitting, setIsSubmitting] = useState(false);
   const [isSuccess, setIsSuccess] = useState(false);
+  const { toast } = useToast();
   
   const [workspaceType, setWorkspaceType] = useState("TEAM");
   const [projectType, setProjectType] = useState("DEAL");
@@ -42,27 +45,52 @@ export default function ProvisionNewPage() {
   const [secondaryOwner, setSecondaryOwner] = useState("");
   const [sensitivity, setSensitivity] = useState("highly_confidential");
   
-  // Mock naming policy preview based on Deal/PortCo standards
   const getPolicyPreview = () => {
     if (!name) return "";
     const prefix = projectType === "DEAL" ? "DEAL-" : projectType === "PORTCO" ? "PORTCO-" : "GEN-";
     return `${prefix}${name.replace(/[^a-zA-Z0-9]/g, "-").toUpperCase()}`;
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    setIsSubmitting(true);
-    
-    // Simulate submission delay
-    setTimeout(() => {
-      setIsSubmitting(false);
+  const mutation = useMutation({
+    mutationFn: async () => {
+      const sensitivityMap: Record<string, string> = {
+        public: "PUBLIC",
+        internal: "INTERNAL",
+        confidential: "CONFIDENTIAL",
+        highly_confidential: "HIGHLY_CONFIDENTIAL",
+      };
+      await apiRequest("POST", "/api/provisioning-requests", {
+        workspaceName: name,
+        workspaceType,
+        projectType,
+        sensitivity: sensitivityMap[sensitivity] || sensitivity.toUpperCase(),
+        externalSharing: sensitivity !== "highly_confidential",
+        primarySteward: owner,
+        secondarySteward: secondaryOwner,
+        governedName: getPolicyPreview(),
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/provisioning-requests"] });
       setIsSuccess(true);
-      
-      // Redirect to dashboard or requests list after success
       setTimeout(() => {
         setLocation("/app/dashboard");
       }, 2000);
-    }, 1500);
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Provisioning Failed",
+        description: error.message,
+        variant: "destructive",
+      });
+    },
+  });
+
+  const isSubmitting = mutation.isPending;
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    mutation.mutate();
   };
 
   if (isSuccess) {

@@ -12,8 +12,25 @@ import {
   Users
 } from "lucide-react";
 import { Link } from "wouter";
+import { useQuery } from "@tanstack/react-query";
 
 export default function DashboardPage() {
+  const { data: stats, isLoading } = useQuery<{
+    totalWorkspaces: number;
+    copilotReady: number;
+    copilotNotReady: number;
+    metadataComplete: number;
+    metadataMissing: number;
+    highlyConfidential: number;
+    pendingRequests: number;
+    totalRequests: number;
+  }>({ queryKey: ["/api/stats"] });
+
+  const totalWorkspaces = stats?.totalWorkspaces ?? 0;
+  const metadataCompliance = totalWorkspaces > 0 ? Math.round((stats!.metadataComplete / totalWorkspaces) * 100) : 0;
+  const copilotReadiness = totalWorkspaces > 0 ? Math.round((stats!.copilotReady / totalWorkspaces) * 100) : 0;
+  const pendingApprovals = stats?.pendingRequests ?? 0;
+
   return (
     <div className="space-y-8 animate-in fade-in duration-500 pb-10">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -39,7 +56,7 @@ export default function DashboardPage() {
             <Database className="w-4 h-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-3xl font-bold">1,284</div>
+            <div className="text-3xl font-bold" data-testid="text-total-workspaces">{isLoading ? "..." : totalWorkspaces.toLocaleString()}</div>
             <p className="text-xs text-muted-foreground mt-1 flex items-center">
               <span className="text-emerald-500 font-medium flex items-center mr-1">
                 <ArrowUpRight className="w-3 h-3 mr-1"/> 12%
@@ -55,9 +72,9 @@ export default function DashboardPage() {
             <ShieldCheck className="w-4 h-4 text-primary" />
           </CardHeader>
           <CardContent>
-            <div className="text-3xl font-bold">94%</div>
-            <Progress value={94} className="h-2 mt-3 bg-muted overflow-hidden">
-              <div className="h-full bg-primary transition-all duration-1000 ease-in-out" style={{ width: "94%" }} />
+            <div className="text-3xl font-bold" data-testid="text-metadata-compliance">{isLoading ? "..." : `${metadataCompliance}%`}</div>
+            <Progress value={isLoading ? 0 : metadataCompliance} className="h-2 mt-3 bg-muted overflow-hidden">
+              <div className="h-full bg-primary transition-all duration-1000 ease-in-out" style={{ width: isLoading ? "0%" : `${metadataCompliance}%` }} />
             </Progress>
           </CardContent>
         </Card>
@@ -68,7 +85,7 @@ export default function DashboardPage() {
             <Clock className="w-4 h-4 text-amber-500" />
           </CardHeader>
           <CardContent>
-            <div className="text-3xl font-bold text-amber-500">7</div>
+            <div className="text-3xl font-bold text-amber-500" data-testid="text-pending-approvals">{isLoading ? "..." : pendingApprovals}</div>
             <p className="text-xs text-muted-foreground mt-1 text-amber-500/80 font-medium">
               Requires attention
             </p>
@@ -196,11 +213,11 @@ export default function DashboardPage() {
             </CardHeader>
             <CardContent>
               <div className="flex items-end justify-between mb-3">
-                <span className="text-4xl font-bold tracking-tight text-transparent bg-clip-text bg-gradient-to-r from-primary to-secondary">68%</span>
+                <span className="text-4xl font-bold tracking-tight text-transparent bg-clip-text bg-gradient-to-r from-primary to-secondary" data-testid="text-copilot-readiness">{isLoading ? "..." : `${copilotReadiness}%`}</span>
                 <span className="text-sm text-muted-foreground mb-1 font-medium">of workspaces</span>
               </div>
-              <Progress value={68} className="h-2.5 mb-5 bg-muted overflow-hidden rounded-full">
-                <div className="h-full bg-gradient-to-r from-primary to-secondary transition-all duration-1000 ease-in-out" style={{ width: "68%" }} />
+              <Progress value={isLoading ? 0 : copilotReadiness} className="h-2.5 mb-5 bg-muted overflow-hidden rounded-full">
+                <div className="h-full bg-gradient-to-r from-primary to-secondary transition-all duration-1000 ease-in-out" style={{ width: isLoading ? "0%" : `${copilotReadiness}%` }} />
               </Progress>
               <p className="text-sm text-muted-foreground leading-relaxed">
                 Workspaces meeting minimum classification and external sharing policies required for secure Copilot indexing.
