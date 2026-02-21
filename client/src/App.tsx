@@ -1,11 +1,10 @@
-import { Switch, Route, Router as WouterRouter } from "wouter";
+import { Switch, Route, useLocation } from "wouter";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import NotFound from "@/pages/not-found";
 
-// Pages
 import SplashPage from "./pages/splash";
 import EntraCallbackPage from "./pages/auth/callback";
 import SelectTenantPage from "./pages/app/select-tenant";
@@ -35,7 +34,6 @@ import TenantConnectionsPage from "./pages/app/admin/tenant-connections";
 import PolicyBuilderPage from "./pages/app/admin/policy-builder";
 import AppShell from "./components/layout/app-shell";
 
-// Fallback empty pages for other routes
 const EmptyPage = ({ title }: { title: string }) => (
   <div className="flex h-[50vh] items-center justify-center">
     <div className="text-center space-y-4">
@@ -45,55 +43,53 @@ const EmptyPage = ({ title }: { title: string }) => (
   </div>
 );
 
+const NO_SHELL_ROUTES = ["/", "/auth/entra/callback", "/app/select-tenant", "/app/add-tenant"];
+
+function AppShellWrapper({ children }: { children: React.ReactNode }) {
+  const [location] = useLocation();
+  const needsShell = location.startsWith("/app/") && !NO_SHELL_ROUTES.includes(location);
+
+  if (needsShell) {
+    return <AppShell>{children}</AppShell>;
+  }
+  return <>{children}</>;
+}
+
 function AppRoutes() {
   return (
-    <Switch>
-      <Route path="/" component={SplashPage} />
-      <Route path="/auth/entra/callback" component={EntraCallbackPage} />
-      
-      {/* App Shell Routes */}
-      <Route path="/app/:rest*">
-        <Switch>
-          <Route path="/app/select-tenant" component={SelectTenantPage} />
-          <Route path="/app/add-tenant" component={AddTenantPage} />
-          
-          <Route>
-            <AppShell>
-              <Switch>
-                <Route path="/app/dashboard" component={DashboardPage} />
-                <Route path="/app/provision/new" component={ProvisionNewPage} />
-                <Route path="/app/provision" component={() => <EmptyPage title="Provisioning Requests" />} />
-                <Route path="/app/governance/workspaces/:id" component={WorkspaceDetailsPage} />
-                <Route path="/app/governance" component={GovernancePage} />
-                <Route path="/app/syntex" component={SyntexPage} />
-                <Route path="/app/purview" component={PurviewConfigPage} />
-                <Route path="/app/lifecycle" component={() => <EmptyPage title="Lifecycle Management" />} />
-                <Route path="/app/reports" component={ReportsPage} />
-                <Route path="/app/document-library" component={DocumentLibraryPage} />
-                <Route path="/app/structures" component={StructuresPage} />
-                <Route path="/app/content-types" component={ContentTypesPage} />
-                <Route path="/app/embedded-containers" component={EmbeddedContainersPage} />
-                <Route path="/app/archive-backup" component={ArchiveBackupPage} />
-                <Route path="/app/lifecycle" component={LifecycleReviewHub} />
-                <Route path="/app/approvals" component={ApprovalsQueue} />
-                <Route path="/app/ai-copilot" component={AICopilotIntegration} />
-                <Route path="/app/discover" component={DiscoverDashboard} />
-                <Route path="/app/admin/plans" component={ServicePlansPage} />
-                <Route path="/app/admin/users" component={UserManagementPage} />
-                <Route path="/app/admin/organization" component={OrganizationSettingsPage} />
-                <Route path="/app/admin/system" component={SystemAdminPage} />
-                <Route path="/app/admin/tenants" component={TenantConnectionsPage} />
-                <Route path="/app/admin/policies" component={PolicyBuilderPage} />
-                <Route path="/app/admin" component={AdminTemplatesPage} />
-                <Route component={NotFound} />
-              </Switch>
-            </AppShell>
-          </Route>
-        </Switch>
-      </Route>
-
-      <Route component={NotFound} />
-    </Switch>
+    <AppShellWrapper>
+      <Switch>
+        <Route path="/" component={SplashPage} />
+        <Route path="/auth/entra/callback" component={EntraCallbackPage} />
+        <Route path="/app/select-tenant" component={SelectTenantPage} />
+        <Route path="/app/add-tenant" component={AddTenantPage} />
+        <Route path="/app/dashboard" component={DashboardPage} />
+        <Route path="/app/provision/new" component={ProvisionNewPage} />
+        <Route path="/app/provision" component={() => <EmptyPage title="Provisioning Requests" />} />
+        <Route path="/app/governance/workspaces/:id" component={WorkspaceDetailsPage} />
+        <Route path="/app/governance" component={GovernancePage} />
+        <Route path="/app/syntex" component={SyntexPage} />
+        <Route path="/app/purview" component={PurviewConfigPage} />
+        <Route path="/app/reports" component={ReportsPage} />
+        <Route path="/app/document-library" component={DocumentLibraryPage} />
+        <Route path="/app/structures" component={StructuresPage} />
+        <Route path="/app/content-types" component={ContentTypesPage} />
+        <Route path="/app/embedded-containers" component={EmbeddedContainersPage} />
+        <Route path="/app/archive-backup" component={ArchiveBackupPage} />
+        <Route path="/app/lifecycle" component={LifecycleReviewHub} />
+        <Route path="/app/approvals" component={ApprovalsQueue} />
+        <Route path="/app/ai-copilot" component={AICopilotIntegration} />
+        <Route path="/app/discover" component={DiscoverDashboard} />
+        <Route path="/app/admin/plans" component={ServicePlansPage} />
+        <Route path="/app/admin/users" component={UserManagementPage} />
+        <Route path="/app/admin/organization" component={OrganizationSettingsPage} />
+        <Route path="/app/admin/system" component={SystemAdminPage} />
+        <Route path="/app/admin/tenants" component={TenantConnectionsPage} />
+        <Route path="/app/admin/policies" component={PolicyBuilderPage} />
+        <Route path="/app/admin" component={AdminTemplatesPage} />
+        <Route component={NotFound} />
+      </Switch>
+    </AppShellWrapper>
   );
 }
 
