@@ -24,6 +24,7 @@ import ContentTypesPage from "./pages/app/content-types";
 import EmbeddedContainersPage from "./pages/app/embedded-containers";
 import ArchiveBackupPage from "./pages/app/archive-backup";
 import LifecycleReviewHub from "./pages/app/lifecycle-review";
+import ApprovalsQueue from "./pages/app/approvals";
 import DiscoverDashboard from "./pages/app/discover";
 import AICopilotIntegration from "./pages/app/ai-copilot";
 import ServicePlansPage from "./pages/app/admin/service-plans";
@@ -74,6 +75,7 @@ function AppRoutes() {
                 <Route path="/app/embedded-containers" component={EmbeddedContainersPage} />
                 <Route path="/app/archive-backup" component={ArchiveBackupPage} />
                 <Route path="/app/lifecycle" component={LifecycleReviewHub} />
+                <Route path="/app/approvals" component={ApprovalsQueue} />
                 <Route path="/app/ai-copilot" component={AICopilotIntegration} />
                 <Route path="/app/discover" component={DiscoverDashboard} />
                 <Route path="/app/admin/plans" component={ServicePlansPage} />

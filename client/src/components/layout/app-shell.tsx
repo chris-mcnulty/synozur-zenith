@@ -29,7 +29,8 @@ import {
   CreditCard,
   Cloud,
   Users as UsersIcon,
-  Server
+  Server,
+  CheckCircle2
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -54,7 +55,8 @@ const navGroups = [
     label: "Overview",
     items: [
       { name: "Dashboard", href: "/app/dashboard", icon: LayoutDashboard },
-      { name: "Provision", href: "/app/provision", icon: FolderPlus, badge: "3" },
+      { name: "Approvals", href: "/app/approvals", icon: CheckCircle2, badge: "3" },
+      { name: "Provision", href: "/app/provision", icon: FolderPlus },
     ]
   },
   {
