@@ -23,7 +23,8 @@ import {
   BrainCircuit,
   Library,
   LayoutTemplate,
-  FileText
+  FileText,
+  Box
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -58,6 +59,7 @@ const navGroups = [
       { name: "Structures", href: "/app/structures", icon: Layers },
       { name: "Document Library", href: "/app/document-library", icon: Library },
       { name: "Content Types", href: "/app/content-types", icon: FileText },
+      { name: "Embedded Containers", href: "/app/embedded-containers", icon: Box },
       { name: "Syntex", href: "/app/syntex", icon: BrainCircuit },
       { name: "Purview", href: "/app/purview", icon: Fingerprint },
       { name: "Lifecycle", href: "/app/lifecycle", icon: Clock },
