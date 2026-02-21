@@ -18,7 +18,9 @@ import {
   CheckCircle2,
   BarChart2,
   BookOpen,
-  Infinity
+  Infinity,
+  Briefcase,
+  Building2
 } from "lucide-react";
 import {
   Select,
@@ -32,13 +34,18 @@ export default function ProvisionNewPage() {
   const [, setLocation] = useLocation();
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isSuccess, setIsSuccess] = useState(false);
-  const [workspaceType, setWorkspaceType] = useState("TEAM");
-  const [name, setName] = useState("");
   
-  // Mock naming policy preview
+  const [workspaceType, setWorkspaceType] = useState("TEAM");
+  const [projectType, setProjectType] = useState("DEAL");
+  const [name, setName] = useState("");
+  const [owner, setOwner] = useState("");
+  const [secondaryOwner, setSecondaryOwner] = useState("");
+  const [sensitivity, setSensitivity] = useState("highly_confidential");
+  
+  // Mock naming policy preview based on Deal/PortCo standards
   const getPolicyPreview = () => {
     if (!name) return "";
-    const prefix = workspaceType === "TEAM" ? "TEAM-" : workspaceType === "SHAREPOINT_SITE" ? "SITE-" : workspaceType === "LOOP_WORKSPACE" ? "LOOP-" : workspaceType === "POWER_BI" ? "PBI-" : workspaceType === "COPILOT_NOTEBOOK" ? "CPLT-" : "GRP-";
+    const prefix = projectType === "DEAL" ? "DEAL-" : projectType === "PORTCO" ? "PORTCO-" : "GEN-";
     return `${prefix}${name.replace(/[^a-zA-Z0-9]/g, "-").toUpperCase()}`;
   };
 
@@ -67,9 +74,9 @@ export default function ProvisionNewPage() {
               <CheckCircle2 className="w-10 h-10" />
             </div>
             <div className="space-y-2">
-              <h2 className="text-2xl font-bold tracking-tight">Request Submitted</h2>
+              <h2 className="text-2xl font-bold tracking-tight">Governance Request Submitted</h2>
               <p className="text-muted-foreground max-w-sm mx-auto">
-                Your request for <span className="font-semibold text-foreground">{name}</span> has been sent for approval. You will be notified once it is provisioned.
+                Your request for <span className="font-semibold text-foreground">{getPolicyPreview()}</span> has been securely logged and is pending automated provisioning.
               </p>
             </div>
           </CardContent>
@@ -87,20 +94,77 @@ export default function ProvisionNewPage() {
           </Button>
         </Link>
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">Request New Workspace</h1>
-          <p className="text-muted-foreground mt-1">Provision a new Microsoft 365 Team, Site, or Group.</p>
+          <h1 className="text-3xl font-bold tracking-tight">Governed Workspace Provisioning</h1>
+          <p className="text-muted-foreground mt-1">Create Deal & PortCo safe-by-default collaboration spaces.</p>
         </div>
       </div>
 
       <form onSubmit={handleSubmit}>
         <div className="grid gap-6">
+          
+          <Card className="glass-panel border-primary/20 shadow-sm bg-gradient-to-br from-primary/5 to-transparent">
+            <CardHeader>
+              <CardTitle>1. Business Context (Required Metadata)</CardTitle>
+              <CardDescription>Select the structured context to enforce naming standards and lifecycle.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              <RadioGroup defaultValue="DEAL" value={projectType} onValueChange={setProjectType} className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div>
+                  <RadioGroupItem value="DEAL" id="pt-deal" className="peer sr-only" />
+                  <Label htmlFor="pt-deal" className="flex flex-col items-center justify-between rounded-xl border-2 border-muted bg-popover p-4 hover:bg-accent hover:text-accent-foreground peer-data-[state=checked]:border-primary peer-data-[state=checked]:bg-primary/5 cursor-pointer transition-all h-full">
+                    <Briefcase className="mb-3 h-6 w-6 text-primary" />
+                    <span className="font-semibold text-center">Deal Workspace</span>
+                  </Label>
+                </div>
+                <div>
+                  <RadioGroupItem value="PORTCO" id="pt-portco" className="peer sr-only" />
+                  <Label htmlFor="pt-portco" className="flex flex-col items-center justify-between rounded-xl border-2 border-muted bg-popover p-4 hover:bg-accent hover:text-accent-foreground peer-data-[state=checked]:border-primary peer-data-[state=checked]:bg-primary/5 cursor-pointer transition-all h-full">
+                    <Building2 className="mb-3 h-6 w-6 text-primary" />
+                    <span className="font-semibold text-center">Portfolio Company</span>
+                  </Label>
+                </div>
+                <div>
+                  <RadioGroupItem value="GENERAL" id="pt-gen" className="peer sr-only" />
+                  <Label htmlFor="pt-gen" className="flex flex-col items-center justify-between rounded-xl border-2 border-muted bg-popover p-4 hover:bg-accent hover:text-accent-foreground peer-data-[state=checked]:border-primary peer-data-[state=checked]:bg-primary/5 cursor-pointer transition-all h-full">
+                    <FolderGit2 className="mb-3 h-6 w-6 text-muted-foreground" />
+                    <span className="font-semibold text-center">General Collaboration</span>
+                  </Label>
+                </div>
+              </RadioGroup>
+
+              <div className="space-y-3">
+                <Label htmlFor="name">Entity Name <span className="text-destructive">*</span></Label>
+                <Input 
+                  id="name" 
+                  placeholder={projectType === 'DEAL' ? "e.g. Project Phoenix" : projectType === 'PORTCO' ? "e.g. Acme Corp" : "Workspace Name"} 
+                  required
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  className="bg-background/80 text-lg"
+                />
+                
+                {name && (
+                  <div className="flex items-start gap-2 p-3 rounded-lg bg-primary/5 border border-primary/20 mt-2">
+                    <Info className="w-4 h-4 text-primary shrink-0 mt-0.5" />
+                    <div>
+                      <p className="text-xs font-semibold text-primary">Naming Standard Applied</p>
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        Governed URL & Name: <span className="font-mono bg-background px-1.5 py-0.5 rounded border border-border text-foreground font-medium">{getPolicyPreview()}</span>
+                      </p>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+
           <Card className="glass-panel border-border/50 shadow-sm">
             <CardHeader>
-              <CardTitle>1. Workspace Type</CardTitle>
-              <CardDescription>Select the type of collaboration space you need.</CardDescription>
+              <CardTitle>2. Workspace Type</CardTitle>
+              <CardDescription>Select the underlying Microsoft 365 capability.</CardDescription>
             </CardHeader>
             <CardContent>
-              <RadioGroup defaultValue="TEAM" value={workspaceType} onValueChange={setWorkspaceType} className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <RadioGroup defaultValue="TEAM" value={workspaceType} onValueChange={setWorkspaceType} className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
                   <RadioGroupItem value="TEAM" id="type-team" className="peer sr-only" />
                   <Label
@@ -120,51 +184,7 @@ export default function ProvisionNewPage() {
                   >
                     <Globe className="mb-3 h-8 w-8 text-teal-500" />
                     <span className="font-semibold text-center">SharePoint Site</span>
-                    <span className="text-[10px] text-muted-foreground mt-1 text-center font-normal">Intranet and document management</span>
-                  </Label>
-                </div>
-                <div>
-                  <RadioGroupItem value="M365_GROUP" id="type-group" className="peer sr-only" />
-                  <Label
-                    htmlFor="type-group"
-                    className="flex flex-col items-center justify-between rounded-xl border-2 border-muted bg-popover p-4 hover:bg-accent hover:text-accent-foreground peer-data-[state=checked]:border-primary peer-data-[state=checked]:bg-primary/5 cursor-pointer transition-all h-full"
-                  >
-                    <FolderGit2 className="mb-3 h-8 w-8 text-orange-500" />
-                    <span className="font-semibold text-center">M365 Group</span>
-                    <span className="text-[10px] text-muted-foreground mt-1 text-center font-normal">Shared inbox and calendar</span>
-                  </Label>
-                </div>
-                <div>
-                  <RadioGroupItem value="LOOP_WORKSPACE" id="type-loop" className="peer sr-only" />
-                  <Label
-                    htmlFor="type-loop"
-                    className="flex flex-col items-center justify-between rounded-xl border-2 border-muted bg-popover p-4 hover:bg-accent hover:text-accent-foreground peer-data-[state=checked]:border-primary peer-data-[state=checked]:bg-primary/5 cursor-pointer transition-all h-full"
-                  >
-                    <Infinity className="mb-3 h-8 w-8 text-indigo-500" />
-                    <span className="font-semibold text-center">Loop Workspace</span>
-                    <span className="text-[10px] text-muted-foreground mt-1 text-center font-normal">Co-creation and components</span>
-                  </Label>
-                </div>
-                <div>
-                  <RadioGroupItem value="POWER_BI" id="type-powerbi" className="peer sr-only" />
-                  <Label
-                    htmlFor="type-powerbi"
-                    className="flex flex-col items-center justify-between rounded-xl border-2 border-muted bg-popover p-4 hover:bg-accent hover:text-accent-foreground peer-data-[state=checked]:border-primary peer-data-[state=checked]:bg-primary/5 cursor-pointer transition-all h-full"
-                  >
-                    <BarChart2 className="mb-3 h-8 w-8 text-yellow-500" />
-                    <span className="font-semibold text-center">Power BI Workspace</span>
-                    <span className="text-[10px] text-muted-foreground mt-1 text-center font-normal">Reports and dashboards</span>
-                  </Label>
-                </div>
-                <div>
-                  <RadioGroupItem value="COPILOT_NOTEBOOK" id="type-copilot" className="peer sr-only" />
-                  <Label
-                    htmlFor="type-copilot"
-                    className="flex flex-col items-center justify-between rounded-xl border-2 border-muted bg-popover p-4 hover:bg-accent hover:text-accent-foreground peer-data-[state=checked]:border-primary peer-data-[state=checked]:bg-primary/5 cursor-pointer transition-all h-full"
-                  >
-                    <BookOpen className="mb-3 h-8 w-8 text-purple-500" />
-                    <span className="font-semibold text-center">Copilot Notebook</span>
-                    <span className="text-[10px] text-muted-foreground mt-1 text-center font-normal">AI-assisted research spaces</span>
+                    <span className="text-[10px] text-muted-foreground mt-1 text-center font-normal">Intranet and structured document storage</span>
                   </Label>
                 </div>
               </RadioGroup>
@@ -173,55 +193,46 @@ export default function ProvisionNewPage() {
 
           <Card className="glass-panel border-border/50 shadow-sm">
             <CardHeader>
-              <CardTitle>2. Basic Information</CardTitle>
-              <CardDescription>Provide details about the purpose of this workspace.</CardDescription>
+              <CardTitle>3. Ownership & Stewardship</CardTitle>
+              <CardDescription>All workspaces require at least two active owners to prevent orphan data.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-6">
-              <div className="space-y-3">
-                <Label htmlFor="name">Workspace Name <span className="text-destructive">*</span></Label>
-                <Input 
-                  id="name" 
-                  placeholder="e.g. Q3 Marketing Campaign" 
-                  required
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  className="bg-background/50 text-lg"
-                />
-                
-                {name && (
-                  <div className="flex items-start gap-2 p-3 rounded-lg bg-primary/5 border border-primary/20 mt-2">
-                    <Info className="w-4 h-4 text-primary shrink-0 mt-0.5" />
-                    <div>
-                      <p className="text-xs font-semibold text-primary">Naming Policy Applied</p>
-                      <p className="text-xs text-muted-foreground mt-0.5">
-                        The final provisioned name will be: <span className="font-mono bg-background px-1.5 py-0.5 rounded border border-border">{getPolicyPreview()}</span>
-                      </p>
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              <div className="space-y-3">
-                <Label htmlFor="purpose">Business Purpose <span className="text-destructive">*</span></Label>
-                <Textarea 
-                  id="purpose" 
-                  placeholder="Briefly describe what this workspace will be used for to help approvers understand the request." 
-                  required
-                  className="bg-background/50 min-h-[100px] resize-none"
-                />
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div className="space-y-3">
+                  <Label htmlFor="owner1">Primary Steward <span className="text-destructive">*</span></Label>
+                  <Input 
+                    id="owner1" 
+                    placeholder="Search directory..." 
+                    required
+                    value={owner}
+                    onChange={(e) => setOwner(e.target.value)}
+                    className="bg-background/50"
+                  />
+                </div>
+                <div className="space-y-3">
+                  <Label htmlFor="owner2">Secondary Owner <span className="text-destructive">*</span></Label>
+                  <Input 
+                    id="owner2" 
+                    placeholder="Search directory..." 
+                    required
+                    value={secondaryOwner}
+                    onChange={(e) => setSecondaryOwner(e.target.value)}
+                    className="bg-background/50"
+                  />
+                </div>
               </div>
             </CardContent>
           </Card>
 
           <Card className="glass-panel border-border/50 shadow-sm">
             <CardHeader>
-              <CardTitle>3. Security & Governance</CardTitle>
-              <CardDescription>Set the initial sensitivity and access controls.</CardDescription>
+              <CardTitle>4. Security & AI Readiness</CardTitle>
+              <CardDescription>Purview sensitivity labels determine external sharing rules and Copilot inclusion.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-8">
               <div className="space-y-3">
-                <Label>Data Sensitivity <span className="text-destructive">*</span></Label>
-                <Select defaultValue="internal">
+                <Label>Sensitivity Label Enforcement <span className="text-destructive">*</span></Label>
+                <Select value={sensitivity} onValueChange={setSensitivity}>
                   <SelectTrigger className="w-full bg-background/50">
                     <SelectValue placeholder="Select classification" />
                   </SelectTrigger>
@@ -232,29 +243,32 @@ export default function ProvisionNewPage() {
                     <SelectItem value="highly_confidential">Highly Confidential (Strictly restricted)</SelectItem>
                   </SelectContent>
                 </Select>
-                <p className="text-xs text-muted-foreground flex items-center gap-1.5 mt-1.5">
-                  <ShieldAlert className="w-3 h-3 text-amber-500" />
-                  Requires at least 'Internal' classification per tenant policy.
-                </p>
+                
+                {sensitivity === 'highly_confidential' && (
+                  <p className="text-xs text-muted-foreground flex items-center gap-1.5 mt-1.5">
+                    <ShieldAlert className="w-3 h-3 text-amber-500" />
+                    Highly Confidential prevents external guest sharing and excludes content from general Copilot indexes by default.
+                  </p>
+                )}
               </div>
 
               <div className="flex flex-row items-center justify-between rounded-xl border border-border/50 p-4 bg-background/30">
                 <div className="space-y-0.5">
                   <Label className="text-base font-semibold">External Sharing</Label>
                   <p className="text-sm text-muted-foreground">
-                    Allow inviting external guests to this workspace.
+                    Allow inviting external guests (e.g. external counsel, advisors).
                   </p>
                 </div>
-                <Switch />
+                <Switch disabled={sensitivity === 'highly_confidential'} checked={sensitivity !== 'highly_confidential'} />
               </div>
             </CardContent>
             <CardFooter className="pt-6 border-t border-border/50 flex justify-end gap-3 bg-muted/10 rounded-b-xl">
               <Button type="button" variant="ghost" onClick={() => setLocation("/app/dashboard")}>
                 Cancel
               </Button>
-              <Button type="submit" disabled={isSubmitting || !name} className="shadow-md shadow-primary/20 px-8 gap-2">
+              <Button type="submit" disabled={isSubmitting || !name || !owner || !secondaryOwner} className="shadow-md shadow-primary/20 px-8 gap-2">
                 {isSubmitting ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
-                {isSubmitting ? "Submitting..." : "Submit Request"}
+                {isSubmitting ? "Provisioning..." : "Provision Governed Workspace"}
               </Button>
             </CardFooter>
           </Card>

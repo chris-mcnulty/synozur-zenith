@@ -67,7 +67,9 @@ const workspaces = [
     metadataStatus: "COMPLETE",
     copilotReady: true,
     owners: 3,
-    lastActive: "2 days ago"
+    lastActive: "2 days ago",
+    size: "450 MB",
+    usage: "High"
   },
   {
     id: "ws-2",
@@ -78,7 +80,9 @@ const workspaces = [
     metadataStatus: "MISSING_REQUIRED",
     copilotReady: false,
     owners: 1,
-    lastActive: "5 hours ago"
+    lastActive: "5 hours ago",
+    size: "1.2 GB",
+    usage: "Medium"
   },
   {
     id: "ws-3",
@@ -89,7 +93,9 @@ const workspaces = [
     metadataStatus: "COMPLETE",
     copilotReady: true,
     owners: 4,
-    lastActive: "Just now"
+    lastActive: "Just now",
+    size: "2.8 GB",
+    usage: "Very High"
   },
   {
     id: "ws-4",
@@ -100,7 +106,9 @@ const workspaces = [
     metadataStatus: "COMPLETE",
     copilotReady: true,
     owners: 2,
-    lastActive: "1 day ago"
+    lastActive: "1 day ago",
+    size: "8.5 GB",
+    usage: "High"
   },
   {
     id: "ws-5",
@@ -111,7 +119,9 @@ const workspaces = [
     metadataStatus: "MISSING_REQUIRED",
     copilotReady: false,
     owners: 2,
-    lastActive: "1 week ago"
+    lastActive: "1 week ago",
+    size: "310 MB",
+    usage: "Low"
   },
   {
     id: "ws-6",
@@ -122,7 +132,9 @@ const workspaces = [
     metadataStatus: "COMPLETE",
     copilotReady: true,
     owners: 2,
-    lastActive: "10 mins ago"
+    lastActive: "10 mins ago",
+    size: "15 MB",
+    usage: "Medium"
   },
   {
     id: "ws-7",
@@ -133,7 +145,9 @@ const workspaces = [
     metadataStatus: "COMPLETE",
     copilotReady: true,
     owners: 5,
-    lastActive: "1 hour ago"
+    lastActive: "1 hour ago",
+    size: "45 MB",
+    usage: "High"
   },
   {
     id: "ws-8",
@@ -144,7 +158,9 @@ const workspaces = [
     metadataStatus: "MISSING_REQUIRED",
     copilotReady: false,
     owners: 1,
-    lastActive: "2 days ago"
+    lastActive: "2 days ago",
+    size: "5 MB",
+    usage: "Medium"
   }
 ];
 
@@ -265,9 +281,9 @@ export default function GovernancePage() {
                     aria-label="Select all"
                   />
                 </TableHead>
-                <TableHead className="w-[300px]">Workspace</TableHead>
+                <TableHead className="w-[280px]">Workspace</TableHead>
+                <TableHead>Size & Usage</TableHead>
                 <TableHead>Sensitivity</TableHead>
-                <TableHead>Retention Policy</TableHead>
                 <TableHead>Metadata Status</TableHead>
                 <TableHead>Copilot Readiness</TableHead>
                 <TableHead className="text-right">Owners</TableHead>
@@ -293,14 +309,20 @@ export default function GovernancePage() {
                       <div className="w-8 h-8 rounded-lg bg-background border border-border/50 flex items-center justify-center shadow-sm">
                         {getIconForType(ws.type)}
                       </div>
-                      <span className="text-foreground">{ws.displayName}</span>
+                      <div className="flex flex-col">
+                        <span className="text-foreground text-sm">{ws.displayName}</span>
+                        <span className="text-xs text-muted-foreground font-normal">Last active: {ws.lastActive}</span>
+                      </div>
+                    </div>
+                  </TableCell>
+                  <TableCell className="relative z-10">
+                    <div className="flex flex-col">
+                      <span className="text-sm font-medium">{ws.size}</span>
+                      <span className="text-xs text-muted-foreground">{ws.usage} Activity</span>
                     </div>
                   </TableCell>
                   <TableCell className="relative z-10">
                     {getSensitivityBadge(ws.sensitivity)}
-                  </TableCell>
-                  <TableCell className="relative z-10 text-muted-foreground text-sm">
-                    {ws.retention}
                   </TableCell>
                   <TableCell className="relative z-10">
                     {ws.metadataStatus === 'COMPLETE' ? (
