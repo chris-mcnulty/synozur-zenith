@@ -1,0 +1,223 @@
+Below is a developer‑ready implementation plan you can hand directly to the Zenith engineering team. It is written as an internal technical/security design plan, not marketing copy, and reflects exactly the security model we’ve been discussing: Entra ≠ authorization, explicit tenant ownership, MSP‑safe multi‑tenant control plane, and zero existence leakage.
+I’ve structured this so it can be:
+Dropped into an engineering backlog 
+Used as a security design spec 
+Reviewed by security / compliance without re‑translation 
+
+Zenith Security Implementation Plan
+Multi‑Tenant, MSP‑Safe, Entra‑Integrated Control Plane
+
+1. Objectives & Non‑Negotiable Principles
+1.1 Objectives
+Zenith must:
+Support multiple Microsoft Entra tenants 
+Allow MSPs and enterprises to operate across tenants 
+Prevent unauthorized MSP attachment 
+Prevent existence leakage (users must not see tenants or objects they don’t own or manage) 
+Be regulator‑defensible (SEC / PE / enterprise‑grade) 
+1.2 Non‑Negotiable Principles
+Admin consent is necessary but never sufficient 
+Tenant ownership is explicit, singular, and auditable 
+Inventory does not imply visibility 
+All authorization decisions happen in Zenith, not Entra 
+Every decision is logged 
+These principles drive every implementation decision below.
+
+2. High‑Level Architecture
+2.1 Separation of Concerns
+Layer
+Responsibility
+Microsoft Entra ID
+Authentication, token issuance
+Zenith Entra App
+Technical Graph access only
+Zenith Control Plane
+Authorization, ownership, visibility
+Zenith Data Plane
+Inventory, governance data
+Zenith RBAC
+Who can see / do what
+Critical rule:
+
+Entra answers who you are. Zenith answers whether you’re allowed.
+
+
+3. Entra Application Design
+3.1 Single Multi‑Tenant Entra App
+One Zenith Entra app 
+Multi‑tenant enabled 
+Admin consent required 
+3.2 Permissions (Principle of Minimum Required)
+Use application permissions, not delegated 
+Examples (final list owned by security review):
+Sites.Read.All 
+Group.Read.All 
+Directory.Read.All 
+Important:  Possessing these permissions does not grant operational access in Zenith.
+
+4. Tenant Registration & Claiming (Core Control)
+4.1 Tenant Registration Table (Authoritative)
+Tenant
+- tenantId (Entra GUID)
+- tenantName
+- owningOrganizationId (Zenith org)
+- ownershipType (MSP | Customer | Hybrid)
+- status (Pending | Active | Suspended | Revoked)
+- createdAt
+- createdBy
+4.2 Tenant Claiming Flow (Required)
+Zenith Entra app is consented in tenant 
+Zenith detects token from tenant 
+Zenith checks Tenant table 
+If tenant is unregistered:
+Reject all operations 
+Return “Tenant not registered” 
+Only an authorized tenant admin can:
+Register tenant 
+Assign owning organization 
+✅ No auto‑registration. Ever.
+
+5. One‑Owner Tenant Lock (Anti‑MSP Hijack)
+5.1 Ownership Rules
+A tenant can have exactly one owning Zenith organization 
+Ownership is exclusive 
+Ownership changes require:
+Explicit tenant admin approval 
+Audit record 
+Optional cooling‑off period 
+5.2 Enforcement
+Every request must validate:
+requestingOrgId == tenant.owningOrganizationId
+If false → hard deny.
+This is the primary control preventing:
+
+“A second MSP connects to Platinum without authorization.”
+
+
+6. Operator Allowlisting (Second Gate)
+6.1 Operator Registry
+Operator
+- operatorOrgId
+- operatorTenantId
+- allowedRoles (Admin, Operator, ReadOnly)
+- status (Active | Suspended)
+6.2 Runtime Enforcement
+For every request:
+Validate Entra token 
+Extract operator tenant ID 
+Check against Operator registry 
+If not allowlisted → deny 
+✅ Even valid Entra tokens are rejected if the operator isn’t explicitly trusted.
+
+7. Zenith RBAC (Visibility & Action Control)
+7.1 RBAC Is Internal to Zenith
+Do not rely on:
+Entra directory roles 
+SharePoint ACLs 
+Graph permission scope 
+RBAC decisions are made inside Zenith.
+7.2 Core Roles (Initial)
+Zenith Platform Admin 
+Tenant Admin 
+MSP Operator 
+Read‑Only Auditor 
+Each role defines:
+Accessible tenants 
+Accessible object types 
+Permitted actions 
+
+8. Inventory vs Visibility (Existence Leakage Prevention)
+8.1 Inventory Model
+Zenith maintains full tenant inventory 
+Inventory is stored centrally 
+Inventory is never directly exposed 
+8.2 Visibility Filtering (Mandatory)
+Every query applies all of the following filters:
+WHERE
+tenantId IN user.authorizedTenants
+AND
+objectScope IN user.permittedScopes
+AND
+objectRelationship IN user.relationships
+If the user is not allowed:
+The object does not appear 
+The object is not counted 
+The object is not searchable 
+✅ “Does not exist” is the correct user experience.
+
+9. API Security & Guardrails
+9.1 API Gatekeeping
+All APIs must:
+Validate Entra token 
+Validate tenant ownership 
+Validate operator allowlist 
+Validate RBAC role 
+Validate scope 
+Fail closed. Always.
+9.2 Explicit Denial Conditions
+Return 403 when:
+Tenant unregistered 
+Ownership mismatch 
+Operator not allowlisted 
+Role insufficient 
+Never return partial data.
+
+10. Conditional Access (Optional but Recommended)
+For Platinum‑grade tenants:
+Require MFA 
+Require compliant device 
+Restrict sign‑ins to approved operator tenants 
+Optional custom claims:
+zenith_operator_org 
+zenith_operator_role 
+Zenith validates claims before allowing destructive actions.
+
+11. Auditing & Compliance
+11.1 Mandatory Audit Events
+Log all:
+Tenant registration 
+Ownership assignment / change 
+Operator allowlist changes 
+Access denials 
+Privileged actions 
+11.2 Audit Model
+AuditEvent
+- eventType
+- tenantId
+- operatorOrgId
+- userId
+- timestamp
+- decision (Allow | Deny)
+- reason
+This supports:
+SEC inquiries 
+PE governance 
+Incident response 
+
+12. Threat Scenarios & Outcomes
+Scenario
+Result
+Unauthorized MSP attempts to attach
+Denied
+User with valid token but wrong org
+Denied
+App consented but tenant unclaimed
+Denied
+Inventory exists, user unauthorized
+Object invisible
+Ownership transfer without approval
+Impossible
+
+13. Engineering Acceptance Criteria
+✅ No tenant is operable without registration  ✅ No tenant can have multiple owners  ✅ No user sees unauthorized tenant existence  ✅ No API bypasses Zenith authorization  ✅ Every denial is explainable and logged
+
+14. One Sentence the Team Should Memorize
+
+Zenith is the system of authorization; Entra is only the system of authentication.
+
+If you want, next I can:
+Convert this into a sequence diagram (Auth → Claim → Operate) 
+Produce a threat model table for security review 
+Map this to Platinum Equity / Deal / PortCo realities 
+Turn this into engineering backlog epics + stories 
+This plan is solid, defensible, and exactly where a serious multi‑tenant governance platform needs to start.
