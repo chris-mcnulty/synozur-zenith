@@ -20,7 +20,12 @@ import {
   Globe, 
   FolderGit2,
   ShieldAlert,
-  ShieldCheck
+  ShieldCheck,
+  CheckSquare,
+  X,
+  Settings2,
+  Save,
+  Loader2
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -30,6 +35,23 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+  SheetFooter,
+} from "@/components/ui/sheet";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 // Mock Data
 const workspaces = [
@@ -87,6 +109,37 @@ const workspaces = [
 
 export default function GovernancePage() {
   const [searchTerm, setSearchTerm] = useState("");
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [isBulkEditOpen, setIsBulkEditOpen] = useState(false);
+  const [isSavingBulk, setIsSavingBulk] = useState(false);
+  const [showFilterDrawer, setShowFilterDrawer] = useState(false);
+
+  const toggleSelectAll = () => {
+    if (selectedIds.size === workspaces.length) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(workspaces.map(w => w.id)));
+    }
+  };
+
+  const toggleSelect = (id: string) => {
+    const newSet = new Set(selectedIds);
+    if (newSet.has(id)) {
+      newSet.delete(id);
+    } else {
+      newSet.add(id);
+    }
+    setSelectedIds(newSet);
+  };
+
+  const handleBulkSave = () => {
+    setIsSavingBulk(true);
+    setTimeout(() => {
+      setIsSavingBulk(false);
+      setIsBulkEditOpen(false);
+      setSelectedIds(new Set());
+    }, 1500);
+  };
 
   const getIconForType = (type: string) => {
     switch(type) {
@@ -115,7 +168,7 @@ export default function GovernancePage() {
           <p className="text-muted-foreground mt-1">Enumerate and inspect Microsoft 365 objects</p>
         </div>
         <div className="flex gap-3">
-          <Button variant="outline" className="gap-2 rounded-full">
+          <Button variant="outline" className="gap-2 rounded-full" onClick={() => setShowFilterDrawer(true)}>
             <Filter className="w-4 h-4" />
             Filters
           </Button>
@@ -124,6 +177,23 @@ export default function GovernancePage() {
           </Button>
         </div>
       </div>
+
+      {selectedIds.size > 0 && (
+        <div className="bg-primary/10 border border-primary/20 rounded-xl p-3 flex items-center justify-between animate-in fade-in slide-in-from-top-2">
+          <div className="flex items-center gap-3">
+            <Badge className="bg-primary text-primary-foreground">{selectedIds.size}</Badge>
+            <span className="text-sm font-medium text-primary">workspaces selected</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button variant="outline" size="sm" onClick={() => setSelectedIds(new Set())} className="h-8 border-primary/20 text-primary hover:bg-primary/10">
+              <X className="w-4 h-4 mr-1" /> Clear
+            </Button>
+            <Button size="sm" onClick={() => setIsBulkEditOpen(true)} className="h-8 gap-2 shadow-sm shadow-primary/20">
+              <CheckSquare className="w-4 h-4" /> Bulk Edit Properties
+            </Button>
+          </div>
+        </div>
+      )}
 
       <Card className="glass-panel border-border/50">
         <CardHeader className="pb-4">
@@ -144,7 +214,14 @@ export default function GovernancePage() {
           <Table>
             <TableHeader className="bg-muted/30">
               <TableRow className="hover:bg-transparent">
-                <TableHead className="w-[300px] pl-6">Workspace</TableHead>
+                <TableHead className="w-[40px] pl-4">
+                  <Checkbox 
+                    checked={selectedIds.size === workspaces.length && workspaces.length > 0} 
+                    onCheckedChange={toggleSelectAll}
+                    aria-label="Select all"
+                  />
+                </TableHead>
+                <TableHead className="w-[300px]">Workspace</TableHead>
                 <TableHead>Sensitivity</TableHead>
                 <TableHead>Metadata Status</TableHead>
                 <TableHead>Copilot Readiness</TableHead>
@@ -154,8 +231,18 @@ export default function GovernancePage() {
             </TableHeader>
             <TableBody>
               {workspaces.map((ws) => (
-                <TableRow key={ws.id} className="group hover:bg-muted/20 transition-colors cursor-pointer relative">
-                  <TableCell className="pl-6 font-medium">
+                <TableRow 
+                  key={ws.id} 
+                  className={`group transition-colors relative ${selectedIds.has(ws.id) ? 'bg-primary/5 hover:bg-primary/10' : 'hover:bg-muted/20'}`}
+                >
+                  <TableCell className="pl-4 relative z-20" onClick={(e) => e.stopPropagation()}>
+                    <Checkbox 
+                      checked={selectedIds.has(ws.id)}
+                      onCheckedChange={() => toggleSelect(ws.id)}
+                      aria-label={`Select ${ws.displayName}`}
+                    />
+                  </TableCell>
+                  <TableCell className="font-medium cursor-pointer relative">
                     <Link href={`/app/governance/workspaces/${ws.id}`} className="absolute inset-0 z-0" />
                     <div className="flex items-center gap-3 relative z-10">
                       <div className="w-8 h-8 rounded-lg bg-background border border-border/50 flex items-center justify-center shadow-sm">
@@ -219,6 +306,124 @@ export default function GovernancePage() {
           </div>
         </CardContent>
       </Card>
+
+      {/* Bulk Edit Sheet */}
+      <Sheet open={isBulkEditOpen} onOpenChange={setIsBulkEditOpen}>
+        <SheetContent className="w-[400px] sm:w-[540px] border-l-border/50 bg-card/95 backdrop-blur-xl">
+          <SheetHeader>
+            <SheetTitle>Bulk Edit Properties</SheetTitle>
+            <SheetDescription>
+              Applying changes to {selectedIds.size} selected workspace{selectedIds.size !== 1 ? 's' : ''}.
+            </SheetDescription>
+          </SheetHeader>
+          <div className="py-6 space-y-6">
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <Label>Sensitivity Label</Label>
+                <Select>
+                  <SelectTrigger className="w-full bg-background/50">
+                    <SelectValue placeholder="Select new label..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="public">Public</SelectItem>
+                    <SelectItem value="internal">Internal</SelectItem>
+                    <SelectItem value="confidential">Confidential</SelectItem>
+                    <SelectItem value="highly_confidential">Highly Confidential</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="space-y-2">
+                <Label>Department Metadata</Label>
+                <Input placeholder="Update department value..." className="bg-background/50" />
+              </div>
+
+              <div className="space-y-2">
+                <Label>Cost Center</Label>
+                <Input placeholder="Update cost center..." className="bg-background/50" />
+              </div>
+            </div>
+
+            <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/20 text-sm text-amber-600 dark:text-amber-500">
+              <span className="font-semibold block mb-1">Warning</span>
+              Bulk applying a higher sensitivity label may immediately restrict access for existing external guests across these workspaces.
+            </div>
+          </div>
+          <SheetFooter>
+            <Button variant="outline" onClick={() => setIsBulkEditOpen(false)}>Cancel</Button>
+            <Button onClick={handleBulkSave} disabled={isSavingBulk} className="gap-2 shadow-md shadow-primary/20">
+              {isSavingBulk ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+              {isSavingBulk ? "Applying..." : "Apply Changes"}
+            </Button>
+          </SheetFooter>
+        </SheetContent>
+      </Sheet>
+
+      {/* Filter Drawer */}
+      <Sheet open={showFilterDrawer} onOpenChange={setShowFilterDrawer}>
+        <SheetContent side="left" className="w-[300px] sm:w-[400px] border-r-border/50 bg-card/95 backdrop-blur-xl">
+          <SheetHeader>
+            <SheetTitle>Filter Directory</SheetTitle>
+            <SheetDescription>
+              Narrow down workspaces by attributes and policies.
+            </SheetDescription>
+          </SheetHeader>
+          <div className="py-6 space-y-6">
+            <div className="space-y-2">
+              <Label>Workspace Type</Label>
+              <Select defaultValue="all">
+                <SelectTrigger className="w-full bg-background/50">
+                  <SelectValue placeholder="All types" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Types</SelectItem>
+                  <SelectItem value="team">Microsoft Team</SelectItem>
+                  <SelectItem value="site">SharePoint Site</SelectItem>
+                  <SelectItem value="group">M365 Group</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            
+            <div className="space-y-2">
+              <Label>Sensitivity</Label>
+              <Select defaultValue="all">
+                <SelectTrigger className="w-full bg-background/50">
+                  <SelectValue placeholder="All classifications" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Classifications</SelectItem>
+                  <SelectItem value="highly_confidential">Highly Confidential</SelectItem>
+                  <SelectItem value="confidential">Confidential</SelectItem>
+                  <SelectItem value="internal">Internal</SelectItem>
+                  <SelectItem value="public">Public</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-2">
+              <Label>Metadata Status</Label>
+              <Select defaultValue="missing">
+                <SelectTrigger className="w-full bg-background/50 border-amber-500/50 focus:ring-amber-500/50">
+                  <SelectValue placeholder="Select status" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Any Status</SelectItem>
+                  <SelectItem value="complete">Complete</SelectItem>
+                  <SelectItem value="missing">Missing Required Fields</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <SheetFooter>
+            <Button variant="outline" onClick={() => setShowFilterDrawer(false)} className="w-full">
+              Close Filters
+            </Button>
+            <Button onClick={() => setShowFilterDrawer(false)} className="w-full">
+              Apply Filters
+            </Button>
+          </SheetFooter>
+        </SheetContent>
+      </Sheet>
     </div>
   );
 }
