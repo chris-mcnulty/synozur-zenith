@@ -98,22 +98,20 @@ export default function AppShell({ children }: AppShellProps) {
             {group.items.map((item) => {
               const isActive = location.startsWith(item.href);
               return (
-                <Link key={item.name} href={item.href}>
-                  <a className={`flex items-center justify-between px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
-                    isActive 
-                      ? "bg-primary/10 text-primary shadow-sm shadow-primary/5" 
-                      : "text-muted-foreground hover:bg-muted/80 hover:text-foreground"
-                  }`}>
-                    <div className="flex items-center gap-3">
-                      <item.icon className={`w-5 h-5 ${isActive ? "text-primary" : "text-muted-foreground/70"}`} />
-                      {item.name}
-                    </div>
-                    {item.badge && (
-                      <span className={`flex h-5 items-center justify-center rounded-full px-2 text-[10px] font-bold ${isActive ? 'bg-primary text-primary-foreground' : 'bg-primary/20 text-primary'}`}>
-                        {item.badge}
-                      </span>
-                    )}
-                  </a>
+                <Link key={item.name} href={item.href} className={`flex items-center justify-between px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
+                  isActive 
+                    ? "bg-primary/10 text-primary shadow-sm shadow-primary/5" 
+                    : "text-muted-foreground hover:bg-muted/80 hover:text-foreground"
+                }`}>
+                  <div className="flex items-center gap-3">
+                    <item.icon className={`w-5 h-5 ${isActive ? "text-primary" : "text-muted-foreground/70"}`} />
+                    {item.name}
+                  </div>
+                  {item.badge && (
+                    <span className={`flex h-5 items-center justify-center rounded-full px-2 text-[10px] font-bold ${isActive ? 'bg-primary text-primary-foreground' : 'bg-primary/20 text-primary'}`}>
+                      {item.badge}
+                    </span>
+                  )}
                 </Link>
               );
             })}
@@ -126,70 +124,60 @@ export default function AppShell({ children }: AppShellProps) {
           Administration
         </h4>
         <div className="space-y-1">
-          <Link href="/app/admin">
-            <a className={`flex items-center justify-between px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
-              location === "/app/admin" 
-                ? "bg-primary/10 text-primary shadow-sm shadow-primary/5" 
-                : "text-muted-foreground hover:bg-muted/80 hover:text-foreground"
-            }`}>
-              <div className="flex items-center gap-3">
-                <LayoutTemplate className={`w-5 h-5 ${location === "/app/admin" ? "text-primary" : "text-muted-foreground/70"}`} />
-                Provisioning Templates
-              </div>
-            </a>
+          <Link href="/app/admin" className={`flex items-center justify-between px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
+            location === "/app/admin" 
+              ? "bg-primary/10 text-primary shadow-sm shadow-primary/5" 
+              : "text-muted-foreground hover:bg-muted/80 hover:text-foreground"
+          }`}>
+            <div className="flex items-center gap-3">
+              <LayoutTemplate className={`w-5 h-5 ${location === "/app/admin" ? "text-primary" : "text-muted-foreground/70"}`} />
+              Provisioning Templates
+            </div>
           </Link>
-          <Link href="/app/admin/users">
-            <a className={`flex items-center justify-between px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
-              location.startsWith("/app/admin/users") 
-                ? "bg-primary/10 text-primary shadow-sm shadow-primary/5" 
-                : "text-muted-foreground hover:bg-muted/80 hover:text-foreground"
-            }`}>
-              <div className="flex items-center gap-3">
-                <UsersIcon className={`w-5 h-5 ${location.startsWith("/app/admin/users") ? "text-primary" : "text-muted-foreground/70"}`} />
-                User Management
-              </div>
-            </a>
+          <Link href="/app/admin/users" className={`flex items-center justify-between px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
+            location.startsWith("/app/admin/users") 
+              ? "bg-primary/10 text-primary shadow-sm shadow-primary/5" 
+              : "text-muted-foreground hover:bg-muted/80 hover:text-foreground"
+          }`}>
+            <div className="flex items-center gap-3">
+              <UsersIcon className={`w-5 h-5 ${location.startsWith("/app/admin/users") ? "text-primary" : "text-muted-foreground/70"}`} />
+              User Management
+            </div>
           </Link>
-          <Link href="/app/admin/organization">
-            <a className={`flex items-center justify-between px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
-              location.startsWith("/app/admin/organization") 
-                ? "bg-primary/10 text-primary shadow-sm shadow-primary/5" 
-                : "text-muted-foreground hover:bg-muted/80 hover:text-foreground"
-            }`}>
-              <div className="flex items-center gap-3">
-                <Building2 className={`w-5 h-5 ${location.startsWith("/app/admin/organization") ? "text-primary" : "text-muted-foreground/70"}`} />
-                Organization Settings
-              </div>
-            </a>
+          <Link href="/app/admin/organization" className={`flex items-center justify-between px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
+            location.startsWith("/app/admin/organization") 
+              ? "bg-primary/10 text-primary shadow-sm shadow-primary/5" 
+              : "text-muted-foreground hover:bg-muted/80 hover:text-foreground"
+          }`}>
+            <div className="flex items-center gap-3">
+              <Building2 className={`w-5 h-5 ${location.startsWith("/app/admin/organization") ? "text-primary" : "text-muted-foreground/70"}`} />
+              Organization Settings
+            </div>
           </Link>
-          <Link href="/app/admin/plans">
-            <a className={`flex items-center justify-between px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
-              location.startsWith("/app/admin/plans") 
-                ? "bg-primary/10 text-primary shadow-sm shadow-primary/5" 
-                : "text-muted-foreground hover:bg-muted/80 hover:text-foreground"
-            }`}>
-              <div className="flex items-center gap-3">
-                <CreditCard className={`w-5 h-5 ${location.startsWith("/app/admin/plans") ? "text-primary" : "text-muted-foreground/70"}`} />
-                Service Plans
-              </div>
-            </a>
+          <Link href="/app/admin/plans" className={`flex items-center justify-between px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
+            location.startsWith("/app/admin/plans") 
+              ? "bg-primary/10 text-primary shadow-sm shadow-primary/5" 
+              : "text-muted-foreground hover:bg-muted/80 hover:text-foreground"
+          }`}>
+            <div className="flex items-center gap-3">
+              <CreditCard className={`w-5 h-5 ${location.startsWith("/app/admin/plans") ? "text-primary" : "text-muted-foreground/70"}`} />
+              Service Plans
+            </div>
           </Link>
           
           <div className="pt-2 mt-2 border-t border-border/50">
             <div className="px-3 pb-1 flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest text-primary/70">
               <ShieldCheck className="w-3 h-3" /> Platform Admin Only
             </div>
-            <Link href="/app/admin/system">
-              <a className={`flex items-center justify-between px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
-                location.startsWith("/app/admin/system") 
-                  ? "bg-primary/10 text-primary shadow-sm shadow-primary/5" 
-                  : "text-muted-foreground hover:bg-muted/80 hover:text-foreground"
-              }`}>
-                <div className="flex items-center gap-3">
-                  <Server className={`w-5 h-5 ${location.startsWith("/app/admin/system") ? "text-primary" : "text-muted-foreground/70"}`} />
-                  System Administration
-                </div>
-              </a>
+            <Link href="/app/admin/system" className={`flex items-center justify-between px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
+              location.startsWith("/app/admin/system") 
+                ? "bg-primary/10 text-primary shadow-sm shadow-primary/5" 
+                : "text-muted-foreground hover:bg-muted/80 hover:text-foreground"
+            }`}>
+              <div className="flex items-center gap-3">
+                <Server className={`w-5 h-5 ${location.startsWith("/app/admin/system") ? "text-primary" : "text-muted-foreground/70"}`} />
+                System Administration
+              </div>
             </Link>
           </div>
         </div>
