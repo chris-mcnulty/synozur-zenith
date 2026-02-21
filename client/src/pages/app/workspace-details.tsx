@@ -18,7 +18,9 @@ import {
   Wand2,
   CheckCircle2,
   Activity,
-  Loader2
+  Loader2,
+  Tags,
+  Database
 } from "lucide-react";
 
 export default function WorkspaceDetailsPage() {
@@ -78,6 +80,7 @@ export default function WorkspaceDetailsPage() {
             <div className="flex items-center justify-between mb-4">
               <TabsList className="bg-muted/50 border border-border/50">
                 <TabsTrigger value="structured" className="gap-2"><Settings2 className="w-4 h-4"/> Structured View</TabsTrigger>
+                <TabsTrigger value="native" className="gap-2"><Tags className="w-4 h-4"/> Property Bag</TabsTrigger>
                 <TabsTrigger value="raw" className="gap-2"><FileJson className="w-4 h-4"/> Raw JSON</TabsTrigger>
                 <TabsTrigger value="lifecycle" className="gap-2"><Activity className="w-4 h-4"/> Lifecycle</TabsTrigger>
               </TabsList>
@@ -146,6 +149,80 @@ export default function WorkspaceDetailsPage() {
                   </div>
                 </CardContent>
               </Card>
+            </TabsContent>
+            
+            <TabsContent value="native">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <Card className="glass-panel border-border/50">
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2">
+                      <Database className="w-5 h-5 text-teal-500" />
+                      SharePoint Property Bag
+                    </CardTitle>
+                    <CardDescription>Raw key-value pairs stored directly on the underlying SharePoint Site.</CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="space-y-3">
+                      <div className="grid grid-cols-3 gap-2 py-2 border-b border-border/50">
+                        <span className="font-semibold text-sm text-muted-foreground col-span-1">Key</span>
+                        <span className="font-semibold text-sm text-muted-foreground col-span-2">Value</span>
+                      </div>
+                      <div className="grid grid-cols-3 gap-2 py-1.5">
+                        <span className="font-mono text-xs col-span-1 break-all text-primary">vti_extenderversion</span>
+                        <span className="font-mono text-xs col-span-2 break-all text-muted-foreground">16.0.0.2612</span>
+                      </div>
+                      <div className="grid grid-cols-3 gap-2 py-1.5">
+                        <span className="font-mono text-xs col-span-1 break-all text-primary">vti_defaultlanguage</span>
+                        <span className="font-mono text-xs col-span-2 break-all text-muted-foreground">en-us</span>
+                      </div>
+                      <div className="grid grid-cols-3 gap-2 py-1.5 bg-primary/5 rounded px-2 -mx-2">
+                        <span className="font-mono text-xs col-span-1 break-all text-primary">Zenith_DataClass</span>
+                        <span className="font-mono text-xs col-span-2 break-all font-medium text-foreground">Highly Confidential</span>
+                      </div>
+                      <div className="grid grid-cols-3 gap-2 py-1.5 bg-primary/5 rounded px-2 -mx-2">
+                        <span className="font-mono text-xs col-span-1 break-all text-primary">Zenith_DeptId</span>
+                        <span className="font-mono text-xs col-span-2 break-all font-medium text-foreground">HR-01</span>
+                      </div>
+                      <div className="grid grid-cols-3 gap-2 py-1.5">
+                        <span className="font-mono text-xs col-span-1 break-all text-primary">vti_siteusagedata</span>
+                        <span className="font-mono text-xs col-span-2 break-all text-muted-foreground">391024;1024</span>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+
+                <Card className="glass-panel border-border/50">
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2">
+                      <Tags className="w-5 h-5 text-blue-500" />
+                      Microsoft Teams Tags
+                    </CardTitle>
+                    <CardDescription>Tags applied to the associated M365 Group and Team.</CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="space-y-4">
+                      <div className="space-y-2">
+                        <h4 className="text-sm font-semibold">System Tags</h4>
+                        <div className="flex flex-wrap gap-2">
+                          <Badge variant="secondary" className="font-mono text-xs text-muted-foreground">Teamified</Badge>
+                          <Badge variant="secondary" className="font-mono text-xs text-muted-foreground">ExchangeProvisioned</Badge>
+                        </div>
+                      </div>
+                      <div className="space-y-2 pt-2 border-t border-border/40">
+                        <h4 className="text-sm font-semibold flex items-center justify-between">
+                          Custom Tags
+                          <Button variant="ghost" size="sm" className="h-6 text-xs">Edit Tags</Button>
+                        </h4>
+                        <div className="flex flex-wrap gap-2">
+                          <Badge variant="outline" className="font-mono text-xs border-primary/30 text-primary bg-primary/5">Project:PHX</Badge>
+                          <Badge variant="outline" className="font-mono text-xs border-primary/30 text-primary bg-primary/5">Status:Active</Badge>
+                          <Badge variant="outline" className="font-mono text-xs border-primary/30 text-primary bg-primary/5">Tier:Tier1</Badge>
+                        </div>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              </div>
             </TabsContent>
             
             <TabsContent value="raw">
