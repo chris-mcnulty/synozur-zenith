@@ -60,6 +60,7 @@ const workspaces = [
     displayName: "Project Phoenix",
     type: "TEAM",
     sensitivity: "CONFIDENTIAL",
+    retention: "Default 7 Year",
     metadataStatus: "COMPLETE",
     copilotReady: true,
     owners: 3,
@@ -70,6 +71,7 @@ const workspaces = [
     displayName: "HR Leadership",
     type: "SHAREPOINT_SITE",
     sensitivity: "HIGHLY_CONFIDENTIAL",
+    retention: "Executive 10 Year",
     metadataStatus: "MISSING_REQUIRED",
     copilotReady: false,
     owners: 1,
@@ -80,6 +82,7 @@ const workspaces = [
     displayName: "Marketing Q3 Campaign",
     type: "TEAM",
     sensitivity: "INTERNAL",
+    retention: "Default 7 Year",
     metadataStatus: "COMPLETE",
     copilotReady: true,
     owners: 4,
@@ -90,6 +93,7 @@ const workspaces = [
     displayName: "All Company Updates",
     type: "M365_GROUP",
     sensitivity: "PUBLIC",
+    retention: "Default 7 Year",
     metadataStatus: "COMPLETE",
     copilotReady: true,
     owners: 2,
@@ -100,6 +104,7 @@ const workspaces = [
     displayName: "Mergers & Acquisitions",
     type: "TEAM",
     sensitivity: "HIGHLY_CONFIDENTIAL",
+    retention: "Executive 10 Year",
     metadataStatus: "MISSING_REQUIRED",
     copilotReady: false,
     owners: 2,
@@ -223,6 +228,7 @@ export default function GovernancePage() {
                 </TableHead>
                 <TableHead className="w-[300px]">Workspace</TableHead>
                 <TableHead>Sensitivity</TableHead>
+                <TableHead>Retention Policy</TableHead>
                 <TableHead>Metadata Status</TableHead>
                 <TableHead>Copilot Readiness</TableHead>
                 <TableHead className="text-right">Owners</TableHead>
@@ -253,6 +259,9 @@ export default function GovernancePage() {
                   </TableCell>
                   <TableCell className="relative z-10">
                     {getSensitivityBadge(ws.sensitivity)}
+                  </TableCell>
+                  <TableCell className="relative z-10 text-muted-foreground text-sm">
+                    {ws.retention}
                   </TableCell>
                   <TableCell className="relative z-10">
                     {ws.metadataStatus === 'COMPLETE' ? (
@@ -329,6 +338,20 @@ export default function GovernancePage() {
                     <SelectItem value="internal">Internal</SelectItem>
                     <SelectItem value="confidential">Confidential</SelectItem>
                     <SelectItem value="highly_confidential">Highly Confidential</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="space-y-2">
+                <Label>Retention Policy</Label>
+                <Select>
+                  <SelectTrigger className="w-full bg-background/50">
+                    <SelectValue placeholder="Select retention policy..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="default_7_year">Default 7 Year</SelectItem>
+                    <SelectItem value="executive_10_year">Executive 10 Year</SelectItem>
+                    <SelectItem value="no_retention">No Retention (Delete)</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
