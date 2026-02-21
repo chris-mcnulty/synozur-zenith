@@ -26,7 +26,8 @@ import {
   FileText,
   Box,
   Archive,
-  CreditCard
+  CreditCard,
+  Cloud
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -208,24 +209,27 @@ export default function AppShell({ children }: AppShellProps) {
             {/* Master Selectors */}
             <div className="hidden md:flex items-center bg-card/40 border border-border/50 rounded-full shadow-sm p-0.5 backdrop-blur-md transition-colors hover:border-border/80">
               
-              {/* Company Selector */}
+              {/* Company/Org Selector */}
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <Button variant="ghost" className="h-9 gap-2 rounded-full px-3 hover:bg-muted/60 data-[state=open]:bg-muted/60">
-                    <Building2 className="w-4 h-4 text-primary" />
-                    <span className="font-semibold text-sm leading-none text-foreground">Synozur</span>
-                    <ChevronDown className="w-3 h-3 text-muted-foreground opacity-50 ml-1" />
+                  <Button variant="ghost" className="h-9 gap-2 rounded-full px-3 hover:bg-muted/60 data-[state=open]:bg-muted/60 text-left">
+                    <Building2 className="w-4 h-4 text-primary shrink-0" />
+                    <div className="flex flex-col items-start -space-y-0.5">
+                      <span className="text-[9px] font-bold text-muted-foreground uppercase tracking-widest">Platform Org</span>
+                      <span className="font-semibold text-sm leading-none text-foreground">Synozur Group</span>
+                    </div>
+                    <ChevronDown className="w-3 h-3 text-muted-foreground opacity-50 ml-1 shrink-0" />
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="start" className="w-60 rounded-xl p-2">
-                  <DropdownMenuLabel className="text-xs text-muted-foreground uppercase tracking-wider">Company</DropdownMenuLabel>
+                  <DropdownMenuLabel className="text-xs text-muted-foreground uppercase tracking-wider">Organization</DropdownMenuLabel>
                   <DropdownMenuSeparator className="mb-2 mt-1" />
                   <DropdownMenuItem className="flex justify-between rounded-lg p-2.5 bg-primary/10 cursor-default">
                     <div className="flex items-center gap-2.5">
                       <div className="w-6 h-6 rounded bg-primary/20 flex items-center justify-center">
                         <Building2 className="w-3.5 h-3.5 text-primary" />
                       </div>
-                      <span className="font-semibold text-primary">Synozur</span>
+                      <span className="font-semibold text-primary">Synozur Group</span>
                     </div>
                     <Check className="w-4 h-4 text-primary" />
                   </DropdownMenuItem>
@@ -239,41 +243,47 @@ export default function AppShell({ children }: AppShellProps) {
                   <DropdownMenuItem asChild className="rounded-lg p-2.5 cursor-pointer group">
                     <Link href="/app/add-tenant" className="flex items-center text-primary font-medium">
                       <FolderPlus className="w-4 h-4 mr-2" />
-                      Connect new company...
+                      Register new org...
                     </Link>
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
 
-              <div className="w-px h-5 bg-border/80 mx-0.5"></div>
+              <div className="w-px h-6 bg-border/80 mx-1"></div>
 
-              {/* Environment Selector */}
+              {/* Tenant Selector */}
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <Button variant="ghost" className="h-9 gap-2 rounded-full px-3 hover:bg-muted/60 data-[state=open]:bg-muted/60">
-                    <Layers className="w-4 h-4 text-secondary" />
-                    <span className="font-medium text-sm leading-none text-muted-foreground">PROD</span>
-                    <ChevronDown className="w-3 h-3 text-muted-foreground opacity-50 ml-1" />
+                  <Button variant="ghost" className="h-9 gap-2 rounded-full px-3 hover:bg-muted/60 data-[state=open]:bg-muted/60 text-left">
+                    <Cloud className="w-4 h-4 text-secondary shrink-0" />
+                    <div className="flex flex-col items-start -space-y-0.5">
+                      <span className="text-[9px] font-bold text-muted-foreground uppercase tracking-widest">M365 Tenant</span>
+                      <span className="font-medium text-sm leading-none text-muted-foreground">synozur.onmicrosoft.com</span>
+                    </div>
+                    <ChevronDown className="w-3 h-3 text-muted-foreground opacity-50 ml-1 shrink-0" />
                   </Button>
                 </DropdownMenuTrigger>
-                <DropdownMenuContent align="start" className="w-52 rounded-xl p-2">
-                  <DropdownMenuLabel className="text-xs text-muted-foreground uppercase tracking-wider">Environment</DropdownMenuLabel>
+                <DropdownMenuContent align="start" className="w-64 rounded-xl p-2">
+                  <DropdownMenuLabel className="text-xs text-muted-foreground uppercase tracking-wider">Connected Tenants</DropdownMenuLabel>
                   <DropdownMenuSeparator className="mb-2 mt-1" />
-                  <DropdownMenuItem className="flex justify-between rounded-lg p-2.5 bg-secondary/10 cursor-default">
-                    <span className="font-semibold text-secondary">PROD</span>
+                  <DropdownMenuItem className="flex justify-between rounded-lg p-2.5 bg-secondary/10 cursor-default items-start">
+                    <div className="space-y-0.5">
+                      <span className="font-semibold text-secondary block">synozur.onmicrosoft.com</span>
+                      <span className="text-xs text-muted-foreground block">Production Environment</span>
+                    </div>
                     <Badge variant="default" className="text-[10px] bg-secondary text-secondary-foreground hover:bg-secondary uppercase tracking-wider h-5 px-1.5 shadow-sm shadow-secondary/20">Active</Badge>
                   </DropdownMenuItem>
-                  <DropdownMenuItem className="rounded-lg p-2.5 cursor-pointer text-muted-foreground hover:text-foreground mt-1">
-                    <span className="font-medium">TEST</span>
-                  </DropdownMenuItem>
-                  <DropdownMenuItem className="rounded-lg p-2.5 cursor-pointer text-muted-foreground hover:text-foreground">
-                    <span className="font-medium">SANDBOX</span>
+                  <DropdownMenuItem className="rounded-lg p-2.5 cursor-pointer text-muted-foreground hover:text-foreground mt-1 items-start">
+                    <div className="space-y-0.5">
+                      <span className="font-medium block">synozurtest.onmicrosoft.com</span>
+                      <span className="text-xs text-muted-foreground block">UAT / Sandbox</span>
+                    </div>
                   </DropdownMenuItem>
                   <DropdownMenuSeparator className="my-2" />
                   <DropdownMenuItem asChild className="rounded-lg p-2.5 cursor-pointer group">
                     <Link href="/app/admin" className="flex items-center text-muted-foreground">
                       <Settings className="w-4 h-4 mr-2" />
-                      Manage environments
+                      Manage connections
                     </Link>
                   </DropdownMenuItem>
                 </DropdownMenuContent>
