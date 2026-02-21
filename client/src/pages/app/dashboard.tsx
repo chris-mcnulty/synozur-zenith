@@ -196,11 +196,11 @@ export default function DashboardPage() {
             </CardHeader>
             <CardContent>
               <div className="flex items-end justify-between mb-3">
-                <span className="text-4xl font-bold tracking-tight text-transparent bg-clip-text bg-gradient-to-r from-primary to-blue-400">68%</span>
+                <span className="text-4xl font-bold tracking-tight text-transparent bg-clip-text bg-gradient-to-r from-primary to-secondary">68%</span>
                 <span className="text-sm text-muted-foreground mb-1 font-medium">of workspaces</span>
               </div>
               <Progress value={68} className="h-2.5 mb-5 bg-muted overflow-hidden rounded-full">
-                <div className="h-full bg-gradient-to-r from-primary to-blue-500 transition-all duration-1000 ease-in-out" style={{ width: "68%" }} />
+                <div className="h-full bg-gradient-to-r from-primary to-secondary transition-all duration-1000 ease-in-out" style={{ width: "68%" }} />
               </Progress>
               <p className="text-sm text-muted-foreground leading-relaxed">
                 Workspaces meeting minimum classification and external sharing policies required for secure Copilot indexing.
