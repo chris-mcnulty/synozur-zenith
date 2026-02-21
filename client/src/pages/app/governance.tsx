@@ -25,7 +25,10 @@ import {
   X,
   Settings2,
   Save,
-  Loader2
+  Loader2,
+  BarChart2,
+  BookOpen,
+  Infinity
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -109,6 +112,39 @@ const workspaces = [
     copilotReady: false,
     owners: 2,
     lastActive: "1 week ago"
+  },
+  {
+    id: "ws-6",
+    displayName: "Q4 Finance Reporting",
+    type: "POWER_BI",
+    sensitivity: "CONFIDENTIAL",
+    retention: "Default 7 Year",
+    metadataStatus: "COMPLETE",
+    copilotReady: true,
+    owners: 2,
+    lastActive: "10 mins ago"
+  },
+  {
+    id: "ws-7",
+    displayName: "Engineering Specs Sync",
+    type: "LOOP_WORKSPACE",
+    sensitivity: "INTERNAL",
+    retention: "Default 7 Year",
+    metadataStatus: "COMPLETE",
+    copilotReady: true,
+    owners: 5,
+    lastActive: "1 hour ago"
+  },
+  {
+    id: "ws-8",
+    displayName: "R&D Competitor Research",
+    type: "COPILOT_NOTEBOOK",
+    sensitivity: "HIGHLY_CONFIDENTIAL",
+    retention: "Executive 10 Year",
+    metadataStatus: "MISSING_REQUIRED",
+    copilotReady: false,
+    owners: 1,
+    lastActive: "2 days ago"
   }
 ];
 
@@ -151,6 +187,9 @@ export default function GovernancePage() {
       case 'TEAM': return <Users className="w-4 h-4 text-blue-500" />;
       case 'SHAREPOINT_SITE': return <Globe className="w-4 h-4 text-teal-500" />;
       case 'M365_GROUP': return <FolderGit2 className="w-4 h-4 text-orange-500" />;
+      case 'POWER_BI': return <BarChart2 className="w-4 h-4 text-yellow-500" />;
+      case 'LOOP_WORKSPACE': return <Infinity className="w-4 h-4 text-indigo-500" />;
+      case 'COPILOT_NOTEBOOK': return <BookOpen className="w-4 h-4 text-purple-500" />;
       default: return <FolderGit2 className="w-4 h-4" />;
     }
   };
@@ -403,6 +442,9 @@ export default function GovernancePage() {
                   <SelectItem value="team">Microsoft Team</SelectItem>
                   <SelectItem value="site">SharePoint Site</SelectItem>
                   <SelectItem value="group">M365 Group</SelectItem>
+                  <SelectItem value="loop">Loop Workspace</SelectItem>
+                  <SelectItem value="powerbi">Power BI Workspace</SelectItem>
+                  <SelectItem value="copilot">Copilot Notebook</SelectItem>
                 </SelectContent>
               </Select>
             </div>

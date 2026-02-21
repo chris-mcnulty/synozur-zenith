@@ -15,7 +15,10 @@ import {
   ShieldAlert, 
   Info,
   Loader2,
-  CheckCircle2
+  CheckCircle2,
+  BarChart2,
+  BookOpen,
+  Infinity
 } from "lucide-react";
 import {
   Select,
@@ -35,7 +38,7 @@ export default function ProvisionNewPage() {
   // Mock naming policy preview
   const getPolicyPreview = () => {
     if (!name) return "";
-    const prefix = workspaceType === "TEAM" ? "TEAM-" : workspaceType === "SHAREPOINT_SITE" ? "SITE-" : "GRP-";
+    const prefix = workspaceType === "TEAM" ? "TEAM-" : workspaceType === "SHAREPOINT_SITE" ? "SITE-" : workspaceType === "LOOP_WORKSPACE" ? "LOOP-" : workspaceType === "POWER_BI" ? "PBI-" : workspaceType === "COPILOT_NOTEBOOK" ? "CPLT-" : "GRP-";
     return `${prefix}${name.replace(/[^a-zA-Z0-9]/g, "-").toUpperCase()}`;
   };
 
@@ -102,10 +105,10 @@ export default function ProvisionNewPage() {
                   <RadioGroupItem value="TEAM" id="type-team" className="peer sr-only" />
                   <Label
                     htmlFor="type-team"
-                    className="flex flex-col items-center justify-between rounded-xl border-2 border-muted bg-popover p-4 hover:bg-accent hover:text-accent-foreground peer-data-[state=checked]:border-primary peer-data-[state=checked]:bg-primary/5 cursor-pointer transition-all"
+                    className="flex flex-col items-center justify-between rounded-xl border-2 border-muted bg-popover p-4 hover:bg-accent hover:text-accent-foreground peer-data-[state=checked]:border-primary peer-data-[state=checked]:bg-primary/5 cursor-pointer transition-all h-full"
                   >
                     <Users className="mb-3 h-8 w-8 text-blue-500" />
-                    <span className="font-semibold">Microsoft Team</span>
+                    <span className="font-semibold text-center">Microsoft Team</span>
                     <span className="text-[10px] text-muted-foreground mt-1 text-center font-normal">Chat, files, and meetings</span>
                   </Label>
                 </div>
@@ -113,10 +116,10 @@ export default function ProvisionNewPage() {
                   <RadioGroupItem value="SHAREPOINT_SITE" id="type-site" className="peer sr-only" />
                   <Label
                     htmlFor="type-site"
-                    className="flex flex-col items-center justify-between rounded-xl border-2 border-muted bg-popover p-4 hover:bg-accent hover:text-accent-foreground peer-data-[state=checked]:border-primary peer-data-[state=checked]:bg-primary/5 cursor-pointer transition-all"
+                    className="flex flex-col items-center justify-between rounded-xl border-2 border-muted bg-popover p-4 hover:bg-accent hover:text-accent-foreground peer-data-[state=checked]:border-primary peer-data-[state=checked]:bg-primary/5 cursor-pointer transition-all h-full"
                   >
                     <Globe className="mb-3 h-8 w-8 text-teal-500" />
-                    <span className="font-semibold">SharePoint Site</span>
+                    <span className="font-semibold text-center">SharePoint Site</span>
                     <span className="text-[10px] text-muted-foreground mt-1 text-center font-normal">Intranet and document management</span>
                   </Label>
                 </div>
@@ -124,11 +127,44 @@ export default function ProvisionNewPage() {
                   <RadioGroupItem value="M365_GROUP" id="type-group" className="peer sr-only" />
                   <Label
                     htmlFor="type-group"
-                    className="flex flex-col items-center justify-between rounded-xl border-2 border-muted bg-popover p-4 hover:bg-accent hover:text-accent-foreground peer-data-[state=checked]:border-primary peer-data-[state=checked]:bg-primary/5 cursor-pointer transition-all"
+                    className="flex flex-col items-center justify-between rounded-xl border-2 border-muted bg-popover p-4 hover:bg-accent hover:text-accent-foreground peer-data-[state=checked]:border-primary peer-data-[state=checked]:bg-primary/5 cursor-pointer transition-all h-full"
                   >
                     <FolderGit2 className="mb-3 h-8 w-8 text-orange-500" />
-                    <span className="font-semibold">M365 Group</span>
+                    <span className="font-semibold text-center">M365 Group</span>
                     <span className="text-[10px] text-muted-foreground mt-1 text-center font-normal">Shared inbox and calendar</span>
+                  </Label>
+                </div>
+                <div>
+                  <RadioGroupItem value="LOOP_WORKSPACE" id="type-loop" className="peer sr-only" />
+                  <Label
+                    htmlFor="type-loop"
+                    className="flex flex-col items-center justify-between rounded-xl border-2 border-muted bg-popover p-4 hover:bg-accent hover:text-accent-foreground peer-data-[state=checked]:border-primary peer-data-[state=checked]:bg-primary/5 cursor-pointer transition-all h-full"
+                  >
+                    <Infinity className="mb-3 h-8 w-8 text-indigo-500" />
+                    <span className="font-semibold text-center">Loop Workspace</span>
+                    <span className="text-[10px] text-muted-foreground mt-1 text-center font-normal">Co-creation and components</span>
+                  </Label>
+                </div>
+                <div>
+                  <RadioGroupItem value="POWER_BI" id="type-powerbi" className="peer sr-only" />
+                  <Label
+                    htmlFor="type-powerbi"
+                    className="flex flex-col items-center justify-between rounded-xl border-2 border-muted bg-popover p-4 hover:bg-accent hover:text-accent-foreground peer-data-[state=checked]:border-primary peer-data-[state=checked]:bg-primary/5 cursor-pointer transition-all h-full"
+                  >
+                    <BarChart2 className="mb-3 h-8 w-8 text-yellow-500" />
+                    <span className="font-semibold text-center">Power BI Workspace</span>
+                    <span className="text-[10px] text-muted-foreground mt-1 text-center font-normal">Reports and dashboards</span>
+                  </Label>
+                </div>
+                <div>
+                  <RadioGroupItem value="COPILOT_NOTEBOOK" id="type-copilot" className="peer sr-only" />
+                  <Label
+                    htmlFor="type-copilot"
+                    className="flex flex-col items-center justify-between rounded-xl border-2 border-muted bg-popover p-4 hover:bg-accent hover:text-accent-foreground peer-data-[state=checked]:border-primary peer-data-[state=checked]:bg-primary/5 cursor-pointer transition-all h-full"
+                  >
+                    <BookOpen className="mb-3 h-8 w-8 text-purple-500" />
+                    <span className="font-semibold text-center">Copilot Notebook</span>
+                    <span className="text-[10px] text-muted-foreground mt-1 text-center font-normal">AI-assisted research spaces</span>
                   </Label>
                 </div>
               </RadioGroup>
