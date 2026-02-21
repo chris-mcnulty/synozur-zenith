@@ -72,6 +72,7 @@ const navGroups = [
       { name: "Archive & Backup", href: "/app/archive-backup", icon: Archive },
       { name: "Lifecycle", href: "/app/lifecycle", icon: Clock },
       { name: "Syntex", href: "/app/syntex", icon: BrainCircuit },
+      { name: "Purview", href: "/app/purview", icon: Fingerprint },
     ]
   },
   {
