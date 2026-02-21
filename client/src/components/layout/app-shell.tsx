@@ -73,8 +73,9 @@ const navGroups = [
     ]
   },
   {
-    label: "Insights",
+    label: "Insights & Intelligence",
     items: [
+      { name: "AI & Copilot", href: "/app/ai-copilot", icon: BrainCircuit },
       { name: "Reports", href: "/app/reports", icon: BarChart3 },
     ]
   }
