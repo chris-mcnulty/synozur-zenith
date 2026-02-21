@@ -25,7 +25,8 @@ import {
   LayoutTemplate,
   FileText,
   Box,
-  Archive
+  Archive,
+  CreditCard
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -116,18 +117,32 @@ export default function AppShell({ children }: AppShellProps) {
         <h4 className="px-4 text-xs font-bold text-muted-foreground uppercase tracking-widest mb-2">
           Administration
         </h4>
-        <Link href="/app/admin">
-          <a className={`flex items-center justify-between px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
-            location.startsWith("/app/admin") 
-              ? "bg-primary/10 text-primary shadow-sm shadow-primary/5" 
-              : "text-muted-foreground hover:bg-muted/80 hover:text-foreground"
-          }`}>
-            <div className="flex items-center gap-3">
-              <LayoutTemplate className={`w-5 h-5 ${location.startsWith("/app/admin") ? "text-primary" : "text-muted-foreground/70"}`} />
-              Provisioning Templates
-            </div>
-          </a>
-        </Link>
+        <div className="space-y-1">
+          <Link href="/app/admin">
+            <a className={`flex items-center justify-between px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
+              location === "/app/admin" 
+                ? "bg-primary/10 text-primary shadow-sm shadow-primary/5" 
+                : "text-muted-foreground hover:bg-muted/80 hover:text-foreground"
+            }`}>
+              <div className="flex items-center gap-3">
+                <LayoutTemplate className={`w-5 h-5 ${location === "/app/admin" ? "text-primary" : "text-muted-foreground/70"}`} />
+                Provisioning Templates
+              </div>
+            </a>
+          </Link>
+          <Link href="/app/admin/plans">
+            <a className={`flex items-center justify-between px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
+              location.startsWith("/app/admin/plans") 
+                ? "bg-primary/10 text-primary shadow-sm shadow-primary/5" 
+                : "text-muted-foreground hover:bg-muted/80 hover:text-foreground"
+            }`}>
+              <div className="flex items-center gap-3">
+                <CreditCard className={`w-5 h-5 ${location.startsWith("/app/admin/plans") ? "text-primary" : "text-muted-foreground/70"}`} />
+                Service Plans
+              </div>
+            </a>
+          </Link>
+        </div>
       </div>
     </div>
   );
