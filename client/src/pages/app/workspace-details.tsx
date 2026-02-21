@@ -145,7 +145,7 @@ export default function WorkspaceDetailsPage() {
         <p className="text-destructive font-medium">{error?.message || "Workspace not found"}</p>
         <Link href="/app/governance">
           <Button variant="outline" className="gap-2">
-            <ArrowLeft className="w-4 h-4" /> Back to Site Inventory
+            <ArrowLeft className="w-4 h-4" /> Back to Site Governance
           </Button>
         </Link>
       </div>

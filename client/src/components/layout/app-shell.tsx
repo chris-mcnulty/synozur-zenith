@@ -62,7 +62,7 @@ const navGroups = [
   {
     label: "Management",
     items: [
-      { name: "Governance", href: "/app/governance", icon: ShieldCheck },
+      { name: "Site Governance", href: "/app/governance", icon: ShieldCheck },
       { name: "Policy Builder", href: "/app/admin/policies", icon: ShieldCheck, badge: "Ent+" },
       { name: "Structures", href: "/app/structures", icon: Layers },
       { name: "Document Library", href: "/app/document-library", icon: Library },

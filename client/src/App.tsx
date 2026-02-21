@@ -63,8 +63,8 @@ function AppRoutes() {
                 <Route path="/app/dashboard" component={DashboardPage} />
                 <Route path="/app/provision/new" component={ProvisionNewPage} />
                 <Route path="/app/provision" component={() => <EmptyPage title="Provisioning Requests" />} />
-                <Route path="/app/governance" component={GovernancePage} />
                 <Route path="/app/governance/workspaces/:id" component={WorkspaceDetailsPage} />
+                <Route path="/app/governance" component={GovernancePage} />
                 <Route path="/app/syntex" component={SyntexPage} />
                 <Route path="/app/purview" component={PurviewConfigPage} />
                 <Route path="/app/lifecycle" component={() => <EmptyPage title="Lifecycle Management" />} />

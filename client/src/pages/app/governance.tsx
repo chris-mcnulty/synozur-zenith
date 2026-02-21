@@ -155,7 +155,7 @@ export default function GovernancePage() {
       <div className="space-y-6 animate-in fade-in duration-500 pb-10">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div>
-            <h1 className="text-3xl font-bold tracking-tight">Workspace Governance</h1>
+            <h1 className="text-3xl font-bold tracking-tight">Site Governance</h1>
             <p className="text-muted-foreground mt-1">Enumerate and inspect SharePoint sites across your tenant</p>
           </div>
         </div>
@@ -172,7 +172,7 @@ export default function GovernancePage() {
     <div className="space-y-6 animate-in fade-in duration-500 pb-10">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">Workspace Governance</h1>
+          <h1 className="text-3xl font-bold tracking-tight">Site Governance</h1>
           <p className="text-muted-foreground mt-1">Enumerate and inspect SharePoint sites across your tenant</p>
         </div>
         <div className="flex gap-3">
@@ -258,8 +258,8 @@ export default function GovernancePage() {
                         />
                       </TableCell>
                       <TableCell className="font-medium cursor-pointer relative">
-                        <Link href={`/app/governance/workspaces/${ws.id}`} className="absolute inset-0 z-0" />
-                        <div className="flex items-center gap-3 relative z-10">
+                        <Link href={`/app/governance/workspaces/${ws.id}`} className="absolute inset-0 z-10" />
+                        <div className="flex items-center gap-3 relative z-0 pointer-events-none">
                           <div className="w-8 h-8 rounded-lg bg-background border border-border/50 flex items-center justify-center shadow-sm">
                             {getIconForType(ws.type)}
                           </div>
