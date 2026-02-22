@@ -12,6 +12,7 @@ Zenith is a Microsoft 365 governance platform MVP built for The Synozur Alliance
 ## Synozur Product Suite
 - **Zenith** — Microsoft 365 governance platform (this project)
 - **Vega** — Strategy and OKR app. Code at: https://github.com/chris-mcnulty/synozur-vega
+- **Orbit** — Competitive Intelligence app. Code at: https://github.com/chris-mcnulty/synozur-orbit
 
 ## Organizations & Tenants
 - **Organization 1**: "The Synozur Alliance" — parent org, ENTERPRISE (unlimited) plan
