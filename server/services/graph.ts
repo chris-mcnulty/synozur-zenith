@@ -140,6 +140,134 @@ export async function fetchSharePointSites(tenantId: string, clientId: string, c
   }
 }
 
+export interface SiteUsageReportRow {
+  siteId: string;
+  siteUrl: string;
+  ownerDisplayName: string;
+  ownerPrincipalName: string;
+  isDeleted: boolean;
+  lastActivityDate: string;
+  fileCount: number;
+  activeFileCount: number;
+  pageViewCount: number;
+  visitedPageCount: number;
+  storageUsedBytes: number;
+  storageAllocatedBytes: number;
+  rootWebTemplate: string;
+  sensitivityLabelId: string;
+  externalSharing: string;
+  reportRefreshDate: string;
+  reportPeriod: string;
+}
+
+export async function fetchSiteUsageReport(tenantId: string, clientId: string, clientSecret: string): Promise<{
+  report: SiteUsageReportRow[];
+  error?: string;
+}> {
+  try {
+    const token = await getAppToken(tenantId, clientId, clientSecret);
+
+    const allRows: SiteUsageReportRow[] = [];
+    let nextLink: string | null = "https://graph.microsoft.com/beta/reports/getSharePointSiteUsageDetail(period='D7')?$format=application/json";
+
+    while (nextLink) {
+      const res: Response = await fetch(nextLink, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: "application/json",
+        },
+      });
+
+      if (!res.ok) {
+        const errText = await res.text();
+        return { report: allRows, error: `Usage report API error ${res.status}: ${errText}` };
+      }
+
+      const data: any = await res.json();
+      const rows: any[] = data.value || [];
+
+      for (const row of rows) {
+        allRows.push({
+          siteId: row.siteId || '',
+          siteUrl: row.siteUrl || '',
+          ownerDisplayName: row.ownerDisplayName || '',
+          ownerPrincipalName: row.ownerPrincipalName || '',
+          isDeleted: row.isDeleted === true,
+          lastActivityDate: row.lastActivityDate || '',
+          fileCount: row.fileCount ?? 0,
+          activeFileCount: row.activeFileCount ?? 0,
+          pageViewCount: row.pageViewCount ?? 0,
+          visitedPageCount: row.visitedPageCount ?? 0,
+          storageUsedBytes: row.storageUsedInBytes ?? 0,
+          storageAllocatedBytes: row.storageAllocatedInBytes ?? 0,
+          rootWebTemplate: row.rootWebTemplate || '',
+          sensitivityLabelId: row.siteSensitivityLabelId || '',
+          externalSharing: row.externalSharing || '',
+          reportRefreshDate: row.reportRefreshDate || '',
+          reportPeriod: String(row.reportPeriod || ''),
+        });
+      }
+
+      nextLink = data["@odata.nextLink"] || null;
+    }
+
+    return { report: allRows };
+  } catch (err: any) {
+    return { report: [], error: err.message };
+  }
+}
+
+export interface SiteDriveOwner {
+  siteId: string;
+  ownerEmail?: string;
+  ownerDisplayName?: string;
+}
+
+export async function fetchSiteDriveOwner(token: string, graphSiteId: string): Promise<SiteDriveOwner> {
+  try {
+    const res = await fetch(`https://graph.microsoft.com/v1.0/sites/${graphSiteId}/drive`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+
+    if (!res.ok) {
+      return { siteId: graphSiteId };
+    }
+
+    const data = await res.json();
+    const owner = data?.owner?.user;
+    return {
+      siteId: graphSiteId,
+      ownerEmail: owner?.email || owner?.userPrincipalName,
+      ownerDisplayName: owner?.displayName,
+    };
+  } catch {
+    return { siteId: graphSiteId };
+  }
+}
+
+export async function fetchSiteAnalytics(token: string, graphSiteId: string): Promise<{
+  lastActivityDate?: string;
+  fileCount?: number;
+  activeFileCount?: number;
+  pageViewCount?: number;
+  visitedPageCount?: number;
+}> {
+  try {
+    const res = await fetch(`https://graph.microsoft.com/v1.0/sites/${graphSiteId}/analytics/lastSevenDays`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+
+    if (!res.ok) return {};
+
+    const data = await res.json();
+    return {
+      lastActivityDate: data?.lastActivityDateTime,
+    };
+  } catch {
+    return {};
+  }
+}
+
 export function clearTokenCache(tenantId?: string, clientId?: string) {
   if (tenantId && clientId) {
     tokenCache.delete(`${tenantId}:${clientId}`);

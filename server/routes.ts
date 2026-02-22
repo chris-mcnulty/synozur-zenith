@@ -3,7 +3,7 @@ import { createServer, type Server } from "http";
 import crypto from "crypto";
 import { storage } from "./storage";
 import { insertWorkspaceSchema, insertProvisioningRequestSchema, insertTenantConnectionSchema, PLAN_FEATURES, SERVICE_PLANS, type ServicePlanTier } from "@shared/schema";
-import { testConnection, fetchSharePointSites, clearTokenCache } from "./services/graph";
+import { testConnection, fetchSharePointSites, fetchSiteUsageReport, fetchSiteDriveOwner, getAppToken, clearTokenCache } from "./services/graph";
 import { requireFeature, getPlanFeatures } from "./services/feature-gate";
 import authRouter from "./routes-auth";
 import entraRouter from "./routes-entra";
@@ -375,40 +375,114 @@ export async function registerRoutes(
     }
 
     try {
-      const result = await fetchSharePointSites(connection.tenantId, clientId, clientSecret);
+      const [siteResult, usageResult] = await Promise.all([
+        fetchSharePointSites(connection.tenantId, clientId, clientSecret),
+        fetchSiteUsageReport(connection.tenantId, clientId, clientSecret),
+      ]);
 
-      if (result.error) {
+      if (siteResult.error && siteResult.sites.length === 0) {
         await storage.updateTenantConnection(req.params.id, {
           lastSyncAt: new Date(),
-          lastSyncStatus: `ERROR: ${result.error}`,
-          lastSyncSiteCount: result.sites.length,
+          lastSyncStatus: `ERROR: ${siteResult.error}`,
+          lastSyncSiteCount: 0,
         });
-        return res.json({
-          success: false,
-          error: result.error,
-          sitesFound: result.sites.length,
-        });
+        return res.json({ success: false, error: siteResult.error, sitesFound: 0 });
       }
 
+      const normalizeUrl = (url: string) => url.toLowerCase().replace(/\/+$/, '');
+
+      const usageMap = new Map<string, typeof usageResult.report[0]>();
+      const usageUrlMap = new Map<string, typeof usageResult.report[0]>();
+      for (const row of usageResult.report) {
+        if (row.siteId) usageMap.set(row.siteId.toLowerCase().trim(), row);
+        if (row.siteUrl) usageUrlMap.set(normalizeUrl(row.siteUrl), row);
+      }
+
+      let token: string | null = null;
+      try {
+        token = await getAppToken(connection.tenantId, clientId, clientSecret);
+      } catch {}
+
       let upsertedCount = 0;
-      for (const site of result.sites) {
+      let usageMatched = 0;
+      const enrichErrors: string[] = [];
+
+      for (const site of siteResult.sites) {
+        const graphSiteIdParts = site.id.split(',');
+        const siteGuid = graphSiteIdParts.length >= 2 ? graphSiteIdParts[1].trim() : site.id.trim();
+
+        let usage = usageMap.get(siteGuid.toLowerCase());
+        if (!usage && site.webUrl) {
+          usage = usageUrlMap.get(normalizeUrl(site.webUrl));
+        }
+        if (usage) usageMatched++;
+
+        let driveOwner: { ownerEmail?: string; ownerDisplayName?: string } = {};
+        if (token) {
+          try {
+            driveOwner = await fetchSiteDriveOwner(token, site.id);
+          } catch (e: any) {
+            enrichErrors.push(`Drive owner for ${site.displayName}: ${e.message}`);
+          }
+        }
+
+        const siteType = inferSiteType(usage?.rootWebTemplate, site.siteCollection?.root);
+
+        const workspaceData: Record<string, any> = {
+          displayName: site.displayName || 'Untitled Site',
+          siteUrl: site.webUrl,
+          description: site.description || null,
+          tenantConnectionId: req.params.id,
+          m365ObjectId: site.id,
+          type: siteType,
+          siteCreatedDate: site.createdDateTime || null,
+          lastContentModifiedDate: site.lastModifiedDateTime || null,
+        };
+
+        if (usage) {
+          workspaceData.ownerDisplayName = usage.ownerDisplayName || driveOwner.ownerDisplayName || null;
+          workspaceData.ownerPrincipalName = usage.ownerPrincipalName || driveOwner.ownerEmail || null;
+          workspaceData.storageUsedBytes = usage.storageUsedBytes ?? null;
+          workspaceData.storageAllocatedBytes = usage.storageAllocatedBytes ?? null;
+          workspaceData.lastActivityDate = usage.lastActivityDate || null;
+          workspaceData.fileCount = usage.fileCount;
+          workspaceData.activeFileCount = usage.activeFileCount;
+          workspaceData.pageViewCount = usage.pageViewCount;
+          workspaceData.visitedPageCount = usage.visitedPageCount;
+          workspaceData.rootWebTemplate = usage.rootWebTemplate || null;
+          workspaceData.isDeleted = usage.isDeleted;
+          workspaceData.reportRefreshDate = usage.reportRefreshDate || null;
+          workspaceData.sensitivityLabelId = usage.sensitivityLabelId || null;
+          workspaceData.sharingCapability = usage.externalSharing || null;
+
+          const usedMB = Math.round((usage.storageUsedBytes ?? 0) / (1024 * 1024));
+          workspaceData.size = usedMB >= 1024 ? `${(usedMB / 1024).toFixed(1)} GB` : `${usedMB} MB`;
+
+          if (usage.pageViewCount > 50) workspaceData.usage = "Very High";
+          else if (usage.pageViewCount > 20) workspaceData.usage = "High";
+          else if (usage.pageViewCount > 5) workspaceData.usage = "Medium";
+          else workspaceData.usage = "Low";
+
+          if (usage.lastActivityDate) {
+            const d = new Date(usage.lastActivityDate);
+            const now = new Date();
+            const diffDays = Math.floor((now.getTime() - d.getTime()) / (1000 * 60 * 60 * 24));
+            if (diffDays === 0) workspaceData.lastActive = "Today";
+            else if (diffDays === 1) workspaceData.lastActive = "Yesterday";
+            else if (diffDays <= 7) workspaceData.lastActive = `${diffDays} days ago`;
+            else if (diffDays <= 30) workspaceData.lastActive = `${Math.floor(diffDays / 7)} weeks ago`;
+            else workspaceData.lastActive = `${Math.floor(diffDays / 30)} months ago`;
+          }
+        } else {
+          if (driveOwner.ownerDisplayName) workspaceData.ownerDisplayName = driveOwner.ownerDisplayName;
+          if (driveOwner.ownerEmail) workspaceData.ownerPrincipalName = driveOwner.ownerEmail;
+        }
+
         const existing = await storage.getWorkspaceByM365ObjectId(site.id);
         if (existing) {
-          await storage.updateWorkspace(existing.id, {
-            displayName: site.displayName || existing.displayName,
-            siteUrl: site.webUrl || existing.siteUrl,
-            description: site.description || existing.description,
-            tenantConnectionId: req.params.id,
-          });
+          await storage.updateWorkspace(existing.id, workspaceData);
         } else {
-          await storage.createWorkspace({
-            displayName: site.displayName || 'Untitled Site',
-            type: 'TEAM_SITE',
-            m365ObjectId: site.id,
-            siteUrl: site.webUrl,
-            description: site.description || null,
-            tenantConnectionId: req.params.id,
-          });
+          await storage.createWorkspace(workspaceData as any);
         }
         upsertedCount++;
       }
@@ -416,15 +490,19 @@ export async function registerRoutes(
       await storage.updateTenantConnection(req.params.id, {
         lastSyncAt: new Date(),
         lastSyncStatus: "SUCCESS",
-        lastSyncSiteCount: result.sites.length,
+        lastSyncSiteCount: siteResult.sites.length,
         status: "ACTIVE",
         consentGranted: true,
       });
 
       res.json({
         success: true,
-        sitesFound: result.sites.length,
+        sitesFound: siteResult.sites.length,
         upserted: upsertedCount,
+        usageReportRows: usageResult.report.length,
+        usageMatched,
+        usageReportError: usageResult.error || null,
+        enrichErrors: enrichErrors.length > 0 ? enrichErrors : undefined,
       });
     } catch (err: any) {
       await storage.updateTenantConnection(req.params.id, {
@@ -434,6 +512,16 @@ export async function registerRoutes(
       res.status(500).json({ success: false, error: err.message });
     }
   });
+
+  function inferSiteType(rootWebTemplate?: string, isRootSite?: object): string {
+    if (!rootWebTemplate) return "TEAM_SITE";
+    const t = rootWebTemplate.toUpperCase();
+    if (t.includes("SITEPAGEPUBLISHING") || t.includes("COMM")) return "COMMUNICATION_SITE";
+    if (t.includes("GROUP")) return "TEAM_SITE";
+    if (t.includes("STS")) return "TEAM_SITE";
+    if (t.includes("HUB")) return "HUB_SITE";
+    return "TEAM_SITE";
+  }
 
   // ── Domain Blocklist (Admin) ──
   app.get("/api/admin/domain-blocklist", async (_req, res) => {

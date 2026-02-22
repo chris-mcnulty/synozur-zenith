@@ -27,8 +27,14 @@ import {
   X,
   Settings2,
   Save,
-  Loader2
+  Loader2,
+  ExternalLink,
+  HardDrive,
+  FileText,
+  Users,
+  Activity
 } from "lucide-react";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -150,6 +156,26 @@ export default function GovernancePage() {
     }
   };
 
+  const formatStorage = (usedBytes?: number | null, allocatedBytes?: number | null) => {
+    if (usedBytes == null) return { used: "—", allocated: "—", percent: 0 };
+    const usedMB = usedBytes / (1024 * 1024);
+    const allocMB = allocatedBytes ? allocatedBytes / (1024 * 1024) : 0;
+    const format = (mb: number) => mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${Math.round(mb)} MB`;
+    const percent = allocMB > 0 ? Math.min(100, Math.round((usedMB / allocMB) * 100)) : 0;
+    return { used: format(usedMB), allocated: allocMB > 0 ? format(allocMB) : "—", percent };
+  };
+
+  const getTemplateLabel = (template?: string | null) => {
+    if (!template) return null;
+    const t = template.toUpperCase();
+    if (t.includes("GROUP")) return "Group";
+    if (t.includes("SITEPAGEPUBLISHING")) return "Comm";
+    if (t.includes("STS#3")) return "Modern Team";
+    if (t.includes("STS#0")) return "Classic Team";
+    if (t.includes("STS")) return "Team";
+    return template;
+  };
+
   const getSensitivityBadge = (sensitivity: string) => {
     switch(sensitivity) {
       case 'HIGHLY_CONFIDENTIAL': return <Badge variant="destructive" className="bg-destructive/10 text-destructive border-destructive/20 hover:bg-destructive/20">Highly Confidential</Badge>;
@@ -235,6 +261,7 @@ export default function GovernancePage() {
             </div>
           ) : (
             <>
+              <div className="overflow-x-auto">
               <Table>
                 <TableHeader className="bg-muted/30">
                   <TableRow className="hover:bg-transparent">
@@ -245,19 +272,24 @@ export default function GovernancePage() {
                         aria-label="Select all"
                       />
                     </TableHead>
-                    <TableHead className="w-[280px]">Workspace</TableHead>
-                    <TableHead>Size & Usage</TableHead>
+                    <TableHead className="min-w-[240px]">Site</TableHead>
+                    <TableHead className="min-w-[160px]">Owner</TableHead>
+                    <TableHead className="min-w-[160px]">Storage</TableHead>
+                    <TableHead className="min-w-[100px]">Files</TableHead>
+                    <TableHead className="min-w-[100px]">Activity</TableHead>
                     <TableHead>Sensitivity</TableHead>
-                    <TableHead>Metadata Status</TableHead>
-                    <TableHead>Copilot Readiness</TableHead>
-                    <TableHead className="text-right">Owners</TableHead>
+                    <TableHead>Copilot</TableHead>
                     <TableHead className="w-[80px]"></TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {workspaces.map((ws) => (
+                  {workspaces.map((ws) => {
+                    const storage = formatStorage(ws.storageUsedBytes, ws.storageAllocatedBytes);
+                    const templateLabel = getTemplateLabel(ws.rootWebTemplate);
+                    return (
                     <TableRow 
                       key={ws.id} 
+                      data-testid={`row-workspace-${ws.id}`}
                       className={`group transition-colors relative ${selectedIds.has(ws.id) ? 'bg-primary/5 hover:bg-primary/10' : 'hover:bg-muted/20'}`}
                     >
                       <TableCell className="pl-4 relative z-20" onClick={(e) => e.stopPropagation()}>
@@ -265,44 +297,94 @@ export default function GovernancePage() {
                           checked={selectedIds.has(ws.id)}
                           onCheckedChange={() => toggleSelect(ws.id)}
                           aria-label={`Select ${ws.displayName}`}
+                          data-testid={`checkbox-workspace-${ws.id}`}
                         />
                       </TableCell>
                       <TableCell className="font-medium cursor-pointer relative">
                         <Link href={`/app/governance/workspaces/${ws.id}`} className="absolute inset-0 z-10" />
                         <div className="flex items-center gap-3 relative z-0 pointer-events-none">
-                          <div className="w-8 h-8 rounded-lg bg-background border border-border/50 flex items-center justify-center shadow-sm">
+                          <div className="w-8 h-8 rounded-lg bg-background border border-border/50 flex items-center justify-center shadow-sm shrink-0">
                             {getIconForType(ws.type)}
                           </div>
-                          <div className="flex flex-col">
-                            <span className="text-foreground text-sm">{ws.displayName}</span>
-                            <div className="flex items-center gap-1.5">
-                              <span className="text-xs text-muted-foreground font-normal">{getSiteTypeLabel(ws.type)}</span>
+                          <div className="flex flex-col min-w-0">
+                            <span className="text-foreground text-sm font-medium truncate">{ws.displayName}</span>
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              {templateLabel && (
+                                <span className="text-[10px] font-medium text-muted-foreground bg-muted/50 px-1.5 py-0.5 rounded">{templateLabel}</span>
+                              )}
+                              {!templateLabel && (
+                                <span className="text-xs text-muted-foreground font-normal">{getSiteTypeLabel(ws.type)}</span>
+                              )}
                               {ws.teamsConnected && (
                                 <span className="text-[10px] font-semibold text-blue-500 bg-blue-500/10 px-1.5 py-0.5 rounded">Teams</span>
                               )}
+                              {ws.isDeleted && (
+                                <span className="text-[10px] font-semibold text-destructive bg-destructive/10 px-1.5 py-0.5 rounded">Deleted</span>
+                              )}
                             </div>
+                            {ws.siteUrl && (
+                              <span className="text-[10px] text-muted-foreground/60 truncate max-w-[220px]">{ws.siteUrl.replace(/^https?:\/\//, '')}</span>
+                            )}
                           </div>
                         </div>
                       </TableCell>
                       <TableCell className="relative z-10">
+                        {ws.ownerDisplayName || ws.ownerPrincipalName ? (
+                          <div className="flex flex-col min-w-0">
+                            <span className="text-sm truncate max-w-[140px]" data-testid={`text-owner-${ws.id}`}>
+                              {ws.ownerDisplayName || '—'}
+                            </span>
+                            {ws.ownerPrincipalName && (
+                              <span className="text-[10px] text-muted-foreground truncate max-w-[140px]">{ws.ownerPrincipalName}</span>
+                            )}
+                          </div>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">—</span>
+                        )}
+                      </TableCell>
+                      <TableCell className="relative z-10">
+                        <div className="flex flex-col gap-1 min-w-[120px]">
+                          <div className="flex items-center justify-between text-xs">
+                            <span className="font-medium" data-testid={`text-storage-${ws.id}`}>{storage.used}</span>
+                            {storage.allocated !== "—" && (
+                              <span className="text-muted-foreground">/ {storage.allocated}</span>
+                            )}
+                          </div>
+                          {storage.percent > 0 && (
+                            <div className="w-full h-1.5 bg-muted/50 rounded-full overflow-hidden">
+                              <div 
+                                className={`h-full rounded-full transition-all ${storage.percent > 90 ? 'bg-destructive' : storage.percent > 70 ? 'bg-amber-500' : 'bg-primary'}`}
+                                style={{ width: `${storage.percent}%` }}
+                              />
+                            </div>
+                          )}
+                          {ws.storageUsedBytes != null && storage.percent > 0 && (
+                            <span className="text-[10px] text-muted-foreground">{storage.percent}% used</span>
+                          )}
+                        </div>
+                      </TableCell>
+                      <TableCell className="relative z-10">
+                        {ws.fileCount != null ? (
+                          <div className="flex flex-col">
+                            <span className="text-sm font-medium" data-testid={`text-files-${ws.id}`}>{ws.fileCount.toLocaleString()}</span>
+                            {ws.activeFileCount != null && (
+                              <span className="text-[10px] text-muted-foreground">{ws.activeFileCount.toLocaleString()} active</span>
+                            )}
+                          </div>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">—</span>
+                        )}
+                      </TableCell>
+                      <TableCell className="relative z-10">
                         <div className="flex flex-col">
-                          <span className="text-sm font-medium">{ws.size}</span>
-                          <span className="text-xs text-muted-foreground">{ws.usage} Activity</span>
+                          <span className="text-sm" data-testid={`text-activity-${ws.id}`}>{ws.lastActive || '—'}</span>
+                          {ws.pageViewCount != null && ws.pageViewCount > 0 && (
+                            <span className="text-[10px] text-muted-foreground">{ws.pageViewCount} views / 7d</span>
+                          )}
                         </div>
                       </TableCell>
                       <TableCell className="relative z-10">
                         {getSensitivityBadge(ws.sensitivity)}
-                      </TableCell>
-                      <TableCell className="relative z-10">
-                        {ws.metadataStatus === 'COMPLETE' ? (
-                          <div className="flex items-center text-sm text-emerald-500 gap-1.5">
-                            <ShieldCheck className="w-4 h-4" /> Complete
-                          </div>
-                        ) : (
-                          <div className="flex items-center text-sm text-amber-500 gap-1.5">
-                            <ShieldAlert className="w-4 h-4" /> Missing
-                          </div>
-                        )}
                       </TableCell>
                       <TableCell className="relative z-10">
                         {ws.copilotReady ? (
@@ -311,34 +393,38 @@ export default function GovernancePage() {
                           <Badge variant="secondary" className="text-muted-foreground">Not Eligible</Badge>
                         )}
                       </TableCell>
-                      <TableCell className="text-right text-muted-foreground relative z-10">
-                        <span className={ws.owners < 2 ? "text-destructive font-medium" : ""}>
-                          {ws.owners}
-                        </span>
-                      </TableCell>
                       <TableCell className="relative z-10">
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
-                            <Button variant="ghost" className="h-8 w-8 p-0">
+                            <Button variant="ghost" className="h-8 w-8 p-0" data-testid={`button-actions-${ws.id}`}>
                               <span className="sr-only">Open menu</span>
                               <MoreHorizontal className="h-4 w-4" />
                             </Button>
                           </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end" className="w-[160px]">
+                          <DropdownMenuContent align="end" className="w-[180px]">
                             <DropdownMenuLabel>Actions</DropdownMenuLabel>
                             <DropdownMenuSeparator />
                             <DropdownMenuItem asChild>
                                <Link href={`/app/governance/workspaces/${ws.id}`}>Inspect Properties</Link>
                             </DropdownMenuItem>
+                            {ws.siteUrl && (
+                              <DropdownMenuItem asChild>
+                                <a href={ws.siteUrl} target="_blank" rel="noopener noreferrer" className="gap-2">
+                                  <ExternalLink className="w-3 h-3" /> Open in SharePoint
+                                </a>
+                              </DropdownMenuItem>
+                            )}
                             <DropdownMenuItem>Request Attestation</DropdownMenuItem>
                             <DropdownMenuItem className="text-destructive">Archive Workspace</DropdownMenuItem>
                           </DropdownMenuContent>
                         </DropdownMenu>
                       </TableCell>
                     </TableRow>
-                  ))}
+                    );
+                  })}
                 </TableBody>
               </Table>
+              </div>
               
               <div className="p-4 border-t border-border/50 text-xs text-center text-muted-foreground">
                 Showing {workspaces.length} workspaces

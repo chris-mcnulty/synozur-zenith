@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, integer, boolean, timestamp, jsonb, unique } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, integer, boolean, timestamp, jsonb, unique, bigint } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -27,6 +27,26 @@ export const workspaces = pgTable("workspaces", {
   tenantConnectionId: varchar("tenant_connection_id"),
   siteUrl: text("site_url"),
   description: text("description"),
+  ownerDisplayName: text("owner_display_name"),
+  ownerPrincipalName: text("owner_principal_name"),
+  template: text("template"),
+  storageUsedBytes: bigint("storage_used_bytes", { mode: "number" }),
+  storageAllocatedBytes: bigint("storage_allocated_bytes", { mode: "number" }),
+  lastActivityDate: text("last_activity_date"),
+  lastContentModifiedDate: text("last_content_modified_date"),
+  fileCount: integer("file_count"),
+  activeFileCount: integer("active_file_count"),
+  pageViewCount: integer("page_view_count"),
+  visitedPageCount: integer("visited_page_count"),
+  sharingCapability: text("sharing_capability"),
+  lockState: text("lock_state"),
+  isHubSite: boolean("is_hub_site"),
+  hubSiteId: text("hub_site_id"),
+  sensitivityLabelId: text("sensitivity_label_id"),
+  rootWebTemplate: text("root_web_template"),
+  isDeleted: boolean("is_deleted").default(false),
+  siteCreatedDate: text("site_created_date"),
+  reportRefreshDate: text("report_refresh_date"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
