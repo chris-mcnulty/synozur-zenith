@@ -202,42 +202,6 @@ export async function registerRoutes(
     res.json(safe);
   });
 
-  app.get("/api/admin/tenants/:id", async (req, res) => {
-    const connection = await storage.getTenantConnection(req.params.id);
-    if (!connection) return res.status(404).json({ message: "Tenant connection not found" });
-    res.json({ ...connection, clientSecret: undefined });
-  });
-
-  app.post("/api/admin/tenants", async (req, res) => {
-    const { tenantId, tenantName, domain, ownershipType, organizationId } = req.body;
-    if (!tenantId || !domain) {
-      return res.status(400).json({ message: "tenantId and domain are required" });
-    }
-    const connection = await storage.createTenantConnection({
-      tenantId,
-      tenantName: tenantName || domain.split('.')[0],
-      domain,
-      ownershipType: ownershipType || 'MSP',
-      organizationId: organizationId || null,
-      status: 'PENDING',
-      consentGranted: false,
-    });
-    res.status(201).json({ ...connection, clientSecret: undefined });
-  });
-
-  app.patch("/api/admin/tenants/:id", async (req, res) => {
-    const connection = await storage.updateTenantConnection(req.params.id, req.body);
-    if (!connection) return res.status(404).json({ message: "Tenant connection not found" });
-    res.json({ ...connection, clientSecret: undefined });
-  });
-
-  app.delete("/api/admin/tenants/:id", async (req, res) => {
-    const conn = await storage.getTenantConnection(req.params.id);
-    if (conn && conn.clientId) clearTokenCache(conn.tenantId, conn.clientId);
-    await storage.deleteTenantConnection(req.params.id);
-    res.status(204).send();
-  });
-
   app.get("/api/admin/tenants/consent/initiate", async (req, res) => {
     const clientId = process.env.AZURE_CLIENT_ID;
     if (!clientId) {
@@ -345,6 +309,42 @@ export async function registerRoutes(
       console.error('[Consent] Callback processing error:', err);
       return res.redirect(`/app/admin/tenants?consent_error=${encodeURIComponent(err.message)}`);
     }
+  });
+
+  app.get("/api/admin/tenants/:id", async (req, res) => {
+    const connection = await storage.getTenantConnection(req.params.id);
+    if (!connection) return res.status(404).json({ message: "Tenant connection not found" });
+    res.json({ ...connection, clientSecret: undefined });
+  });
+
+  app.post("/api/admin/tenants", async (req, res) => {
+    const { tenantId, tenantName, domain, ownershipType, organizationId } = req.body;
+    if (!tenantId || !domain) {
+      return res.status(400).json({ message: "tenantId and domain are required" });
+    }
+    const connection = await storage.createTenantConnection({
+      tenantId,
+      tenantName: tenantName || domain.split('.')[0],
+      domain,
+      ownershipType: ownershipType || 'MSP',
+      organizationId: organizationId || null,
+      status: 'PENDING',
+      consentGranted: false,
+    });
+    res.status(201).json({ ...connection, clientSecret: undefined });
+  });
+
+  app.patch("/api/admin/tenants/:id", async (req, res) => {
+    const connection = await storage.updateTenantConnection(req.params.id, req.body);
+    if (!connection) return res.status(404).json({ message: "Tenant connection not found" });
+    res.json({ ...connection, clientSecret: undefined });
+  });
+
+  app.delete("/api/admin/tenants/:id", async (req, res) => {
+    const conn = await storage.getTenantConnection(req.params.id);
+    if (conn && conn.clientId) clearTokenCache(conn.tenantId, conn.clientId);
+    await storage.deleteTenantConnection(req.params.id);
+    res.status(204).send();
   });
 
   app.post("/api/admin/tenants/test", async (req, res) => {
