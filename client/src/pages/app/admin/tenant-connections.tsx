@@ -32,6 +32,8 @@ import {
   Trash2,
   Info,
   LogIn,
+  Building2,
+  X,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -47,6 +49,8 @@ export default function TenantConnectionsPage() {
   const [showAddDialog, setShowAddDialog] = useState(false);
   const [syncingId, setSyncingId] = useState<string | null>(null);
   const [isInitiating, setIsInitiating] = useState(false);
+  const [manageDeptConnId, setManageDeptConnId] = useState<string | null>(null);
+  const [newDeptName, setNewDeptName] = useState("");
 
   const [form, setForm] = useState({
     domain: "",
@@ -79,6 +83,40 @@ export default function TenantConnectionsPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/tenants"] });
       toast({ title: "Tenant Disconnected", description: "The tenant connection has been removed." });
+    },
+  });
+
+  const manageDeptConn = connections.find(c => c.id === manageDeptConnId);
+
+  const { data: departments = [], isLoading: isDeptLoading } = useQuery<{ id: string; name: string }[]>({
+    queryKey: ["/api/admin/tenants", manageDeptConnId, "departments"],
+    enabled: !!manageDeptConnId,
+  });
+
+  const addDeptMutation = useMutation({
+    mutationFn: async ({ connId, name }: { connId: string; name: string }) => {
+      await apiRequest("POST", `/api/admin/tenants/${connId}/departments`, { name });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/tenants", manageDeptConnId, "departments"] });
+      setNewDeptName("");
+      toast({ title: "Department Added", description: "The department has been created." });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const deleteDeptMutation = useMutation({
+    mutationFn: async ({ connId, deptId }: { connId: string; deptId: string }) => {
+      await apiRequest("DELETE", `/api/admin/tenants/${connId}/departments/${deptId}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/tenants", manageDeptConnId, "departments"] });
+      toast({ title: "Department Removed", description: "The department has been deleted." });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
     },
   });
 
@@ -408,6 +446,13 @@ export default function TenantConnectionsPage() {
                           <DropdownMenuItem className="gap-2" onClick={() => navigator.clipboard.writeText(conn.tenantId)}>
                             <Copy className="w-4 h-4" /> Copy Tenant ID
                           </DropdownMenuItem>
+                          <DropdownMenuItem
+                            className="gap-2"
+                            onClick={() => setManageDeptConnId(conn.id)}
+                            data-testid={`button-manage-departments-${conn.id}`}
+                          >
+                            <Building2 className="w-4 h-4" /> Manage Departments
+                          </DropdownMenuItem>
                           <DropdownMenuSeparator />
                           <DropdownMenuItem
                             className="gap-2 text-destructive focus:text-destructive"
@@ -429,6 +474,87 @@ export default function TenantConnectionsPage() {
           )}
         </CardContent>
       </Card>
+
+      <Dialog open={!!manageDeptConnId} onOpenChange={(open) => { if (!open) { setManageDeptConnId(null); setNewDeptName(""); } }}>
+        <DialogContent className="sm:max-w-[500px]">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2" data-testid="text-dept-dialog-title">
+              <Building2 className="w-5 h-5 text-primary" />
+              Departments — {manageDeptConn?.tenantName}
+            </DialogTitle>
+            <DialogDescription>
+              Manage departments for this tenant. Departments can be used to organize sites and users.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 py-2">
+            <div className="flex gap-2">
+              <Input
+                placeholder="New department name..."
+                value={newDeptName}
+                onChange={(e) => setNewDeptName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && newDeptName.trim() && manageDeptConnId) {
+                    addDeptMutation.mutate({ connId: manageDeptConnId, name: newDeptName.trim() });
+                  }
+                }}
+                className="flex-1"
+                data-testid="input-new-department"
+              />
+              <Button
+                onClick={() => {
+                  if (newDeptName.trim() && manageDeptConnId) {
+                    addDeptMutation.mutate({ connId: manageDeptConnId, name: newDeptName.trim() });
+                  }
+                }}
+                disabled={!newDeptName.trim() || addDeptMutation.isPending}
+                className="gap-2"
+                data-testid="button-add-department"
+              >
+                {addDeptMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+                Add
+              </Button>
+            </div>
+
+            <div className="rounded-lg border border-border/50 bg-muted/10 p-4 min-h-[120px]">
+              {isDeptLoading ? (
+                <div className="flex items-center justify-center h-20">
+                  <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
+                </div>
+              ) : departments.length === 0 ? (
+                <div className="flex flex-col items-center justify-center h-20 text-center">
+                  <Building2 className="w-8 h-8 text-muted-foreground/30 mb-2" />
+                  <p className="text-sm text-muted-foreground" data-testid="text-no-departments">No departments yet</p>
+                </div>
+              ) : (
+                <div className="flex flex-wrap gap-2" data-testid="list-departments">
+                  {departments.map((dept) => (
+                    <Badge
+                      key={dept.id}
+                      variant="secondary"
+                      className="gap-1.5 pl-3 pr-1.5 py-1.5 text-sm bg-background/80 border border-border/50"
+                      data-testid={`badge-department-${dept.id}`}
+                    >
+                      {dept.name}
+                      <button
+                        onClick={() => {
+                          if (manageDeptConnId) {
+                            deleteDeptMutation.mutate({ connId: manageDeptConnId, deptId: dept.id });
+                          }
+                        }}
+                        className="ml-1 rounded-full hover:bg-destructive/20 p-0.5 transition-colors"
+                        data-testid={`button-delete-department-${dept.id}`}
+                      >
+                        <X className="w-3 h-3 text-muted-foreground hover:text-destructive" />
+                      </button>
+                    </Badge>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

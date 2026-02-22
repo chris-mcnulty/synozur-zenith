@@ -32,7 +32,9 @@ import {
   HardDrive,
   FileText,
   Users,
-  Activity
+  Activity,
+  Building2,
+  Upload
 } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
@@ -42,6 +44,9 @@ import {
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
+  DropdownMenuSub,
+  DropdownMenuSubTrigger,
+  DropdownMenuSubContent,
 } from "@/components/ui/dropdown-menu";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -84,6 +89,12 @@ export default function GovernancePage() {
 
   const tenantConnectionId = selectedTenant?.id || "";
 
+  const { data: departments = [] } = useQuery<{id: string; tenantId: string; name: string; createdAt: string}[]>({
+    queryKey: ["/api/admin/tenants", tenantConnectionId, "departments"],
+    queryFn: () => fetch(`/api/admin/tenants/${tenantConnectionId}/departments`).then(r => r.json()),
+    enabled: !!tenantConnectionId,
+  });
+
   const { data: workspaces = [], isLoading, isError } = useQuery<Workspace[]>({
     queryKey: ["/api/workspaces", debouncedSearch, tenantConnectionId],
     queryFn: () => {
@@ -104,6 +115,27 @@ export default function GovernancePage() {
       setBulkRetention("");
       setBulkDepartment("");
       setBulkCostCenter("");
+    },
+  });
+
+  const departmentMutation = useMutation({
+    mutationFn: ({ workspaceId, department }: { workspaceId: string; department: string }) =>
+      apiRequest("PATCH", `/api/workspaces/${workspaceId}`, { department }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/workspaces"] });
+    },
+  });
+
+  const writebackMutation = useMutation({
+    mutationFn: (workspaceIds: string[]) =>
+      apiRequest("POST", "/api/workspaces/writeback/department", { workspaceIds }).then(r => r.json()),
+    onSuccess: (data: any) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/workspaces"] });
+      if (data.failed === 0) {
+        alert(`Department synced to SharePoint for ${data.succeeded} site(s).`);
+      } else {
+        alert(`Synced: ${data.succeeded} succeeded, ${data.failed} failed.\n${data.results.filter((r: any) => !r.success).map((r: any) => `${r.displayName}: ${r.error}`).join('\n')}`);
+      }
     },
   });
 
@@ -129,7 +161,7 @@ export default function GovernancePage() {
     const updates: Record<string, string> = {};
     if (bulkSensitivity) updates.sensitivity = bulkSensitivity;
     if (bulkRetention) updates.retentionPolicy = bulkRetention;
-    if (bulkDepartment) updates.department = bulkDepartment;
+    if (bulkDepartment) updates.department = bulkDepartment === "__clear__" ? "" : bulkDepartment;
     if (bulkCostCenter) updates.costCenter = bulkCostCenter;
 
     bulkMutation.mutate({
@@ -235,6 +267,17 @@ export default function GovernancePage() {
             <Button size="sm" onClick={() => setIsBulkEditOpen(true)} className="h-8 gap-2 shadow-sm shadow-primary/20">
               <CheckSquare className="w-4 h-4" /> Bulk Edit Properties
             </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => writebackMutation.mutate(Array.from(selectedIds))}
+              disabled={writebackMutation.isPending}
+              className="h-8 gap-2 border-primary/20 text-primary hover:bg-primary/10"
+              data-testid="button-sync-departments"
+            >
+              {writebackMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
+              Sync Dept to SharePoint
+            </Button>
           </div>
         </div>
       )}
@@ -277,6 +320,7 @@ export default function GovernancePage() {
                     <TableHead className="min-w-[160px]">Storage</TableHead>
                     <TableHead className="min-w-[100px]">Files</TableHead>
                     <TableHead className="min-w-[100px]">Activity</TableHead>
+                    <TableHead className="min-w-[80px]">Dept</TableHead>
                     <TableHead>Sensitivity</TableHead>
                     <TableHead>Copilot</TableHead>
                     <TableHead className="w-[80px]"></TableHead>
@@ -384,6 +428,13 @@ export default function GovernancePage() {
                         </div>
                       </TableCell>
                       <TableCell className="relative z-10">
+                        {ws.department ? (
+                          <span className="text-xs font-medium text-muted-foreground bg-muted/50 px-1.5 py-0.5 rounded" data-testid={`text-department-${ws.id}`}>{ws.department}</span>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">—</span>
+                        )}
+                      </TableCell>
+                      <TableCell className="relative z-10">
                         {getSensitivityBadge(ws.sensitivity)}
                       </TableCell>
                       <TableCell className="relative z-10">
@@ -414,6 +465,25 @@ export default function GovernancePage() {
                                 </a>
                               </DropdownMenuItem>
                             )}
+                            <DropdownMenuSub>
+                              <DropdownMenuSubTrigger data-testid={`button-set-department-${ws.id}`}>
+                                <Building2 className="w-3 h-3 mr-2" /> Set Department
+                              </DropdownMenuSubTrigger>
+                              <DropdownMenuSubContent className="w-[180px]">
+                                {departments.map((dept) => (
+                                  <DropdownMenuItem
+                                    key={dept.id}
+                                    data-testid={`menu-department-${dept.id}-${ws.id}`}
+                                    onClick={() => departmentMutation.mutate({ workspaceId: ws.id, department: dept.name })}
+                                  >
+                                    {dept.name}
+                                  </DropdownMenuItem>
+                                ))}
+                                {departments.length === 0 && (
+                                  <DropdownMenuItem disabled>No departments available</DropdownMenuItem>
+                                )}
+                              </DropdownMenuSubContent>
+                            </DropdownMenuSub>
                             <DropdownMenuItem>Request Attestation</DropdownMenuItem>
                             <DropdownMenuItem className="text-destructive">Archive Workspace</DropdownMenuItem>
                           </DropdownMenuContent>
@@ -476,7 +546,19 @@ export default function GovernancePage() {
 
               <div className="space-y-2">
                 <Label>Department Metadata</Label>
-                <Input placeholder="Update department value..." className="bg-background/50" value={bulkDepartment} onChange={(e) => setBulkDepartment(e.target.value)} />
+                <Select value={bulkDepartment} onValueChange={setBulkDepartment}>
+                  <SelectTrigger className="w-full bg-background/50" data-testid="select-bulk-department">
+                    <SelectValue placeholder="Select department..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__clear__">Clear</SelectItem>
+                    {departments.map((dept) => (
+                      <SelectItem key={dept.id} value={dept.name} data-testid={`select-bulk-department-${dept.id}`}>
+                        {dept.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
 
               <div className="space-y-2">

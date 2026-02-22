@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { storage } from "../storage";
 import { insertWorkspaceSchema, insertProvisioningRequestSchema, type ServicePlanTier } from "@shared/schema";
-import { fetchSharePointSites, fetchSiteUsageReport, fetchSiteDriveOwner, fetchSiteAnalytics, getAppToken } from "../services/graph";
+import { fetchSharePointSites, fetchSiteUsageReport, fetchSiteDriveOwner, fetchSiteAnalytics, getAppToken, writeSitePropertyBag } from "../services/graph";
 import { getPlanFeatures } from "../services/feature-gate";
 
 const router = Router();
@@ -283,6 +283,73 @@ router.post("/api/admin/tenants/:id/sync", async (req, res) => {
     });
     res.status(500).json({ success: false, error: err.message });
   }
+});
+
+// ── Write-back: Department to SharePoint ──
+router.post("/api/workspaces/writeback/department", async (req, res) => {
+  const org = await storage.getOrganization();
+  const plan = (org?.servicePlan || "TRIAL") as ServicePlanTier;
+  const features = getPlanFeatures(plan);
+  if (!features.m365WriteBack) {
+    return res.status(403).json({
+      error: "FEATURE_GATED",
+      message: `Writing metadata to Microsoft 365 is not available on the ${features.label} plan. Upgrade to Standard or higher.`,
+      currentPlan: plan,
+      requiredFeature: "m365WriteBack",
+    });
+  }
+
+  const { workspaceIds } = req.body;
+  if (!Array.isArray(workspaceIds) || workspaceIds.length === 0) {
+    return res.status(400).json({ error: "workspaceIds array is required" });
+  }
+
+  const results: { workspaceId: string; displayName: string; success: boolean; error?: string }[] = [];
+
+  for (const wsId of workspaceIds) {
+    const workspace = await storage.getWorkspace(wsId);
+    if (!workspace) {
+      results.push({ workspaceId: wsId, displayName: "Unknown", success: false, error: "Workspace not found" });
+      continue;
+    }
+    if (!workspace.department) {
+      results.push({ workspaceId: wsId, displayName: workspace.displayName, success: false, error: "No department set" });
+      continue;
+    }
+    if (!workspace.tenantConnectionId) {
+      results.push({ workspaceId: wsId, displayName: workspace.displayName, success: false, error: "No tenant connection" });
+      continue;
+    }
+    if (!workspace.m365ObjectId) {
+      results.push({ workspaceId: wsId, displayName: workspace.displayName, success: false, error: "No M365 site ID" });
+      continue;
+    }
+
+    const conn = await storage.getTenantConnection(workspace.tenantConnectionId);
+    if (!conn) {
+      results.push({ workspaceId: wsId, displayName: workspace.displayName, success: false, error: "Tenant connection not found" });
+      continue;
+    }
+
+    const clientId = conn.clientId || process.env.AZURE_CLIENT_ID;
+    const clientSecret = conn.clientSecret || process.env.AZURE_CLIENT_SECRET;
+    if (!clientId || !clientSecret) {
+      results.push({ workspaceId: wsId, displayName: workspace.displayName, success: false, error: "Missing credentials" });
+      continue;
+    }
+
+    try {
+      const token = await getAppToken(conn.tenantId, clientId, clientSecret);
+      const result = await writeSitePropertyBag(token, workspace.m365ObjectId, { Department: workspace.department });
+      results.push({ workspaceId: wsId, displayName: workspace.displayName, ...result });
+    } catch (err: any) {
+      results.push({ workspaceId: wsId, displayName: workspace.displayName, success: false, error: err.message });
+    }
+  }
+
+  const succeeded = results.filter(r => r.success).length;
+  const failed = results.filter(r => !r.success).length;
+  res.json({ succeeded, failed, results });
 });
 
 function inferSiteType(rootWebTemplate?: string, isRootSite?: object): string {
