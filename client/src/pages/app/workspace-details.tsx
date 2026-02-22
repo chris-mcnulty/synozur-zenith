@@ -550,12 +550,12 @@ export default function WorkspaceDetailsPage() {
             <TabsContent value="metadata" className="mt-4">
               <Card className="glass-panel border-border/50">
                 <CardHeader>
-                  <div className="flex items-center justify-between">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                     <div>
                       <CardTitle>Governance Metadata</CardTitle>
                       <CardDescription>Required and optional metadata fields for governance compliance.</CardDescription>
                     </div>
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
                       <Badge variant={workspace.metadataStatus === "COMPLETE" ? "default" : "destructive"} className={workspace.metadataStatus === "COMPLETE" ? "bg-emerald-500/10 text-emerald-600 border-emerald-500/20" : "bg-destructive/10 text-destructive border-destructive/20"}>
                         {workspace.metadataStatus === "COMPLETE" ? "Complete" : "Missing Required"}
                       </Badge>
@@ -570,6 +570,25 @@ export default function WorkspaceDetailsPage() {
                         >
                           {writebackMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />}
                           Sync to SharePoint
+                        </Button>
+                      )}
+                      {editMode ? (
+                        <div className="flex items-center gap-1.5">
+                          <Button variant="outline" size="sm" className="h-7 text-xs" onClick={handleCancel} data-testid="button-metadata-cancel">Cancel</Button>
+                          <Button size="sm" className="h-7 gap-1.5 text-xs shadow-md shadow-primary/20" onClick={handleSave} disabled={saveMutation.isPending} data-testid="button-metadata-save">
+                            {saveMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+                            Save
+                          </Button>
+                        </div>
+                      ) : (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-7 gap-1.5 text-xs"
+                          onClick={() => setEditMode(true)}
+                          data-testid="button-metadata-edit"
+                        >
+                          <Pencil className="w-3.5 h-3.5" /> Edit
                         </Button>
                       )}
                     </div>
