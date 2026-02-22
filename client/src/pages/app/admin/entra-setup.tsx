@@ -1,4 +1,5 @@
-import { useQuery } from "@tanstack/react-query";
+import { useState } from "react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -14,9 +15,14 @@ import {
   KeyRound,
   Globe,
   Users,
-  ArrowRight,
   AlertTriangle,
   Server,
+  Loader2,
+  XCircle,
+  AlertCircle,
+  ArrowRight,
+  Save,
+  TestTube,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
@@ -33,14 +39,65 @@ const GRAPH_PERMISSIONS = [
   { name: "Directory.Read.All", type: "Application", description: "Read directory data" },
 ];
 
+type CheckResult = { step: string; status: "pass" | "fail" | "warn"; message: string };
+
 export default function EntraSetupPage() {
   const { toast } = useToast();
+  const queryClient = useQueryClient();
+
+  const [clientId, setClientId] = useState("");
+  const [clientSecret, setClientSecret] = useState("");
+  const [tenantId, setTenantId] = useState("common");
+  const [tokenEncryptionSecret, setTokenEncryptionSecret] = useState("");
+  const [testResults, setTestResults] = useState<CheckResult[] | null>(null);
 
   const ssoStatus = useQuery({
     queryKey: ["/auth/entra/status"],
     queryFn: async () => {
       const res = await fetch("/auth/entra/status");
       return res.json();
+    },
+  });
+
+  const configureMutation = useMutation({
+    mutationFn: async () => {
+      const res = await fetch("/auth/entra/configure", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ clientId, clientSecret, tenantId, tokenEncryptionSecret: tokenEncryptionSecret || undefined }),
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || "Failed to save configuration");
+      }
+      return res.json();
+    },
+    onSuccess: (data) => {
+      toast({ title: "Configuration Saved", description: data.message });
+      queryClient.invalidateQueries({ queryKey: ["/auth/entra/status"] });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const testMutation = useMutation({
+    mutationFn: async () => {
+      const res = await fetch("/auth/entra/test", { method: "POST" });
+      if (!res.ok) throw new Error("Failed to test configuration");
+      return res.json();
+    },
+    onSuccess: (data) => {
+      setTestResults(data.checks);
+      if (data.success) {
+        toast({ title: "Verification Passed", description: data.message });
+      } else {
+        toast({ title: "Verification Issues", description: data.message, variant: "destructive" });
+      }
+      queryClient.invalidateQueries({ queryKey: ["/auth/entra/status"] });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
     },
   });
 
@@ -55,11 +112,17 @@ export default function EntraSetupPage() {
 
   const isConfigured = ssoStatus.data?.configured === true;
 
+  const statusIcon = (status: "pass" | "fail" | "warn") => {
+    if (status === "pass") return <CheckCircle2 className="w-4 h-4 text-green-500 shrink-0" />;
+    if (status === "fail") return <XCircle className="w-4 h-4 text-red-500 shrink-0" />;
+    return <AlertCircle className="w-4 h-4 text-amber-500 shrink-0" />;
+  };
+
   return (
     <div className="space-y-6 animate-in fade-in duration-500 pb-12">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">Entra ID (Azure AD) Setup</h1>
+          <h1 className="text-3xl font-bold tracking-tight" data-testid="text-page-title">Entra ID (Azure AD) Setup</h1>
           <p className="text-muted-foreground mt-1">
             Configure Microsoft Entra ID for single sign-on authentication.
           </p>
@@ -98,7 +161,7 @@ export default function EntraSetupPage() {
                 SSO is not yet configured
               </p>
               <p className="text-sm text-muted-foreground">
-                Follow the steps below to set up Microsoft Entra ID authentication.
+                Follow the steps below to register an app in Entra ID, then enter your credentials to activate SSO.
               </p>
             </div>
           </CardContent>
@@ -124,7 +187,7 @@ export default function EntraSetupPage() {
               <ol className="space-y-3 text-sm">
                 <li className="flex gap-3">
                   <span className="font-mono text-xs bg-muted px-2 py-0.5 rounded h-fit mt-0.5">a</span>
-                  <span>Go to <strong>Azure Portal</strong> &rarr; <strong>Microsoft Entra ID</strong> &rarr; <strong>App registrations</strong> &rarr; <strong>New registration</strong></span>
+                  <span>Go to <strong>Azure Portal</strong> <ArrowRight className="inline w-3 h-3" /> <strong>Microsoft Entra ID</strong> <ArrowRight className="inline w-3 h-3" /> <strong>App registrations</strong> <ArrowRight className="inline w-3 h-3" /> <strong>New registration</strong></span>
                 </li>
                 <li className="flex gap-3">
                   <span className="font-mono text-xs bg-muted px-2 py-0.5 rounded h-fit mt-0.5">b</span>
@@ -139,8 +202,8 @@ export default function EntraSetupPage() {
                   <div>
                     <span>Set the <strong>Redirect URI</strong> to <strong>Web</strong> with this value:</span>
                     <div className="mt-2 flex items-center gap-2">
-                      <Input value={callbackUrl} readOnly className="font-mono text-xs bg-muted/50" />
-                      <Button variant="outline" size="icon" onClick={() => copyToClipboard(callbackUrl)}>
+                      <Input value={callbackUrl} readOnly className="font-mono text-xs bg-muted/50" data-testid="input-callback-url" />
+                      <Button variant="outline" size="icon" onClick={() => copyToClipboard(callbackUrl)} data-testid="button-copy-callback">
                         <Copy className="w-4 h-4" />
                       </Button>
                     </div>
@@ -152,7 +215,7 @@ export default function EntraSetupPage() {
                 </li>
               </ol>
               <div className="pt-2">
-                <Button variant="outline" size="sm" className="gap-2" asChild>
+                <Button variant="outline" size="sm" className="gap-2" asChild data-testid="button-open-azure-portal">
                   <a href="https://portal.azure.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade" target="_blank" rel="noopener">
                     Open Azure Portal <ExternalLink className="w-3 h-3" />
                   </a>
@@ -238,43 +301,130 @@ export default function EntraSetupPage() {
             </CardContent>
           </Card>
 
-          <Card className="glass-panel border-border/50 shadow-xl" data-testid="card-step-4">
-            <CardHeader className="border-b border-border/40 bg-muted/10 pb-4">
+          <Card className="glass-panel border-primary/30 shadow-xl" data-testid="card-step-4">
+            <CardHeader className="border-b border-border/40 bg-primary/5 pb-4">
               <div className="flex items-center gap-3">
                 <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center text-primary font-bold text-sm">4</div>
                 <div>
                   <CardTitle className="text-lg flex items-center gap-2">
                     <Server className="w-5 h-5 text-primary" />
-                    Set Environment Variables
+                    Enter Credentials & Verify
                   </CardTitle>
-                  <CardDescription>Add credentials to Zenith's environment.</CardDescription>
+                  <CardDescription>Paste the values from your app registration and confirm the connection works.</CardDescription>
                 </div>
               </div>
             </CardHeader>
-            <CardContent className="space-y-4 pt-6">
-              <p className="text-sm">
-                Add these environment variables to your Zenith deployment (via Replit Secrets or .env):
-              </p>
-              <div className="space-y-3">
-                <div className="space-y-1">
-                  <Label className="text-xs font-mono">AZURE_CLIENT_ID</Label>
-                  <p className="text-xs text-muted-foreground">The Application (client) ID from the app registration Overview page</p>
+            <CardContent className="space-y-5 pt-6">
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <Label htmlFor="clientId" className="text-sm font-medium">Application (Client) ID</Label>
+                  <p className="text-xs text-muted-foreground">Found on the app registration Overview page</p>
+                  <Input
+                    id="clientId"
+                    data-testid="input-client-id"
+                    placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+                    value={clientId}
+                    onChange={(e) => setClientId(e.target.value)}
+                    className="font-mono text-sm"
+                  />
                 </div>
-                <div className="space-y-1">
-                  <Label className="text-xs font-mono">AZURE_CLIENT_SECRET</Label>
-                  <p className="text-xs text-muted-foreground">The client secret value you copied in Step 2</p>
+                <div className="space-y-2">
+                  <Label htmlFor="clientSecret" className="text-sm font-medium">Client Secret Value</Label>
+                  <p className="text-xs text-muted-foreground">The secret value you copied in Step 2</p>
+                  <Input
+                    id="clientSecret"
+                    data-testid="input-client-secret"
+                    type="password"
+                    placeholder="Enter client secret value"
+                    value={clientSecret}
+                    onChange={(e) => setClientSecret(e.target.value)}
+                    className="font-mono text-sm"
+                  />
                 </div>
-                <div className="space-y-1">
-                  <Label className="text-xs font-mono">AZURE_TENANT_ID</Label>
-                  <p className="text-xs text-muted-foreground">Set to "common" for multi-tenant, or a specific tenant ID for single-tenant</p>
+                <div className="space-y-2">
+                  <Label htmlFor="tenantId" className="text-sm font-medium">Tenant ID</Label>
+                  <p className="text-xs text-muted-foreground">Use "common" for multi-tenant, or a specific tenant GUID for single-tenant</p>
+                  <Input
+                    id="tenantId"
+                    data-testid="input-tenant-id"
+                    placeholder="common"
+                    value={tenantId}
+                    onChange={(e) => setTenantId(e.target.value)}
+                    className="font-mono text-sm"
+                  />
                 </div>
-                <div className="space-y-1">
-                  <Label className="text-xs font-mono">TOKEN_ENCRYPTION_SECRET</Label>
-                  <p className="text-xs text-muted-foreground">A random string (min 32 chars) for encrypting Graph tokens at rest</p>
+                <div className="space-y-2">
+                  <Label htmlFor="tokenEncSecret" className="text-sm font-medium">
+                    Token Encryption Secret
+                    <Badge variant="outline" className="ml-2 text-[10px]">Optional</Badge>
+                  </Label>
+                  <p className="text-xs text-muted-foreground">Min 32 characters. Used to encrypt Graph tokens stored in the database.</p>
+                  <Input
+                    id="tokenEncSecret"
+                    data-testid="input-token-encryption-secret"
+                    type="password"
+                    placeholder="Min 32 characters for AES-256-GCM encryption"
+                    value={tokenEncryptionSecret}
+                    onChange={(e) => setTokenEncryptionSecret(e.target.value)}
+                    className="font-mono text-sm"
+                  />
                 </div>
-                <div className="space-y-1">
-                  <Label className="text-xs font-mono">SESSION_SECRET</Label>
-                  <p className="text-xs text-muted-foreground">A random string for signing session cookies (auto-generated if not set)</p>
+              </div>
+
+              <Separator />
+
+              <div className="flex gap-3">
+                <Button
+                  data-testid="button-save-config"
+                  onClick={() => configureMutation.mutate()}
+                  disabled={!clientId || !clientSecret || configureMutation.isPending}
+                  className="gap-2"
+                >
+                  {configureMutation.isPending ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <Save className="w-4 h-4" />
+                  )}
+                  Save Configuration
+                </Button>
+                <Button
+                  data-testid="button-test-connection"
+                  variant="outline"
+                  onClick={() => testMutation.mutate()}
+                  disabled={testMutation.isPending}
+                  className="gap-2"
+                >
+                  {testMutation.isPending ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <TestTube className="w-4 h-4" />
+                  )}
+                  Test Connection
+                </Button>
+              </div>
+
+              {testResults && (
+                <div className="space-y-2 p-4 rounded-lg bg-muted/30 border border-border/40" data-testid="card-test-results">
+                  <h4 className="text-sm font-medium mb-3">Verification Results</h4>
+                  {testResults.map((check, i) => (
+                    <div key={i} className="flex items-start gap-2 text-sm py-1.5">
+                      {statusIcon(check.status)}
+                      <div>
+                        <span className="font-medium">{check.step}</span>
+                        <span className="text-muted-foreground ml-2">{check.message}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div className="p-3 rounded-lg bg-amber-500/5 border border-amber-500/20 text-xs text-muted-foreground">
+                <div className="flex gap-2">
+                  <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
+                  <div>
+                    <p className="font-medium text-amber-700 dark:text-amber-400 mb-1">Persistence Note</p>
+                    <p>Credentials saved here are stored in runtime memory. For them to persist across restarts, also save them as <strong>Replit Secrets</strong> using the same variable names: AZURE_CLIENT_ID, AZURE_CLIENT_SECRET, AZURE_TENANT_ID, TOKEN_ENCRYPTION_SECRET.</p>
+                  </div>
                 </div>
               </div>
             </CardContent>
@@ -303,6 +453,27 @@ export default function EntraSetupPage() {
                 <code className="text-xs block p-2 bg-background rounded font-mono break-all">
                   https://login.microsoftonline.com/&#123;TENANT_ID&#125;/adminconsent?client_id=&#123;AZURE_CLIENT_ID&#125;&redirect_uri={callbackUrl}
                 </code>
+                {isConfigured && ssoStatus.data?.tenantId && ssoStatus.data.tenantId !== "common" && (
+                  <div className="mt-3">
+                    <p className="text-xs text-muted-foreground mb-1">Your admin consent URL:</p>
+                    <div className="flex items-center gap-2">
+                      <Input
+                        readOnly
+                        value={`https://login.microsoftonline.com/${ssoStatus.data.tenantId}/adminconsent?client_id=${clientId || process.env.AZURE_CLIENT_ID || '{CLIENT_ID}'}&redirect_uri=${callbackUrl}`}
+                        className="font-mono text-xs bg-muted/50"
+                        data-testid="input-consent-url"
+                      />
+                      <Button
+                        variant="outline"
+                        size="icon"
+                        onClick={() => copyToClipboard(`https://login.microsoftonline.com/${ssoStatus.data.tenantId}/adminconsent?client_id=${clientId}&redirect_uri=${callbackUrl}`)}
+                        data-testid="button-copy-consent-url"
+                      >
+                        <Copy className="w-4 h-4" />
+                      </Button>
+                    </div>
+                  </div>
+                )}
               </div>
               <p className="text-xs text-muted-foreground">
                 After consent is granted, users from that tenant can sign in via SSO and Zenith can sync SharePoint site inventory.
@@ -322,11 +493,12 @@ export default function EntraSetupPage() {
                   { label: "App registered in Entra ID", done: isConfigured },
                   { label: "Client secret created", done: isConfigured },
                   { label: "Delegated permissions added", done: isConfigured },
-                  { label: "Application permissions added", done: false },
-                  { label: "Environment variables set", done: isConfigured },
-                  { label: "Admin consent granted", done: false },
+                  { label: "Application permissions added", done: testResults?.some(c => c.step === 'Graph API Access' && c.status === 'pass') || false },
+                  { label: "Credentials saved", done: isConfigured },
+                  { label: "Connection verified", done: testResults?.some(c => c.step === 'App Authentication' && c.status === 'pass') || false },
+                  { label: "Admin consent granted", done: testResults?.some(c => c.step === 'Graph API Access' && c.status === 'pass') || false },
                 ].map((item, i) => (
-                  <div key={i} className="flex items-center gap-2 text-sm">
+                  <div key={i} className="flex items-center gap-2 text-sm" data-testid={`checklist-item-${i}`}>
                     {item.done ? (
                       <CheckCircle2 className="w-4 h-4 text-green-500 shrink-0" />
                     ) : (

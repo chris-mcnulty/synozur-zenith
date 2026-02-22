@@ -50,7 +50,124 @@ router.get('/status', (_req: Request, res: Response) => {
   return res.json({
     configured,
     tenantId: process.env.AZURE_TENANT_ID,
+    hasClientId: !!process.env.AZURE_CLIENT_ID,
+    hasClientSecret: !!process.env.AZURE_CLIENT_SECRET,
+    hasTokenEncryptionSecret: !!process.env.TOKEN_ENCRYPTION_SECRET,
   });
+});
+
+router.post('/configure', async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { clientId, clientSecret, tenantId, tokenEncryptionSecret } = req.body;
+
+    if (!clientId || !clientSecret) {
+      return res.status(400).json({ error: 'Client ID and Client Secret are required' });
+    }
+
+    if (tokenEncryptionSecret && tokenEncryptionSecret.length < 32) {
+      return res.status(400).json({ error: 'Token Encryption Secret must be at least 32 characters' });
+    }
+
+    process.env.AZURE_CLIENT_ID = clientId;
+    process.env.AZURE_CLIENT_SECRET = clientSecret;
+    process.env.AZURE_TENANT_ID = tenantId || 'common';
+    if (tokenEncryptionSecret) {
+      process.env.TOKEN_ENCRYPTION_SECRET = tokenEncryptionSecret;
+    }
+
+    msalClient = null;
+
+    return res.json({
+      success: true,
+      message: 'Entra ID credentials saved to runtime. Add them as Replit Secrets for persistence across restarts.',
+    });
+  } catch (error: any) {
+    console.error('[Entra] Configure error:', error);
+    return res.status(500).json({ error: 'Failed to save configuration' });
+  }
+});
+
+router.post('/test', async (_req: Request, res: Response) => {
+  try {
+    const clientId = process.env.AZURE_CLIENT_ID;
+    const clientSecret = process.env.AZURE_CLIENT_SECRET;
+    const tenantId = process.env.AZURE_TENANT_ID || 'common';
+
+    const checks: { step: string; status: 'pass' | 'fail' | 'warn'; message: string }[] = [];
+
+    if (!clientId) {
+      checks.push({ step: 'Client ID', status: 'fail', message: 'AZURE_CLIENT_ID is not set' });
+    } else {
+      checks.push({ step: 'Client ID', status: 'pass', message: `Set (${clientId.substring(0, 8)}...)` });
+    }
+
+    if (!clientSecret) {
+      checks.push({ step: 'Client Secret', status: 'fail', message: 'AZURE_CLIENT_SECRET is not set' });
+    } else {
+      checks.push({ step: 'Client Secret', status: 'pass', message: 'Set (hidden)' });
+    }
+
+    checks.push({ step: 'Tenant ID', status: 'pass', message: tenantId === 'common' ? 'Multi-tenant (common)' : tenantId });
+
+    if (process.env.TOKEN_ENCRYPTION_SECRET) {
+      checks.push({ step: 'Token Encryption', status: 'pass', message: 'Encryption key configured' });
+    } else {
+      checks.push({ step: 'Token Encryption', status: 'warn', message: 'Not set — Graph tokens will not be encrypted at rest' });
+    }
+
+    if (!clientId || !clientSecret) {
+      return res.json({ success: false, checks, message: 'Missing required credentials' });
+    }
+
+    try {
+      const testClient = new ConfidentialClientApplication({
+        auth: {
+          clientId,
+          clientSecret,
+          authority: `https://login.microsoftonline.com/${tenantId}`,
+        },
+      });
+
+      const tokenResult = await testClient.acquireTokenByClientCredential({
+        scopes: ['https://graph.microsoft.com/.default'],
+      });
+
+      if (tokenResult?.accessToken) {
+        checks.push({ step: 'App Authentication', status: 'pass', message: 'Successfully acquired client credentials token from Entra ID' });
+
+        try {
+          const graphRes = await fetch('https://graph.microsoft.com/v1.0/organization', {
+            headers: { Authorization: `Bearer ${tokenResult.accessToken}` },
+          });
+
+          if (graphRes.ok) {
+            const orgData = await graphRes.json();
+            const orgName = orgData.value?.[0]?.displayName || 'Unknown';
+            checks.push({ step: 'Graph API Access', status: 'pass', message: `Connected to tenant: ${orgName}` });
+          } else if (graphRes.status === 403) {
+            checks.push({ step: 'Graph API Access', status: 'warn', message: 'Token acquired but Directory.Read.All permission may not be granted yet. Grant admin consent to enable inventory sync.' });
+          } else {
+            checks.push({ step: 'Graph API Access', status: 'warn', message: `Graph API returned ${graphRes.status}. Admin consent may be needed.` });
+          }
+        } catch (graphErr: any) {
+          checks.push({ step: 'Graph API Access', status: 'warn', message: `Could not reach Graph API: ${graphErr.message}` });
+        }
+
+        msalClient = null;
+        return res.json({ success: true, checks, message: 'App registration verified successfully' });
+      } else {
+        checks.push({ step: 'App Authentication', status: 'fail', message: 'No access token returned — check client credentials' });
+        return res.json({ success: false, checks, message: 'Authentication failed' });
+      }
+    } catch (msalErr: any) {
+      const errorMsg = msalErr.errorMessage || msalErr.message || 'Unknown error';
+      checks.push({ step: 'App Authentication', status: 'fail', message: `Entra ID rejected credentials: ${errorMsg}` });
+      return res.json({ success: false, checks, message: 'App registration verification failed' });
+    }
+  } catch (error: any) {
+    console.error('[Entra] Test error:', error);
+    return res.status(500).json({ error: 'Failed to test configuration' });
+  }
 });
 
 router.get('/login', async (req: AuthenticatedRequest, res: Response) => {
