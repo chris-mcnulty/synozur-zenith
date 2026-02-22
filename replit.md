@@ -81,6 +81,9 @@ This section documents all Microsoft Entra ID (Azure AD) app registration permis
 - The admin consent URL includes all application permissions; tenant admins must approve during onboarding
 - When adding new Graph API calls, always update this section with the required permission
 
+### Tenant Prerequisites
+- **Site-level sensitivity label application**: Before Zenith (or any app) can apply sensitivity labels at the SharePoint site level, the tenant admin must first enable AIP integration via PowerShell: `Set-SPOTenant -EnableAIPIntegration $true` (or the equivalent API call). Without this, label application calls will fail. Reference: https://learn.microsoft.com/en-us/purview/sensitivity-labels-sharepoint-onedrive-files
+
 ## External Dependencies
 - **Microsoft 365 / SharePoint**: Core platform for workspace management and governance.
 - **Microsoft Entra ID (formerly Azure Active Directory)**: Used for Single Sign-On (SSO) authentication and identity management.
