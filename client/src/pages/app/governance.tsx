@@ -3,6 +3,7 @@ import { Link } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import type { Workspace } from "@shared/schema";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import { useTenant } from "@/lib/tenant-context";
 import { 
   Table, 
   TableBody, 
@@ -66,6 +67,8 @@ export default function GovernancePage() {
   const [bulkDepartment, setBulkDepartment] = useState("");
   const [bulkCostCenter, setBulkCostCenter] = useState("");
 
+  const { selectedTenant } = useTenant();
+
   useEffect(() => {
     const timer = setTimeout(() => {
       setDebouncedSearch(searchTerm);
@@ -73,9 +76,16 @@ export default function GovernancePage() {
     return () => clearTimeout(timer);
   }, [searchTerm]);
 
+  const tenantConnectionId = selectedTenant?.id || "";
+
   const { data: workspaces = [], isLoading, isError } = useQuery<Workspace[]>({
-    queryKey: ["/api/workspaces", debouncedSearch],
-    queryFn: () => fetch(`/api/workspaces?search=${debouncedSearch}`).then(r => r.json()),
+    queryKey: ["/api/workspaces", debouncedSearch, tenantConnectionId],
+    queryFn: () => {
+      const params = new URLSearchParams();
+      if (debouncedSearch) params.set("search", debouncedSearch);
+      if (tenantConnectionId) params.set("tenantConnectionId", tenantConnectionId);
+      return fetch(`/api/workspaces?${params.toString()}`).then(r => r.json());
+    },
   });
 
   const bulkMutation = useMutation({

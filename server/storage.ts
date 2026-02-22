@@ -31,7 +31,7 @@ import {
 } from "@shared/schema";
 
 export interface IStorage {
-  getWorkspaces(search?: string): Promise<Workspace[]>;
+  getWorkspaces(search?: string, tenantConnectionId?: string): Promise<Workspace[]>;
   getWorkspace(id: string): Promise<Workspace | undefined>;
   getWorkspaceByM365ObjectId(m365ObjectId: string): Promise<Workspace | undefined>;
   createWorkspace(workspace: InsertWorkspace): Promise<Workspace>;
@@ -80,15 +80,25 @@ export interface IStorage {
 }
 
 export class DatabaseStorage implements IStorage {
-  async getWorkspaces(search?: string): Promise<Workspace[]> {
+  async getWorkspaces(search?: string, tenantConnectionId?: string): Promise<Workspace[]> {
+    const conditions = [];
+
     if (search) {
-      return db.select().from(workspaces).where(
+      conditions.push(
         or(
           ilike(workspaces.displayName, `%${search}%`),
           ilike(workspaces.department, `%${search}%`),
           ilike(workspaces.primarySteward, `%${search}%`)
         )
-      ).orderBy(desc(workspaces.createdAt));
+      );
+    }
+
+    if (tenantConnectionId) {
+      conditions.push(eq(workspaces.tenantConnectionId, tenantConnectionId));
+    }
+
+    if (conditions.length > 0) {
+      return db.select().from(workspaces).where(and(...conditions)).orderBy(desc(workspaces.createdAt));
     }
     return db.select().from(workspaces).orderBy(desc(workspaces.createdAt));
   }

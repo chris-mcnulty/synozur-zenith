@@ -19,7 +19,8 @@ export async function registerRoutes(
   // ── Workspaces ──
   app.get("/api/workspaces", async (req, res) => {
     const search = req.query.search as string | undefined;
-    const workspaces = await storage.getWorkspaces(search);
+    const tenantConnectionId = req.query.tenantConnectionId as string | undefined;
+    const workspaces = await storage.getWorkspaces(search, tenantConnectionId);
     res.json(workspaces);
   });
 

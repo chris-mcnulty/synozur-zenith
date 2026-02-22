@@ -46,18 +46,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
-import { useQuery } from "@tanstack/react-query";
-import { useState } from "react";
-
-interface TenantConnection {
-  id: string;
-  tenantId: string;
-  tenantName: string;
-  domain: string;
-  ownershipType: string;
-  status: string;
-  isDemo: boolean;
-}
+import { useTenant } from "@/lib/tenant-context";
 
 interface AppShellProps {
   children: React.ReactNode;
@@ -99,18 +88,7 @@ const navGroups = [
 
 export default function AppShell({ children }: AppShellProps) {
   const [location] = useLocation();
-  const [selectedTenantId, setSelectedTenantId] = useState<string | null>(null);
-
-  const { data: tenants = [] } = useQuery<TenantConnection[]>({
-    queryKey: ["/api/admin/tenants"],
-    queryFn: async () => {
-      const res = await fetch("/api/admin/tenants");
-      if (!res.ok) return [];
-      return res.json();
-    },
-  });
-
-  const selectedTenant = tenants.find(t => t.id === selectedTenantId) || tenants[0];
+  const { tenants, selectedTenant, setSelectedTenantId } = useTenant();
 
   const NavLinks = () => (
     <div className="space-y-6 py-4">
