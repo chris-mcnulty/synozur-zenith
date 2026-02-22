@@ -46,6 +46,18 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
+import { useQuery } from "@tanstack/react-query";
+import { useState } from "react";
+
+interface TenantConnection {
+  id: string;
+  tenantId: string;
+  tenantName: string;
+  domain: string;
+  ownershipType: string;
+  status: string;
+  isDemo: boolean;
+}
 
 interface AppShellProps {
   children: React.ReactNode;
@@ -87,6 +99,18 @@ const navGroups = [
 
 export default function AppShell({ children }: AppShellProps) {
   const [location] = useLocation();
+  const [selectedTenantId, setSelectedTenantId] = useState<string | null>(null);
+
+  const { data: tenants = [] } = useQuery<TenantConnection[]>({
+    queryKey: ["/api/admin/tenants"],
+    queryFn: async () => {
+      const res = await fetch("/api/admin/tenants");
+      if (!res.ok) return [];
+      return res.json();
+    },
+  });
+
+  const selectedTenant = tenants.find(t => t.id === selectedTenantId) || tenants[0];
 
   const NavLinks = () => (
     <div className="space-y-6 py-4">
@@ -333,7 +357,7 @@ export default function AppShell({ children }: AppShellProps) {
                     <Cloud className="w-4 h-4 text-secondary shrink-0" />
                     <div className="flex flex-col items-start -space-y-0.5">
                       <span className="text-[9px] font-bold text-muted-foreground uppercase tracking-widest">M365 Tenant</span>
-                      <span className="font-medium text-sm leading-none text-muted-foreground">synozur.onmicrosoft.com</span>
+                      <span className="font-medium text-sm leading-none text-muted-foreground">{selectedTenant?.domain || 'No tenants'}</span>
                     </div>
                     <ChevronDown className="w-3 h-3 text-muted-foreground opacity-50 ml-1 shrink-0" />
                   </Button>
@@ -341,19 +365,26 @@ export default function AppShell({ children }: AppShellProps) {
                 <DropdownMenuContent align="start" className="w-64 rounded-xl p-2">
                   <DropdownMenuLabel className="text-xs text-muted-foreground uppercase tracking-wider">Connected Tenants</DropdownMenuLabel>
                   <DropdownMenuSeparator className="mb-2 mt-1" />
-                  <DropdownMenuItem className="flex justify-between rounded-lg p-2.5 bg-secondary/10 cursor-default items-start">
-                    <div className="space-y-0.5">
-                      <span className="font-semibold text-secondary block">synozur.onmicrosoft.com</span>
-                      <span className="text-xs text-muted-foreground block">Synozur Production</span>
-                    </div>
-                    <Badge variant="default" className="text-[10px] bg-secondary text-secondary-foreground hover:bg-secondary uppercase tracking-wider h-5 px-1.5 shadow-sm shadow-secondary/20">Active</Badge>
-                  </DropdownMenuItem>
-                  <DropdownMenuItem className="rounded-lg p-2.5 cursor-pointer text-muted-foreground hover:text-foreground mt-1 items-start">
-                    <div className="space-y-0.5">
-                      <span className="font-medium block text-emerald-600">cascadiaoceanic.onmicrosoft.com</span>
-                      <span className="text-xs text-muted-foreground block">Cascadia Oceanic</span>
-                    </div>
-                  </DropdownMenuItem>
+                  {tenants.map((tenant) => (
+                    <DropdownMenuItem
+                      key={tenant.id}
+                      className={`flex justify-between rounded-lg p-2.5 mt-1 items-start ${selectedTenant?.id === tenant.id ? 'bg-secondary/10 cursor-default' : 'cursor-pointer text-muted-foreground hover:text-foreground'}`}
+                      onClick={() => setSelectedTenantId(tenant.id)}
+                    >
+                      <div className="space-y-0.5">
+                        <span className={`font-semibold block ${selectedTenant?.id === tenant.id ? 'text-secondary' : ''}`}>{tenant.domain}</span>
+                        <span className="text-xs text-muted-foreground block">{tenant.tenantName}{tenant.isDemo ? ' (Demo)' : ''}</span>
+                      </div>
+                      {selectedTenant?.id === tenant.id && (
+                        <Badge variant="default" className="text-[10px] bg-secondary text-secondary-foreground hover:bg-secondary uppercase tracking-wider h-5 px-1.5 shadow-sm shadow-secondary/20">Active</Badge>
+                      )}
+                    </DropdownMenuItem>
+                  ))}
+                  {tenants.length === 0 && (
+                    <DropdownMenuItem className="rounded-lg p-2.5 text-muted-foreground cursor-default">
+                      No tenant connections yet
+                    </DropdownMenuItem>
+                  )}
                   <DropdownMenuSeparator className="my-2" />
                   <DropdownMenuItem asChild className="rounded-lg p-2.5 cursor-pointer group">
                     <Link href="/app/admin/tenants" className="flex items-center text-muted-foreground">
