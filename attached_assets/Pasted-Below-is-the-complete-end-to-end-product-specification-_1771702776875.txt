@@ -1,371 +1,0 @@
-Below is the complete, end‑to‑end product specification for Zenith, written as a production‑grade SaaS PRD / architecture spec.  It incorporates every constraint and decision you’ve locked in across the conversation:
-Orchestry‑class governance 
-Purview‑first, metadata‑driven control 
-Multi‑tenant / multi‑environment 
-No polling 
-Event‑ and intent‑driven only 
-MGDC + file share analysis Enterprise+ only 
-Clear separation from Reveille 
-Copilot‑native and agent‑ready 
-Vega / Constellation external UX pattern 
-SaaS‑quality service plans 
-This is intentionally long, structured, and “hand‑to‑engineering ready.”
-
-Zenith
-Microsoft 365 Governance, Provisioning & AI Control Plane
-Complete Product Specification – v1.0
-
-1. Product Vision
-Zenith is the governance control plane for Microsoft 365.
-It translates business intent into enforced, explainable, and auditable governance across Teams, SharePoint, Microsoft 365 Groups, Viva, Power Platform, and Copilot — without slowing users down or monitoring behavior.
-Zenith is policy‑first, metadata‑driven, event‑based, and AI‑assisted, designed for enterprises operating across multiple tenants and environments.
-
-2. Non‑Negotiable Design Principles
-These are hard rules, not guidelines.
-2.1 Governance, Not Monitoring
-Zenith:
-Governs creation, configuration, and lifecycle 
-Explains policy outcomes 
-Orchestrates Microsoft enforcement layers 
-Zenith never:
-Monitors performance 
-Tracks user behavior 
-Measures experience or health 
-Performs observability or remediation 
-(That boundary preserves Reveille.)
-
-2.2 No Polling (Hard Constraint)
-
-Zenith must never poll Microsoft 365 for state.
-Allowed:
-Event‑driven notifications 
-Intent‑driven, transactional reads 
-State captured at creation 
-Enterprise batch analytics (MGDC) — explicit, optional, offline 
-Forbidden:
-Scheduled scans 
-Background enumeration 
-Drift crawlers 
-“Check everything” jobs 
-
-2.3 Purview Is the Enforcement Engine
-Zenith configures and governs Purview.  Purview enforces.
-Zenith does not re‑implement:
-DLP 
-Retention 
-Label enforcement 
-Records management 
-
-2.4 Metadata Is the Control Surface
-If it isn’t expressed as metadata, Zenith cannot govern it.
-
-3. Target Users & Personas
-Tenant Governance Admin 
-Environment Admin 
-Platform / IT Admin 
-Business Workspace Owner 
-Executive / Risk Viewer 
-Consultant / MSP Admin 
-Each persona sees the same system with different depth and authority.
-
-4. Architecture Overview
-4.1 Logical Architecture
-[ User / Copilot / Agent ]
-          ↓
-     Zenith UX
-          ↓
-   Zenith Policy Engine
-          ↓
-  Purview / Graph / Power Platform
-Zenith is orchestration + decisioning, not execution.
-
-4.2 Tenancy Model
-Three layers
-Zenith Global Tenant
-Service plans 
-Feature flags 
-Telemetry 
-Agent registration 
-Customer Account
-Logical Zenith account 
-Owns governance model 
-Managed Microsoft Environments
-One or more M365 tenants 
-Prod / Test / Sovereign / Regulated 
-Policy inheritance with overrides 
-
-5. Identity & Security
-Microsoft Entra ID (OIDC / OAuth) 
-Cross‑tenant access 
-Conditional Access compatible 
-RBAC independent of Microsoft roles 
-Just‑In‑Time admin elevation 
-
-6. Core Functional Capabilities
-6.1 Provisioning (Orchestry‑Equivalent)
-Self‑service creation of:
-Teams 
-SharePoint Team Sites 
-Communication Sites 
-M365 Groups 
-Viva Engage communities 
-Planner / Loop workspaces 
-Provisioning always includes:
-Naming rules 
-Required metadata 
-Sensitivity label assignment 
-Default permissions 
-Lifecycle policy binding 
-Approval workflows (if required) 
-
-6.2 Policy Engine
-Policies are:
-Declarative 
-Versioned 
-Explainable 
-Scoped (tenant / environment / workspace type) 
-Policy types:
-Creation eligibility 
-Metadata requirements 
-External sharing 
-Guest access 
-Lifecycle defaults 
-Copilot eligibility 
-
-6.3 Metadata Governance (Critical)
-Zenith governs:
-SharePoint
-Site property bags 
-Managed metadata 
-Content types 
-Required columns 
-Syntex autofill rules (optional) 
-Teams
-Team metadata captured at creation 
-Synced to Group + Site 
-Prevents drift 
-Metadata feeds:
-Purview adaptive scopes 
-Copilot access 
-Lifecycle logic 
-Reporting 
-
-6.4 Microsoft Purview Orchestration
-Zenith governs:
-Sensitivity label assignment logic 
-Adaptive DLP scope inputs 
-Retention policy mapping 
-Records intent 
-Purview executes:
-Enforcement 
-Classification 
-Retention 
-Copilot inclusion/exclusion 
-Zenith never bypasses Purview.
-
-6.5 Lifecycle Management
-Lifecycle stages:
-Created 
-Active 
-Review 
-Renew 
-Archive 
-Delete / Retain 
-Triggers:
-Time‑based 
-Ownership changes 
-Business review checkpoints 
-No destructive action without human confirmation.
-
-6.6 Reporting & Governance Insights
-Zenith reports on:
-Policy compliance 
-Metadata completeness 
-Label coverage 
-Copilot readiness 
-Lifecycle state 
-Zenith does not report on:
-Activity 
-Usage 
-Performance 
-Behavior 
-
-7. AI & Copilot Integration
-7.1 Copilot Extension
-Zenith appears inside:
-Copilot Chat 
-Teams 
-SharePoint context panels 
-Example prompts:
-“Create a project team for Finance with external auditors” 
-“Why can’t Copilot use this site?” 
-“Which sites are up for renewal?” 
-
-7.2 Zenith AI (Internal)
-AI assists with:
-Intent interpretation 
-Policy explanation 
-Lifecycle recommendations 
-Governance narratives 
-AI does not:
-Detect anomalies 
-Predict failures 
-Monitor usage 
-
-7.3 Zenith as an Agent
-Zenith exposes agent skills:
-Provision 
-Validate 
-Explain 
-Recommend 
-Report 
-Callable by:
-Copilot 
-Vega 
-Other agents 
-APIs 
-All actions are permission‑scoped and auditable.
-
-8. Discovery & Migration Intelligence (Enterprise+)
-8.1 Zenith Discover (Module)
-Purpose:
-Catalog unmanaged content 
-Classify for governance 
-Recommend target locations 
-Sources:
-File shares 
-Large SharePoint estates 
-
-8.2 MGDC Role (Enterprise & Unlimited Only)
-MGDC is used for:
-Bulk, read‑only extraction 
-Oversharing analysis 
-Migration readiness 
-Rules:
-Explicitly initiated 
-Batch only 
-Never continuous 
-Never enforcement 
-
-9. Event‑Driven Data Model (No Polling)
-Zenith state is updated via:
-Change notifications 
-Provisioning events 
-Lifecycle checkpoints 
-User‑initiated actions 
-Zenith maintains a governance system of record, not a mirror of M365.
-
-10. Service Plans
-Capability
-Trial
-Free
-Base
-Enterprise
-Unlimited
-Core provisioning
-✅
-✅
-✅
-✅
-✅
-Policy engine
-❌
-❌
-✅
-✅
-✅
-Metadata governance
-❌
-❌
-✅
-✅
-✅
-Purview orchestration
-❌
-❌
-✅
-✅
-✅
-Lifecycle automation
-❌
-❌
-✅
-✅
-✅
-Copilot integration
-❌
-❌
-✅
-✅
-✅
-Multi‑tenant control
-❌
-❌
-❌
-✅
-✅
-File share analysis
-❌
-❌
-❌
-✅
-✅
-MGDC analytics
-❌
-❌
-❌
-✅
-✅
-Custom policies
-❌
-❌
-❌
-❌
-✅
-APIs & agent chaining
-❌
-❌
-❌
-✅
-✅
-
-11. External UX (Splash + Login)
-Pattern
-Vega / Constellation‑style splash page 
-Single primary CTA: Sign in with Microsoft 
-Entra SSO → mainline app 
-Tenant resolver post‑login 
-URL Structure
-zenith.synozur.com → splash 
-/auth/entra/callback 
-/app → main UI 
-
-12. Explicit Non‑Goals
-Zenith will never:
-Monitor M365 health 
-Track user behavior 
-Poll Graph 
-Replace Purview 
-Replace Reveille 
-Become a SIEM or ITOM tool 
-
-13. Canonical Product Statement
-
-Zenith governs Microsoft 365 by intent, policy, and lifecycle — ensuring Purview and Copilot operate safely, consistently, and at enterprise scale.
-
-14. Why This Works
-Clean separation of concerns 
-Future‑proof for Copilot & agents 
-Scales without polling 
-Enterprise‑credible 
-SaaS‑disciplined 
-Strong portfolio fit with Vega, Orion, Constellation, Reveille 
-
-If you want, the next logical artifacts would be:
-Engineering backlog + epics 
-Event taxonomy 
-Policy DSL definition 
-Agent skill schemas 
-Admin UX wireframes 
-Board‑ready product one‑pager 
-But as requested — this is the complete specification.
