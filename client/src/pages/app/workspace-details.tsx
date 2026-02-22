@@ -37,7 +37,8 @@ import {
   Unlock,
   Pencil,
   Copy,
-  AlertTriangle
+  AlertTriangle,
+  Upload
 } from "lucide-react";
 
 type DataDictEntry = { id: string; tenantId: string; category: string; value: string; createdAt: string };
@@ -117,6 +118,28 @@ export default function WorkspaceDetailsPage() {
     },
     onError: () => {
       toast({ title: "Save failed", description: "Could not update workspace properties.", variant: "destructive" });
+    },
+  });
+
+  const writebackMutation = useMutation({
+    mutationFn: () =>
+      apiRequest("POST", "/api/workspaces/writeback/metadata", { workspaceIds: [id] }).then(r => r.json()),
+    onSuccess: (data: any) => {
+      if (data.succeeded > 0) {
+        const fields = data.results?.[0]?.fieldsSynced?.join(", ") || "metadata";
+        toast({ title: "Synced to SharePoint", description: `Successfully wrote ${fields} to the site property bag.` });
+      } else {
+        const errMsg = data.results?.[0]?.error || "Unknown error";
+        toast({ title: "Sync Failed", description: errMsg, variant: "destructive" });
+      }
+    },
+    onError: (err: any) => {
+      const msg = err?.message || "Failed to sync";
+      if (msg.includes("FEATURE_GATED")) {
+        toast({ title: "Plan Required", description: "Writing metadata to SharePoint requires a Standard plan or higher.", variant: "destructive" });
+      } else {
+        toast({ title: "Sync Failed", description: msg, variant: "destructive" });
+      }
     },
   });
 
@@ -532,9 +555,24 @@ export default function WorkspaceDetailsPage() {
                       <CardTitle>Governance Metadata</CardTitle>
                       <CardDescription>Required and optional metadata fields for governance compliance.</CardDescription>
                     </div>
-                    <Badge variant={workspace.metadataStatus === "COMPLETE" ? "default" : "destructive"} className={workspace.metadataStatus === "COMPLETE" ? "bg-emerald-500/10 text-emerald-600 border-emerald-500/20" : "bg-destructive/10 text-destructive border-destructive/20"}>
-                      {workspace.metadataStatus === "COMPLETE" ? "Complete" : "Missing Required"}
-                    </Badge>
+                    <div className="flex items-center gap-2">
+                      <Badge variant={workspace.metadataStatus === "COMPLETE" ? "default" : "destructive"} className={workspace.metadataStatus === "COMPLETE" ? "bg-emerald-500/10 text-emerald-600 border-emerald-500/20" : "bg-destructive/10 text-destructive border-destructive/20"}>
+                        {workspace.metadataStatus === "COMPLETE" ? "Complete" : "Missing Required"}
+                      </Badge>
+                      {!editMode && (workspace.department || workspace.costCenter || workspace.projectCode) && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-7 gap-1.5 text-xs border-primary/20 text-primary hover:bg-primary/10"
+                          onClick={() => writebackMutation.mutate()}
+                          disabled={writebackMutation.isPending}
+                          data-testid="button-sync-metadata"
+                        >
+                          {writebackMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />}
+                          Sync to SharePoint
+                        </Button>
+                      )}
+                    </div>
                   </div>
                 </CardHeader>
                 <CardContent className="space-y-5">

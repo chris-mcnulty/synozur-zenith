@@ -285,8 +285,7 @@ router.post("/api/admin/tenants/:id/sync", async (req, res) => {
   }
 });
 
-// ── Write-back: Department to SharePoint ──
-router.post("/api/workspaces/writeback/department", async (req, res) => {
+async function handleMetadataWriteback(req: any, res: any) {
   const org = await storage.getOrganization();
   const plan = (org?.servicePlan || "TRIAL") as ServicePlanTier;
   const features = getPlanFeatures(plan);
@@ -304,16 +303,12 @@ router.post("/api/workspaces/writeback/department", async (req, res) => {
     return res.status(400).json({ error: "workspaceIds array is required" });
   }
 
-  const results: { workspaceId: string; displayName: string; success: boolean; error?: string }[] = [];
+  const results: { workspaceId: string; displayName: string; success: boolean; fieldsSynced?: string[]; error?: string }[] = [];
 
   for (const wsId of workspaceIds) {
     const workspace = await storage.getWorkspace(wsId);
     if (!workspace) {
       results.push({ workspaceId: wsId, displayName: "Unknown", success: false, error: "Workspace not found" });
-      continue;
-    }
-    if (!workspace.department) {
-      results.push({ workspaceId: wsId, displayName: workspace.displayName, success: false, error: "No department set" });
       continue;
     }
     if (!workspace.tenantConnectionId) {
@@ -322,6 +317,17 @@ router.post("/api/workspaces/writeback/department", async (req, res) => {
     }
     if (!workspace.m365ObjectId) {
       results.push({ workspaceId: wsId, displayName: workspace.displayName, success: false, error: "No M365 site ID" });
+      continue;
+    }
+
+    const properties: Record<string, string> = {};
+    const fieldsSynced: string[] = [];
+    if (workspace.department) { properties["Department"] = workspace.department; fieldsSynced.push("Department"); }
+    if (workspace.costCenter) { properties["CostCenter"] = workspace.costCenter; fieldsSynced.push("CostCenter"); }
+    if (workspace.projectCode) { properties["ProjectCode"] = workspace.projectCode; fieldsSynced.push("ProjectCode"); }
+
+    if (Object.keys(properties).length === 0) {
+      results.push({ workspaceId: wsId, displayName: workspace.displayName, success: false, error: "No metadata fields set to sync" });
       continue;
     }
 
@@ -340,8 +346,8 @@ router.post("/api/workspaces/writeback/department", async (req, res) => {
 
     try {
       const token = await getAppToken(conn.tenantId, clientId, clientSecret);
-      const result = await writeSitePropertyBag(token, workspace.m365ObjectId, { Department: workspace.department });
-      results.push({ workspaceId: wsId, displayName: workspace.displayName, ...result });
+      const result = await writeSitePropertyBag(token, workspace.m365ObjectId, properties);
+      results.push({ workspaceId: wsId, displayName: workspace.displayName, fieldsSynced, ...result });
     } catch (err: any) {
       results.push({ workspaceId: wsId, displayName: workspace.displayName, success: false, error: err.message });
     }
@@ -350,7 +356,10 @@ router.post("/api/workspaces/writeback/department", async (req, res) => {
   const succeeded = results.filter(r => r.success).length;
   const failed = results.filter(r => !r.success).length;
   res.json({ succeeded, failed, results });
-});
+}
+
+router.post("/api/workspaces/writeback/department", handleMetadataWriteback);
+router.post("/api/workspaces/writeback/metadata", handleMetadataWriteback);
 
 function inferSiteType(rootWebTemplate?: string, isRootSite?: object): string {
   if (!rootWebTemplate) return "TEAM_SITE";

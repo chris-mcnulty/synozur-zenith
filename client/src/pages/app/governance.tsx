@@ -3,6 +3,7 @@ import { Link } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import type { Workspace } from "@shared/schema";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import { useToast } from "@/hooks/use-toast";
 import { useTenant } from "@/lib/tenant-context";
 import { 
   Table, 
@@ -64,6 +65,7 @@ import {
 } from "@/components/ui/select";
 
 export default function GovernancePage() {
+  const { toast } = useToast();
   const [searchTerm, setSearchTerm] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -120,14 +122,22 @@ export default function GovernancePage() {
 
   const writebackMutation = useMutation({
     mutationFn: (workspaceIds: string[]) =>
-      apiRequest("POST", "/api/workspaces/writeback/department", { workspaceIds }).then(r => r.json()),
+      apiRequest("POST", "/api/workspaces/writeback/metadata", { workspaceIds }).then(r => r.json()),
     onSuccess: (data: any) => {
       queryClient.invalidateQueries({ queryKey: ["/api/workspaces"] });
       if (data.failed === 0) {
-        alert(`Department synced to SharePoint for ${data.succeeded} site(s).`);
+        toast({ title: "Metadata Synced", description: `Successfully synced metadata to SharePoint for ${data.succeeded} site(s).` });
       } else {
-        alert(`Synced: ${data.succeeded} succeeded, ${data.failed} failed.\n${data.results.filter((r: any) => !r.success).map((r: any) => `${r.displayName}: ${r.error}`).join('\n')}`);
+        toast({
+          title: "Partial Sync",
+          description: `${data.succeeded} succeeded, ${data.failed} failed. ${data.results.filter((r: any) => !r.success).map((r: any) => `${r.displayName}: ${r.error}`).join('; ')}`,
+          variant: "destructive",
+        });
       }
+    },
+    onError: (err: any) => {
+      const msg = err?.message || "Failed to sync metadata to SharePoint";
+      toast({ title: "Sync Failed", description: msg, variant: "destructive" });
     },
   });
 
@@ -265,10 +275,10 @@ export default function GovernancePage() {
               onClick={() => writebackMutation.mutate(Array.from(selectedIds))}
               disabled={writebackMutation.isPending}
               className="h-8 gap-2 border-primary/20 text-primary hover:bg-primary/10"
-              data-testid="button-sync-departments"
+              data-testid="button-sync-metadata"
             >
               {writebackMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
-              Sync Dept to SharePoint
+              Sync Metadata to SharePoint
             </Button>
           </div>
         </div>
