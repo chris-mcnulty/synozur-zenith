@@ -183,6 +183,16 @@ export class DatabaseStorage implements IStorage {
   }
 
   async deleteTenantConnection(id: string): Promise<void> {
+    const tenantWorkspaces = await db.select({ id: workspaces.id }).from(workspaces).where(eq(workspaces.tenantConnectionId, id));
+    const workspaceIds = tenantWorkspaces.map(w => w.id);
+
+    if (workspaceIds.length > 0) {
+      for (const wId of workspaceIds) {
+        await db.delete(copilotRules).where(eq(copilotRules.workspaceId, wId));
+      }
+      await db.delete(workspaces).where(eq(workspaces.tenantConnectionId, id));
+    }
+
     await db.delete(tenantConnections).where(eq(tenantConnections.id, id));
   }
 
