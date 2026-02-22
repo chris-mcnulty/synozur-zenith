@@ -253,6 +253,23 @@ export default function AppShell({ children }: AppShellProps) {
                   </div>
                 </div>
                 <div className="px-4 py-2 overflow-y-auto h-[calc(100vh-4rem)]">
+                  <div className="space-y-2 pb-4 mb-4 border-b border-border/40">
+                    <div className="flex items-center gap-2.5 px-3 py-2 rounded-xl bg-primary/5">
+                      <Building2 className="w-4 h-4 text-primary shrink-0" />
+                      <div className="flex flex-col -space-y-0.5">
+                        <span className="text-[9px] font-bold text-muted-foreground uppercase tracking-widest">Platform Org</span>
+                        <span className="font-semibold text-sm leading-none">The Synozur Alliance</span>
+                      </div>
+                    </div>
+                    <Link href="/app/admin/tenants" className="flex items-center gap-2.5 px-3 py-2 rounded-xl bg-secondary/5 hover:bg-secondary/10 transition-colors">
+                      <Cloud className="w-4 h-4 text-secondary shrink-0" />
+                      <div className="flex flex-col -space-y-0.5">
+                        <span className="text-[9px] font-bold text-muted-foreground uppercase tracking-widest">M365 Tenant</span>
+                        <span className="font-medium text-sm leading-none text-muted-foreground">Manage connections</span>
+                      </div>
+                      <Settings className="w-3.5 h-3.5 text-muted-foreground/50 ml-auto" />
+                    </Link>
+                  </div>
                   <NavLinks />
                   <div className="mt-8 pt-4 border-t border-border/40">
                     <a href="#" className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium text-muted-foreground hover:bg-muted/80 hover:text-foreground transition-all">
