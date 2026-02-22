@@ -319,7 +319,7 @@ router.get('/callback', async (req: AuthenticatedRequest, res: Response) => {
       ipAddress: req.ip || null,
     });
 
-    return res.redirect('/dashboard');
+    return res.redirect('/app/dashboard');
   } catch (error: any) {
     console.error('[Entra] Callback error:', error);
     return res.redirect('/login?error=sso_failed');
