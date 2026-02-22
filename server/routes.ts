@@ -1,5 +1,6 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
+import crypto from "crypto";
 import { storage } from "./storage";
 import { insertWorkspaceSchema, insertProvisioningRequestSchema, insertTenantConnectionSchema, PLAN_FEATURES, SERVICE_PLANS, type ServicePlanTier } from "@shared/schema";
 import { testConnection, fetchSharePointSites, clearTokenCache } from "./services/graph";
@@ -243,10 +244,24 @@ export async function registerRoutes(
       return res.status(503).json({ error: "Zenith Entra app is not configured. Set AZURE_CLIENT_ID first." });
     }
 
+    const userId = req.session?.userId;
+    if (!userId) {
+      return res.status(401).json({ error: "You must be logged in to connect a tenant." });
+    }
+
+    const user = await storage.getUser(userId);
+    if (!user || !user.organizationId) {
+      return res.status(403).json({ error: "You must belong to an organization to connect a tenant." });
+    }
+
     const { tenantDomain, ownershipType } = req.query;
     if (!tenantDomain) {
       return res.status(400).json({ error: "tenantDomain query parameter is required" });
     }
+
+    const nonce = crypto.randomBytes(16).toString('hex');
+    (req.session as any).consentNonce = nonce;
+    (req.session as any).consentOrgId = user.organizationId;
 
     const protocol = req.headers['x-forwarded-proto'] || req.protocol;
     const host = req.headers['x-forwarded-host'] || req.get('host');
@@ -256,6 +271,7 @@ export async function registerRoutes(
     const state = Buffer.from(JSON.stringify({
       tenantDomain,
       ownershipType: ownershipType || 'MSP',
+      nonce,
     })).toString('base64url');
 
     const consentUrl = `https://login.microsoftonline.com/${tenantDomain}/adminconsent?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&state=${state}`;
@@ -277,9 +293,31 @@ export async function registerRoutes(
 
     try {
       const stateData = JSON.parse(Buffer.from(String(state), 'base64url').toString());
+      const sessionNonce = (req.session as any)?.consentNonce;
+      const sessionOrgId = (req.session as any)?.consentOrgId;
+
+      if (!sessionNonce || sessionNonce !== stateData.nonce) {
+        return res.redirect('/app/admin/tenants?consent_error=Invalid+consent+session.+Please+try+again.');
+      }
+
+      delete (req.session as any).consentNonce;
+      delete (req.session as any).consentOrgId;
+
       const tenantIdStr = String(tenant);
       const domain = stateData.tenantDomain || tenantIdStr;
       const ownershipType = stateData.ownershipType || 'MSP';
+      const organizationId = sessionOrgId || null;
+
+      const existing = (await storage.getTenantConnections()).find(
+        c => c.tenantId === tenantIdStr && c.organizationId === organizationId
+      );
+      if (existing) {
+        await storage.updateTenantConnection(existing.id, {
+          consentGranted: true,
+          status: 'ACTIVE',
+        });
+        return res.redirect('/app/admin/tenants?consent_success=true');
+      }
 
       let tenantName = domain.split('.')[0];
       const clientId = process.env.AZURE_CLIENT_ID!;
@@ -297,6 +335,7 @@ export async function registerRoutes(
         tenantName,
         domain,
         ownershipType,
+        organizationId,
         consentGranted: true,
         status: 'ACTIVE',
       });
