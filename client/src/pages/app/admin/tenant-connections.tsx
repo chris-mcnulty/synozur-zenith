@@ -51,6 +51,7 @@ export default function TenantConnectionsPage() {
   const [form, setForm] = useState({
     domain: "",
     ownershipType: "MSP",
+    adminEmail: "",
   });
 
   useEffect(() => {
@@ -88,7 +89,11 @@ export default function TenantConnectionsPage() {
     }
     setIsInitiating(true);
     try {
-      const res = await fetch(`/api/admin/tenants/consent/initiate?tenantDomain=${encodeURIComponent(form.domain)}&ownershipType=${encodeURIComponent(form.ownershipType)}`);
+      let url = `/api/admin/tenants/consent/initiate?tenantDomain=${encodeURIComponent(form.domain)}&ownershipType=${encodeURIComponent(form.ownershipType)}`;
+      if (form.adminEmail.trim()) {
+        url += `&adminEmail=${encodeURIComponent(form.adminEmail)}`;
+      }
+      const res = await fetch(url);
       const data = await res.json();
       if (!res.ok) {
         toast({ title: "Error", description: data.error || "Failed to initiate consent", variant: "destructive" });
@@ -130,7 +135,7 @@ export default function TenantConnectionsPage() {
           <h1 className="text-3xl font-bold tracking-tight" data-testid="text-page-title">Tenant Connections</h1>
           <p className="text-muted-foreground mt-1">Connect Microsoft 365 tenants via admin consent using Zenith's multi-tenant app registration.</p>
         </div>
-        <Dialog open={showAddDialog} onOpenChange={(open) => { setShowAddDialog(open); if (!open) setForm({ domain: "", ownershipType: "MSP" }); }}>
+        <Dialog open={showAddDialog} onOpenChange={(open) => { setShowAddDialog(open); if (!open) setForm({ domain: "", ownershipType: "MSP", adminEmail: "" }); }}>
           <DialogTrigger asChild>
             <Button className="gap-2 shadow-md shadow-primary/20" data-testid="button-connect-tenant">
               <Plus className="w-4 h-4" />
@@ -190,6 +195,18 @@ export default function TenantConnectionsPage() {
                       <SelectItem value="Hybrid">Hybrid (Customer Owns, MSP Operates)</SelectItem>
                     </SelectContent>
                   </Select>
+                </div>
+
+                <div className="space-y-2">
+                  <Label>Tenant Admin Email <span className="text-xs text-muted-foreground font-normal">(recommended)</span></Label>
+                  <Input
+                    placeholder="e.g. admin@cascadiaoceanic.onmicrosoft.com"
+                    value={form.adminEmail}
+                    onChange={e => setForm(f => ({ ...f, adminEmail: e.target.value }))}
+                    className="font-mono text-sm"
+                    data-testid="input-admin-email"
+                  />
+                  <p className="text-[11px] text-muted-foreground">The email of the Global Admin for the target tenant. This ensures Microsoft prompts you to sign in with the correct account.</p>
                 </div>
               </div>
             </div>

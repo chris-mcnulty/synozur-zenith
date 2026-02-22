@@ -218,7 +218,7 @@ export async function registerRoutes(
       return res.status(403).json({ error: "You must belong to an organization to connect a tenant." });
     }
 
-    const { tenantDomain, ownershipType } = req.query;
+    const { tenantDomain, ownershipType, adminEmail } = req.query;
     if (!tenantDomain) {
       return res.status(400).json({ error: "tenantDomain query parameter is required" });
     }
@@ -238,7 +238,10 @@ export async function registerRoutes(
       nonce,
     })).toString('base64url');
 
-    const consentUrl = `https://login.microsoftonline.com/organizations/adminconsent?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&state=${state}&prompt=login`;
+    let consentUrl = `https://login.microsoftonline.com/organizations/adminconsent?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&state=${state}&prompt=login`;
+    if (adminEmail) {
+      consentUrl += `&login_hint=${encodeURIComponent(String(adminEmail))}`;
+    }
 
     res.json({ consentUrl });
   });
