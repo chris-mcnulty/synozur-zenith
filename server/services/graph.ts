@@ -223,9 +223,9 @@ export interface SiteDriveOwner {
   ownerDisplayName?: string;
 }
 
-export async function fetchSiteDriveOwner(token: string, graphSiteId: string): Promise<SiteDriveOwner> {
+export async function fetchSiteDriveOwner(token: string, graphSiteId: string): Promise<SiteDriveOwner & { storageUsedBytes?: number; storageAllocatedBytes?: number }> {
   try {
-    const res = await fetch(`https://graph.microsoft.com/v1.0/sites/${graphSiteId}/drive`, {
+    const res: Response = await fetch(`https://graph.microsoft.com/v1.0/sites/${graphSiteId}/drive`, {
       headers: { Authorization: `Bearer ${token}` },
     });
 
@@ -233,12 +233,15 @@ export async function fetchSiteDriveOwner(token: string, graphSiteId: string): P
       return { siteId: graphSiteId };
     }
 
-    const data = await res.json();
+    const data: any = await res.json();
     const owner = data?.owner?.user;
+    const quota = data?.quota;
     return {
       siteId: graphSiteId,
       ownerEmail: owner?.email || owner?.userPrincipalName,
       ownerDisplayName: owner?.displayName,
+      storageUsedBytes: quota?.used ?? undefined,
+      storageAllocatedBytes: quota?.total ?? undefined,
     };
   } catch {
     return { siteId: graphSiteId };

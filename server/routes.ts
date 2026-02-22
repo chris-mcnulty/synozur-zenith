@@ -3,7 +3,7 @@ import { createServer, type Server } from "http";
 import crypto from "crypto";
 import { storage } from "./storage";
 import { insertWorkspaceSchema, insertProvisioningRequestSchema, insertTenantConnectionSchema, PLAN_FEATURES, SERVICE_PLANS, type ServicePlanTier } from "@shared/schema";
-import { testConnection, fetchSharePointSites, fetchSiteUsageReport, fetchSiteDriveOwner, getAppToken, clearTokenCache } from "./services/graph";
+import { testConnection, fetchSharePointSites, fetchSiteUsageReport, fetchSiteDriveOwner, fetchSiteAnalytics, getAppToken, clearTokenCache } from "./services/graph";
 import { requireFeature, getPlanFeatures } from "./services/feature-gate";
 import authRouter from "./routes-auth";
 import entraRouter from "./routes-entra";
@@ -407,6 +407,33 @@ export async function registerRoutes(
       let usageMatched = 0;
       const enrichErrors: string[] = [];
 
+      const BATCH_SIZE = 5;
+      const enrichCache = new Map<string, { driveOwner: any; analytics: any }>();
+
+      if (token) {
+        for (let i = 0; i < siteResult.sites.length; i += BATCH_SIZE) {
+          const batch = siteResult.sites.slice(i, i + BATCH_SIZE);
+          const results = await Promise.allSettled(
+            batch.map(async (site) => {
+              const [driveResult, analyticsResult] = await Promise.allSettled([
+                fetchSiteDriveOwner(token!, site.id),
+                fetchSiteAnalytics(token!, site.id),
+              ]);
+              return {
+                siteId: site.id,
+                driveOwner: driveResult.status === 'fulfilled' ? driveResult.value : {},
+                analytics: analyticsResult.status === 'fulfilled' ? analyticsResult.value : {},
+              };
+            })
+          );
+          for (const r of results) {
+            if (r.status === 'fulfilled') {
+              enrichCache.set(r.value.siteId, { driveOwner: r.value.driveOwner, analytics: r.value.analytics });
+            }
+          }
+        }
+      }
+
       for (const site of siteResult.sites) {
         const graphSiteIdParts = site.id.split(',');
         const siteGuid = graphSiteIdParts.length >= 2 ? graphSiteIdParts[1].trim() : site.id.trim();
@@ -417,14 +444,9 @@ export async function registerRoutes(
         }
         if (usage) usageMatched++;
 
-        let driveOwner: { ownerEmail?: string; ownerDisplayName?: string } = {};
-        if (token) {
-          try {
-            driveOwner = await fetchSiteDriveOwner(token, site.id);
-          } catch (e: any) {
-            enrichErrors.push(`Drive owner for ${site.displayName}: ${e.message}`);
-          }
-        }
+        const enriched = enrichCache.get(site.id) || { driveOwner: {}, analytics: {} };
+        const driveOwner = enriched.driveOwner;
+        const siteAnalytics = enriched.analytics;
 
         const siteType = inferSiteType(usage?.rootWebTemplate, site.siteCollection?.root);
 
@@ -439,12 +461,18 @@ export async function registerRoutes(
           lastContentModifiedDate: site.lastModifiedDateTime || null,
         };
 
+        workspaceData.ownerDisplayName = usage?.ownerDisplayName || driveOwner.ownerDisplayName || null;
+        workspaceData.ownerPrincipalName = usage?.ownerPrincipalName || driveOwner.ownerEmail || null;
+
+        const storageUsed = usage?.storageUsedBytes ?? driveOwner.storageUsedBytes ?? null;
+        const storageAlloc = usage?.storageAllocatedBytes ?? driveOwner.storageAllocatedBytes ?? null;
+        workspaceData.storageUsedBytes = storageUsed;
+        workspaceData.storageAllocatedBytes = storageAlloc;
+
+        const activityDate = usage?.lastActivityDate || siteAnalytics.lastActivityDate || null;
+        workspaceData.lastActivityDate = activityDate;
+
         if (usage) {
-          workspaceData.ownerDisplayName = usage.ownerDisplayName || driveOwner.ownerDisplayName || null;
-          workspaceData.ownerPrincipalName = usage.ownerPrincipalName || driveOwner.ownerEmail || null;
-          workspaceData.storageUsedBytes = usage.storageUsedBytes ?? null;
-          workspaceData.storageAllocatedBytes = usage.storageAllocatedBytes ?? null;
-          workspaceData.lastActivityDate = usage.lastActivityDate || null;
           workspaceData.fileCount = usage.fileCount;
           workspaceData.activeFileCount = usage.activeFileCount;
           workspaceData.pageViewCount = usage.pageViewCount;
@@ -454,28 +482,29 @@ export async function registerRoutes(
           workspaceData.reportRefreshDate = usage.reportRefreshDate || null;
           workspaceData.sensitivityLabelId = usage.sensitivityLabelId || null;
           workspaceData.sharingCapability = usage.externalSharing || null;
+        }
 
-          const usedMB = Math.round((usage.storageUsedBytes ?? 0) / (1024 * 1024));
+        if (storageUsed != null) {
+          const usedMB = Math.round(storageUsed / (1024 * 1024));
           workspaceData.size = usedMB >= 1024 ? `${(usedMB / 1024).toFixed(1)} GB` : `${usedMB} MB`;
+        }
 
+        if (activityDate) {
+          const d = new Date(activityDate);
+          const now = new Date();
+          const diffDays = Math.floor((now.getTime() - d.getTime()) / (1000 * 60 * 60 * 24));
+          if (diffDays === 0) workspaceData.lastActive = "Today";
+          else if (diffDays === 1) workspaceData.lastActive = "Yesterday";
+          else if (diffDays <= 7) workspaceData.lastActive = `${diffDays} days ago`;
+          else if (diffDays <= 30) workspaceData.lastActive = `${Math.floor(diffDays / 7)} weeks ago`;
+          else workspaceData.lastActive = `${Math.floor(diffDays / 30)} months ago`;
+        }
+
+        if (usage) {
           if (usage.pageViewCount > 50) workspaceData.usage = "Very High";
           else if (usage.pageViewCount > 20) workspaceData.usage = "High";
           else if (usage.pageViewCount > 5) workspaceData.usage = "Medium";
           else workspaceData.usage = "Low";
-
-          if (usage.lastActivityDate) {
-            const d = new Date(usage.lastActivityDate);
-            const now = new Date();
-            const diffDays = Math.floor((now.getTime() - d.getTime()) / (1000 * 60 * 60 * 24));
-            if (diffDays === 0) workspaceData.lastActive = "Today";
-            else if (diffDays === 1) workspaceData.lastActive = "Yesterday";
-            else if (diffDays <= 7) workspaceData.lastActive = `${diffDays} days ago`;
-            else if (diffDays <= 30) workspaceData.lastActive = `${Math.floor(diffDays / 7)} weeks ago`;
-            else workspaceData.lastActive = `${Math.floor(diffDays / 30)} months ago`;
-          }
-        } else {
-          if (driveOwner.ownerDisplayName) workspaceData.ownerDisplayName = driveOwner.ownerDisplayName;
-          if (driveOwner.ownerEmail) workspaceData.ownerPrincipalName = driveOwner.ownerEmail;
         }
 
         const existing = await storage.getWorkspaceByM365ObjectId(site.id);
@@ -501,6 +530,7 @@ export async function registerRoutes(
         upserted: upsertedCount,
         usageReportRows: usageResult.report.length,
         usageMatched,
+        driveEnriched: enrichCache.size,
         usageReportError: usageResult.error || null,
         enrichErrors: enrichErrors.length > 0 ? enrichErrors : undefined,
       });
