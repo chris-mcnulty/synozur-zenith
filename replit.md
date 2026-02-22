@@ -101,6 +101,33 @@ If the "Groups & sites" scope is grayed out/disabled when creating a sensitivity
 
 **Important distinction:** Container labels govern the collaboration surface (Teams, Groups, Sites), NOT the documents inside them. They do not label files automatically, encrypt SharePoint content, or replace file-level sensitivity labels.
 
+### Troubleshooting: Labels Not Discoverable or Assignable via Code
+Sensitivity labels **must be published** in a label policy before they can be applied via code (Graph API, PnP PowerShell, SPO). Publishing is what authorizes usage by SharePoint Online, Teams, M365 Groups, and APIs — not just by users in Office apps. An unpublished label is invisible to SharePoint and all code paths.
+
+**Requirements for code-based label assignment:**
+1. The label must exist in Purview
+2. The label scope must include "Groups & sites"
+3. The label must be published in a label policy
+4. The identity applying it (user account, service principal, or managed identity) must be in scope of that policy
+
+If any of these are false, code-based assignment fails or the label is not discoverable.
+
+**Symptoms of unpublished/out-of-scope labels:**
+- `Get-PnPSiteSensitivityLabel` returns nothing
+- `Set-PnPSite -SensitivityLabel` fails or silently no-ops
+- Graph API calls reject the label ID
+- Label does not appear in site metadata
+
+**Publishing scope for automation:** The label policy must include at least one of: the user account running the script, the service principal / managed identity (for app-only auth), or an admin unit containing those. Publishing to "All users" works and is common.
+
+**What publishing does NOT do:** It does not auto-apply labels to sites, force users to label files, encrypt content, or grant site owners control. It simply makes the label eligible for use by platforms and APIs.
+
+**Minimum viable setup for site labeling via code:**
+1. Enable container labeling in Entra (EnableMIPLabels = True) — see troubleshooting above
+2. Create label with "Groups & sites" scope in Purview
+3. Publish label in a label policy targeting the automation identity (or all users)
+4. Apply via code (Graph API / PnP / SPO)
+
 ## External Dependencies
 - **Microsoft 365 / SharePoint**: Core platform for workspace management and governance.
 - **Microsoft Entra ID (formerly Azure Active Directory)**: Used for Single Sign-On (SSO) authentication and identity management.
