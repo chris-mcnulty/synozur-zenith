@@ -271,6 +271,33 @@ export async function fetchSiteAnalytics(token: string, graphSiteId: string): Pr
   }
 }
 
+export async function writeSitePropertyBag(
+  token: string,
+  graphSiteId: string,
+  properties: Record<string, string>
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const url = `https://graph.microsoft.com/v1.0/sites/${graphSiteId}/lists/Site Information/items/1/fields`;
+    const res: Response = await fetch(url, {
+      method: 'PATCH',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(properties),
+    });
+
+    if (!res.ok) {
+      const errText = await res.text();
+      return { success: false, error: `Graph API ${res.status}: ${errText}` };
+    }
+
+    return { success: true };
+  } catch (e: any) {
+    return { success: false, error: e.message };
+  }
+}
+
 export function clearTokenCache(tenantId?: string, clientId?: string) {
   if (tenantId && clientId) {
     tokenCache.delete(`${tenantId}:${clientId}`);

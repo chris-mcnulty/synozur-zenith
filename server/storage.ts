@@ -28,6 +28,9 @@ import {
   type InsertAuditLog,
   type DomainBlocklist,
   type InsertDomainBlocklist,
+  tenantDepartments,
+  type TenantDepartment,
+  type InsertTenantDepartment,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -77,6 +80,10 @@ export interface IStorage {
   addBlockedDomain(entry: InsertDomainBlocklist): Promise<DomainBlocklist>;
   removeBlockedDomain(domain: string): Promise<void>;
   isDomainBlocked(domain: string): Promise<boolean>;
+
+  getTenantDepartments(tenantConnectionId: string): Promise<TenantDepartment[]>;
+  createTenantDepartment(dept: InsertTenantDepartment): Promise<TenantDepartment>;
+  deleteTenantDepartment(id: string): Promise<void>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -193,6 +200,7 @@ export class DatabaseStorage implements IStorage {
       await db.delete(workspaces).where(eq(workspaces.tenantConnectionId, id));
     }
 
+    await db.delete(tenantDepartments).where(eq(tenantDepartments.tenantConnectionId, id));
     await db.delete(tenantConnections).where(eq(tenantConnections.id, id));
   }
 
@@ -320,6 +328,21 @@ export class DatabaseStorage implements IStorage {
     const [result] = await db.select().from(domainBlocklist)
       .where(eq(domainBlocklist.domain, domain.toLowerCase()));
     return !!result;
+  }
+
+  async getTenantDepartments(tenantConnectionId: string): Promise<TenantDepartment[]> {
+    return db.select().from(tenantDepartments)
+      .where(eq(tenantDepartments.tenantConnectionId, tenantConnectionId))
+      .orderBy(tenantDepartments.name);
+  }
+
+  async createTenantDepartment(dept: InsertTenantDepartment): Promise<TenantDepartment> {
+    const [created] = await db.insert(tenantDepartments).values(dept).returning();
+    return created;
+  }
+
+  async deleteTenantDepartment(id: string): Promise<void> {
+    await db.delete(tenantDepartments).where(eq(tenantDepartments.id, id));
   }
 }
 

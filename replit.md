@@ -48,6 +48,7 @@ This section documents all Microsoft Entra ID (Azure AD) app registration permis
 | Permission | Type | Purpose | Used By |
 |---|---|---|---|
 | `Sites.Read.All` | Application | Read all SharePoint site collections, site properties, and drives | Site inventory sync, drive storage/owner enrichment |
+| `Sites.Manage.All` | Application | Create, edit, and delete items and lists in all site collections | Write department to site property bag, future provisioning |
 | `Group.Read.All` | Application | Read all Microsoft 365 group properties | Site-to-group mapping, Teams connectivity detection |
 | `Directory.Read.All` | Application | Read directory data (users, groups, org info) | User/owner resolution, tenant validation |
 | `Reports.Read.All` | Application | Read all usage reports | SharePoint site usage reports (storage, file counts, page views, activity, sensitivity labels, sharing settings) |

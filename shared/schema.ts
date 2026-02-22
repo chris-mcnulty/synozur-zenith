@@ -127,6 +127,21 @@ export const insertTenantConnectionSchema = createInsertSchema(tenantConnections
 export type InsertTenantConnection = z.infer<typeof insertTenantConnectionSchema>;
 export type TenantConnection = typeof tenantConnections.$inferSelect;
 
+export const tenantDepartments = pgTable("tenant_departments", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantConnectionId: varchar("tenant_connection_id").notNull(),
+  name: text("name").notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertTenantDepartmentSchema = createInsertSchema(tenantDepartments).omit({
+  id: true,
+  createdAt: true,
+});
+
+export type InsertTenantDepartment = z.infer<typeof insertTenantDepartmentSchema>;
+export type TenantDepartment = typeof tenantDepartments.$inferSelect;
+
 export const SERVICE_PLANS = ["TRIAL", "STANDARD", "PROFESSIONAL", "ENTERPRISE"] as const;
 export type ServicePlanTier = typeof SERVICE_PLANS[number];
 
