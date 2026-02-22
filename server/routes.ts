@@ -195,7 +195,8 @@ export async function registerRoutes(
     const connections = await storage.getTenantConnections();
     const safe = connections.map(c => ({
       ...c,
-      clientSecret: c.clientSecret ? "••••••••" : "",
+      clientSecret: undefined,
+      clientId: c.clientId ? `${c.clientId.substring(0, 8)}...` : undefined,
     }));
     res.json(safe);
   });
@@ -203,33 +204,116 @@ export async function registerRoutes(
   app.get("/api/admin/tenants/:id", async (req, res) => {
     const connection = await storage.getTenantConnection(req.params.id);
     if (!connection) return res.status(404).json({ message: "Tenant connection not found" });
-    res.json({ ...connection, clientSecret: "••••••••" });
+    res.json({ ...connection, clientSecret: undefined });
   });
 
   app.post("/api/admin/tenants", async (req, res) => {
-    const parsed = insertTenantConnectionSchema.safeParse(req.body);
-    if (!parsed.success) return res.status(400).json({ message: parsed.error.message });
-    const connection = await storage.createTenantConnection(parsed.data);
-    res.status(201).json({ ...connection, clientSecret: "••••••••" });
+    const { tenantId, tenantName, domain, ownershipType, organizationId } = req.body;
+    if (!tenantId || !domain) {
+      return res.status(400).json({ message: "tenantId and domain are required" });
+    }
+    const connection = await storage.createTenantConnection({
+      tenantId,
+      tenantName: tenantName || domain.split('.')[0],
+      domain,
+      ownershipType: ownershipType || 'MSP',
+      organizationId: organizationId || null,
+      status: 'PENDING',
+      consentGranted: false,
+    });
+    res.status(201).json({ ...connection, clientSecret: undefined });
   });
 
   app.patch("/api/admin/tenants/:id", async (req, res) => {
     const connection = await storage.updateTenantConnection(req.params.id, req.body);
     if (!connection) return res.status(404).json({ message: "Tenant connection not found" });
-    res.json({ ...connection, clientSecret: "••••••••" });
+    res.json({ ...connection, clientSecret: undefined });
   });
 
   app.delete("/api/admin/tenants/:id", async (req, res) => {
     const conn = await storage.getTenantConnection(req.params.id);
-    if (conn) clearTokenCache(conn.tenantId, conn.clientId);
+    if (conn && conn.clientId) clearTokenCache(conn.tenantId, conn.clientId);
     await storage.deleteTenantConnection(req.params.id);
     res.status(204).send();
   });
 
+  app.get("/api/admin/tenants/consent/initiate", async (req, res) => {
+    const clientId = process.env.AZURE_CLIENT_ID;
+    if (!clientId) {
+      return res.status(503).json({ error: "Zenith Entra app is not configured. Set AZURE_CLIENT_ID first." });
+    }
+
+    const { tenantDomain, ownershipType } = req.query;
+    if (!tenantDomain) {
+      return res.status(400).json({ error: "tenantDomain query parameter is required" });
+    }
+
+    const protocol = req.headers['x-forwarded-proto'] || req.protocol;
+    const host = req.headers['x-forwarded-host'] || req.get('host');
+    const baseUrl = `${protocol}://${host}`;
+    const redirectUri = `${baseUrl}/api/admin/tenants/consent/callback`;
+
+    const state = Buffer.from(JSON.stringify({
+      tenantDomain,
+      ownershipType: ownershipType || 'MSP',
+    })).toString('base64url');
+
+    const consentUrl = `https://login.microsoftonline.com/${tenantDomain}/adminconsent?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&state=${state}`;
+
+    res.json({ consentUrl });
+  });
+
+  app.get("/api/admin/tenants/consent/callback", async (req, res) => {
+    const { admin_consent, tenant, state, error, error_description } = req.query;
+
+    if (error) {
+      console.error('[Consent] Admin consent error:', error, error_description);
+      return res.redirect(`/app/admin/tenants?consent_error=${encodeURIComponent(String(error_description || error))}`);
+    }
+
+    if (admin_consent !== 'True' || !tenant || !state) {
+      return res.redirect('/app/admin/tenants?consent_error=Consent+was+not+granted');
+    }
+
+    try {
+      const stateData = JSON.parse(Buffer.from(String(state), 'base64url').toString());
+      const tenantIdStr = String(tenant);
+      const domain = stateData.tenantDomain || tenantIdStr;
+      const ownershipType = stateData.ownershipType || 'MSP';
+
+      let tenantName = domain.split('.')[0];
+      const clientId = process.env.AZURE_CLIENT_ID!;
+      const clientSecret = process.env.AZURE_CLIENT_SECRET!;
+
+      try {
+        const result = await testConnection(tenantIdStr, clientId, clientSecret);
+        if (result.success && result.tenantName) {
+          tenantName = result.tenantName;
+        }
+      } catch {}
+
+      await storage.createTenantConnection({
+        tenantId: tenantIdStr,
+        tenantName,
+        domain,
+        ownershipType,
+        consentGranted: true,
+        status: 'ACTIVE',
+      });
+
+      return res.redirect('/app/admin/tenants?consent_success=true');
+    } catch (err: any) {
+      console.error('[Consent] Callback processing error:', err);
+      return res.redirect(`/app/admin/tenants?consent_error=${encodeURIComponent(err.message)}`);
+    }
+  });
+
   app.post("/api/admin/tenants/test", async (req, res) => {
-    const { tenantId, clientId, clientSecret } = req.body;
+    const { tenantId } = req.body;
+    const clientId = req.body.clientId || process.env.AZURE_CLIENT_ID;
+    const clientSecret = req.body.clientSecret || process.env.AZURE_CLIENT_SECRET;
     if (!tenantId || !clientId || !clientSecret) {
-      return res.status(400).json({ message: "tenantId, clientId, and clientSecret are required" });
+      return res.status(400).json({ message: "tenantId is required, and Zenith app credentials must be configured" });
     }
     const result = await testConnection(tenantId, clientId, clientSecret);
     res.json(result);
@@ -239,8 +323,15 @@ export async function registerRoutes(
     const connection = await storage.getTenantConnection(req.params.id);
     if (!connection) return res.status(404).json({ message: "Tenant connection not found" });
 
+    const clientId = connection.clientId || process.env.AZURE_CLIENT_ID;
+    const clientSecret = connection.clientSecret || process.env.AZURE_CLIENT_SECRET;
+
+    if (!clientId || !clientSecret) {
+      return res.status(503).json({ success: false, error: "Zenith app credentials not configured. Set AZURE_CLIENT_ID and AZURE_CLIENT_SECRET." });
+    }
+
     try {
-      const result = await fetchSharePointSites(connection.tenantId, connection.clientId, connection.clientSecret);
+      const result = await fetchSharePointSites(connection.tenantId, clientId, clientSecret);
 
       if (result.error) {
         await storage.updateTenantConnection(req.params.id, {
