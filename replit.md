@@ -1,211 +1,44 @@
 # Zenith - Microsoft 365 Governance Platform
 
 ## Overview
-Zenith is a Microsoft 365 governance platform MVP built for The Synozur Alliance (Platinum Equity). It focuses on governed SharePoint site provisioning with Deal and Portfolio Company context, site inventory tracking, sensitivity label enforcement, and Copilot eligibility explainability. All workspaces are SharePoint sites (TEAM_SITE, COMMUNICATION_SITE, HUB_SITE) with optional Microsoft Teams connectivity.
+Zenith is an MVP Microsoft 365 governance platform designed for The Synozur Alliance. Its primary purpose is to provide governed SharePoint site provisioning, incorporating Deal and Portfolio Company context. Key capabilities include site inventory tracking, sensitivity label enforcement, and explainability for Copilot eligibility. All managed workspaces are SharePoint sites (TEAM_SITE, COMMUNICATION_SITE, HUB_SITE) with optional Microsoft Teams connectivity. The business vision is to streamline M365 governance, enhance security, and improve operational efficiency for organizations managing multiple M365 tenants.
 
-## Architecture
-- **Frontend**: React + Vite + TanStack Query + shadcn/ui + wouter routing
-- **Backend**: Express.js + Drizzle ORM + PostgreSQL (Neon)
-- **Database**: PostgreSQL with tables: workspaces, provisioning_requests, copilot_rules, tenant_connections, organizations
-- **Auth**: Microsoft Entra ID (SSO) + Zenith-managed RBAC (planned)
+## User Preferences
+I prefer clear and direct communication. When making changes, please explain the reasoning and impact before proceeding. I value iterative development and would like to be involved in key decision points. Do not make changes to the `shared/schema.ts` file without explicit approval.
 
-## Synozur Product Suite
-- **Zenith** — Microsoft 365 governance platform (this project)
-- **Vega** — Strategy and OKR app. Code at: https://github.com/chris-mcnulty/synozur-vega
-- **Orbit** — Competitive Intelligence app. Code at: https://github.com/chris-mcnulty/synozur-orbit
+## System Architecture
 
-## Organizations & Tenants
-- **Organization 1**: "The Synozur Alliance" — parent org, ENTERPRISE (unlimited) plan
-- **Organization 2**: "Contoso" — demo/sample org, TRIAL (free) plan
-- **Tenant 1**: Fabrikam (fabrikam.onmicrosoft.com) — DEMO, MSP ownership, no real M365 behind it
-- **Tenant 2**: Cascadia Oceanic (cascadiaoceanic.onmicrosoft.com) — DEMO, Hybrid ownership, no real M365 behind it
+### UI/UX Decisions
+The frontend is built with React, Vite, TanStack Query, shadcn/ui for components, and wouter for routing, aiming for a modern and responsive user experience.
 
-## Security Architecture (Confirmed Design)
+### Technical Implementations
+- **Frontend**: React + Vite + TanStack Query + shadcn/ui + wouter
+- **Backend**: Express.js + Drizzle ORM
+- **Database**: PostgreSQL
+- **Authentication**: Microsoft Entra ID (SSO) with Zenith-managed RBAC. Dual authentication with email/password login is also supported. Tokens are encrypted at rest using AES-256-GCM.
+- **Multi-Tenancy**: Primary multi-tenancy is at the Organization level, providing isolated Zenith experiences. Organizations can connect multiple M365 tenants.
+- **Security Model**: Zenith acts as the system of authorization, while Entra ID handles authentication. It employs four layers of separation: Microsoft Entra ID (authentication), Zenith Control Plane (authorization), Zenith Data Plane (inventory), and Zenith RBAC (permissions). A single multi-tenant Entra app registration is used, requiring admin consent per tenant for application-level permissions.
+- **Tenant Ownership**: Each M365 tenant has exactly one owning Zenith organization with defined ownership types (MSP, Customer, Hybrid). No auto-registration; tenants must be explicitly claimed.
+- **RBAC**: Zenith implements a robust Role-Based Access Control system with roles like Platform Owner, Tenant Admin, Governance Admin, Operator, Viewer, and Read-Only Auditor. Access is visibility-scoped, ensuring zero existence leakage where users only see data relevant to their authorized tenants and scopes.
+- **Service Plan Gating**: Features are gated by service plans (TRIAL, STANDARD, PROFESSIONAL, ENTERPRISE), enforced both server-side and client-side.
+- **Key Design Decisions**:
+    - All workspaces are SharePoint sites (TEAM_SITE, COMMUNICATION_SITE, HUB_SITE) with an optional `teamsConnected` flag.
+    - Automated `DEAL-` and `PORTCO-` prefixes for site naming conventions.
+    - Enforcement of "Highly Confidential" sensitivity labels to block external sharing and Copilot indexing by default.
+    - Requirement of dual ownership (Primary Steward + Secondary Owner) for workspaces to prevent orphaned sites.
+    - Clear display of Copilot eligibility criteria.
 
-### Core Principle
-"Zenith is the system of authorization; Entra is only the system of authentication."
-Entra answers WHO you are. Zenith answers WHETHER you're allowed.
+### System Design Choices
+- **Database Schema**: Core tables include `workspaces`, `provisioning_requests`, `copilot_rules`, `tenant_connections`, `organizations`, `users`, `graph_tokens`, and `audit_log`.
+- **Audit Trail**: All significant actions are logged with details on WHO, WHAT, WHERE, WHEN, and RESULT, stored in PostgreSQL for auditing and compliance.
+- **API Endpoints**: A comprehensive set of RESTful APIs are provided for managing workspaces, provisioning requests, tenant connections, user authentication, and organization settings.
 
-### Four Separation Layers
-1. **Microsoft Entra ID** — Authentication, token issuance only
-2. **Zenith Control Plane** — Authorization, ownership, visibility
-3. **Zenith Data Plane** — Inventory, governance data
-4. **Zenith RBAC** — Who can see/do what
-
-### Entra App Design
-- Single multi-tenant Entra app registration
-- Admin consent required per tenant
-- Application permissions (not delegated) for inventory: Sites.Read.All, Group.Read.All, Directory.Read.All
-- Possessing Graph permissions does NOT grant Zenith operational access
-
-### Tenant Ownership Model
-- Each tenant has exactly ONE owning Zenith organization (exclusive)
-- ownershipType: MSP | Customer | Hybrid
-  - MSP: Synozur owns and operates
-  - Customer: Customer owns and operates themselves
-  - Hybrid: Customer owns, MSP has delegated operator access (NOT shared ownership)
-- No auto-registration. Tenant must be explicitly claimed.
-- Ownership changes require explicit admin approval + audit record
-
-### Tenant Registration Flow
-1. Zenith Platform Admin initiates "Connect New Tenant"
-2. Redirect to target tenant's Entra admin consent
-3. Target tenant's Global Admin approves consent
-4. Initiating user claims ownership for their Zenith org
-5. RBAC begins for that tenant
-
-### Operator Allowlisting (MSP Safety)
-- Operators are per-tenant-per-operator role assignments
-- Same MSP operator gets different roles on different tenants
-- Even valid Entra tokens are rejected if operator isn't explicitly allowlisted
-- Synozur Alliance is typically the sole MSP operator
-
-### Organization-Scoped Data Isolation
-- Each org gets their own separate Zenith experience
-- Cascadia sees their own inventory/dashboards when they log in
-- When Synozur operates on Cascadia's tenant as MSP, they see through operator lens only
-- Data is never mixed between orgs
-
-### Zenith RBAC Roles
-- Platform Owner — Zenith superadmin, full access + config
-- Tenant Admin — Full inventory, tenant connection management
-- Governance Admin — Governance within their visibility scope only
-- Operator — Submit requests, update metadata within scope
-- Viewer — Read-only within scope
-- Read-Only Auditor — Audit trail access
-
-### Visibility-Scoped Access (Zero Existence Leakage)
-- Master inventory stored centrally but NEVER directly exposed to all users
-- Every query filters by: authorized tenants + permitted scopes + object relationships
-- Object relationship types: Owner/Steward, Member, Tenant-wide admin
-- Provisioning requesters can see their pending sites
-- If user is unauthorized: object doesn't appear, isn't counted, isn't searchable
-- Dashboard stats are user-scoped (user sees "800 sites" not "1000 sites")
-- Only Tenant Admin / Platform Owner see full master inventory
-
-### Tenant Context
-- Explicit tenant switching required (no combined cross-tenant views)
-- Cross-tenant alerts dashboard may come later (future feature)
-
-### Token Failure Handling
-- On Graph token failure: flag data as stale with warning, don't dump inventory
-- Show "Last synced X ago — consent may need renewal"
-- Avoid destructive re-sync on transient failures
-
-### Audit Trail
-- Every decision logged: WHO, WHAT, WHERE, WHEN, RESULT
-- Retention: 1 year default, 7 years enterprise, unlimited for unlimited tier
-- Stored in PostgreSQL for MVP, append-only
-- Supports SEC inquiries, PE governance, incident response
-
-### Threat Model Outcomes
-- Unauthorized MSP attempts to attach → Denied
-- Valid token but wrong org → Denied
-- App consented but tenant unclaimed → Denied
-- Inventory exists but user unauthorized → Object invisible
-- Ownership transfer without approval → Impossible
-
-## Key Design Decisions
-- All workspaces are SharePoint sites with optional Teams connectivity (teamsConnected boolean)
-- Site templates: TEAM_SITE, COMMUNICATION_SITE, HUB_SITE
-- Deal/PortCo naming conventions (DEAL-, PORTCO- prefixes applied automatically)
-- Highly Confidential sensitivity blocks external sharing and Copilot indexing by default
-- Required dual ownership (Primary Steward + Secondary Owner) to prevent orphaned workspaces
-- Copilot eligibility displayed with clear pass/fail criteria
-- "Discover & Migrate" marked as Enterprise+ feature
-
-## Service Plan Feature Gating
-- Plans: TRIAL, STANDARD, PROFESSIONAL, ENTERPRISE (defined in shared/schema.ts PLAN_FEATURES)
-- TRIAL/Free: Read-only. No M365 write-back. Inventory sync and governance views only.
-- STANDARD+: M365 write-back enabled (provisioning, site creation, config changes)
-- PROFESSIONAL+: Copilot readiness, lifecycle automation, self-service portal
-- ENTERPRISE: All features + advanced reporting + unlimited retention
-- Backend enforcement: requireFeature middleware in server/services/feature-gate.ts
-- Frontend: useServicePlan hook + UpgradeGate component for conditional rendering
-- Organization record stored in `organizations` table with servicePlan field
-- Plan can be changed via PATCH /api/organization/plan
-
-## Authentication Architecture
-- **Dual auth**: Password login OR Azure AD SSO (following Vega's patterns)
-- **Session**: PostgreSQL-backed via connect-pg-simple, 30-day cookie expiry
-- **Password**: bcryptjs (12 rounds), min 8 chars
-- **SSO**: MSAL-node with PKCE authorization code flow, multi-tenant app
-- **JIT Provisioning**: First SSO user from new org becomes tenant_admin
-- **Token encryption**: AES-256-GCM for Graph tokens at rest (server/utils/encryption.ts)
-- **RBAC middleware**: server/middleware/rbac.ts — loadCurrentUser, requireAuth, requireRole, requirePermission
-- **Auth routes**: server/routes-auth.ts (local auth), server/routes-entra.ts (SSO)
-- **Login page**: /login with email/password + Microsoft SSO button
-- **Entra setup**: /app/admin/entra — step-by-step app registration guide
-
-### Required Environment Variables for SSO
-- AZURE_CLIENT_ID — App registration client ID
-- AZURE_CLIENT_SECRET — App registration client secret
-- AZURE_TENANT_ID — "common" for multi-tenant or specific tenant ID
-- TOKEN_ENCRYPTION_SECRET — Min 32 chars, for Graph token encryption
-- SESSION_SECRET — Auto-generated if not set
-
-## Project Structure
-- `shared/schema.ts` - Drizzle schema: workspaces, provisioning_requests, copilot_rules, tenant_connections, organizations, users, graph_tokens, audit_log + PLAN_FEATURES + ZENITH_ROLES
-- `server/db.ts` - Database connection (pg + drizzle)
-- `server/storage.ts` - DatabaseStorage class implementing IStorage interface
-- `server/routes.ts` - API routes (/api/workspaces, /api/provisioning-requests, /api/stats, etc.)
-- `server/routes-auth.ts` - Local auth routes (login, signup, logout, verify-email, password-reset)
-- `server/routes-entra.ts` - Entra SSO routes (login, callback, logout, check-policy)
-- `server/auth.ts` - Password hashing, token generation utilities
-- `server/utils/encryption.ts` - AES-256-GCM token encryption/decryption
-- `server/middleware/rbac.ts` - RBAC middleware (loadCurrentUser, requireAuth, requireRole, requirePermission)
-- `server/services/graph.ts` - Microsoft Graph API client (token acquisition, site inventory)
-- `server/services/feature-gate.ts` - Service plan feature gating middleware
-- `server/seed.ts` - Database seeding script with 12 realistic workspaces
-- `client/src/pages/auth/login.tsx` - Login/signup page
-- `client/src/pages/auth/callback.tsx` - Entra SSO callback page
-- `client/src/pages/app/admin/entra-setup.tsx` - Entra app registration setup guide
-- `client/src/pages/app/` - All app pages (dashboard, governance, provision-new, workspace-details, etc.)
-- `client/src/components/layout/app-shell.tsx` - Main layout shell
-- `client/src/components/upgrade-gate.tsx` - UpgradeGate, UpgradeBadge, WriteBackGate components
-- `client/src/hooks/use-service-plan.ts` - Hook for plan status and feature checks
-
-## API Endpoints
-- GET/POST /api/workspaces - List/create workspaces (search via ?search=)
-- GET/PATCH/DELETE /api/workspaces/:id - Single workspace CRUD
-- PATCH /api/workspaces/bulk/update - Bulk update workspaces
-- GET/POST /api/provisioning-requests - List/create provisioning requests
-- PATCH /api/provisioning-requests/:id/status - Update request status (PROVISIONED gated by m365WriteBack)
-- GET/PUT /api/workspaces/:id/copilot-rules - Copilot eligibility rules
-- GET /api/stats - Dashboard statistics
-- GET /api/organization - Current org with plan features
-- PATCH /api/organization/plan - Change plan tier
-- GET /api/feature-check/:feature - Check if specific feature is enabled
-- GET/POST /api/admin/tenants - Tenant connection CRUD
-- POST /api/admin/tenants/test - Test tenant connection
-- POST /api/admin/tenants/:id/sync - Sync SharePoint site inventory
-- POST /api/auth/signup - Create account (email, password, name)
-- POST /api/auth/login - Sign in (email, password)
-- GET /api/auth/me - Get current user + organization
-- POST /api/auth/logout - Destroy session
-- POST /api/auth/verify-email - Verify email token
-- POST /api/auth/request-password-reset - Request password reset
-- POST /api/auth/reset-password - Reset password with token
-- GET /auth/entra/status - Check if SSO is configured
-- GET /auth/entra/login - Initiate SSO flow
-- GET /auth/entra/callback - SSO callback (JIT provisioning)
-- POST /auth/entra/logout - SSO logout
-- POST /auth/entra/check-policy - Check SSO enforcement for email domain
-
-## Recent Changes
-- 2026-02-21: Implemented comprehensive auth system — local login + Entra SSO, sessions, RBAC, JIT provisioning (Vega pattern)
-- 2026-02-21: Added users, graph_tokens, audit_log tables; organizations table extended with SSO fields
-- 2026-02-21: Created login page (/login) with email/password + Microsoft SSO button
-- 2026-02-21: Created Entra ID setup admin page (/app/admin/entra) with step-by-step registration guide
-- 2026-02-21: Added service plan feature gating — TRIAL plan blocks M365 write-back, enforced server-side + frontend upgrade prompts
-- 2026-02-21: Added organizations table, useServicePlan hook, UpgradeGate component, dynamic service plans page
-- 2026-02-21: Confirmed security design — multi-tenant, MSP-safe, zero existence leakage architecture
-- 2026-02-21: Rebuilt Document Library page as governance tool for library structures, columns, versioning
-- 2026-02-21: Flattened routing structure to fix wouter v3 nested Switch 404 issue
-- 2026-02-21: Built comprehensive workspace details/properties page with edit mode, metadata editing, property bag view, lifecycle timeline
-- 2026-02-21: Updated all org references to "The Synozur Alliance", tenants to synozur.onmicrosoft.com + cascadiaoceanic.onmicrosoft.com
-- 2026-02-21: Refactored workspace types to SharePoint site templates (TEAM_SITE, COMMUNICATION_SITE, HUB_SITE) with teamsConnected flag
-- 2026-02-21: Converted from mockup to full-stack app with PostgreSQL
-- 2026-02-21: Implemented complete backend (schema, storage, routes)
-- 2026-02-21: Wired all frontend pages to real API endpoints
-- 2026-02-21: Seeded 12 demo workspaces + 4 provisioning requests + copilot rules
+## External Dependencies
+- **Microsoft 365 / SharePoint**: Core platform for workspace management and governance.
+- **Microsoft Entra ID (formerly Azure Active Directory)**: Used for Single Sign-On (SSO) authentication and identity management.
+- **PostgreSQL**: Primary database for storing application data, including user information, workspace inventory, and audit logs.
+- **Neon**: Managed PostgreSQL service.
+- **Microsoft Graph API**: Utilized for interacting with Microsoft 365 services, such as reading site information (`Sites.Read.All`), group details (`Group.Read.All`), and directory information (`Directory.Read.All`).
+- **connect-pg-simple**: PostgreSQL-backed session store.
+- **bcryptjs**: Used for password hashing.
+- **MSAL-node**: Microsoft Authentication Library for Node.js, used for handling PKCE authorization code flow for SSO.
