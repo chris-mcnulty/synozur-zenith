@@ -597,5 +597,45 @@ export async function registerRoutes(
     }
   });
 
+  // ── Tenant Departments (tenant-owned, shared across orgs) ──
+  app.get("/api/admin/tenants/:tenantConnectionId/departments", async (req, res) => {
+    try {
+      const conn = await storage.getTenantConnection(req.params.tenantConnectionId);
+      if (!conn) return res.status(404).json({ error: "Tenant connection not found" });
+      const departments = await storage.getTenantDepartments(conn.tenantId);
+      res.json(departments);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post("/api/admin/tenants/:tenantConnectionId/departments", async (req, res) => {
+    try {
+      const conn = await storage.getTenantConnection(req.params.tenantConnectionId);
+      if (!conn) return res.status(404).json({ error: "Tenant connection not found" });
+      const { name } = req.body;
+      if (!name || typeof name !== "string" || !name.trim()) {
+        return res.status(400).json({ error: "Department name is required" });
+      }
+      const existing = await storage.getTenantDepartments(conn.tenantId);
+      if (existing.some(d => d.name.toLowerCase() === name.trim().toLowerCase())) {
+        return res.status(409).json({ error: "Department already exists for this tenant" });
+      }
+      const dept = await storage.createTenantDepartment({ tenantId: conn.tenantId, name: name.trim() });
+      res.status(201).json(dept);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.delete("/api/admin/tenants/:tenantConnectionId/departments/:deptId", async (req, res) => {
+    try {
+      await storage.deleteTenantDepartment(req.params.deptId);
+      res.json({ success: true });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   return httpServer;
 }

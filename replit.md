@@ -6,6 +6,14 @@ Zenith is an MVP Microsoft 365 governance platform designed for The Synozur Alli
 ## User Preferences
 I prefer clear and direct communication. When making changes, please explain the reasoning and impact before proceeding. I value iterative development and would like to be involved in key decision points. Do not make changes to the `shared/schema.ts` file without explicit approval. Always keep the Entra App Registration permissions documented in this file — this is a permanent rule so the app can be maintained alongside the codebase.
 
+### Permanent Rule: Data Ownership Scoping
+Every time a new property, table, or data object is added, verify its ownership scope:
+- **Tenant-owned**: Data intrinsic to the M365 tenant itself (e.g., departments, sensitivity labels, Purview policies). Scoped by M365 `tenantId` so all organizations connected to the same tenant share a single canonical list. Prevents drift between MSP and customer views.
+- **Organization-owned**: Data specific to a Zenith organization's governance decisions (e.g., provisioning templates, RBAC roles, service plan settings). Scoped by `organizationId`.
+- **Application-owned**: Data controlled by the Zenith platform itself (e.g., system defaults, feature flags, plan definitions). Not scoped to any tenant or org.
+
+This rule applies to all object types going forward: workspaces, document libraries, Purview labels, compliance policies, etc.
+
 ## System Architecture
 
 ### UI/UX Decisions

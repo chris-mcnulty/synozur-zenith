@@ -129,7 +129,7 @@ export type TenantConnection = typeof tenantConnections.$inferSelect;
 
 export const tenantDepartments = pgTable("tenant_departments", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  tenantConnectionId: varchar("tenant_connection_id").notNull(),
+  tenantId: text("tenant_id").notNull(),
   name: text("name").notNull(),
   createdAt: timestamp("created_at").defaultNow(),
 });

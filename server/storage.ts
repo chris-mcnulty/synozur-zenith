@@ -1,4 +1,4 @@
-import { eq, desc, ilike, or, and } from "drizzle-orm";
+import { eq, desc, ilike, or, and, sql } from "drizzle-orm";
 import { db } from "./db";
 import {
   workspaces,
@@ -81,7 +81,7 @@ export interface IStorage {
   removeBlockedDomain(domain: string): Promise<void>;
   isDomainBlocked(domain: string): Promise<boolean>;
 
-  getTenantDepartments(tenantConnectionId: string): Promise<TenantDepartment[]>;
+  getTenantDepartments(tenantId: string): Promise<TenantDepartment[]>;
   createTenantDepartment(dept: InsertTenantDepartment): Promise<TenantDepartment>;
   deleteTenantDepartment(id: string): Promise<void>;
 }
@@ -200,7 +200,14 @@ export class DatabaseStorage implements IStorage {
       await db.delete(workspaces).where(eq(workspaces.tenantConnectionId, id));
     }
 
-    await db.delete(tenantDepartments).where(eq(tenantDepartments.tenantConnectionId, id));
+    const [conn] = await db.select().from(tenantConnections).where(eq(tenantConnections.id, id));
+    if (conn) {
+      const otherConns = await db.select({ id: tenantConnections.id }).from(tenantConnections)
+        .where(and(eq(tenantConnections.tenantId, conn.tenantId), sql`${tenantConnections.id} != ${id}`));
+      if (otherConns.length === 0) {
+        await db.delete(tenantDepartments).where(eq(tenantDepartments.tenantId, conn.tenantId));
+      }
+    }
     await db.delete(tenantConnections).where(eq(tenantConnections.id, id));
   }
 
@@ -330,9 +337,9 @@ export class DatabaseStorage implements IStorage {
     return !!result;
   }
 
-  async getTenantDepartments(tenantConnectionId: string): Promise<TenantDepartment[]> {
+  async getTenantDepartments(tenantId: string): Promise<TenantDepartment[]> {
     return db.select().from(tenantDepartments)
-      .where(eq(tenantDepartments.tenantConnectionId, tenantConnectionId))
+      .where(eq(tenantDepartments.tenantId, tenantId))
       .orderBy(tenantDepartments.name);
   }
 
