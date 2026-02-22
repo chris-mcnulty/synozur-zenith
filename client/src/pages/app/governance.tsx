@@ -94,7 +94,7 @@ export default function GovernancePage() {
     enabled: !!tenantConnectionId,
   });
 
-  const { data: sensitivityLabelsData = [] } = useQuery<{labelId: string; name: string; color: string | null; hasProtection: boolean}[]>({
+  const { data: sensitivityLabelsData = [] } = useQuery<{labelId: string; name: string; color: string | null; hasProtection: boolean; appliesToGroupsSites: boolean}[]>({
     queryKey: ["/api/admin/tenants", tenantConnectionId, "sensitivity-labels"],
     queryFn: () => fetch(`/api/admin/tenants/${tenantConnectionId}/sensitivity-labels`).then(r => r.json()),
     enabled: !!tenantConnectionId,
@@ -169,7 +169,13 @@ export default function GovernancePage() {
 
   const handleBulkSave = () => {
     const updates: Record<string, string> = {};
-    if (bulkSensitivity) updates.sensitivity = bulkSensitivity;
+    if (bulkSensitivity) {
+      if (bulkSensitivity === "__clear__") {
+        updates.sensitivityLabelId = "";
+      } else {
+        updates.sensitivityLabelId = bulkSensitivity;
+      }
+    }
     if (bulkRetention) updates.retentionPolicy = bulkRetention;
     if (bulkDepartment) updates.department = bulkDepartment === "__clear__" ? "" : bulkDepartment;
     if (bulkCostCenter) updates.costCenter = bulkCostCenter === "__clear__" ? "" : bulkCostCenter;
@@ -218,13 +224,26 @@ export default function GovernancePage() {
     return template;
   };
 
-  const getSensitivityBadge = (sensitivity: string) => {
-    switch(sensitivity) {
+  const getSensitivityBadge = (ws: Workspace) => {
+    const label = ws.sensitivityLabelId ? labelMap.get(ws.sensitivityLabelId) : null;
+    if (label) {
+      const colorDot = label.color ? (
+        <span className="w-2 h-2 rounded-full inline-block" style={{ backgroundColor: label.color }} />
+      ) : null;
+      return (
+        <Badge variant="outline" className="gap-1.5" data-testid={`badge-purview-label-${ws.id}`}>
+          {colorDot}
+          {label.name}
+          {label.hasProtection && <ShieldCheck className="w-3 h-3 text-emerald-500" />}
+        </Badge>
+      );
+    }
+    switch(ws.sensitivity) {
       case 'HIGHLY_CONFIDENTIAL': return <Badge variant="destructive" className="bg-destructive/10 text-destructive border-destructive/20 hover:bg-destructive/20">Highly Confidential</Badge>;
       case 'CONFIDENTIAL': return <Badge variant="outline" className="bg-orange-500/10 text-orange-500 border-orange-500/20 hover:bg-orange-500/20">Confidential</Badge>;
       case 'INTERNAL': return <Badge variant="outline" className="bg-blue-500/10 text-blue-500 border-blue-500/20 hover:bg-blue-500/20">Internal</Badge>;
       case 'PUBLIC': return <Badge variant="outline" className="bg-emerald-500/10 text-emerald-500 border-emerald-500/20 hover:bg-emerald-500/20">Public</Badge>;
-      default: return <Badge variant="outline">{sensitivity}</Badge>;
+      default: return ws.sensitivity ? <Badge variant="outline">{ws.sensitivity}</Badge> : <Badge variant="secondary" className="text-muted-foreground">None</Badge>;
     }
   };
 
@@ -474,19 +493,7 @@ export default function GovernancePage() {
                         })()}
                       </TableCell>
                       <TableCell className="relative z-10">
-                        <div className="flex items-center gap-1.5">
-                          {getSensitivityBadge(ws.sensitivity)}
-                          {ws.sensitivityLabelId && labelMap.has(ws.sensitivityLabelId) && (
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <span className="text-[10px] text-muted-foreground truncate max-w-[80px]" data-testid={`text-purview-label-${ws.id}`}>
-                                  {labelMap.get(ws.sensitivityLabelId)!.name}
-                                </span>
-                              </TooltipTrigger>
-                              <TooltipContent>Purview label: {labelMap.get(ws.sensitivityLabelId)!.name}</TooltipContent>
-                            </Tooltip>
-                          )}
-                        </div>
+                        {getSensitivityBadge(ws)}
                       </TableCell>
                       <TableCell className="relative z-10">
                         {ws.copilotReady ? (
@@ -548,16 +555,27 @@ export default function GovernancePage() {
           <div className="py-6 space-y-6">
             <div className="space-y-4">
               <div className="space-y-2">
-                <Label>Sensitivity Label</Label>
+                <Label>Sensitivity Label (Purview)</Label>
                 <Select value={bulkSensitivity} onValueChange={setBulkSensitivity}>
-                  <SelectTrigger className="w-full bg-background/50">
-                    <SelectValue placeholder="Select new label..." />
+                  <SelectTrigger className="w-full bg-background/50" data-testid="select-bulk-sensitivity">
+                    <SelectValue placeholder="Select Purview label..." />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="PUBLIC">Public</SelectItem>
-                    <SelectItem value="INTERNAL">Internal</SelectItem>
-                    <SelectItem value="CONFIDENTIAL">Confidential</SelectItem>
-                    <SelectItem value="HIGHLY_CONFIDENTIAL">Highly Confidential</SelectItem>
+                    <SelectItem value="__clear__" className="text-muted-foreground">Clear label</SelectItem>
+                    {sensitivityLabelsData.filter(l => l.appliesToGroupsSites).map((l) => (
+                      <SelectItem key={l.labelId} value={l.labelId} data-testid={`select-bulk-label-${l.labelId}`}>
+                        <span className="flex items-center gap-2">
+                          {l.color && <span className="w-2 h-2 rounded-full inline-block" style={{ backgroundColor: l.color }} />}
+                          {l.name}
+                          {l.hasProtection && <ShieldCheck className="w-3 h-3 text-emerald-500" />}
+                        </span>
+                      </SelectItem>
+                    ))}
+                    {sensitivityLabelsData.filter(l => l.appliesToGroupsSites).length === 0 && (
+                      <SelectItem value="__no_opts__" disabled className="text-muted-foreground text-xs">
+                        No Purview labels synced — run tenant sync first
+                      </SelectItem>
+                    )}
                   </SelectContent>
                 </Select>
               </div>
@@ -662,17 +680,22 @@ export default function GovernancePage() {
             </div>
             
             <div className="space-y-2">
-              <Label>Sensitivity</Label>
+              <Label>Sensitivity Label</Label>
               <Select defaultValue="all">
                 <SelectTrigger className="w-full bg-background/50">
-                  <SelectValue placeholder="All classifications" />
+                  <SelectValue placeholder="All labels" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="all">All Classifications</SelectItem>
-                  <SelectItem value="highly_confidential">Highly Confidential</SelectItem>
-                  <SelectItem value="confidential">Confidential</SelectItem>
-                  <SelectItem value="internal">Internal</SelectItem>
-                  <SelectItem value="public">Public</SelectItem>
+                  <SelectItem value="all">All Labels</SelectItem>
+                  <SelectItem value="__none__">No Label Assigned</SelectItem>
+                  {sensitivityLabelsData.filter(l => l.appliesToGroupsSites).map((l) => (
+                    <SelectItem key={l.labelId} value={l.labelId}>
+                      <span className="flex items-center gap-2">
+                        {l.color && <span className="w-2 h-2 rounded-full inline-block" style={{ backgroundColor: l.color }} />}
+                        {l.name}
+                      </span>
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </div>

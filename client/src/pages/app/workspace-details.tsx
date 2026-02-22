@@ -83,6 +83,7 @@ export default function WorkspaceDetailsPage() {
     costCenter: "",
     projectCode: "",
     sensitivity: "",
+    sensitivityLabelId: "",
     retentionPolicy: "",
     externalSharing: false,
     primarySteward: "",
@@ -100,6 +101,7 @@ export default function WorkspaceDetailsPage() {
         costCenter: workspace.costCenter || "",
         projectCode: workspace.projectCode || "",
         sensitivity: workspace.sensitivity || "",
+        sensitivityLabelId: workspace.sensitivityLabelId || "",
         retentionPolicy: workspace.retentionPolicy || "",
         externalSharing: workspace.externalSharing,
         primarySteward: workspace.primarySteward || "",
@@ -162,6 +164,7 @@ export default function WorkspaceDetailsPage() {
         costCenter: workspace.costCenter || "",
         projectCode: workspace.projectCode || "",
         sensitivity: workspace.sensitivity || "",
+        sensitivityLabelId: workspace.sensitivityLabelId || "",
         retentionPolicy: workspace.retentionPolicy || "",
         externalSharing: workspace.externalSharing,
         primarySteward: workspace.primarySteward || "",
@@ -440,24 +443,43 @@ export default function WorkspaceDetailsPage() {
                     </h3>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-5">
                       <div className="space-y-2">
-                        <Label>Sensitivity Label</Label>
+                        <Label>Sensitivity Label (Purview)</Label>
                         {editMode ? (
-                          <Select value={form.sensitivity} onValueChange={(v) => setForm({...form, sensitivity: v})}>
+                          <Select value={form.sensitivityLabelId || "__none__"} onValueChange={(v) => setForm({...form, sensitivityLabelId: v === "__none__" ? "" : v})}>
                             <SelectTrigger className="bg-background/50" data-testid="select-sensitivity"><SelectValue /></SelectTrigger>
                             <SelectContent>
-                              <SelectItem value="PUBLIC">Public</SelectItem>
-                              <SelectItem value="INTERNAL">Internal</SelectItem>
-                              <SelectItem value="CONFIDENTIAL">Confidential</SelectItem>
-                              <SelectItem value="HIGHLY_CONFIDENTIAL">Highly Confidential</SelectItem>
+                              <SelectItem value="__none__" className="text-muted-foreground">No label</SelectItem>
+                              {sensitivityLabelsData.filter(l => l.appliesToGroupsSites).map((l) => (
+                                <SelectItem key={l.labelId} value={l.labelId} data-testid={`select-label-${l.labelId}`}>
+                                  <span className="flex items-center gap-2">
+                                    {l.color && <span className="w-2 h-2 rounded-full inline-block" style={{ backgroundColor: l.color }} />}
+                                    {l.name}
+                                    {l.hasProtection && <Lock className="w-3 h-3 text-emerald-500" />}
+                                  </span>
+                                </SelectItem>
+                              ))}
+                              {sensitivityLabelsData.filter(l => l.appliesToGroupsSites).length === 0 && (
+                                <SelectItem value="__no_labels__" disabled className="text-muted-foreground text-xs">
+                                  No Purview labels synced
+                                </SelectItem>
+                              )}
                             </SelectContent>
                           </Select>
                         ) : (
                           <div className="h-10 flex items-center px-3 rounded-md bg-muted/50 text-sm">
-                            <Badge variant={sensitivityVariant} className={`${sensitivityVariant === "destructive" ? "bg-destructive/10 text-destructive border-destructive/20" : ""}`}>{sensitivityLabel}</Badge>
+                            {resolvedPurviewLabel ? (
+                              <Badge variant="outline" className="gap-1.5">
+                                {resolvedPurviewLabel.color && <span className="w-2 h-2 rounded-full inline-block" style={{ backgroundColor: resolvedPurviewLabel.color }} />}
+                                {resolvedPurviewLabel.name}
+                                {resolvedPurviewLabel.hasProtection && <Lock className="w-3 h-3 text-emerald-500" />}
+                              </Badge>
+                            ) : (
+                              <Badge variant={sensitivityVariant} className={`${sensitivityVariant === "destructive" ? "bg-destructive/10 text-destructive border-destructive/20" : ""}`}>{sensitivityLabel || "None"}</Badge>
+                            )}
                           </div>
                         )}
-                        {form.sensitivity === "HIGHLY_CONFIDENTIAL" && editMode && (
-                          <p className="text-[10px] text-amber-500 flex items-center gap-1"><AlertTriangle className="w-3 h-3" /> Blocks external sharing and Copilot indexing by default.</p>
+                        {resolvedPurviewLabel?.hasProtection && editMode && (
+                          <p className="text-[10px] text-amber-500 flex items-center gap-1"><AlertTriangle className="w-3 h-3" /> This label has encryption/protection enabled.</p>
                         )}
                       </div>
                       <div className="space-y-2">
