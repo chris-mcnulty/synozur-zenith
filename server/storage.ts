@@ -33,6 +33,7 @@ import {
 export interface IStorage {
   getWorkspaces(search?: string): Promise<Workspace[]>;
   getWorkspace(id: string): Promise<Workspace | undefined>;
+  getWorkspaceByM365ObjectId(m365ObjectId: string): Promise<Workspace | undefined>;
   createWorkspace(workspace: InsertWorkspace): Promise<Workspace>;
   updateWorkspace(id: string, updates: Partial<InsertWorkspace>): Promise<Workspace | undefined>;
   deleteWorkspace(id: string): Promise<void>;
@@ -94,6 +95,11 @@ export class DatabaseStorage implements IStorage {
 
   async getWorkspace(id: string): Promise<Workspace | undefined> {
     const [workspace] = await db.select().from(workspaces).where(eq(workspaces.id, id));
+    return workspace;
+  }
+
+  async getWorkspaceByM365ObjectId(m365ObjectId: string): Promise<Workspace | undefined> {
+    const [workspace] = await db.select().from(workspaces).where(eq(workspaces.m365ObjectId, m365ObjectId));
     return workspace;
   }
 

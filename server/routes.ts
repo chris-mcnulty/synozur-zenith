@@ -239,7 +239,7 @@ export async function registerRoutes(
     })).toString('base64url');
 
     const tenantAuthority = tenantDomain || 'organizations';
-    let consentUrl = `https://login.microsoftonline.com/${tenantAuthority}/adminconsent?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&state=${state}&prompt=consent`;
+    let consentUrl = `https://login.microsoftonline.com/${tenantAuthority}/adminconsent?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&state=${state}`;
     if (adminEmail) {
       consentUrl += `&login_hint=${encodeURIComponent(String(adminEmail))}`;
     }
@@ -389,6 +389,29 @@ export async function registerRoutes(
         });
       }
 
+      let upsertedCount = 0;
+      for (const site of result.sites) {
+        const existing = await storage.getWorkspaceByM365ObjectId(site.id);
+        if (existing) {
+          await storage.updateWorkspace(existing.id, {
+            displayName: site.displayName || existing.displayName,
+            siteUrl: site.webUrl || existing.siteUrl,
+            description: site.description || existing.description,
+            tenantConnectionId: req.params.id,
+          });
+        } else {
+          await storage.createWorkspace({
+            displayName: site.displayName || 'Untitled Site',
+            type: 'TEAM_SITE',
+            m365ObjectId: site.id,
+            siteUrl: site.webUrl,
+            description: site.description || null,
+            tenantConnectionId: req.params.id,
+          });
+        }
+        upsertedCount++;
+      }
+
       await storage.updateTenantConnection(req.params.id, {
         lastSyncAt: new Date(),
         lastSyncStatus: "SUCCESS",
@@ -400,14 +423,7 @@ export async function registerRoutes(
       res.json({
         success: true,
         sitesFound: result.sites.length,
-        sites: result.sites.map(s => ({
-          graphId: s.id,
-          displayName: s.displayName,
-          webUrl: s.webUrl,
-          description: s.description,
-          createdDateTime: s.createdDateTime,
-          lastModifiedDateTime: s.lastModifiedDateTime,
-        })),
+        upserted: upsertedCount,
       });
     } catch (err: any) {
       await storage.updateTenantConnection(req.params.id, {

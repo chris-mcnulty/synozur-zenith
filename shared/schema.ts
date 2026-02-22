@@ -24,13 +24,15 @@ export const workspaces = pgTable("workspaces", {
   costCenter: text("cost_center"),
   projectCode: text("project_code"),
   m365ObjectId: text("m365_object_id").default(sql`gen_random_uuid()`),
+  tenantConnectionId: varchar("tenant_connection_id"),
+  siteUrl: text("site_url"),
+  description: text("description"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
 export const insertWorkspaceSchema = createInsertSchema(workspaces).omit({
   id: true,
   createdAt: true,
-  m365ObjectId: true,
 });
 
 export type InsertWorkspace = z.infer<typeof insertWorkspaceSchema>;
