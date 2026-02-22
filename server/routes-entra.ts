@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { ConfidentialClientApplication, CryptoProvider, AuthorizationCodeRequest } from '@azure/msal-node';
 import { storage } from './storage';
-import { encryptToken } from './utils/encryption';
+import { encryptToken, isEncryptionConfigured } from './utils/encryption';
 import type { AuthenticatedRequest } from './middleware/rbac';
 import { ZENITH_ROLES } from '@shared/schema';
 
@@ -286,12 +286,14 @@ router.get('/callback', async (req: AuthenticatedRequest, res: Response) => {
 
     if (tokenResponse.accessToken && user.organizationId) {
       try {
-        const encryptedToken = encryptToken(tokenResponse.accessToken);
+        const tokenToStore = encryptToken(tokenResponse.accessToken);
+        const encrypted = isEncryptionConfigured();
+        console.log(`[Entra] Storing Graph token for user ${user.id} (encrypted: ${encrypted})`);
         await storage.upsertGraphToken({
           userId: user.id,
           organizationId: user.organizationId,
           service: 'graph',
-          accessToken: encryptedToken,
+          accessToken: tokenToStore,
           refreshToken: null,
           expiresAt: tokenResponse.expiresOn || null,
           scopes: tokenResponse.scopes || SCOPES,

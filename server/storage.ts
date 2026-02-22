@@ -67,6 +67,7 @@ export interface IStorage {
 
   upsertGraphToken(token: InsertGraphToken): Promise<GraphToken>;
   getGraphToken(userId: string, service?: string): Promise<GraphToken | undefined>;
+  getDecryptedGraphToken(userId: string, service?: string): Promise<{ token: string; expiresAt: Date | null } | undefined>;
 
   createAuditEntry(entry: InsertAuditLog): Promise<AuditLog>;
   getAuditLog(orgId?: string, limit?: number): Promise<AuditLog[]>;
@@ -248,6 +249,17 @@ export class DatabaseStorage implements IStorage {
     const [token] = await db.select().from(graphTokens)
       .where(and(eq(graphTokens.userId, userId), eq(graphTokens.service, service)));
     return token;
+  }
+
+  async getDecryptedGraphToken(userId: string, service: string = 'default'): Promise<{ token: string; expiresAt: Date | null } | undefined> {
+    const record = await this.getGraphToken(userId, service);
+    if (!record || !record.accessToken) return undefined;
+
+    const { decryptToken } = await import('./utils/encryption');
+    return {
+      token: decryptToken(record.accessToken),
+      expiresAt: record.expiresAt,
+    };
   }
 
   async createAuditEntry(entry: InsertAuditLog): Promise<AuditLog> {

@@ -5,6 +5,11 @@ const IV_LENGTH = 16;
 const AUTH_TAG_LENGTH = 16;
 const SALT = 'zenith-token-encryption-v1';
 
+export function isEncryptionConfigured(): boolean {
+  const secret = process.env.TOKEN_ENCRYPTION_SECRET;
+  return !!secret && secret.length >= 32;
+}
+
 function getEncryptionKey(): Buffer {
   const secret = process.env.TOKEN_ENCRYPTION_SECRET;
 
@@ -20,6 +25,10 @@ function getEncryptionKey(): Buffer {
 }
 
 export function encryptToken(plaintext: string): string {
+  if (!isEncryptionConfigured()) {
+    return plaintext;
+  }
+
   const iv = crypto.randomBytes(IV_LENGTH);
   const key = getEncryptionKey();
 
@@ -34,6 +43,10 @@ export function encryptToken(plaintext: string): string {
 }
 
 export function decryptToken(ciphertext: string): string {
+  if (!isEncrypted(ciphertext)) {
+    return ciphertext;
+  }
+
   const [ivHex, authTagHex, encrypted] = ciphertext.split(':');
 
   if (!ivHex || !authTagHex || !encrypted) {
