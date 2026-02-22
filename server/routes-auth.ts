@@ -41,6 +41,13 @@ router.post('/signup', async (req: AuthenticatedRequest, res) => {
     let isFirstUser = false;
 
     if (!org) {
+      const isBlocked = await storage.isDomainBlocked(domain);
+      if (isBlocked) {
+        return res.status(403).json({
+          error: 'This email domain is not allowed for self-registration. Please contact your administrator to set up your organization.',
+        });
+      }
+
       org = await storage.upsertOrganization({
         name: domain.split('.')[0].charAt(0).toUpperCase() + domain.split('.')[0].slice(1),
         domain,

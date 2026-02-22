@@ -267,3 +267,19 @@ export const insertAuditLogSchema = createInsertSchema(auditLog).omit({
 
 export type InsertAuditLog = z.infer<typeof insertAuditLogSchema>;
 export type AuditLog = typeof auditLog.$inferSelect;
+
+export const domainBlocklist = pgTable("domain_blocklist", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  domain: text("domain").notNull().unique(),
+  reason: text("reason"),
+  createdBy: varchar("created_by"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertDomainBlocklistSchema = createInsertSchema(domainBlocklist).omit({
+  id: true,
+  createdAt: true,
+});
+
+export type InsertDomainBlocklist = z.infer<typeof insertDomainBlocklistSchema>;
+export type DomainBlocklist = typeof domainBlocklist.$inferSelect;

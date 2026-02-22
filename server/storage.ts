@@ -9,6 +9,7 @@ import {
   users,
   graphTokens,
   auditLog,
+  domainBlocklist,
   type Workspace,
   type InsertWorkspace,
   type ProvisioningRequest,
@@ -25,6 +26,8 @@ import {
   type InsertGraphToken,
   type AuditLog,
   type InsertAuditLog,
+  type DomainBlocklist,
+  type InsertDomainBlocklist,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -67,6 +70,11 @@ export interface IStorage {
 
   createAuditEntry(entry: InsertAuditLog): Promise<AuditLog>;
   getAuditLog(orgId?: string, limit?: number): Promise<AuditLog[]>;
+
+  getBlockedDomains(): Promise<DomainBlocklist[]>;
+  addBlockedDomain(entry: InsertDomainBlocklist): Promise<DomainBlocklist>;
+  removeBlockedDomain(domain: string): Promise<void>;
+  isDomainBlocked(domain: string): Promise<boolean>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -255,6 +263,25 @@ export class DatabaseStorage implements IStorage {
         .limit(limit);
     }
     return db.select().from(auditLog).orderBy(desc(auditLog.createdAt)).limit(limit);
+  }
+
+  async getBlockedDomains(): Promise<DomainBlocklist[]> {
+    return db.select().from(domainBlocklist).orderBy(desc(domainBlocklist.createdAt));
+  }
+
+  async addBlockedDomain(entry: InsertDomainBlocklist): Promise<DomainBlocklist> {
+    const [created] = await db.insert(domainBlocklist).values(entry).returning();
+    return created;
+  }
+
+  async removeBlockedDomain(domain: string): Promise<void> {
+    await db.delete(domainBlocklist).where(eq(domainBlocklist.domain, domain.toLowerCase()));
+  }
+
+  async isDomainBlocked(domain: string): Promise<boolean> {
+    const [result] = await db.select().from(domainBlocklist)
+      .where(eq(domainBlocklist.domain, domain.toLowerCase()));
+    return !!result;
   }
 }
 

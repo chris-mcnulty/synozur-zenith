@@ -459,7 +459,7 @@ export default function EntraSetupPage() {
                     <div className="flex items-center gap-2">
                       <Input
                         readOnly
-                        value={`https://login.microsoftonline.com/${ssoStatus.data.tenantId}/adminconsent?client_id=${clientId || process.env.AZURE_CLIENT_ID || '{CLIENT_ID}'}&redirect_uri=${callbackUrl}`}
+                        value={`https://login.microsoftonline.com/${ssoStatus.data.tenantId}/adminconsent?client_id=${clientId || '{CLIENT_ID}'}&redirect_uri=${callbackUrl}`}
                         className="font-mono text-xs bg-muted/50"
                         data-testid="input-consent-url"
                       />

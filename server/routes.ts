@@ -284,5 +284,49 @@ export async function registerRoutes(
     }
   });
 
+  // ── Domain Blocklist (Admin) ──
+  app.get("/api/admin/domain-blocklist", async (_req, res) => {
+    try {
+      const domains = await storage.getBlockedDomains();
+      res.json(domains);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post("/api/admin/domain-blocklist", async (req, res) => {
+    try {
+      const { domain, reason } = req.body;
+      if (!domain) {
+        return res.status(400).json({ error: "Domain is required" });
+      }
+      const normalizedDomain = domain.toLowerCase().trim();
+      const domainRegex = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*\.[a-z]{2,}$/;
+      if (!domainRegex.test(normalizedDomain)) {
+        return res.status(400).json({ error: "Invalid domain format" });
+      }
+      const entry = await storage.addBlockedDomain({
+        domain: normalizedDomain,
+        reason: reason || null,
+        createdBy: null,
+      });
+      res.status(201).json(entry);
+    } catch (err: any) {
+      if (err.message?.includes("unique") || err.code === '23505') {
+        return res.status(409).json({ error: "Domain is already blocked" });
+      }
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.delete("/api/admin/domain-blocklist/:domain", async (req, res) => {
+    try {
+      await storage.removeBlockedDomain(decodeURIComponent(req.params.domain));
+      res.json({ success: true });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   return httpServer;
 }
