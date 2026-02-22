@@ -44,9 +44,6 @@ import {
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-  DropdownMenuSub,
-  DropdownMenuSubTrigger,
-  DropdownMenuSubContent,
 } from "@/components/ui/dropdown-menu";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -427,12 +424,43 @@ export default function GovernancePage() {
                           )}
                         </div>
                       </TableCell>
-                      <TableCell className="relative z-10">
-                        {ws.department ? (
-                          <span className="text-xs font-medium text-muted-foreground bg-muted/50 px-1.5 py-0.5 rounded" data-testid={`text-department-${ws.id}`}>{ws.department}</span>
-                        ) : (
-                          <span className="text-xs text-muted-foreground">—</span>
-                        )}
+                      <TableCell className="relative z-10" onClick={(e) => e.stopPropagation()}>
+                        <Select
+                          value={ws.department || "__none__"}
+                          onValueChange={(val) => {
+                            const dept = val === "__none__" || val === "__clear__" ? "" : val;
+                            departmentMutation.mutate({ workspaceId: ws.id, department: dept });
+                          }}
+                        >
+                          <SelectTrigger
+                            className={`h-7 w-[130px] text-xs border-border/30 bg-transparent hover:bg-muted/30 focus:ring-1 focus:ring-primary/30 ${!ws.department ? 'text-muted-foreground' : ''}`}
+                            data-testid={`select-department-${ws.id}`}
+                          >
+                            <SelectValue placeholder="Set dept..." />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {ws.department && (
+                              <SelectItem value="__clear__" className="text-muted-foreground">
+                                <span className="flex items-center gap-1"><X className="w-3 h-3" /> Clear</span>
+                              </SelectItem>
+                            )}
+                            {!ws.department && (
+                              <SelectItem value="__none__" disabled className="text-muted-foreground">
+                                No department
+                              </SelectItem>
+                            )}
+                            {departments.map((dept) => (
+                              <SelectItem key={dept.id} value={dept.name} data-testid={`option-department-${dept.id}-${ws.id}`}>
+                                {dept.name}
+                              </SelectItem>
+                            ))}
+                            {departments.length === 0 && (
+                              <SelectItem value="__empty__" disabled className="text-muted-foreground text-xs">
+                                No departments defined yet
+                              </SelectItem>
+                            )}
+                          </SelectContent>
+                        </Select>
                       </TableCell>
                       <TableCell className="relative z-10">
                         {getSensitivityBadge(ws.sensitivity)}
@@ -465,25 +493,6 @@ export default function GovernancePage() {
                                 </a>
                               </DropdownMenuItem>
                             )}
-                            <DropdownMenuSub>
-                              <DropdownMenuSubTrigger data-testid={`button-set-department-${ws.id}`}>
-                                <Building2 className="w-3 h-3 mr-2" /> Set Department
-                              </DropdownMenuSubTrigger>
-                              <DropdownMenuSubContent className="w-[180px]">
-                                {departments.map((dept) => (
-                                  <DropdownMenuItem
-                                    key={dept.id}
-                                    data-testid={`menu-department-${dept.id}-${ws.id}`}
-                                    onClick={() => departmentMutation.mutate({ workspaceId: ws.id, department: dept.name })}
-                                  >
-                                    {dept.name}
-                                  </DropdownMenuItem>
-                                ))}
-                                {departments.length === 0 && (
-                                  <DropdownMenuItem disabled>No departments available</DropdownMenuItem>
-                                )}
-                              </DropdownMenuSubContent>
-                            </DropdownMenuSub>
                             <DropdownMenuItem>Request Attestation</DropdownMenuItem>
                             <DropdownMenuItem className="text-destructive">Archive Workspace</DropdownMenuItem>
                           </DropdownMenuContent>

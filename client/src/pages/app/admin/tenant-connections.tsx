@@ -349,6 +349,7 @@ export default function TenantConnectionsPage() {
                   <TableHead>Consent</TableHead>
                   <TableHead>Last Sync</TableHead>
                   <TableHead>Sites Found</TableHead>
+                  <TableHead>Departments</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead className="w-[50px]"></TableHead>
                 </TableRow>
@@ -398,6 +399,18 @@ export default function TenantConnectionsPage() {
                     </TableCell>
                     <TableCell className="text-sm font-medium">
                       {conn.lastSyncSiteCount != null ? conn.lastSyncSiteCount : "—"}
+                    </TableCell>
+                    <TableCell>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-7 gap-1.5 text-xs border-border/50 hover:border-primary/30 hover:bg-primary/5"
+                        onClick={() => setManageDeptConnId(conn.id)}
+                        data-testid={`button-manage-departments-${conn.id}`}
+                      >
+                        <Building2 className="w-3 h-3" />
+                        Manage
+                      </Button>
                     </TableCell>
                     <TableCell>
                       <div className="flex items-center gap-1.5">
