@@ -142,6 +142,31 @@ export const insertTenantDepartmentSchema = createInsertSchema(tenantDepartments
 export type InsertTenantDepartment = z.infer<typeof insertTenantDepartmentSchema>;
 export type TenantDepartment = typeof tenantDepartments.$inferSelect;
 
+export const METADATA_CATEGORIES = [
+  "department",
+  "cost_center",
+  "business_unit",
+  "region",
+  "project_code",
+] as const;
+export type MetadataCategory = typeof METADATA_CATEGORIES[number];
+
+export const tenantDataDictionaries = pgTable("tenant_data_dictionaries", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: text("tenant_id").notNull(),
+  category: text("category").notNull(),
+  value: text("value").notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertTenantDataDictionarySchema = createInsertSchema(tenantDataDictionaries).omit({
+  id: true,
+  createdAt: true,
+});
+
+export type InsertTenantDataDictionary = z.infer<typeof insertTenantDataDictionarySchema>;
+export type TenantDataDictionary = typeof tenantDataDictionaries.$inferSelect;
+
 export const SERVICE_PLANS = ["TRIAL", "STANDARD", "PROFESSIONAL", "ENTERPRISE"] as const;
 export type ServicePlanTier = typeof SERVICE_PLANS[number];
 

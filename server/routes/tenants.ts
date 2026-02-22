@@ -2,6 +2,7 @@ import { Router } from "express";
 import crypto from "crypto";
 import { storage } from "../storage";
 import { testConnection, clearTokenCache } from "../services/graph";
+import { METADATA_CATEGORIES } from "@shared/schema";
 
 const router = Router();
 
@@ -176,40 +177,52 @@ router.post("/api/admin/tenants/test", async (req, res) => {
   res.json(result);
 });
 
-// ── Tenant Departments (tenant-owned, shared across orgs) ──
-router.get("/api/admin/tenants/:tenantConnectionId/departments", async (req, res) => {
+// ── Data Dictionaries (tenant-owned, shared across orgs) ──
+router.get("/api/admin/tenants/:tenantConnectionId/data-dictionaries", async (req, res) => {
   try {
     const conn = await storage.getTenantConnection(req.params.tenantConnectionId);
     if (!conn) return res.status(404).json({ error: "Tenant connection not found" });
-    const departments = await storage.getTenantDepartments(conn.tenantId);
-    res.json(departments);
+    const { category } = req.query;
+    if (category && typeof category === "string") {
+      const entries = await storage.getDataDictionary(conn.tenantId, category);
+      return res.json(entries);
+    }
+    const entries = await storage.getAllDataDictionaries(conn.tenantId);
+    res.json(entries);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
 });
 
-router.post("/api/admin/tenants/:tenantConnectionId/departments", async (req, res) => {
+router.post("/api/admin/tenants/:tenantConnectionId/data-dictionaries", async (req, res) => {
   try {
     const conn = await storage.getTenantConnection(req.params.tenantConnectionId);
     if (!conn) return res.status(404).json({ error: "Tenant connection not found" });
-    const { name } = req.body;
-    if (!name || typeof name !== "string" || !name.trim()) {
-      return res.status(400).json({ error: "Department name is required" });
+    const { category, value } = req.body;
+    if (!category || !value || typeof category !== "string" || typeof value !== "string" || !value.trim()) {
+      return res.status(400).json({ error: "category and value are required" });
     }
-    const existing = await storage.getTenantDepartments(conn.tenantId);
-    if (existing.some(d => d.name.toLowerCase() === name.trim().toLowerCase())) {
-      return res.status(409).json({ error: "Department already exists for this tenant" });
+    if (!METADATA_CATEGORIES.includes(category as any)) {
+      return res.status(400).json({ error: `Invalid category. Must be one of: ${METADATA_CATEGORIES.join(", ")}` });
     }
-    const dept = await storage.createTenantDepartment({ tenantId: conn.tenantId, name: name.trim() });
-    res.status(201).json(dept);
+    const existing = await storage.getDataDictionary(conn.tenantId, category);
+    if (existing.some(e => e.value.toLowerCase() === value.trim().toLowerCase())) {
+      return res.status(409).json({ error: `"${value.trim()}" already exists in ${category}` });
+    }
+    const entry = await storage.createDataDictionaryEntry({
+      tenantId: conn.tenantId,
+      category,
+      value: value.trim(),
+    });
+    res.status(201).json(entry);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
 });
 
-router.delete("/api/admin/tenants/:tenantConnectionId/departments/:deptId", async (req, res) => {
+router.delete("/api/admin/tenants/:tenantConnectionId/data-dictionaries/:entryId", async (req, res) => {
   try {
-    await storage.deleteTenantDepartment(req.params.deptId);
+    await storage.deleteDataDictionaryEntry(req.params.entryId);
     res.json({ success: true });
   } catch (err: any) {
     res.status(500).json({ error: err.message });

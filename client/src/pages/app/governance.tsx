@@ -86,11 +86,14 @@ export default function GovernancePage() {
 
   const tenantConnectionId = selectedTenant?.id || "";
 
-  const { data: departments = [] } = useQuery<{id: string; tenantId: string; name: string; createdAt: string}[]>({
-    queryKey: ["/api/admin/tenants", tenantConnectionId, "departments"],
-    queryFn: () => fetch(`/api/admin/tenants/${tenantConnectionId}/departments`).then(r => r.json()),
+  const { data: dictEntries = [] } = useQuery<{id: string; tenantId: string; category: string; value: string; createdAt: string}[]>({
+    queryKey: ["/api/admin/tenants", tenantConnectionId, "data-dictionaries"],
+    queryFn: () => fetch(`/api/admin/tenants/${tenantConnectionId}/data-dictionaries`).then(r => r.json()),
     enabled: !!tenantConnectionId,
   });
+
+  const deptOptions = dictEntries.filter(e => e.category === "department");
+  const costCenterOptions = dictEntries.filter(e => e.category === "cost_center");
 
   const { data: workspaces = [], isLoading, isError } = useQuery<Workspace[]>({
     queryKey: ["/api/workspaces", debouncedSearch, tenantConnectionId],
@@ -112,14 +115,6 @@ export default function GovernancePage() {
       setBulkRetention("");
       setBulkDepartment("");
       setBulkCostCenter("");
-    },
-  });
-
-  const departmentMutation = useMutation({
-    mutationFn: ({ workspaceId, department }: { workspaceId: string; department: string }) =>
-      apiRequest("PATCH", `/api/workspaces/${workspaceId}`, { department }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/workspaces"] });
     },
   });
 
@@ -159,7 +154,7 @@ export default function GovernancePage() {
     if (bulkSensitivity) updates.sensitivity = bulkSensitivity;
     if (bulkRetention) updates.retentionPolicy = bulkRetention;
     if (bulkDepartment) updates.department = bulkDepartment === "__clear__" ? "" : bulkDepartment;
-    if (bulkCostCenter) updates.costCenter = bulkCostCenter;
+    if (bulkCostCenter) updates.costCenter = bulkCostCenter === "__clear__" ? "" : bulkCostCenter;
 
     bulkMutation.mutate({
       ids: Array.from(selectedIds),
@@ -317,7 +312,7 @@ export default function GovernancePage() {
                     <TableHead className="min-w-[160px]">Storage</TableHead>
                     <TableHead className="min-w-[100px]">Files</TableHead>
                     <TableHead className="min-w-[100px]">Activity</TableHead>
-                    <TableHead className="min-w-[80px]">Dept</TableHead>
+                    <TableHead className="min-w-[100px]">Metadata</TableHead>
                     <TableHead>Sensitivity</TableHead>
                     <TableHead>Copilot</TableHead>
                     <TableHead className="w-[80px]"></TableHead>
@@ -424,43 +419,41 @@ export default function GovernancePage() {
                           )}
                         </div>
                       </TableCell>
-                      <TableCell className="relative z-10" onClick={(e) => e.stopPropagation()}>
-                        <Select
-                          value={ws.department || "__none__"}
-                          onValueChange={(val) => {
-                            const dept = val === "__none__" || val === "__clear__" ? "" : val;
-                            departmentMutation.mutate({ workspaceId: ws.id, department: dept });
-                          }}
-                        >
-                          <SelectTrigger
-                            className={`h-7 w-[130px] text-xs border-border/30 bg-transparent hover:bg-muted/30 focus:ring-1 focus:ring-primary/30 ${!ws.department ? 'text-muted-foreground' : ''}`}
-                            data-testid={`select-department-${ws.id}`}
-                          >
-                            <SelectValue placeholder="Set dept..." />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {ws.department && (
-                              <SelectItem value="__clear__" className="text-muted-foreground">
-                                <span className="flex items-center gap-1"><X className="w-3 h-3" /> Clear</span>
-                              </SelectItem>
-                            )}
-                            {!ws.department && (
-                              <SelectItem value="__none__" disabled className="text-muted-foreground">
-                                No department
-                              </SelectItem>
-                            )}
-                            {departments.map((dept) => (
-                              <SelectItem key={dept.id} value={dept.name} data-testid={`option-department-${dept.id}-${ws.id}`}>
-                                {dept.name}
-                              </SelectItem>
-                            ))}
-                            {departments.length === 0 && (
-                              <SelectItem value="__empty__" disabled className="text-muted-foreground text-xs">
-                                No departments defined yet
-                              </SelectItem>
-                            )}
-                          </SelectContent>
-                        </Select>
+                      <TableCell className="relative z-10">
+                        {(() => {
+                          const requiredFields = [
+                            { key: "department", label: "Dept" },
+                            { key: "costCenter", label: "Cost" },
+                          ];
+                          const filled = requiredFields.filter(f => !!(ws as any)[f.key]).length;
+                          const total = requiredFields.length;
+                          const isComplete = filled === total;
+                          return (
+                            <Link href={`/app/governance/workspaces/${ws.id}`}>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <div className="flex items-center gap-1.5 cursor-pointer" data-testid={`badge-metadata-${ws.id}`}>
+                                    <div className={`w-2 h-2 rounded-full shrink-0 ${isComplete ? 'bg-emerald-500' : filled > 0 ? 'bg-amber-500' : 'bg-destructive'}`} />
+                                    <span className={`text-xs font-medium ${isComplete ? 'text-emerald-600' : filled > 0 ? 'text-amber-600' : 'text-destructive'}`}>
+                                      {filled}/{total}
+                                    </span>
+                                  </div>
+                                </TooltipTrigger>
+                                <TooltipContent side="left" className="text-xs">
+                                  {requiredFields.map(f => (
+                                    <div key={f.key} className="flex items-center gap-1.5">
+                                      <span className={`${(ws as any)[f.key] ? 'text-emerald-500' : 'text-destructive'}`}>
+                                        {(ws as any)[f.key] ? '✓' : '✗'}
+                                      </span>
+                                      {f.label}: {(ws as any)[f.key] || 'Missing'}
+                                    </div>
+                                  ))}
+                                  <div className="text-muted-foreground mt-1">Click to edit</div>
+                                </TooltipContent>
+                              </Tooltip>
+                            </Link>
+                          );
+                        })()}
                       </TableCell>
                       <TableCell className="relative z-10">
                         {getSensitivityBadge(ws.sensitivity)}
@@ -554,25 +547,47 @@ export default function GovernancePage() {
               </div>
 
               <div className="space-y-2">
-                <Label>Department Metadata</Label>
+                <Label>Department</Label>
                 <Select value={bulkDepartment} onValueChange={setBulkDepartment}>
                   <SelectTrigger className="w-full bg-background/50" data-testid="select-bulk-department">
                     <SelectValue placeholder="Select department..." />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="__clear__">Clear</SelectItem>
-                    {departments.map((dept) => (
-                      <SelectItem key={dept.id} value={dept.name} data-testid={`select-bulk-department-${dept.id}`}>
-                        {dept.name}
+                    <SelectItem value="__clear__" className="text-muted-foreground">Clear</SelectItem>
+                    {deptOptions.map((d) => (
+                      <SelectItem key={d.id} value={d.value} data-testid={`select-bulk-department-${d.id}`}>
+                        {d.value}
                       </SelectItem>
                     ))}
+                    {deptOptions.length === 0 && (
+                      <SelectItem value="__no_opts__" disabled className="text-muted-foreground text-xs">
+                        No departments defined — add in Data Dictionaries
+                      </SelectItem>
+                    )}
                   </SelectContent>
                 </Select>
               </div>
 
               <div className="space-y-2">
                 <Label>Cost Center</Label>
-                <Input placeholder="Update cost center..." className="bg-background/50" value={bulkCostCenter} onChange={(e) => setBulkCostCenter(e.target.value)} />
+                <Select value={bulkCostCenter} onValueChange={setBulkCostCenter}>
+                  <SelectTrigger className="w-full bg-background/50" data-testid="select-bulk-cost-center">
+                    <SelectValue placeholder="Select cost center..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__clear__" className="text-muted-foreground">Clear</SelectItem>
+                    {costCenterOptions.map((d) => (
+                      <SelectItem key={d.id} value={d.value} data-testid={`select-bulk-cost-center-${d.id}`}>
+                        {d.value}
+                      </SelectItem>
+                    ))}
+                    {costCenterOptions.length === 0 && (
+                      <SelectItem value="__no_opts__" disabled className="text-muted-foreground text-xs">
+                        No cost centers defined — add in Data Dictionaries
+                      </SelectItem>
+                    )}
+                  </SelectContent>
+                </Select>
               </div>
             </div>
 

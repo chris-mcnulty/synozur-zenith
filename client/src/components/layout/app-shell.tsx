@@ -31,7 +31,8 @@ import {
   Users as UsersIcon,
   Server,
   CheckCircle2,
-  KeyRound
+  KeyRound,
+  BookMarked
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -165,6 +166,16 @@ export default function AppShell({ children }: AppShellProps) {
             <div className="flex items-center gap-3">
               <Cloud className={`w-5 h-5 ${location.startsWith("/app/admin/tenants") ? "text-primary" : "text-muted-foreground/70"}`} />
               Tenant Connections
+            </div>
+          </Link>
+          <Link href="/app/admin/data-dictionaries" className={`flex items-center justify-between px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
+            location.startsWith("/app/admin/data-dictionaries") 
+              ? "bg-primary/10 text-primary shadow-sm shadow-primary/5" 
+              : "text-muted-foreground hover:bg-muted/80 hover:text-foreground"
+          }`}>
+            <div className="flex items-center gap-3">
+              <BookMarked className={`w-5 h-5 ${location.startsWith("/app/admin/data-dictionaries") ? "text-primary" : "text-muted-foreground/70"}`} />
+              Data Dictionaries
             </div>
           </Link>
           <Link href="/app/admin/plans" className={`flex items-center justify-between px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${

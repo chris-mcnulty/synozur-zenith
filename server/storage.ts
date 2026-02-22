@@ -10,6 +10,7 @@ import {
   graphTokens,
   auditLog,
   domainBlocklist,
+  tenantDataDictionaries,
   type Workspace,
   type InsertWorkspace,
   type ProvisioningRequest,
@@ -28,9 +29,9 @@ import {
   type InsertAuditLog,
   type DomainBlocklist,
   type InsertDomainBlocklist,
+  type TenantDataDictionary,
+  type InsertTenantDataDictionary,
   tenantDepartments,
-  type TenantDepartment,
-  type InsertTenantDepartment,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -81,9 +82,10 @@ export interface IStorage {
   removeBlockedDomain(domain: string): Promise<void>;
   isDomainBlocked(domain: string): Promise<boolean>;
 
-  getTenantDepartments(tenantId: string): Promise<TenantDepartment[]>;
-  createTenantDepartment(dept: InsertTenantDepartment): Promise<TenantDepartment>;
-  deleteTenantDepartment(id: string): Promise<void>;
+  getDataDictionary(tenantId: string, category: string): Promise<TenantDataDictionary[]>;
+  getAllDataDictionaries(tenantId: string): Promise<TenantDataDictionary[]>;
+  createDataDictionaryEntry(entry: InsertTenantDataDictionary): Promise<TenantDataDictionary>;
+  deleteDataDictionaryEntry(id: string): Promise<void>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -337,19 +339,28 @@ export class DatabaseStorage implements IStorage {
     return !!result;
   }
 
-  async getTenantDepartments(tenantId: string): Promise<TenantDepartment[]> {
-    return db.select().from(tenantDepartments)
-      .where(eq(tenantDepartments.tenantId, tenantId))
-      .orderBy(tenantDepartments.name);
+  async getDataDictionary(tenantId: string, category: string): Promise<TenantDataDictionary[]> {
+    return db.select().from(tenantDataDictionaries)
+      .where(and(
+        eq(tenantDataDictionaries.tenantId, tenantId),
+        eq(tenantDataDictionaries.category, category)
+      ))
+      .orderBy(tenantDataDictionaries.value);
   }
 
-  async createTenantDepartment(dept: InsertTenantDepartment): Promise<TenantDepartment> {
-    const [created] = await db.insert(tenantDepartments).values(dept).returning();
+  async getAllDataDictionaries(tenantId: string): Promise<TenantDataDictionary[]> {
+    return db.select().from(tenantDataDictionaries)
+      .where(eq(tenantDataDictionaries.tenantId, tenantId))
+      .orderBy(tenantDataDictionaries.category, tenantDataDictionaries.value);
+  }
+
+  async createDataDictionaryEntry(entry: InsertTenantDataDictionary): Promise<TenantDataDictionary> {
+    const [created] = await db.insert(tenantDataDictionaries).values(entry).returning();
     return created;
   }
 
-  async deleteTenantDepartment(id: string): Promise<void> {
-    await db.delete(tenantDepartments).where(eq(tenantDepartments.id, id));
+  async deleteDataDictionaryEntry(id: string): Promise<void> {
+    await db.delete(tenantDataDictionaries).where(eq(tenantDataDictionaries.id, id));
   }
 }
 

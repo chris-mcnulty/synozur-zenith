@@ -40,6 +40,8 @@ import {
   AlertTriangle
 } from "lucide-react";
 
+type DataDictEntry = { id: string; tenantId: string; category: string; value: string; createdAt: string };
+
 export default function WorkspaceDetailsPage() {
   const { id } = useParams<{ id: string }>();
   const { toast } = useToast();
@@ -53,6 +55,18 @@ export default function WorkspaceDetailsPage() {
     queryKey: [`/api/workspaces/${id}/copilot-rules`],
     enabled: !!id,
   });
+
+  const tenantConnectionId = workspace?.tenantConnectionId || "";
+
+  const { data: dictEntries = [] } = useQuery<DataDictEntry[]>({
+    queryKey: ["/api/admin/tenants", tenantConnectionId, "data-dictionaries"],
+    queryFn: () => fetch(`/api/admin/tenants/${tenantConnectionId}/data-dictionaries`).then(r => r.json()),
+    enabled: !!tenantConnectionId,
+  });
+
+  const deptOptions = dictEntries.filter(e => e.category === "department");
+  const costCenterOptions = dictEntries.filter(e => e.category === "cost_center");
+  const projectCodeOptions = dictEntries.filter(e => e.category === "project_code");
 
   const [editMode, setEditMode] = useState(false);
   const [form, setForm] = useState({
@@ -530,14 +544,28 @@ export default function WorkspaceDetailsPage() {
                         Department <span className="text-destructive text-xs">Required</span>
                       </Label>
                       {editMode ? (
-                        <Input 
-                          id="dept" 
-                          value={form.department} 
-                          onChange={(e) => setForm({...form, department: e.target.value})}
-                          className={`bg-background/50 ${!form.department ? 'border-amber-500/50 focus-visible:ring-amber-500' : ''}`}
-                          placeholder="Enter department..."
-                          data-testid="input-department"
-                        />
+                        deptOptions.length > 0 ? (
+                          <Select value={form.department || "__none__"} onValueChange={(v) => setForm({...form, department: v === "__none__" ? "" : v})}>
+                            <SelectTrigger className={`bg-background/50 ${!form.department ? 'border-amber-500/50 focus-visible:ring-amber-500' : ''}`} data-testid="select-department">
+                              <SelectValue placeholder="Select department..." />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="__none__" className="text-muted-foreground">— None —</SelectItem>
+                              {deptOptions.map(d => (
+                                <SelectItem key={d.id} value={d.value}>{d.value}</SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        ) : (
+                          <Input 
+                            id="dept" 
+                            value={form.department} 
+                            onChange={(e) => setForm({...form, department: e.target.value})}
+                            className={`bg-background/50 ${!form.department ? 'border-amber-500/50 focus-visible:ring-amber-500' : ''}`}
+                            placeholder="Enter department (define options in Data Dictionaries)..."
+                            data-testid="input-department"
+                          />
+                        )
                       ) : (
                         <div className={`h-10 flex items-center px-3 rounded-md bg-muted/50 text-sm ${!workspace.department ? 'border border-amber-500/30 text-amber-500' : ''}`}>
                           {workspace.department || <span className="italic flex items-center gap-1"><AlertTriangle className="w-3 h-3" /> Missing — required by policy</span>}
@@ -549,14 +577,28 @@ export default function WorkspaceDetailsPage() {
                         Cost Center <span className="text-destructive text-xs">Required</span>
                       </Label>
                       {editMode ? (
-                        <Input 
-                          id="cc" 
-                          placeholder="e.g., CC-4100"
-                          value={form.costCenter} 
-                          onChange={(e) => setForm({...form, costCenter: e.target.value})}
-                          className={`bg-background/50 ${!form.costCenter ? 'border-amber-500/50 focus-visible:ring-amber-500' : ''}`}
-                          data-testid="input-cost-center"
-                        />
+                        costCenterOptions.length > 0 ? (
+                          <Select value={form.costCenter || "__none__"} onValueChange={(v) => setForm({...form, costCenter: v === "__none__" ? "" : v})}>
+                            <SelectTrigger className={`bg-background/50 ${!form.costCenter ? 'border-amber-500/50 focus-visible:ring-amber-500' : ''}`} data-testid="select-cost-center">
+                              <SelectValue placeholder="Select cost center..." />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="__none__" className="text-muted-foreground">— None —</SelectItem>
+                              {costCenterOptions.map(d => (
+                                <SelectItem key={d.id} value={d.value}>{d.value}</SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        ) : (
+                          <Input 
+                            id="cc" 
+                            placeholder="e.g., CC-4100 (define options in Data Dictionaries)"
+                            value={form.costCenter} 
+                            onChange={(e) => setForm({...form, costCenter: e.target.value})}
+                            className={`bg-background/50 ${!form.costCenter ? 'border-amber-500/50 focus-visible:ring-amber-500' : ''}`}
+                            data-testid="input-cost-center"
+                          />
+                        )
                       ) : (
                         <div className={`h-10 flex items-center px-3 rounded-md bg-muted/50 text-sm ${!workspace.costCenter ? 'border border-amber-500/30 text-amber-500' : ''}`}>
                           {workspace.costCenter || <span className="italic flex items-center gap-1"><AlertTriangle className="w-3 h-3" /> Missing — required by policy</span>}
@@ -566,13 +608,27 @@ export default function WorkspaceDetailsPage() {
                     <div className="space-y-2">
                       <Label>Project Code <span className="text-muted-foreground text-xs">(Optional)</span></Label>
                       {editMode ? (
-                        <Input 
-                          value={form.projectCode} 
-                          onChange={(e) => setForm({...form, projectCode: e.target.value})}
-                          className="bg-background/50"
-                          placeholder="e.g., PHX-001"
-                          data-testid="input-project-code"
-                        />
+                        projectCodeOptions.length > 0 ? (
+                          <Select value={form.projectCode || "__none__"} onValueChange={(v) => setForm({...form, projectCode: v === "__none__" ? "" : v})}>
+                            <SelectTrigger className="bg-background/50" data-testid="select-project-code">
+                              <SelectValue placeholder="Select project code..." />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="__none__" className="text-muted-foreground">— None —</SelectItem>
+                              {projectCodeOptions.map(d => (
+                                <SelectItem key={d.id} value={d.value}>{d.value}</SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        ) : (
+                          <Input 
+                            value={form.projectCode} 
+                            onChange={(e) => setForm({...form, projectCode: e.target.value})}
+                            className="bg-background/50"
+                            placeholder="e.g., PHX-001"
+                            data-testid="input-project-code"
+                          />
+                        )
                       ) : (
                         <div className="h-10 flex items-center px-3 rounded-md bg-muted/50 text-sm text-muted-foreground">
                           {workspace.projectCode || "—"}
