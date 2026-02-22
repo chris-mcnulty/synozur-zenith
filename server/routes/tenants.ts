@@ -229,4 +229,15 @@ router.delete("/api/admin/tenants/:tenantConnectionId/data-dictionaries/:entryId
   }
 });
 
+router.get("/api/admin/tenants/:tenantConnectionId/sensitivity-labels", async (req, res) => {
+  try {
+    const conn = await storage.getTenantConnection(req.params.tenantConnectionId);
+    if (!conn) return res.status(404).json({ error: "Tenant connection not found" });
+    const labels = await storage.getSensitivityLabelsByTenantId(conn.tenantId);
+    res.json(labels);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 export default router;

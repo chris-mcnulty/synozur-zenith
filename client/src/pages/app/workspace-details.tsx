@@ -42,6 +42,7 @@ import {
 } from "lucide-react";
 
 type DataDictEntry = { id: string; tenantId: string; category: string; value: string; createdAt: string };
+type SensitivityLabelEntry = { id: string; tenantId: string; labelId: string; name: string; description: string | null; color: string | null; tooltip: string | null; sensitivity: number | null; isActive: boolean; contentFormats: string[] | null; hasProtection: boolean; parentLabelId: string | null; appliesToGroupsSites: boolean; syncedAt: string | null };
 
 export default function WorkspaceDetailsPage() {
   const { id } = useParams<{ id: string }>();
@@ -62,6 +63,12 @@ export default function WorkspaceDetailsPage() {
   const { data: dictEntries = [] } = useQuery<DataDictEntry[]>({
     queryKey: ["/api/admin/tenants", tenantConnectionId, "data-dictionaries"],
     queryFn: () => fetch(`/api/admin/tenants/${tenantConnectionId}/data-dictionaries`).then(r => r.json()),
+    enabled: !!tenantConnectionId,
+  });
+
+  const { data: sensitivityLabelsData = [] } = useQuery<SensitivityLabelEntry[]>({
+    queryKey: ["/api/admin/tenants", tenantConnectionId, "sensitivity-labels"],
+    queryFn: () => fetch(`/api/admin/tenants/${tenantConnectionId}/sensitivity-labels`).then(r => r.json()),
     enabled: !!tenantConnectionId,
   });
 
@@ -209,6 +216,10 @@ export default function WorkspaceDetailsPage() {
 
   const sensitivityLabel = workspace.sensitivity.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase()).replace(/\B\w+/g, c => c.toLowerCase());
   const sensitivityVariant = workspace.sensitivity === "HIGHLY_CONFIDENTIAL" ? "destructive" : "secondary";
+
+  const resolvedPurviewLabel = workspace.sensitivityLabelId
+    ? sensitivityLabelsData.find(l => l.labelId === workspace.sensitivityLabelId)
+    : null;
 
   const computedRules: { ruleName: string; ruleResult: string; ruleDescription: string }[] = copilotRules.length > 0
     ? copilotRules.map(r => ({ ruleName: r.ruleName, ruleResult: r.ruleResult, ruleDescription: r.ruleDescription }))
@@ -697,6 +708,24 @@ export default function WorkspaceDetailsPage() {
                       <div className="h-10 flex items-center px-3 rounded-md bg-muted/30 text-sm text-muted-foreground">
                         <Badge variant={sensitivityVariant} className={`${sensitivityVariant === "destructive" ? "bg-destructive/10 text-destructive border-destructive/20" : ""}`}>{sensitivityLabel}</Badge>
                         <span className="text-[10px] text-muted-foreground ml-2">Derived from sensitivity label</span>
+                      </div>
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Purview Label</Label>
+                      <div className="h-10 flex items-center px-3 rounded-md bg-muted/30 text-sm text-muted-foreground gap-2" data-testid="text-purview-label">
+                        {resolvedPurviewLabel ? (
+                          <>
+                            {resolvedPurviewLabel.color && (
+                              <span className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: resolvedPurviewLabel.color }} />
+                            )}
+                            <span className="text-foreground">{resolvedPurviewLabel.name}</span>
+                            {resolvedPurviewLabel.hasProtection && <Lock className="w-3 h-3 text-amber-500" />}
+                          </>
+                        ) : workspace.sensitivityLabelId ? (
+                          <span className="italic text-xs">ID: {workspace.sensitivityLabelId.substring(0, 8)}… (sync to resolve)</span>
+                        ) : (
+                          <span className="italic">No Purview label assigned</span>
+                        )}
                       </div>
                     </div>
                   </div>

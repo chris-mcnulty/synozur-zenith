@@ -60,6 +60,7 @@ This section documents all Microsoft Entra ID (Azure AD) app registration permis
 | `Group.Read.All` | Application | Read all Microsoft 365 group properties | Site-to-group mapping, Teams connectivity detection |
 | `Directory.Read.All` | Application | Read directory data (users, groups, org info) | User/owner resolution, tenant validation |
 | `Reports.Read.All` | Application | Read all usage reports | SharePoint site usage reports (storage, file counts, page views, activity, sensitivity labels, sharing settings) |
+| `InformationProtectionPolicy.Read.All` | Application | Read all published labels and label policy settings | Purview sensitivity label inventory sync during tenant sync |
 
 ### Delegated Permissions (for SSO user login)
 

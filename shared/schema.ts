@@ -167,6 +167,33 @@ export const insertTenantDataDictionarySchema = createInsertSchema(tenantDataDic
 export type InsertTenantDataDictionary = z.infer<typeof insertTenantDataDictionarySchema>;
 export type TenantDataDictionary = typeof tenantDataDictionaries.$inferSelect;
 
+export const sensitivityLabels = pgTable("sensitivity_labels", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: text("tenant_id").notNull(),
+  labelId: text("label_id").notNull(),
+  name: text("name").notNull(),
+  description: text("description"),
+  color: text("color"),
+  tooltip: text("tooltip"),
+  sensitivity: integer("sensitivity"),
+  isActive: boolean("is_active").notNull().default(true),
+  contentFormats: text("content_formats").array(),
+  hasProtection: boolean("has_protection").notNull().default(false),
+  parentLabelId: text("parent_label_id"),
+  appliesToGroupsSites: boolean("applies_to_groups_sites").notNull().default(false),
+  syncedAt: timestamp("synced_at").defaultNow(),
+}, (table) => [
+  unique("uq_tenant_label").on(table.tenantId, table.labelId),
+]);
+
+export const insertSensitivityLabelSchema = createInsertSchema(sensitivityLabels).omit({
+  id: true,
+  syncedAt: true,
+});
+
+export type InsertSensitivityLabel = z.infer<typeof insertSensitivityLabelSchema>;
+export type SensitivityLabel = typeof sensitivityLabels.$inferSelect;
+
 export const SERVICE_PLANS = ["TRIAL", "STANDARD", "PROFESSIONAL", "ENTERPRISE"] as const;
 export type ServicePlanTier = typeof SERVICE_PLANS[number];
 

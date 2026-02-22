@@ -298,6 +298,68 @@ export async function writeSitePropertyBag(
   }
 }
 
+export async function fetchSensitivityLabels(token: string): Promise<{
+  labels: Array<{
+    id: string;
+    name: string;
+    description?: string;
+    color?: string;
+    tooltip?: string;
+    sensitivity?: number;
+    isActive: boolean;
+    contentFormats?: string[];
+    hasProtection: boolean;
+    parentLabelId?: string;
+    appliesToGroupsSites: boolean;
+  }>;
+  error?: string;
+}> {
+  try {
+    const url = "https://graph.microsoft.com/beta/security/informationProtection/sensitivityLabels";
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+
+    if (!res.ok) {
+      const errText = await res.text();
+      let detail = errText;
+      try {
+        const parsed = JSON.parse(errText);
+        detail = parsed.error?.message || parsed.error?.code || errText;
+      } catch {}
+      return { labels: [], error: `Graph API ${res.status}: ${detail}` };
+    }
+
+    const data = await res.json();
+    const rawLabels = data.value || [];
+
+    const labels = rawLabels.map((l: any) => {
+      const contentFormats: string[] = l.contentFormats || [];
+      const appliesToGroupsSites = contentFormats.includes("schematizeddata") ||
+        (l.parent && l.parent["@odata.type"]?.includes("group")) ||
+        false;
+
+      return {
+        id: l.id,
+        name: l.name || l.displayName || "Unknown",
+        description: l.description || null,
+        color: l.color || null,
+        tooltip: l.tooltip || null,
+        sensitivity: l.sensitivity ?? l.priority ?? null,
+        isActive: l.isActive !== false && l.isEnabled !== false,
+        contentFormats: contentFormats.length > 0 ? contentFormats : null,
+        hasProtection: l.hasProtection === true,
+        parentLabelId: l.parent?.id || null,
+        appliesToGroupsSites,
+      };
+    });
+
+    return { labels };
+  } catch (e: any) {
+    return { labels: [], error: e.message };
+  }
+}
+
 export function clearTokenCache(tenantId?: string, clientId?: string) {
   if (tenantId && clientId) {
     tokenCache.delete(`${tenantId}:${clientId}`);

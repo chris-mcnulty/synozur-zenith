@@ -11,6 +11,7 @@ import {
   auditLog,
   domainBlocklist,
   tenantDataDictionaries,
+  sensitivityLabels,
   type Workspace,
   type InsertWorkspace,
   type ProvisioningRequest,
@@ -31,6 +32,8 @@ import {
   type InsertDomainBlocklist,
   type TenantDataDictionary,
   type InsertTenantDataDictionary,
+  type SensitivityLabel,
+  type InsertSensitivityLabel,
   tenantDepartments,
 } from "@shared/schema";
 
@@ -86,6 +89,10 @@ export interface IStorage {
   getAllDataDictionaries(tenantId: string): Promise<TenantDataDictionary[]>;
   createDataDictionaryEntry(entry: InsertTenantDataDictionary): Promise<TenantDataDictionary>;
   deleteDataDictionaryEntry(id: string): Promise<void>;
+
+  getSensitivityLabelsByTenantId(tenantId: string): Promise<SensitivityLabel[]>;
+  upsertSensitivityLabel(label: InsertSensitivityLabel): Promise<SensitivityLabel>;
+  deleteSensitivityLabelsByTenantId(tenantId: string): Promise<void>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -361,6 +368,39 @@ export class DatabaseStorage implements IStorage {
 
   async deleteDataDictionaryEntry(id: string): Promise<void> {
     await db.delete(tenantDataDictionaries).where(eq(tenantDataDictionaries.id, id));
+  }
+
+  async getSensitivityLabelsByTenantId(tenantId: string): Promise<SensitivityLabel[]> {
+    return db.select().from(sensitivityLabels)
+      .where(eq(sensitivityLabels.tenantId, tenantId))
+      .orderBy(sensitivityLabels.sensitivity);
+  }
+
+  async upsertSensitivityLabel(label: InsertSensitivityLabel): Promise<SensitivityLabel> {
+    const [result] = await db.insert(sensitivityLabels)
+      .values(label)
+      .onConflictDoUpdate({
+        target: [sensitivityLabels.tenantId, sensitivityLabels.labelId],
+        set: {
+          name: label.name,
+          description: label.description,
+          color: label.color,
+          tooltip: label.tooltip,
+          sensitivity: label.sensitivity,
+          isActive: label.isActive,
+          contentFormats: label.contentFormats,
+          hasProtection: label.hasProtection,
+          parentLabelId: label.parentLabelId,
+          appliesToGroupsSites: label.appliesToGroupsSites,
+          syncedAt: new Date(),
+        },
+      })
+      .returning();
+    return result;
+  }
+
+  async deleteSensitivityLabelsByTenantId(tenantId: string): Promise<void> {
+    await db.delete(sensitivityLabels).where(eq(sensitivityLabels.tenantId, tenantId));
   }
 }
 

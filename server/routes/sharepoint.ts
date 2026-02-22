@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { storage } from "../storage";
 import { insertWorkspaceSchema, insertProvisioningRequestSchema, type ServicePlanTier } from "@shared/schema";
-import { fetchSharePointSites, fetchSiteUsageReport, fetchSiteDriveOwner, fetchSiteAnalytics, getAppToken, writeSitePropertyBag } from "../services/graph";
+import { fetchSharePointSites, fetchSiteUsageReport, fetchSiteDriveOwner, fetchSiteAnalytics, getAppToken, writeSitePropertyBag, fetchSensitivityLabels } from "../services/graph";
 import { getPlanFeatures } from "../services/feature-gate";
 
 const router = Router();
@@ -258,6 +258,35 @@ router.post("/api/admin/tenants/:id/sync", async (req, res) => {
       upsertedCount++;
     }
 
+    let labelSyncResult: { synced: number; error?: string } = { synced: 0 };
+    if (token) {
+      try {
+        const labelResult = await fetchSensitivityLabels(token);
+        if (labelResult.error) {
+          labelSyncResult.error = labelResult.error;
+        }
+        for (const label of labelResult.labels) {
+          await storage.upsertSensitivityLabel({
+            tenantId: connection.tenantId,
+            labelId: label.id,
+            name: label.name,
+            description: label.description || null,
+            color: label.color || null,
+            tooltip: label.tooltip || null,
+            sensitivity: label.sensitivity ?? null,
+            isActive: label.isActive,
+            contentFormats: label.contentFormats || null,
+            hasProtection: label.hasProtection,
+            parentLabelId: label.parentLabelId || null,
+            appliesToGroupsSites: label.appliesToGroupsSites,
+          });
+          labelSyncResult.synced++;
+        }
+      } catch (e: any) {
+        labelSyncResult.error = e.message;
+      }
+    }
+
     await storage.updateTenantConnection(req.params.id, {
       lastSyncAt: new Date(),
       lastSyncStatus: "SUCCESS",
@@ -275,6 +304,7 @@ router.post("/api/admin/tenants/:id/sync", async (req, res) => {
       driveEnriched: enrichCache.size,
       usageReportError: usageResult.error || null,
       enrichErrors: enrichErrors.length > 0 ? enrichErrors : undefined,
+      sensitivityLabels: labelSyncResult,
     });
   } catch (err: any) {
     await storage.updateTenantConnection(req.params.id, {

@@ -94,6 +94,14 @@ export default function GovernancePage() {
     enabled: !!tenantConnectionId,
   });
 
+  const { data: sensitivityLabelsData = [] } = useQuery<{labelId: string; name: string; color: string | null; hasProtection: boolean}[]>({
+    queryKey: ["/api/admin/tenants", tenantConnectionId, "sensitivity-labels"],
+    queryFn: () => fetch(`/api/admin/tenants/${tenantConnectionId}/sensitivity-labels`).then(r => r.json()),
+    enabled: !!tenantConnectionId,
+  });
+
+  const labelMap = new Map(sensitivityLabelsData.map(l => [l.labelId, l]));
+
   const deptOptions = dictEntries.filter(e => e.category === "department");
   const costCenterOptions = dictEntries.filter(e => e.category === "cost_center");
 
@@ -466,7 +474,19 @@ export default function GovernancePage() {
                         })()}
                       </TableCell>
                       <TableCell className="relative z-10">
-                        {getSensitivityBadge(ws.sensitivity)}
+                        <div className="flex items-center gap-1.5">
+                          {getSensitivityBadge(ws.sensitivity)}
+                          {ws.sensitivityLabelId && labelMap.has(ws.sensitivityLabelId) && (
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <span className="text-[10px] text-muted-foreground truncate max-w-[80px]" data-testid={`text-purview-label-${ws.id}`}>
+                                  {labelMap.get(ws.sensitivityLabelId)!.name}
+                                </span>
+                              </TooltipTrigger>
+                              <TooltipContent>Purview label: {labelMap.get(ws.sensitivityLabelId)!.name}</TooltipContent>
+                            </Tooltip>
+                          )}
+                        </div>
                       </TableCell>
                       <TableCell className="relative z-10">
                         {ws.copilotReady ? (
