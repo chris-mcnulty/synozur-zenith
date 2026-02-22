@@ -238,7 +238,7 @@ export async function registerRoutes(
       nonce,
     })).toString('base64url');
 
-    const consentUrl = `https://login.microsoftonline.com/${tenantDomain}/adminconsent?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&state=${state}&prompt=login`;
+    const consentUrl = `https://login.microsoftonline.com/organizations/adminconsent?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&state=${state}&prompt=login`;
 
     res.json({ consentUrl });
   });
