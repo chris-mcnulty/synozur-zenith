@@ -85,6 +85,22 @@ This section documents all Microsoft Entra ID (Azure AD) app registration permis
 - **Site-level sensitivity label application**: Before Zenith (or any app) can apply sensitivity labels at the SharePoint site level, the tenant admin must first enable AIP integration via PowerShell: `Set-SPOTenant -EnableAIPIntegration $true` (or the equivalent API call). Without this, label application calls will fail. Reference: https://learn.microsoft.com/en-us/purview/sensitivity-labels-sharepoint-onedrive-files
 - **Verifying sensitivity labels**: Tenant admins can verify their published sensitivity labels at: https://purview.microsoft.com/informationprotection/informationprotectionlabels/sensitivitylabels
 
+### Troubleshooting: "Groups & sites" Grayed Out in Purview Label Scope
+If the "Groups & sites" scope is grayed out/disabled when creating a sensitivity label in the Purview portal, it means **container sensitivity labels are not enabled in Entra ID** for that tenant. The `EnableMIPLabels` flag in the `Group.Unified` Entra directory settings must be set to `True`. This is required before labels can target Microsoft Teams, M365 Groups, and SharePoint sites.
+
+**Fix (run once per tenant as Global Admin):**
+1. Connect to Entra ID: `Install-Module AzureADPreview -Force; Import-Module AzureADPreview; Connect-AzureAD`
+2. Check if the Group.Unified settings object exists: `$setting = Get-AzureADDirectorySetting | Where-Object DisplayName -eq "Group.Unified"; $setting.Values`
+3. If the object **exists**: `$setting["EnableMIPLabels"] = "True"; Set-AzureADDirectorySetting -Id $setting.Id -DirectorySetting $setting`
+4. If the object **does not exist** (common): `$template = Get-AzureADDirectorySettingTemplate | Where-Object DisplayName -eq "Group.Unified"; $setting = $template.CreateDirectorySetting(); $setting["EnableMIPLabels"] = "True"; New-AzureADDirectorySetting -DirectorySetting $setting`
+
+**After enabling:**
+- No restart or policy republish required
+- Purview UI updates within 5–30 minutes (worst case: sign out/in of Purview portal)
+- "Groups & sites" becomes selectable; container labels can then control team privacy, guest access, external sharing, and Conditional Access enforcement
+
+**Important distinction:** Container labels govern the collaboration surface (Teams, Groups, Sites), NOT the documents inside them. They do not label files automatically, encrypt SharePoint content, or replace file-level sensitivity labels.
+
 ## External Dependencies
 - **Microsoft 365 / SharePoint**: Core platform for workspace management and governance.
 - **Microsoft Entra ID (formerly Azure Active Directory)**: Used for Single Sign-On (SSO) authentication and identity management.
