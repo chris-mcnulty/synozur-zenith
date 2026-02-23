@@ -1,4 +1,4 @@
-import { eq, desc, ilike, or, and, sql } from "drizzle-orm";
+import { eq, desc, ilike, or, and, sql, gt } from "drizzle-orm";
 import { db } from "./db";
 import {
   workspaces,
@@ -79,6 +79,7 @@ export interface IStorage {
   upsertGraphToken(token: InsertGraphToken): Promise<GraphToken>;
   getGraphToken(userId: string, service?: string): Promise<GraphToken | undefined>;
   getDecryptedGraphToken(userId: string, service?: string): Promise<{ token: string; expiresAt: Date | null } | undefined>;
+  getAnyValidDelegatedToken(service?: string): Promise<{ token: string; expiresAt: Date | null; userId: string } | undefined>;
 
   createAuditEntry(entry: InsertAuditLog): Promise<AuditLog>;
   getAuditLog(orgId?: string, limit?: number): Promise<AuditLog[]>;
@@ -318,6 +319,24 @@ export class DatabaseStorage implements IStorage {
     return {
       token: decryptToken(record.accessToken),
       expiresAt: record.expiresAt,
+    };
+  }
+
+  async getAnyValidDelegatedToken(service: string = 'graph'): Promise<{ token: string; expiresAt: Date | null; userId: string } | undefined> {
+    const records = await db.select().from(graphTokens)
+      .where(and(
+        eq(graphTokens.service, service),
+        gt(graphTokens.expiresAt, new Date())
+      ))
+      .limit(1);
+    
+    if (records.length === 0 || !records[0].accessToken) return undefined;
+    
+    const { decryptToken } = await import('./utils/encryption');
+    return {
+      token: decryptToken(records[0].accessToken),
+      expiresAt: records[0].expiresAt,
+      userId: records[0].userId,
     };
   }
 
