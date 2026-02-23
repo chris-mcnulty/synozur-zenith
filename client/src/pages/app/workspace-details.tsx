@@ -272,8 +272,14 @@ export default function WorkspaceDetailsPage() {
               <Globe className={`w-3.5 h-3.5 ${getSiteTypeColor(workspace.type)}`} />
               <span className="text-muted-foreground text-xs">{getSiteTypeLabel(workspace.type)}</span>
               <span className="text-muted-foreground text-xs">|</span>
-              <span className="text-muted-foreground font-mono text-xs" data-testid="text-workspace-id">{workspace.m365ObjectId}</span>
-              <Button variant="ghost" size="icon" className="h-5 w-5" onClick={() => { navigator.clipboard.writeText(workspace.m365ObjectId || ""); toast({ title: "Copied", description: "Object ID copied to clipboard." }); }}>
+              {workspace.siteUrl ? (
+                <a href={workspace.siteUrl} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline font-mono text-xs flex items-center gap-1" data-testid="link-sharepoint-site">
+                  {workspace.siteUrl} <ExternalLink className="w-3 h-3" />
+                </a>
+              ) : (
+                <span className="text-muted-foreground font-mono text-xs" data-testid="text-workspace-id">{workspace.m365ObjectId}</span>
+              )}
+              <Button variant="ghost" size="icon" className="h-5 w-5" onClick={() => { navigator.clipboard.writeText(workspace.siteUrl || workspace.m365ObjectId || ""); toast({ title: "Copied", description: workspace.siteUrl ? "Site URL copied to clipboard." : "Object ID copied to clipboard." }); }}>
                 <Copy className="w-3 h-3 text-muted-foreground" />
               </Button>
             </div>
