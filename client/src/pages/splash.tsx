@@ -12,7 +12,6 @@ export default function SplashPage() {
         style={{ backgroundImage: `url(${heroBg})` }}
       />
       <div className="absolute inset-0 z-0 pointer-events-none bg-gradient-to-b from-background/40 via-background/80 to-background" />
-
       {/* Navigation */}
       <nav className="relative z-10 w-full border-b border-border/40 bg-background/50 backdrop-blur-md sticky top-0">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
@@ -37,7 +36,6 @@ export default function SplashPage() {
           </div>
         </div>
       </nav>
-
       {/* Hero Section */}
       <main className="flex-1 flex flex-col items-center justify-center relative z-10 w-full px-4 text-center pt-24 pb-32">
         <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-primary/10 text-primary text-sm font-medium mb-8 border border-primary/20 backdrop-blur-sm shadow-sm">
@@ -50,9 +48,7 @@ export default function SplashPage() {
           <span className="text-transparent bg-clip-text bg-gradient-to-r from-secondary to-primary">Microsoft 365</span>
         </h1>
         
-        <p className="text-xl md:text-2xl text-muted-foreground max-w-2xl mx-auto mb-10 font-light">
-          Secure, provision, and manage your tenant with zero polling. Event-driven architecture built for the Constellation era.
-        </p>
+        <p className="text-xl md:text-2xl text-muted-foreground max-w-2xl mx-auto mb-10 font-light">Secure, provision, and manage your M365 tenan. Event-driven architecture built for the Copilot era.</p>
         
         <div className="flex flex-col sm:flex-row gap-4 items-center justify-center">
           <Link href="/auth/entra/callback">
