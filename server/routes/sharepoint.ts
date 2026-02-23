@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { storage } from "../storage";
 import { insertWorkspaceSchema, insertProvisioningRequestSchema, type ServicePlanTier } from "@shared/schema";
-import { fetchSharePointSites, fetchSiteUsageReport, fetchSiteDriveOwner, fetchSiteAnalytics, fetchSiteGroupOwners, getAppToken, writeSitePropertyBag, fetchSensitivityLabels, fetchRetentionLabels, getSpoToken, fetchHubSites, fetchSiteHubAssociation } from "../services/graph";
+import { fetchSharePointSites, fetchSiteUsageReport, fetchSiteDriveOwner, fetchSiteAnalytics, fetchSiteGroupOwners, getAppToken, writeSitePropertyBag, fetchSensitivityLabels, fetchRetentionLabels, getSpoToken, fetchHubSites, fetchSiteHubAssociation, getGroupIdForSite, applySensitivityLabelToGroup, removeSensitivityLabelFromGroup } from "../services/graph";
 import { getPlanFeatures } from "../services/feature-gate";
 import { refreshDelegatedToken } from "../routes-entra";
 
@@ -66,9 +66,87 @@ router.post("/api/workspaces", async (req, res) => {
 });
 
 router.patch("/api/workspaces/:id", async (req, res) => {
+  const existing = await storage.getWorkspace(req.params.id);
+  if (!existing) return res.status(404).json({ message: "Workspace not found" });
+
+  const sensitivityLabelChanged = req.body.sensitivityLabelId !== undefined &&
+    req.body.sensitivityLabelId !== existing.sensitivityLabelId;
+
+  let labelSyncResult: { pushed: boolean; error?: string } | undefined;
+
+  if (sensitivityLabelChanged && existing.tenantConnectionId && existing.m365ObjectId) {
+    const org = await storage.getOrganization();
+    const plan = (org?.servicePlan || "TRIAL") as ServicePlanTier;
+    const features = getPlanFeatures(plan);
+    if (!features.m365WriteBack) {
+      return res.status(403).json({
+        error: "FEATURE_GATED",
+        message: `Applying sensitivity labels to Microsoft 365 is not available on the ${features.label} plan. Upgrade to Standard or higher.`,
+        currentPlan: plan,
+        requiredFeature: "m365WriteBack",
+      });
+    }
+
+    if (req.body.sensitivityLabelId) {
+      const connection = await storage.getTenantConnection(existing.tenantConnectionId);
+      if (connection) {
+        const labels = await storage.getSensitivityLabelsByTenantId(connection.tenantId);
+        const targetLabel = labels.find(l => l.labelId === req.body.sensitivityLabelId);
+        if (!targetLabel) {
+          return res.status(400).json({ message: "Sensitivity label not found in synced labels." });
+        }
+        if (!targetLabel.appliesToGroupsSites) {
+          return res.status(400).json({ message: `Label "${targetLabel.name}" does not apply to Groups & Sites. Choose a label with Groups & Sites scope.` });
+        }
+      }
+    }
+
+    try {
+      const connection = await storage.getTenantConnection(existing.tenantConnectionId);
+      if (connection) {
+        const clientId = process.env.AZURE_CLIENT_ID!;
+        const clientSecret = process.env.AZURE_CLIENT_SECRET!;
+        const token = await getAppToken(connection.tenantId, clientId, clientSecret);
+
+        const { groupId, error: groupError } = await getGroupIdForSite(token, existing.m365ObjectId);
+
+        if (groupId) {
+          if (req.body.sensitivityLabelId) {
+            const result = await applySensitivityLabelToGroup(token, groupId, req.body.sensitivityLabelId);
+            labelSyncResult = { pushed: result.success, error: result.error };
+            if (result.success) {
+              console.log(`[label-push] Applied sensitivity label ${req.body.sensitivityLabelId} to group ${groupId} for workspace ${existing.displayName}`);
+            } else {
+              console.error(`[label-push] Failed to apply label to group ${groupId}: ${result.error}`);
+              return res.status(502).json({ message: `Label saved locally but failed to apply in M365: ${result.error}`, labelSyncResult });
+            }
+          } else {
+            const result = await removeSensitivityLabelFromGroup(token, groupId);
+            labelSyncResult = { pushed: result.success, error: result.error };
+            if (result.success) {
+              console.log(`[label-push] Removed sensitivity label from group ${groupId} for workspace ${existing.displayName}`);
+            } else {
+              console.error(`[label-push] Failed to remove label from group ${groupId}: ${result.error}`);
+              return res.status(502).json({ message: `Failed to remove label in M365: ${result.error}`, labelSyncResult });
+            }
+          }
+        } else {
+          labelSyncResult = { pushed: false, error: groupError || "No M365 Group found for this site" };
+          console.warn(`[label-push] Cannot apply label: ${groupError}`);
+          return res.status(400).json({ message: `Cannot apply label: ${groupError || "No M365 Group found for this site. Sensitivity labels can only be applied to group-connected team sites."}`, labelSyncResult });
+        }
+      }
+    } catch (err: any) {
+      labelSyncResult = { pushed: false, error: err.message };
+      console.error(`[label-push] Error pushing sensitivity label: ${err.message}`);
+      return res.status(502).json({ message: `Error applying label to M365: ${err.message}`, labelSyncResult });
+    }
+  }
+
   const workspace = await storage.updateWorkspace(req.params.id, req.body);
   if (!workspace) return res.status(404).json({ message: "Workspace not found" });
-  res.json(workspace);
+
+  res.json({ ...workspace, labelSyncResult });
 });
 
 router.delete("/api/workspaces/:id", async (req, res) => {

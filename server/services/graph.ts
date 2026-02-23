@@ -437,6 +437,94 @@ export async function fetchSiteGroupOwners(
   }
 }
 
+export async function getGroupIdForSite(
+  token: string,
+  graphSiteId: string
+): Promise<{ groupId?: string; error?: string }> {
+  try {
+    const driveRes = await fetch(
+      `https://graph.microsoft.com/v1.0/sites/${graphSiteId}/drive`,
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+
+    if (!driveRes.ok) {
+      const errText = await driveRes.text();
+      return { error: `Drive API error ${driveRes.status}: ${errText}` };
+    }
+
+    const driveData = await driveRes.json();
+    const groupId = driveData?.owner?.group?.id;
+    if (!groupId) {
+      return { error: "No M365 Group associated with this site" };
+    }
+
+    return { groupId };
+  } catch (err: any) {
+    return { error: err.message };
+  }
+}
+
+export async function applySensitivityLabelToGroup(
+  token: string,
+  groupId: string,
+  sensitivityLabelId: string
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const res = await fetch(
+      `https://graph.microsoft.com/v1.0/groups/${groupId}`,
+      {
+        method: "PATCH",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          assignedLabels: [{ labelId: sensitivityLabelId }],
+        }),
+      }
+    );
+
+    if (!res.ok) {
+      const errText = await res.text();
+      return { success: false, error: `Graph API error ${res.status}: ${errText}` };
+    }
+
+    return { success: true };
+  } catch (err: any) {
+    return { success: false, error: err.message };
+  }
+}
+
+export async function removeSensitivityLabelFromGroup(
+  token: string,
+  groupId: string
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const res = await fetch(
+      `https://graph.microsoft.com/v1.0/groups/${groupId}`,
+      {
+        method: "PATCH",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          assignedLabels: [],
+        }),
+      }
+    );
+
+    if (!res.ok) {
+      const errText = await res.text();
+      return { success: false, error: `Graph API error ${res.status}: ${errText}` };
+    }
+
+    return { success: true };
+  } catch (err: any) {
+    return { success: false, error: err.message };
+  }
+}
+
 export async function fetchSiteAnalytics(token: string, graphSiteId: string): Promise<{
   lastActivityDate?: string;
   fileCount?: number;

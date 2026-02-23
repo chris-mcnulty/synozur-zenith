@@ -124,15 +124,37 @@ export default function WorkspaceDetailsPage() {
       const res = await apiRequest("PATCH", `/api/workspaces/${id}`, data);
       return res.json();
     },
-    onSuccess: () => {
+    onSuccess: (responseData: any) => {
       queryClient.invalidateQueries({ queryKey: [`/api/workspaces/${id}`] });
       queryClient.invalidateQueries({ queryKey: [`/api/workspaces/${id}/copilot-rules`] });
       queryClient.invalidateQueries({ queryKey: ["/api/workspaces"] });
       setEditMode(false);
-      toast({ title: "Changes saved", description: "Workspace properties updated successfully." });
+      if (responseData?.labelSyncResult) {
+        if (responseData.labelSyncResult.pushed) {
+          toast({ title: "Changes saved & label applied", description: "Workspace updated and sensitivity label pushed to M365." });
+        } else {
+          toast({ title: "Changes saved", description: `Workspace updated but label could not be applied to M365: ${responseData.labelSyncResult.error || "Unknown error"}`, variant: "destructive" });
+        }
+      } else {
+        toast({ title: "Changes saved", description: "Workspace properties updated successfully." });
+      }
     },
-    onError: () => {
-      toast({ title: "Save failed", description: "Could not update workspace properties.", variant: "destructive" });
+    onError: (err: any) => {
+      let errMsg = "Could not update workspace properties.";
+      if (err?.message) {
+        const match = err.message.match(/^\d+:\s*([\s\S]+)$/);
+        if (match) {
+          try {
+            const body = JSON.parse(match[1]);
+            errMsg = body?.message || errMsg;
+          } catch {
+            errMsg = match[1];
+          }
+        } else {
+          errMsg = err.message;
+        }
+      }
+      toast({ title: "Save failed", description: errMsg, variant: "destructive" });
     },
   });
 
