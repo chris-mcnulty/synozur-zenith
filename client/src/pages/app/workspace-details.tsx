@@ -40,7 +40,8 @@ import {
   AlertTriangle,
   Upload,
   Network,
-  Unlink
+  Unlink,
+  Trash2
 } from "lucide-react";
 
 type DataDictEntry = { id: string; tenantId: string; category: string; value: string; createdAt: string };
@@ -326,6 +327,16 @@ export default function WorkspaceDetailsPage() {
               {workspace.teamsConnected && (
                 <Badge variant="outline" className="text-[10px] font-semibold text-blue-500 bg-blue-500/10 border-blue-500/20">Teams Connected</Badge>
               )}
+              {workspace.isDeleted && (
+                <Badge variant="destructive" className="text-xs gap-1">
+                  <Trash2 className="w-3 h-3" /> Deleted
+                </Badge>
+              )}
+              {!workspace.isDeleted && workspace.lockState && workspace.lockState !== "Unlock" && (
+                <Badge variant="outline" className="text-xs text-amber-600 bg-amber-500/10 border-amber-500/20 gap-1">
+                  <Lock className="w-3 h-3" /> {workspace.lockState === "NoAccess" ? "Locked" : workspace.lockState === "ReadOnly" ? "Read-Only" : workspace.lockState}
+                </Badge>
+              )}
               {workspace.isHubSite && (
                 <Badge variant="outline" className="text-[10px] font-semibold text-purple-500 bg-purple-500/10 border-purple-500/20 gap-1">
                   <Network className="w-3 h-3" /> Hub Site
@@ -371,6 +382,34 @@ export default function WorkspaceDetailsPage() {
           )}
         </div>
       </div>
+
+      {workspace.isDeleted && (
+        <div className="flex items-center gap-3 p-4 rounded-xl bg-destructive/10 border border-destructive/20 text-destructive" data-testid="banner-deleted">
+          <Trash2 className="w-5 h-5 shrink-0" />
+          <div>
+            <p className="font-semibold text-sm">This site has been deleted in Microsoft 365</p>
+            <p className="text-xs text-destructive/80 mt-0.5">The site was flagged as deleted during the last tenant sync. It may be in the SharePoint recycle bin and recoverable by a SharePoint administrator.</p>
+          </div>
+        </div>
+      )}
+
+      {!workspace.isDeleted && workspace.lockState && workspace.lockState !== "Unlock" && (
+        <div className="flex items-center gap-3 p-4 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-600 dark:text-amber-500" data-testid="banner-locked">
+          <Lock className="w-5 h-5 shrink-0" />
+          <div>
+            <p className="font-semibold text-sm">
+              This site is {workspace.lockState === "NoAccess" ? "locked (no access)" : workspace.lockState === "ReadOnly" ? "read-only" : workspace.lockState}
+            </p>
+            <p className="text-xs text-amber-600/80 dark:text-amber-500/80 mt-0.5">
+              {workspace.lockState === "NoAccess"
+                ? "Users cannot access this site. A SharePoint administrator must unlock it."
+                : workspace.lockState === "ReadOnly"
+                ? "Users can view content but cannot add, edit, or delete anything."
+                : "This site has restricted access. Contact a SharePoint administrator for details."}
+            </p>
+          </div>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <Card className="glass-panel border-border/50">
