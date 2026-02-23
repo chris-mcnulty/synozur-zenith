@@ -469,8 +469,18 @@ router.post("/api/admin/tenants/:id/sync", async (req, res) => {
 
     let hubSyncResult: { hubSitesFound: number; sitesEnriched: number; error?: string } = { hubSitesFound: 0, sitesEnriched: 0 };
     try {
-      const spoToken = await getSpoToken(connection.tenantId, clientId, clientSecret, connection.domain);
-      const hubResult = await fetchHubSites(spoToken, connection.domain);
+      const allWorkspacesForHub = await storage.getWorkspaces(undefined, req.params.id);
+      const spoHostFromSites = allWorkspacesForHub
+        .map(w => w.siteUrl)
+        .filter(Boolean)
+        .map(url => { try { return new URL(url!).hostname; } catch { return null; } })
+        .find(h => h && h.endsWith('.sharepoint.com'));
+
+      const spoHostDomain = spoHostFromSites || connection.domain;
+      console.log(`[hub-sync] Derived SPO host: ${spoHostDomain} (from ${spoHostFromSites ? 'site URLs' : 'connection domain'})`);
+
+      const spoToken = await getSpoToken(connection.tenantId, clientId, clientSecret, spoHostDomain);
+      const hubResult = await fetchHubSites(spoToken, spoHostDomain);
       if (hubResult.error) {
         hubSyncResult.error = hubResult.error;
       }
@@ -485,9 +495,9 @@ router.post("/api/admin/tenants/:id/sync", async (req, res) => {
         });
       }
 
-      const allWorkspaces = await storage.getWorkspaces(undefined, req.params.id);
+      console.log(`[hub-sync] Found ${hubResult.hubSites.length} hub sites, matching against ${allWorkspacesForHub.length} workspaces`);
 
-      for (const ws of allWorkspaces) {
+      for (const ws of allWorkspacesForHub) {
         if (ws.siteUrl) {
           const hubInfo = hubUrlToHubInfo.get(normalizeHubUrl(ws.siteUrl));
           if (hubInfo) {
@@ -501,7 +511,7 @@ router.post("/api/admin/tenants/:id/sync", async (req, res) => {
         }
       }
 
-      const nonHubSites = allWorkspaces.filter(w => w.siteUrl && !hubUrlToHubInfo.has(normalizeHubUrl(w.siteUrl)));
+      const nonHubSites = allWorkspacesForHub.filter(w => w.siteUrl && !hubUrlToHubInfo.has(normalizeHubUrl(w.siteUrl)));
       const HUB_BATCH_SIZE = 5;
       for (let i = 0; i < nonHubSites.length; i += HUB_BATCH_SIZE) {
         const batch = nonHubSites.slice(i, i + HUB_BATCH_SIZE);
