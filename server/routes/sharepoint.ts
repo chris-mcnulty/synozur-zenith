@@ -111,13 +111,8 @@ router.patch("/api/workspaces/:id", async (req, res) => {
         const { groupId, error: groupError } = await getGroupIdForSite(appToken, existing.m365ObjectId);
 
         if (groupId) {
-          const delegatedToken = await getDelegatedTokenForRetention(req.session?.userId, connection.organizationId);
-          if (!delegatedToken) {
-            return res.status(401).json({ message: "No delegated token available. A user with SSO must sign in to enable label write-back to M365." });
-          }
-
           if (req.body.sensitivityLabelId) {
-            const result = await applySensitivityLabelToGroup(delegatedToken, groupId, req.body.sensitivityLabelId);
+            const result = await applySensitivityLabelToGroup(appToken, groupId, req.body.sensitivityLabelId);
             labelSyncResult = { pushed: result.success, error: result.error };
             if (result.success) {
               console.log(`[label-push] Applied sensitivity label ${req.body.sensitivityLabelId} to group ${groupId} for workspace ${existing.displayName}`);
@@ -126,7 +121,7 @@ router.patch("/api/workspaces/:id", async (req, res) => {
               return res.status(502).json({ message: `Failed to apply label in M365: ${result.error}`, labelSyncResult });
             }
           } else {
-            const result = await removeSensitivityLabelFromGroup(delegatedToken, groupId);
+            const result = await removeSensitivityLabelFromGroup(appToken, groupId);
             labelSyncResult = { pushed: result.success, error: result.error };
             if (result.success) {
               console.log(`[label-push] Removed sensitivity label from group ${groupId} for workspace ${existing.displayName}`);
