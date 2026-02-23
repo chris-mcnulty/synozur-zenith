@@ -104,26 +104,29 @@ router.patch("/api/workspaces/:id", async (req, res) => {
     try {
       const connection = await storage.getTenantConnection(existing.tenantConnectionId);
       if (connection) {
-        const delegatedToken = await getDelegatedTokenForRetention(req.session?.userId, connection.organizationId);
-        if (!delegatedToken) {
-          return res.status(401).json({ message: "No delegated token available. A user with SSO must sign in to enable label write-back to M365." });
-        }
-        const token = delegatedToken;
+        const clientId = process.env.AZURE_CLIENT_ID!;
+        const clientSecret = process.env.AZURE_CLIENT_SECRET!;
+        const appToken = await getAppToken(connection.tenantId, clientId, clientSecret);
 
-        const { groupId, error: groupError } = await getGroupIdForSite(token, existing.m365ObjectId);
+        const { groupId, error: groupError } = await getGroupIdForSite(appToken, existing.m365ObjectId);
 
         if (groupId) {
+          const delegatedToken = await getDelegatedTokenForRetention(req.session?.userId, connection.organizationId);
+          if (!delegatedToken) {
+            return res.status(401).json({ message: "No delegated token available. A user with SSO must sign in to enable label write-back to M365." });
+          }
+
           if (req.body.sensitivityLabelId) {
-            const result = await applySensitivityLabelToGroup(token, groupId, req.body.sensitivityLabelId);
+            const result = await applySensitivityLabelToGroup(delegatedToken, groupId, req.body.sensitivityLabelId);
             labelSyncResult = { pushed: result.success, error: result.error };
             if (result.success) {
               console.log(`[label-push] Applied sensitivity label ${req.body.sensitivityLabelId} to group ${groupId} for workspace ${existing.displayName}`);
             } else {
               console.error(`[label-push] Failed to apply label to group ${groupId}: ${result.error}`);
-              return res.status(502).json({ message: `Label saved locally but failed to apply in M365: ${result.error}`, labelSyncResult });
+              return res.status(502).json({ message: `Failed to apply label in M365: ${result.error}`, labelSyncResult });
             }
           } else {
-            const result = await removeSensitivityLabelFromGroup(token, groupId);
+            const result = await removeSensitivityLabelFromGroup(delegatedToken, groupId);
             labelSyncResult = { pushed: result.success, error: result.error };
             if (result.success) {
               console.log(`[label-push] Removed sensitivity label from group ${groupId} for workspace ${existing.displayName}`);
