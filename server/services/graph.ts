@@ -370,7 +370,7 @@ export async function fetchSiteLockState(spoToken: string, siteUrl: string): Pro
     });
 
     if (res.status === 403 || res.status === 401) {
-      return { lockState: "NoAccess" };
+      return { lockState: "Unlock", error: `Permission denied (${res.status}) — cannot determine lock state` };
     }
 
     if (!res.ok) {
