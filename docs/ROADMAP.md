@@ -10,8 +10,9 @@ The roadmap contains only features we have committed to build. For the full list
 
 1. [Vision & Strategy](#vision--strategy)
 2. [Current Focus (Q1 2026)](#current-focus-q1-2026)
-3. [Recently Completed](#recently-completed)
-4. [Feature Status Legend](#feature-status-legend)
+3. [Recommended for Roadmap (Pending Approval)](#recommended-for-roadmap-pending-approval)
+4. [Recently Completed](#recently-completed)
+5. [Feature Status Legend](#feature-status-legend)
 
 ---
 
@@ -57,7 +58,7 @@ Zenith empowers organizations to govern their Microsoft 365 environments with co
 
 ## Current Focus (Q1 2026)
 
-### 🔄 Governed Site Provisioning
+### 🔄 Governed Site Provisioning (BL-005)
 
 **Status:** 🔄 In Progress
 **Target Completion:** March 2026
@@ -70,6 +71,60 @@ Zenith empowers organizations to govern their Microsoft 365 environments with co
 - Sensitivity label assignment during provisioning
 - Dual ownership requirement (Primary Steward + Secondary Owner)
 - Provisioning audit trail
+
+---
+
+## Recommended for Roadmap (Pending Approval)
+
+The following six backlog items are recommended for advancement to the committed roadmap, selected based on a gap analysis against the authoritative Zenith Engineering Product Specification. They are ordered by priority — security foundations first, then high-value governance capabilities.
+
+### 📋 1. Comprehensive Audit Trail (BL-001)
+
+**Recommended Priority:** Critical — Spec Compliance
+**Backlog:** BL-001 | **Spec Reference:** Section 4.7
+**Why Now:** The spec states "all privileged actions are logged" as an engineering acceptance criterion. Currently only 4 auth actions are logged. Every governance action, tenant change, access denial, and sync operation should produce an audit record. This is foundational for compliance and must be in place before other governance features can claim auditability.
+**Effort Estimate:** Medium (primarily backend instrumentation — audit log table already exists)
+**Dependencies:** None — can proceed immediately
+
+### 📋 2. One-Owner Tenant Lock & Ownership Transfer (BL-002)
+
+**Recommended Priority:** Critical — Spec Compliance
+**Backlog:** BL-002 | **Spec Reference:** Section 4.3
+**Why Now:** The spec explicitly requires "a tenant may belong to exactly one Zenith organization" and this is listed as an engineering acceptance criterion (Section 10: "No tenant with multiple owners"). Currently there is no enforcement. This is a core MSP safety mechanism — without it, unauthorized organizations could claim the same tenant.
+**Effort Estimate:** Small-Medium (unique constraint + transfer workflow)
+**Dependencies:** BL-001 (audit trail should capture ownership changes)
+
+### 📋 3. Tenant Status Lifecycle (BL-004)
+
+**Recommended Priority:** Critical — Spec Compliance
+**Backlog:** BL-004 | **Spec Reference:** Section 4.2
+**Why Now:** The spec defines four tenant statuses (Pending, Active, Suspended, Revoked) but only Pending and Active are implemented. Without Suspended/Revoked states, there is no way to gracefully offboard a tenant, respond to consent revocation, or handle payment lapses. All tenant-scoped API endpoints must respect status before processing.
+**Effort Estimate:** Small-Medium (status field expansion + API guards)
+**Dependencies:** BL-001 (status transitions must be audited)
+
+### 📋 4. Operator Allowlisting (BL-003)
+
+**Recommended Priority:** Critical — Spec Compliance
+**Backlog:** BL-003 | **Spec Reference:** Section 4.4
+**Why Now:** The spec requires "tokens from non-allowlisted operators are rejected." This is a core MSP safety mechanism alongside the one-owner tenant lock. Without it, any organization with a valid Entra token could potentially perform operations. This is a security gap that should be closed before the product goes live with real MSP customers.
+**Effort Estimate:** Small-Medium (new table, middleware check, admin UI)
+**Dependencies:** BL-002 (tenant ownership must be established first)
+
+### 📋 5. Copilot Readiness Dashboard (BL-006)
+
+**Recommended Priority:** High — Strategic Value
+**Backlog:** BL-006 | **Spec Reference:** Section 3.3
+**Why Now:** This is the highest-value feature that naturally follows the Purview label work you're doing right now. Once labels are configured and syncing, the next question every customer will ask is "What does this mean for Copilot?" The spec requires explainable AI eligibility — answering "Why is Copilot allowed (or blocked) here?" Currently only basic pass/fail rules exist with no scoring, remediation guidance, or exclusion model.
+**Effort Estimate:** Medium (scoring engine, dashboard UI, remediation logic)
+**Dependencies:** Purview label sync (in progress), BL-005 provisioning (for lifecycle classification)
+
+### 📋 6. Lifecycle Management & Review Queue (BL-007)
+
+**Recommended Priority:** High — Core Governance
+**Backlog:** BL-007 | **Spec Reference:** Section 3.1
+**Why Now:** Stale site detection, orphaned workspace identification, and lifecycle classification are core governance capabilities. The data needed (last activity dates, ownership, labels) is already being synced. This is the natural complement to provisioning — creating sites governed is only half the story; maintaining them throughout their lifecycle is the other half.
+**Effort Estimate:** Medium (detection logic, review queue UI, bulk actions)
+**Dependencies:** BL-001 (governance actions must be audited), BL-009 job scheduling (for scheduled scans — can be manual first)
 
 ---
 
@@ -152,3 +207,4 @@ The following major features have been delivered and are live. See the [Changelo
 |--------|---------|
 | ✅ Complete | Feature is live in production |
 | 🔄 In Progress | Currently under active development and committed |
+| 📋 Recommended | Recommended for roadmap, pending approval to commit |

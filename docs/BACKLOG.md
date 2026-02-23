@@ -49,8 +49,9 @@ Gap analysis performed against the authoritative Zenith Engineering Product Spec
 | 4.7 | Audit Log Immutability & Export | Missing | High |
 | 5 | MGDC Integration (Enterprise tier) | Missing | Low |
 | 6 | File Share Analysis Module (Enterprise tier) | Missing | Low |
-| 7 | SharePoint Advanced Management integration | Missing | Medium |
+| 7 | Native M365 Policy Integration (SPO Advanced Mgmt, Teams policies, Entra access models) | Missing | Medium |
 | 10 | Engineering Acceptance Criteria — multi-owner prevention | Not enforced | Critical |
+| 10 | Engineering Acceptance Criteria — no polling-based data collection | Needs guardrails | Medium |
 
 ---
 
@@ -179,6 +180,7 @@ Gap analysis performed against the authoritative Zenith Engineering Product Spec
 **Status:** Backlog | **Design Doc:** [`docs/design/job-scheduling-system.md`](/docs/design/job-scheduling-system.md)
 **Description:** Background job scheduling system for automating recurring governance operations — tenant syncs, stale site detection, compliance scans, label audits, and notification delivery. Architecture follows the proven Orbit pattern with database-backed audit trail, concurrency guards, abort support, and admin monitoring UI.
 **Reference:** Orbit (`synozur-orbit`) `scheduled-jobs.ts` — best job scheduling implementation in the Synozur portfolio.
+**Constraint (Spec Section 10):** The spec states "No polling-based data collection." Jobs must be scheduled administrative operations (manual trigger or timed interval), NOT continuous polling or real-time monitoring. Each job runs once and completes — no long-lived polling loops or webhook listeners. This is consistent with Orbit's pattern (scheduled intervals, not continuous polling).
 **Acceptance Criteria:**
 - `scheduled_job_runs` table with full audit trail (job type, tenant, status, result, error, triggered by)
 - `scheduled_job_configs` table with per-org frequency settings (hourly/daily/weekly/disabled)
@@ -282,14 +284,15 @@ Gap analysis performed against the authoritative Zenith Engineering Product Spec
 - Non-interactive, read-only, time-bounded
 - Enterprise tier only
 
-### 🟢 BL-018: SharePoint Advanced Management Integration
+### 🟢 BL-018: Native M365 Policy Integration
 **Status:** Backlog | **Spec Reference:** Section 7
-**Description:** Integration with SharePoint Advanced Management features for enhanced governance controls. The spec positions Zenith as validating and configuring native Microsoft controls, not replacing them.
+**Description:** Integration with native Microsoft 365 policy controls. The spec positions Zenith as configuring, validating, and reporting on native Microsoft controls — not replacing them. This covers SharePoint Advanced Management, Teams policies, and Entra ID access models.
 **Acceptance Criteria:**
-- Restricted access control policy detection
-- Site lifecycle policy integration
-- Default sensitivity label policy visibility
-- Advanced sharing controls awareness
+- SharePoint Advanced Management: restricted access control detection, site lifecycle policies, default sensitivity label policies
+- Teams policies: Teams creation policies, guest access policies, channel governance
+- Entra ID access models: conditional access policy awareness, app consent policy visibility
+- Policy compliance reporting: which workspaces comply/violate each native policy
+- Read-only posture — Zenith reports on policy state, does not replace the admin centers
 
 ### 🟢 BL-019: AI-Powered Governance Insights
 **Status:** Exploring | **Target:** 2027
