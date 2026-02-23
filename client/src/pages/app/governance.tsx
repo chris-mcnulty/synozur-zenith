@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { Link } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import type { Workspace } from "@shared/schema";
@@ -35,7 +35,10 @@ import {
   Users,
   Activity,
   Building2,
-  Upload
+  Upload,
+  ArrowUpDown,
+  ArrowUp,
+  ArrowDown
 } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
@@ -71,6 +74,17 @@ export default function GovernancePage() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [isBulkEditOpen, setIsBulkEditOpen] = useState(false);
   const [showFilterDrawer, setShowFilterDrawer] = useState(false);
+
+  const [sortColumn, setSortColumn] = useState<string>("displayName");
+  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
+
+  const [filterType, setFilterType] = useState("all");
+  const [filterSensitivity, setFilterSensitivity] = useState("all");
+  const [filterMetadata, setFilterMetadata] = useState("all");
+  const [filterDepartment, setFilterDepartment] = useState("all");
+  const [filterSize, setFilterSize] = useState("all");
+  const [filterAge, setFilterAge] = useState("all");
+  const [filterCopilot, setFilterCopilot] = useState("all");
 
   const [bulkSensitivity, setBulkSensitivity] = useState("");
   const [bulkDepartment, setBulkDepartment] = useState("");
@@ -149,10 +163,10 @@ export default function GovernancePage() {
   });
 
   const toggleSelectAll = () => {
-    if (selectedIds.size === workspaces.length) {
+    if (selectedIds.size === filteredAndSortedWorkspaces.length) {
       setSelectedIds(new Set());
     } else {
-      setSelectedIds(new Set(workspaces.map(w => w.id)));
+      setSelectedIds(new Set(filteredAndSortedWorkspaces.map(w => w.id)));
     }
   };
 
@@ -245,6 +259,129 @@ export default function GovernancePage() {
     }
   };
 
+  const handleSort = (column: string) => {
+    if (sortColumn === column) {
+      setSortDirection(prev => prev === "asc" ? "desc" : "asc");
+    } else {
+      setSortColumn(column);
+      setSortDirection("asc");
+    }
+  };
+
+  const getSortIcon = (column: string) => {
+    if (sortColumn !== column) return <ArrowUpDown className="w-3 h-3 ml-1 opacity-40" />;
+    return sortDirection === "asc"
+      ? <ArrowUp className="w-3 h-3 ml-1" />
+      : <ArrowDown className="w-3 h-3 ml-1" />;
+  };
+
+  const clearAllFilters = () => {
+    setFilterType("all");
+    setFilterSensitivity("all");
+    setFilterMetadata("all");
+    setFilterDepartment("all");
+    setFilterSize("all");
+    setFilterAge("all");
+    setFilterCopilot("all");
+  };
+
+  const activeFilterCount = [filterType, filterSensitivity, filterMetadata, filterDepartment, filterSize, filterAge, filterCopilot].filter(v => v !== "all").length;
+
+  const filteredAndSortedWorkspaces = useMemo(() => {
+    let result = [...workspaces];
+
+    if (filterType !== "all") {
+      result = result.filter(ws => ws.type.toLowerCase() === filterType.toLowerCase());
+    }
+
+    if (filterSensitivity !== "all") {
+      if (filterSensitivity === "__none__") {
+        result = result.filter(ws => !ws.sensitivityLabelId);
+      } else {
+        result = result.filter(ws => ws.sensitivityLabelId === filterSensitivity);
+      }
+    }
+
+    if (filterMetadata !== "all") {
+      result = result.filter(ws => {
+        const filled = [ws.department, ws.costCenter].filter(Boolean).length;
+        if (filterMetadata === "complete") return filled === 2;
+        if (filterMetadata === "missing") return filled < 2;
+        return true;
+      });
+    }
+
+    if (filterDepartment !== "all") {
+      result = result.filter(ws => ws.department === filterDepartment);
+    }
+
+    if (filterSize !== "all") {
+      const MB = 1024 * 1024;
+      const GB = 1024 * MB;
+      result = result.filter(ws => {
+        const bytes = ws.storageUsedBytes ?? 0;
+        switch (filterSize) {
+          case "lt10mb": return bytes < 10 * MB;
+          case "10to100mb": return bytes >= 10 * MB && bytes < 100 * MB;
+          case "100mbto1gb": return bytes >= 100 * MB && bytes < GB;
+          case "gt1gb": return bytes >= GB;
+          default: return true;
+        }
+      });
+    }
+
+    if (filterAge !== "all") {
+      const now = Date.now();
+      const DAY = 86400000;
+      result = result.filter(ws => {
+        if (!ws.siteCreatedDate) return false;
+        const created = new Date(ws.siteCreatedDate).getTime();
+        const age = now - created;
+        switch (filterAge) {
+          case "lt30d": return age < 30 * DAY;
+          case "1to6m": return age >= 30 * DAY && age < 180 * DAY;
+          case "6to12m": return age >= 180 * DAY && age < 365 * DAY;
+          case "gt1y": return age >= 365 * DAY;
+          default: return true;
+        }
+      });
+    }
+
+    if (filterCopilot !== "all") {
+      result = result.filter(ws => {
+        if (filterCopilot === "ready") return ws.copilotReady === true;
+        if (filterCopilot === "not_ready") return ws.copilotReady !== true;
+        return true;
+      });
+    }
+
+    result.sort((a, b) => {
+      let cmp = 0;
+      switch (sortColumn) {
+        case "displayName":
+          cmp = (a.displayName || "").localeCompare(b.displayName || "");
+          break;
+        case "storageUsedBytes":
+          cmp = (a.storageUsedBytes ?? 0) - (b.storageUsedBytes ?? 0);
+          break;
+        case "fileCount":
+          cmp = (a.fileCount ?? 0) - (b.fileCount ?? 0);
+          break;
+        case "lastActivityDate": {
+          const da = a.lastActivityDate ? new Date(a.lastActivityDate).getTime() : 0;
+          const db = b.lastActivityDate ? new Date(b.lastActivityDate).getTime() : 0;
+          cmp = da - db;
+          break;
+        }
+        default:
+          cmp = (a.displayName || "").localeCompare(b.displayName || "");
+      }
+      return sortDirection === "asc" ? cmp : -cmp;
+    });
+
+    return result;
+  }, [workspaces, filterType, filterSensitivity, filterMetadata, filterDepartment, filterSize, filterAge, filterCopilot, sortColumn, sortDirection]);
+
   if (isError) {
     return (
       <div className="space-y-6 animate-in fade-in duration-500 pb-10">
@@ -271,9 +408,14 @@ export default function GovernancePage() {
           <p className="text-muted-foreground mt-1">Enumerate and inspect SharePoint sites across your tenant</p>
         </div>
         <div className="flex gap-3">
-          <Button variant="outline" className="gap-2 rounded-full" onClick={() => setShowFilterDrawer(true)}>
+          <Button variant="outline" className="gap-2 rounded-full relative" onClick={() => setShowFilterDrawer(true)} data-testid="button-open-filters">
             <Filter className="w-4 h-4" />
             Filters
+            {activeFilterCount > 0 && (
+              <Badge className="absolute -top-2 -right-2 h-5 w-5 p-0 flex items-center justify-center text-[10px] bg-primary text-primary-foreground" data-testid="badge-active-filter-count">
+                {activeFilterCount}
+              </Badge>
+            )}
           </Button>
           <Button className="gap-2 rounded-full shadow-md shadow-primary/20">
             Export CSV
@@ -337,16 +479,24 @@ export default function GovernancePage() {
                   <TableRow className="hover:bg-transparent">
                     <TableHead className="w-[40px] pl-4">
                       <Checkbox 
-                        checked={selectedIds.size === workspaces.length && workspaces.length > 0} 
+                        checked={selectedIds.size === filteredAndSortedWorkspaces.length && filteredAndSortedWorkspaces.length > 0} 
                         onCheckedChange={toggleSelectAll}
                         aria-label="Select all"
                       />
                     </TableHead>
-                    <TableHead className="min-w-[240px]">Site</TableHead>
+                    <TableHead className="min-w-[240px] cursor-pointer select-none" onClick={() => handleSort("displayName")} data-testid="sort-header-site">
+                      <span className="inline-flex items-center">Site{getSortIcon("displayName")}</span>
+                    </TableHead>
                     <TableHead className="min-w-[160px]">Owner</TableHead>
-                    <TableHead className="min-w-[160px]">Storage</TableHead>
-                    <TableHead className="min-w-[100px]">Files</TableHead>
-                    <TableHead className="min-w-[100px]">Activity</TableHead>
+                    <TableHead className="min-w-[160px] cursor-pointer select-none" onClick={() => handleSort("storageUsedBytes")} data-testid="sort-header-storage">
+                      <span className="inline-flex items-center">Storage{getSortIcon("storageUsedBytes")}</span>
+                    </TableHead>
+                    <TableHead className="min-w-[100px] cursor-pointer select-none" onClick={() => handleSort("fileCount")} data-testid="sort-header-files">
+                      <span className="inline-flex items-center">Files{getSortIcon("fileCount")}</span>
+                    </TableHead>
+                    <TableHead className="min-w-[100px] cursor-pointer select-none" onClick={() => handleSort("lastActivityDate")} data-testid="sort-header-activity">
+                      <span className="inline-flex items-center">Activity{getSortIcon("lastActivityDate")}</span>
+                    </TableHead>
                     <TableHead className="min-w-[100px]">Metadata</TableHead>
                     <TableHead>Sensitivity</TableHead>
                     <TableHead>Copilot</TableHead>
@@ -354,7 +504,7 @@ export default function GovernancePage() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {workspaces.map((ws) => {
+                  {filteredAndSortedWorkspaces.map((ws) => {
                     const storage = formatStorage(ws.storageUsedBytes, ws.storageAllocatedBytes);
                     const templateLabel = getTemplateLabel(ws.rootWebTemplate);
                     return (
@@ -536,8 +686,10 @@ export default function GovernancePage() {
               </Table>
               </div>
               
-              <div className="p-4 border-t border-border/50 text-xs text-center text-muted-foreground">
-                Showing {workspaces.length} workspaces
+              <div className="p-4 border-t border-border/50 text-xs text-center text-muted-foreground" data-testid="text-workspace-count">
+                {activeFilterCount > 0
+                  ? `Showing ${filteredAndSortedWorkspaces.length} of ${workspaces.length} workspaces`
+                  : `Showing ${workspaces.length} workspaces`}
               </div>
             </>
           )}
@@ -651,11 +803,11 @@ export default function GovernancePage() {
               Narrow down workspaces by attributes and policies.
             </SheetDescription>
           </SheetHeader>
-          <div className="py-6 space-y-6">
+          <div className="py-6 space-y-6 overflow-y-auto max-h-[calc(100vh-200px)]">
             <div className="space-y-2">
               <Label>Workspace Type</Label>
-              <Select defaultValue="all">
-                <SelectTrigger className="w-full bg-background/50">
+              <Select value={filterType} onValueChange={setFilterType}>
+                <SelectTrigger className="w-full bg-background/50" data-testid="filter-type">
                   <SelectValue placeholder="All types" />
                 </SelectTrigger>
                 <SelectContent>
@@ -669,8 +821,8 @@ export default function GovernancePage() {
             
             <div className="space-y-2">
               <Label>Sensitivity Label</Label>
-              <Select defaultValue="all">
-                <SelectTrigger className="w-full bg-background/50">
+              <Select value={filterSensitivity} onValueChange={setFilterSensitivity}>
+                <SelectTrigger className="w-full bg-background/50" data-testid="filter-sensitivity">
                   <SelectValue placeholder="All labels" />
                 </SelectTrigger>
                 <SelectContent>
@@ -690,8 +842,8 @@ export default function GovernancePage() {
 
             <div className="space-y-2">
               <Label>Metadata Status</Label>
-              <Select defaultValue="missing">
-                <SelectTrigger className="w-full bg-background/50 border-amber-500/50 focus:ring-amber-500/50">
+              <Select value={filterMetadata} onValueChange={setFilterMetadata}>
+                <SelectTrigger className="w-full bg-background/50" data-testid="filter-metadata">
                   <SelectValue placeholder="Select status" />
                 </SelectTrigger>
                 <SelectContent>
@@ -701,13 +853,78 @@ export default function GovernancePage() {
                 </SelectContent>
               </Select>
             </div>
+
+            <div className="space-y-2">
+              <Label>Department</Label>
+              <Select value={filterDepartment} onValueChange={setFilterDepartment}>
+                <SelectTrigger className="w-full bg-background/50" data-testid="filter-department">
+                  <SelectValue placeholder="All Departments" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Departments</SelectItem>
+                  {deptOptions.map((d) => (
+                    <SelectItem key={d.id} value={d.value}>
+                      {d.value}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-2">
+              <Label>Size</Label>
+              <Select value={filterSize} onValueChange={setFilterSize}>
+                <SelectTrigger className="w-full bg-background/50" data-testid="filter-size">
+                  <SelectValue placeholder="All Sizes" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Sizes</SelectItem>
+                  <SelectItem value="lt10mb">&lt; 10 MB</SelectItem>
+                  <SelectItem value="10to100mb">10 MB – 100 MB</SelectItem>
+                  <SelectItem value="100mbto1gb">100 MB – 1 GB</SelectItem>
+                  <SelectItem value="gt1gb">&gt; 1 GB</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-2">
+              <Label>Age</Label>
+              <Select value={filterAge} onValueChange={setFilterAge}>
+                <SelectTrigger className="w-full bg-background/50" data-testid="filter-age">
+                  <SelectValue placeholder="All Ages" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Ages</SelectItem>
+                  <SelectItem value="lt30d">&lt; 30 days</SelectItem>
+                  <SelectItem value="1to6m">1-6 months</SelectItem>
+                  <SelectItem value="6to12m">6-12 months</SelectItem>
+                  <SelectItem value="gt1y">&gt; 1 year</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-2">
+              <Label>Copilot Ready</Label>
+              <Select value={filterCopilot} onValueChange={setFilterCopilot}>
+                <SelectTrigger className="w-full bg-background/50" data-testid="filter-copilot">
+                  <SelectValue placeholder="All" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All</SelectItem>
+                  <SelectItem value="ready">Ready</SelectItem>
+                  <SelectItem value="not_ready">Not Ready</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
           </div>
           <SheetFooter>
-            <Button variant="outline" onClick={() => setShowFilterDrawer(false)} className="w-full">
+            {activeFilterCount > 0 && (
+              <Button variant="ghost" onClick={clearAllFilters} className="w-full text-destructive hover:text-destructive" data-testid="button-clear-all-filters">
+                <X className="w-4 h-4 mr-1" /> Clear All ({activeFilterCount})
+              </Button>
+            )}
+            <Button onClick={() => setShowFilterDrawer(false)} className="w-full" data-testid="button-close-filters">
               Close Filters
-            </Button>
-            <Button onClick={() => setShowFilterDrawer(false)} className="w-full">
-              Apply Filters
             </Button>
           </SheetFooter>
         </SheetContent>
