@@ -44,6 +44,7 @@ export const workspaces = pgTable("workspaces", {
   hubSiteId: text("hub_site_id"),
   parentHubSiteId: text("parent_hub_site_id"),
   sensitivityLabelId: text("sensitivity_label_id"),
+  retentionLabelId: text("retention_label_id"),
   rootWebTemplate: text("root_web_template"),
   isDeleted: boolean("is_deleted").default(false),
   siteCreatedDate: text("site_created_date"),
@@ -194,6 +195,31 @@ export const insertSensitivityLabelSchema = createInsertSchema(sensitivityLabels
 
 export type InsertSensitivityLabel = z.infer<typeof insertSensitivityLabelSchema>;
 export type SensitivityLabel = typeof sensitivityLabels.$inferSelect;
+
+export const retentionLabels = pgTable("retention_labels", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: text("tenant_id").notNull(),
+  labelId: text("label_id").notNull(),
+  name: text("name").notNull(),
+  description: text("description"),
+  retentionDuration: text("retention_duration"),
+  retentionAction: text("retention_action"),
+  behaviorDuringRetentionPeriod: text("behavior_during_retention_period"),
+  actionAfterRetentionPeriod: text("action_after_retention_period"),
+  isActive: boolean("is_active").notNull().default(true),
+  isRecordLabel: boolean("is_record_label").notNull().default(false),
+  syncedAt: timestamp("synced_at").defaultNow(),
+}, (table) => [
+  unique("uq_tenant_retention_label").on(table.tenantId, table.labelId),
+]);
+
+export const insertRetentionLabelSchema = createInsertSchema(retentionLabels).omit({
+  id: true,
+  syncedAt: true,
+});
+
+export type InsertRetentionLabel = z.infer<typeof insertRetentionLabelSchema>;
+export type RetentionLabel = typeof retentionLabels.$inferSelect;
 
 export const SERVICE_PLANS = ["TRIAL", "STANDARD", "PROFESSIONAL", "ENTERPRISE"] as const;
 export type ServicePlanTier = typeof SERVICE_PLANS[number];

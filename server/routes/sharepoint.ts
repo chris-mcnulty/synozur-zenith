@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { storage } from "../storage";
 import { insertWorkspaceSchema, insertProvisioningRequestSchema, type ServicePlanTier } from "@shared/schema";
-import { fetchSharePointSites, fetchSiteUsageReport, fetchSiteDriveOwner, fetchSiteAnalytics, getAppToken, writeSitePropertyBag, fetchSensitivityLabels, getSpoToken, fetchHubSites, fetchSiteHubAssociation } from "../services/graph";
+import { fetchSharePointSites, fetchSiteUsageReport, fetchSiteDriveOwner, fetchSiteAnalytics, getAppToken, writeSitePropertyBag, fetchSensitivityLabels, fetchRetentionLabels, getSpoToken, fetchHubSites, fetchSiteHubAssociation } from "../services/graph";
 import { getPlanFeatures } from "../services/feature-gate";
 
 const router = Router();
@@ -293,6 +293,36 @@ router.post("/api/admin/tenants/:id/sync", async (req, res) => {
       }
     }
 
+    let retentionSyncResult: { synced: number; error?: string } = { synced: 0 };
+    if (token) {
+      try {
+        console.log(`[retention-sync] Fetching retention labels for tenant ${connection.tenantId}...`);
+        const retResult = await fetchRetentionLabels(token);
+        if (retResult.error) {
+          console.error(`[retention-sync] Error from Graph API: ${retResult.error}`);
+          retentionSyncResult.error = retResult.error;
+        }
+        console.log(`[retention-sync] Graph API returned ${retResult.labels.length} retention labels`);
+        for (const label of retResult.labels) {
+          await storage.upsertRetentionLabel({
+            tenantId: connection.tenantId,
+            labelId: label.labelId,
+            name: label.name,
+            description: label.description || null,
+            retentionDuration: label.retentionDuration || null,
+            retentionAction: label.retentionAction || null,
+            behaviorDuringRetentionPeriod: label.behaviorDuringRetentionPeriod || null,
+            actionAfterRetentionPeriod: label.actionAfterRetentionPeriod || null,
+            isActive: label.isActive,
+            isRecordLabel: label.isRecordLabel,
+          });
+          retentionSyncResult.synced++;
+        }
+      } catch (e: any) {
+        retentionSyncResult.error = e.message;
+      }
+    }
+
     let hubSyncResult: { hubSitesFound: number; sitesEnriched: number; error?: string } = { hubSitesFound: 0, sitesEnriched: 0 };
     try {
       const spoToken = await getSpoToken(connection.tenantId, clientId, clientSecret, connection.domain);
@@ -370,6 +400,7 @@ router.post("/api/admin/tenants/:id/sync", async (req, res) => {
       usageReportError: usageResult.error || null,
       enrichErrors: enrichErrors.length > 0 ? enrichErrors : undefined,
       sensitivityLabels: labelSyncResult,
+      retentionLabels: retentionSyncResult,
       hubSites: hubSyncResult,
     });
   } catch (err: any) {

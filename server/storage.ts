@@ -12,6 +12,7 @@ import {
   domainBlocklist,
   tenantDataDictionaries,
   sensitivityLabels,
+  retentionLabels,
   type Workspace,
   type InsertWorkspace,
   type ProvisioningRequest,
@@ -34,6 +35,8 @@ import {
   type InsertTenantDataDictionary,
   type SensitivityLabel,
   type InsertSensitivityLabel,
+  type RetentionLabel,
+  type InsertRetentionLabel,
   tenantDepartments,
 } from "@shared/schema";
 
@@ -93,6 +96,12 @@ export interface IStorage {
   getSensitivityLabelsByTenantId(tenantId: string): Promise<SensitivityLabel[]>;
   upsertSensitivityLabel(label: InsertSensitivityLabel): Promise<SensitivityLabel>;
   deleteSensitivityLabelsByTenantId(tenantId: string): Promise<void>;
+
+  getRetentionLabelsByTenantId(tenantId: string): Promise<RetentionLabel[]>;
+  upsertRetentionLabel(label: InsertRetentionLabel): Promise<RetentionLabel>;
+  deleteRetentionLabelsByTenantId(tenantId: string): Promise<void>;
+
+  getWorkspaceLabelCoverage(tenantId: string): Promise<{ workspaceId: string; displayName: string; siteUrl: string | null; sensitivityLabelId: string | null; retentionLabelId: string | null; type: string }[]>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -401,6 +410,60 @@ export class DatabaseStorage implements IStorage {
 
   async deleteSensitivityLabelsByTenantId(tenantId: string): Promise<void> {
     await db.delete(sensitivityLabels).where(eq(sensitivityLabels.tenantId, tenantId));
+  }
+
+  async getRetentionLabelsByTenantId(tenantId: string): Promise<RetentionLabel[]> {
+    return db.select().from(retentionLabels)
+      .where(eq(retentionLabels.tenantId, tenantId))
+      .orderBy(retentionLabels.name);
+  }
+
+  async upsertRetentionLabel(label: InsertRetentionLabel): Promise<RetentionLabel> {
+    const [result] = await db.insert(retentionLabels)
+      .values(label)
+      .onConflictDoUpdate({
+        target: [retentionLabels.tenantId, retentionLabels.labelId],
+        set: {
+          name: label.name,
+          description: label.description,
+          retentionDuration: label.retentionDuration,
+          retentionAction: label.retentionAction,
+          behaviorDuringRetentionPeriod: label.behaviorDuringRetentionPeriod,
+          actionAfterRetentionPeriod: label.actionAfterRetentionPeriod,
+          isActive: label.isActive,
+          isRecordLabel: label.isRecordLabel,
+          syncedAt: new Date(),
+        },
+      })
+      .returning();
+    return result;
+  }
+
+  async deleteRetentionLabelsByTenantId(tenantId: string): Promise<void> {
+    await db.delete(retentionLabels).where(eq(retentionLabels.tenantId, tenantId));
+  }
+
+  async getWorkspaceLabelCoverage(tenantId: string): Promise<{ workspaceId: string; displayName: string; siteUrl: string | null; sensitivityLabelId: string | null; retentionLabelId: string | null; type: string }[]> {
+    const conns = await db.select().from(tenantConnections).where(eq(tenantConnections.tenantId, tenantId));
+    const connIds = conns.map(c => c.id);
+    if (connIds.length === 0) return [];
+
+    const results = await db.select({
+      workspaceId: workspaces.id,
+      displayName: workspaces.displayName,
+      siteUrl: workspaces.siteUrl,
+      sensitivityLabelId: workspaces.sensitivityLabelId,
+      retentionLabelId: workspaces.retentionLabelId,
+      type: workspaces.type,
+    }).from(workspaces)
+      .where(
+        connIds.length === 1
+          ? eq(workspaces.tenantConnectionId, connIds[0])
+          : sql`${workspaces.tenantConnectionId} IN (${sql.join(connIds.map(id => sql`${id}`), sql`, `)})`
+      )
+      .orderBy(workspaces.displayName);
+
+    return results;
   }
 }
 

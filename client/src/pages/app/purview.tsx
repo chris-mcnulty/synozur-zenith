@@ -16,12 +16,18 @@ import {
   Info,
   AlertCircle,
   Loader2,
-  Download
+  Download,
+  BarChart3,
+  Clock,
+  CheckCircle2,
+  XCircle,
+  Search,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useTenant } from "@/lib/tenant-context";
 import { queryClient } from "@/lib/queryClient";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Input } from "@/components/ui/input";
 import {
   Table,
   TableBody,
@@ -48,16 +54,72 @@ type SensitivityLabel = {
   syncedAt: string | null;
 };
 
+type RetentionLabel = {
+  id: string;
+  tenantId: string;
+  labelId: string;
+  name: string;
+  description: string | null;
+  retentionDuration: string | null;
+  retentionAction: string | null;
+  behaviorDuringRetentionPeriod: string | null;
+  actionAfterRetentionPeriod: string | null;
+  isActive: boolean;
+  isRecordLabel: boolean;
+  syncedAt: string | null;
+};
+
+type LabelCoverageWorkspace = {
+  workspaceId: string;
+  displayName: string;
+  siteUrl: string | null;
+  sensitivityLabelId: string | null;
+  retentionLabelId: string | null;
+  type: string;
+  sensitivityLabelName: string | null;
+  retentionLabelName: string | null;
+};
+
+type LabelCoverageStats = {
+  totalSites: number;
+  withSensitivityLabel: number;
+  withRetentionLabel: number;
+  unlabeled: number;
+  sensitivityCoveragePercent: number;
+  retentionCoveragePercent: number;
+};
+
+type LabelCoverageResponse = {
+  workspaces: LabelCoverageWorkspace[];
+  stats: LabelCoverageStats;
+};
+
 export default function PurviewConfigPage() {
   const { toast } = useToast();
   const { selectedTenant } = useTenant();
   const tenantConnectionId = selectedTenant?.id;
-  const [isSyncing, setIsSyncing] = useState(false);
+  const [isSyncingSensitivity, setIsSyncingSensitivity] = useState(false);
+  const [isSyncingRetention, setIsSyncingRetention] = useState(false);
   const [syncError, setSyncError] = useState<string | null>(null);
+  const [retentionSyncError, setRetentionSyncError] = useState<string | null>(null);
+  const [coverageSearch, setCoverageSearch] = useState("");
+  const [coverageFilter, setCoverageFilter] = useState<"all" | "labeled" | "unlabeled">("all");
 
   const { data: labels = [], isLoading, refetch, isRefetching } = useQuery<SensitivityLabel[]>({
     queryKey: ["/api/admin/tenants", tenantConnectionId, "sensitivity-labels"],
     queryFn: () => fetch(`/api/admin/tenants/${tenantConnectionId}/sensitivity-labels`).then(r => r.json()),
+    enabled: !!tenantConnectionId,
+  });
+
+  const { data: retentionLabelsData = [], isLoading: isLoadingRetention } = useQuery<RetentionLabel[]>({
+    queryKey: ["/api/admin/tenants", tenantConnectionId, "retention-labels"],
+    queryFn: () => fetch(`/api/admin/tenants/${tenantConnectionId}/retention-labels`).then(r => r.json()),
+    enabled: !!tenantConnectionId,
+  });
+
+  const { data: coverageData, isLoading: isLoadingCoverage } = useQuery<LabelCoverageResponse>({
+    queryKey: ["/api/admin/tenants", tenantConnectionId, "label-coverage"],
+    queryFn: () => fetch(`/api/admin/tenants/${tenantConnectionId}/label-coverage`).then(r => r.json()),
     enabled: !!tenantConnectionId,
   });
 
@@ -68,34 +130,67 @@ export default function PurviewConfigPage() {
     return !latest || new Date(l.syncedAt) > new Date(latest) ? l.syncedAt : latest;
   }, null as string | null) : null;
 
-  const handleSyncLabels = async () => {
+  const retentionLastSynced = retentionLabelsData.length > 0 ? retentionLabelsData.reduce((latest, l) => {
+    if (!l.syncedAt) return latest;
+    return !latest || new Date(l.syncedAt) > new Date(latest) ? l.syncedAt : latest;
+  }, null as string | null) : null;
+
+  const handleSyncSensitivityLabels = async () => {
     if (!tenantConnectionId) return;
-    setIsSyncing(true);
+    setIsSyncingSensitivity(true);
     setSyncError(null);
     try {
-      const res = await fetch(`/api/admin/tenants/${tenantConnectionId}/sensitivity-labels/sync`, {
-        method: "POST",
-      });
+      const res = await fetch(`/api/admin/tenants/${tenantConnectionId}/sensitivity-labels/sync`, { method: "POST" });
       const data = await res.json();
       if (data.error) {
         setSyncError(data.error);
         toast({ title: "Label sync completed with errors", description: data.error, variant: "destructive" });
       } else {
-        toast({ title: "Labels synced from Purview", description: `${data.synced} labels synced from Microsoft Purview.` });
+        toast({ title: "Sensitivity labels synced", description: `${data.synced} labels synced from Microsoft Purview.` });
       }
       queryClient.invalidateQueries({ queryKey: ["/api/admin/tenants", tenantConnectionId, "sensitivity-labels"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/tenants", tenantConnectionId, "label-coverage"] });
     } catch (err: any) {
       setSyncError(err.message);
       toast({ title: "Sync failed", description: err.message, variant: "destructive" });
     } finally {
-      setIsSyncing(false);
+      setIsSyncingSensitivity(false);
     }
   };
 
-  const handleRefresh = async () => {
-    await refetch();
-    toast({ title: "Labels refreshed", description: "Showing latest synced label inventory." });
+  const handleSyncRetentionLabels = async () => {
+    if (!tenantConnectionId) return;
+    setIsSyncingRetention(true);
+    setRetentionSyncError(null);
+    try {
+      const res = await fetch(`/api/admin/tenants/${tenantConnectionId}/retention-labels/sync`, { method: "POST" });
+      const data = await res.json();
+      if (data.error) {
+        setRetentionSyncError(data.error);
+        toast({ title: "Retention sync completed with errors", description: data.error, variant: "destructive" });
+      } else {
+        toast({ title: "Retention labels synced", description: `${data.synced} retention labels synced from Microsoft Purview.` });
+      }
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/tenants", tenantConnectionId, "retention-labels"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/tenants", tenantConnectionId, "label-coverage"] });
+    } catch (err: any) {
+      setRetentionSyncError(err.message);
+      toast({ title: "Sync failed", description: err.message, variant: "destructive" });
+    } finally {
+      setIsSyncingRetention(false);
+    }
   };
+
+  const filteredCoverageWorkspaces = (coverageData?.workspaces || []).filter(w => {
+    const matchesSearch = !coverageSearch || 
+      w.displayName.toLowerCase().includes(coverageSearch.toLowerCase()) ||
+      (w.siteUrl && w.siteUrl.toLowerCase().includes(coverageSearch.toLowerCase()));
+    
+    if (!matchesSearch) return false;
+    if (coverageFilter === "labeled") return w.sensitivityLabelId || w.retentionLabelId;
+    if (coverageFilter === "unlabeled") return !w.sensitivityLabelId && !w.retentionLabelId;
+    return true;
+  });
 
   const renderLabelRow = (label: SensitivityLabel) => (
     <TableRow key={label.labelId} data-testid={`row-label-${label.labelId}`}>
@@ -157,42 +252,30 @@ export default function PurviewConfigPage() {
     </TableRow>
   );
 
+  const stats = coverageData?.stats;
+
   return (
     <div className="space-y-8 animate-in fade-in duration-500 pb-12 max-w-6xl mx-auto">
       <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
         <div>
           <h1 className="text-3xl font-bold tracking-tight" data-testid="text-purview-title">Purview Integration</h1>
           <p className="text-muted-foreground mt-1 max-w-2xl">
-            View and manage Microsoft Purview sensitivity labels synced from your tenant. Labels are imported during tenant sync.
+            Sensitivity and retention label inventory, coverage tracking, and governance alignment with Microsoft Purview.
           </p>
-        </div>
-        <div className="flex gap-3 items-center">
-          {lastSynced && (
-            <span className="text-xs text-muted-foreground">
-              Last synced: {new Date(lastSynced).toLocaleString()}
-            </span>
-          )}
-          <Button onClick={handleRefresh} disabled={isRefetching} variant="outline" className="gap-2" data-testid="button-refresh-labels">
-            <RefreshCcw className={`w-4 h-4 ${isRefetching ? "animate-spin" : ""}`} />
-            Refresh
-          </Button>
-          <Button onClick={handleSyncLabels} disabled={isSyncing} className="gap-2 shadow-md shadow-primary/20" data-testid="button-sync-labels">
-            {isSyncing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
-            Sync from Purview
-          </Button>
         </div>
       </div>
 
-      {syncError && (
+      {(syncError || retentionSyncError) && (
         <Card className="border-red-500/20 bg-red-500/5" data-testid="card-sync-error">
           <CardContent className="p-4 flex items-start gap-3">
             <AlertCircle className="w-5 h-5 text-red-500 shrink-0 mt-0.5" />
             <div>
               <h4 className="font-semibold text-sm text-red-600">Label Sync Error</h4>
-              <p className="text-xs text-red-500 mt-1">{syncError}</p>
+              <p className="text-xs text-red-500 mt-1">{syncError || retentionSyncError}</p>
               <p className="text-xs text-muted-foreground mt-2">
-                Common causes: missing <code className="bg-muted px-1 rounded">InformationProtectionPolicy.Read.All</code> permission on the Entra app registration,
-                or the tenant hasn't enabled sensitivity labels for Groups & Sites.
+                Common causes: missing permissions on the Entra app registration
+                ({syncError ? <code className="bg-muted px-1 rounded">InformationProtectionPolicy.Read.All</code> : <code className="bg-muted px-1 rounded">RecordsManagement.Read.All</code>}),
+                or the tenant lacks the required M365 licensing.
               </p>
             </div>
           </CardContent>
@@ -209,25 +292,35 @@ export default function PurviewConfigPage() {
       )}
 
       {tenantConnectionId && (
-        <Tabs defaultValue="siteLabels" className="w-full space-y-6">
+        <Tabs defaultValue="coverage" className="w-full space-y-6">
           <TabsList className="bg-transparent h-12 gap-6 w-full justify-start border-b border-border/50 p-0 rounded-none mb-2">
+            <TabsTrigger 
+              value="coverage" 
+              className="data-[state=active]:bg-transparent data-[state=active]:shadow-none data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:text-foreground rounded-none px-1 h-12 text-muted-foreground data-[state=active]:font-semibold"
+              data-testid="tab-label-coverage"
+            >
+              <BarChart3 className="w-4 h-4 mr-2" /> Label Coverage
+            </TabsTrigger>
             <TabsTrigger 
               value="siteLabels" 
               className="data-[state=active]:bg-transparent data-[state=active]:shadow-none data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:text-foreground rounded-none px-1 h-12 text-muted-foreground data-[state=active]:font-semibold"
+              data-testid="tab-site-labels"
             >
               <Globe className="w-4 h-4 mr-2" /> Site Labels
               <Badge variant="secondary" className="ml-2 text-[10px]">{siteLabels.length}</Badge>
             </TabsTrigger>
             <TabsTrigger 
-              value="fileLabels" 
+              value="retentionLabels" 
               className="data-[state=active]:bg-transparent data-[state=active]:shadow-none data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:text-foreground rounded-none px-1 h-12 text-muted-foreground data-[state=active]:font-semibold"
+              data-testid="tab-retention-labels"
             >
-              <Tag className="w-4 h-4 mr-2" /> File Labels
-              <Badge variant="secondary" className="ml-2 text-[10px]">{fileLabels.length}</Badge>
+              <Clock className="w-4 h-4 mr-2" /> Retention Labels
+              <Badge variant="secondary" className="ml-2 text-[10px]">{retentionLabelsData.length}</Badge>
             </TabsTrigger>
             <TabsTrigger 
               value="allLabels" 
               className="data-[state=active]:bg-transparent data-[state=active]:shadow-none data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:text-foreground rounded-none px-1 h-12 text-muted-foreground data-[state=active]:font-semibold"
+              data-testid="tab-all-labels"
             >
               <ShieldCheck className="w-4 h-4 mr-2" /> All Labels
               <Badge variant="secondary" className="ml-2 text-[10px]">{labels.length}</Badge>
@@ -235,12 +328,181 @@ export default function PurviewConfigPage() {
             <TabsTrigger 
               value="orchestration" 
               className="data-[state=active]:bg-transparent data-[state=active]:shadow-none data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:text-foreground rounded-none px-1 h-12 text-muted-foreground data-[state=active]:font-semibold"
+              data-testid="tab-orchestration"
             >
               <Fingerprint className="w-4 h-4 mr-2" /> Orchestration
             </TabsTrigger>
           </TabsList>
 
+          {/* ── Label Coverage Tab ── */}
+          <TabsContent value="coverage" className="space-y-6 m-0 animate-in fade-in slide-in-from-bottom-4">
+            {isLoadingCoverage ? (
+              <div className="p-8 text-center text-muted-foreground text-sm">Loading coverage data...</div>
+            ) : stats ? (
+              <>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                  <Card className="glass-panel border-border/50">
+                    <CardContent className="p-4 text-center">
+                      <div className="text-2xl font-bold" data-testid="text-total-sites">{stats.totalSites}</div>
+                      <div className="text-xs text-muted-foreground mt-1">Total Sites</div>
+                    </CardContent>
+                  </Card>
+                  <Card className="glass-panel border-border/50">
+                    <CardContent className="p-4 text-center">
+                      <div className="text-2xl font-bold text-blue-600" data-testid="text-sensitivity-coverage">{stats.sensitivityCoveragePercent}%</div>
+                      <div className="text-xs text-muted-foreground mt-1">Sensitivity Coverage</div>
+                      <div className="text-[10px] text-muted-foreground">{stats.withSensitivityLabel} of {stats.totalSites} sites</div>
+                    </CardContent>
+                  </Card>
+                  <Card className="glass-panel border-border/50">
+                    <CardContent className="p-4 text-center">
+                      <div className="text-2xl font-bold text-purple-600" data-testid="text-retention-coverage">{stats.retentionCoveragePercent}%</div>
+                      <div className="text-xs text-muted-foreground mt-1">Retention Coverage</div>
+                      <div className="text-[10px] text-muted-foreground">{stats.withRetentionLabel} of {stats.totalSites} sites</div>
+                    </CardContent>
+                  </Card>
+                  <Card className={`glass-panel border-border/50 ${stats.unlabeled > 0 ? "border-amber-500/30 bg-amber-500/5" : ""}`}>
+                    <CardContent className="p-4 text-center">
+                      <div className={`text-2xl font-bold ${stats.unlabeled > 0 ? "text-amber-600" : "text-emerald-600"}`} data-testid="text-unlabeled-count">{stats.unlabeled}</div>
+                      <div className="text-xs text-muted-foreground mt-1">Unlabeled Sites</div>
+                      <div className="text-[10px] text-muted-foreground">No sensitivity or retention label</div>
+                    </CardContent>
+                  </Card>
+                </div>
+
+                <Card className="glass-panel border-border/50 shadow-xl">
+                  <CardHeader className="pb-4 border-b border-border/40">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <CardTitle>Workspace Label Mapping</CardTitle>
+                        <CardDescription>
+                          Shows which sensitivity and retention labels are applied to each site in your inventory.
+                        </CardDescription>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-3 mt-3">
+                      <div className="relative flex-1 max-w-sm">
+                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                        <Input
+                          placeholder="Search sites..."
+                          value={coverageSearch}
+                          onChange={(e) => setCoverageSearch(e.target.value)}
+                          className="pl-9 h-9"
+                          data-testid="input-coverage-search"
+                        />
+                      </div>
+                      <div className="flex gap-1.5">
+                        {(["all", "labeled", "unlabeled"] as const).map(f => (
+                          <Button
+                            key={f}
+                            variant={coverageFilter === f ? "default" : "outline"}
+                            size="sm"
+                            onClick={() => setCoverageFilter(f)}
+                            className="text-xs h-9"
+                            data-testid={`button-filter-${f}`}
+                          >
+                            {f === "all" ? "All" : f === "labeled" ? "Labeled" : "Unlabeled"}
+                          </Button>
+                        ))}
+                      </div>
+                    </div>
+                  </CardHeader>
+                  <CardContent className="p-0">
+                    {filteredCoverageWorkspaces.length === 0 ? (
+                      <div className="p-8 text-center text-sm text-muted-foreground">
+                        {coverageSearch ? "No sites match your search." : "No sites found for this tenant. Run a site sync first."}
+                      </div>
+                    ) : (
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>Site</TableHead>
+                            <TableHead>Type</TableHead>
+                            <TableHead>Sensitivity Label</TableHead>
+                            <TableHead>Retention Label</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {filteredCoverageWorkspaces.slice(0, 100).map(w => (
+                            <TableRow key={w.workspaceId} data-testid={`row-coverage-${w.workspaceId}`}>
+                              <TableCell>
+                                <div>
+                                  <div className="font-medium text-sm">{w.displayName}</div>
+                                  {w.siteUrl && (
+                                    <div className="text-[11px] text-muted-foreground truncate max-w-xs">{w.siteUrl}</div>
+                                  )}
+                                </div>
+                              </TableCell>
+                              <TableCell>
+                                <Badge variant="outline" className="text-[10px]">{w.type}</Badge>
+                              </TableCell>
+                              <TableCell>
+                                {w.sensitivityLabelName ? (
+                                  <Badge variant="outline" className="text-[10px] bg-blue-500/10 text-blue-600 border-blue-500/20">
+                                    <ShieldCheck className="w-2.5 h-2.5 mr-1" />{w.sensitivityLabelName}
+                                  </Badge>
+                                ) : w.sensitivityLabelId ? (
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <Badge variant="outline" className="text-[10px] bg-muted/50">
+                                        <Tag className="w-2.5 h-2.5 mr-1" />ID: {w.sensitivityLabelId.substring(0, 8)}...
+                                      </Badge>
+                                    </TooltipTrigger>
+                                    <TooltipContent>Label ID not found in synced inventory. Sync labels to resolve.</TooltipContent>
+                                  </Tooltip>
+                                ) : (
+                                  <span className="flex items-center gap-1 text-xs text-amber-600">
+                                    <XCircle className="w-3 h-3" /> None
+                                  </span>
+                                )}
+                              </TableCell>
+                              <TableCell>
+                                {w.retentionLabelName ? (
+                                  <Badge variant="outline" className="text-[10px] bg-purple-500/10 text-purple-600 border-purple-500/20">
+                                    <Clock className="w-2.5 h-2.5 mr-1" />{w.retentionLabelName}
+                                  </Badge>
+                                ) : w.retentionLabelId ? (
+                                  <Badge variant="outline" className="text-[10px] bg-muted/50">
+                                    <Tag className="w-2.5 h-2.5 mr-1" />ID: {w.retentionLabelId.substring(0, 8)}...
+                                  </Badge>
+                                ) : (
+                                  <span className="flex items-center gap-1 text-xs text-muted-foreground">
+                                    <XCircle className="w-3 h-3" /> None
+                                  </span>
+                                )}
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    )}
+                    {filteredCoverageWorkspaces.length > 100 && (
+                      <div className="p-3 text-center text-xs text-muted-foreground border-t">
+                        Showing 100 of {filteredCoverageWorkspaces.length} sites. Use search to narrow results.
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+              </>
+            ) : null}
+          </TabsContent>
+
+          {/* ── Site Sensitivity Labels Tab ── */}
           <TabsContent value="siteLabels" className="space-y-6 m-0 animate-in fade-in slide-in-from-bottom-4">
+            <div className="flex items-center justify-between">
+              <div />
+              <div className="flex gap-3 items-center">
+                {lastSynced && (
+                  <span className="text-xs text-muted-foreground">
+                    Last synced: {new Date(lastSynced).toLocaleString()}
+                  </span>
+                )}
+                <Button onClick={handleSyncSensitivityLabels} disabled={isSyncingSensitivity} className="gap-2 shadow-md shadow-primary/20" data-testid="button-sync-sensitivity-labels">
+                  {isSyncingSensitivity ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+                  Sync from Purview
+                </Button>
+              </div>
+            </div>
             <Card className="glass-panel border-border/50 shadow-xl">
               <CardHeader className="pb-4 border-b border-border/40">
                 <CardTitle>Site & Group Sensitivity Labels</CardTitle>
@@ -254,7 +516,7 @@ export default function PurviewConfigPage() {
                 ) : siteLabels.length === 0 ? (
                   <div className="p-8 text-center space-y-3">
                     <ShieldCheck className="w-10 h-10 text-muted-foreground mx-auto" />
-                    <p className="text-sm text-muted-foreground">No site-scoped labels found. Run a tenant sync to import labels from Purview.</p>
+                    <p className="text-sm text-muted-foreground">No site-scoped labels found. Click "Sync from Purview" to import labels.</p>
                     <p className="text-xs text-muted-foreground">Ensure "Groups & sites" scope is enabled on your labels in the Purview portal.</p>
                   </div>
                 ) : (
@@ -277,46 +539,124 @@ export default function PurviewConfigPage() {
             </Card>
           </TabsContent>
 
-          <TabsContent value="fileLabels" className="space-y-6 m-0 animate-in fade-in slide-in-from-bottom-4">
+          {/* ── Retention Labels Tab ── */}
+          <TabsContent value="retentionLabels" className="space-y-6 m-0 animate-in fade-in slide-in-from-bottom-4">
+            <div className="flex items-center justify-between">
+              <div />
+              <div className="flex gap-3 items-center">
+                {retentionLastSynced && (
+                  <span className="text-xs text-muted-foreground">
+                    Last synced: {new Date(retentionLastSynced).toLocaleString()}
+                  </span>
+                )}
+                <Button onClick={handleSyncRetentionLabels} disabled={isSyncingRetention} className="gap-2 shadow-md shadow-primary/20" data-testid="button-sync-retention-labels">
+                  {isSyncingRetention ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+                  Sync Retention Labels
+                </Button>
+              </div>
+            </div>
             <Card className="glass-panel border-border/50 shadow-xl">
               <CardHeader className="pb-4 border-b border-border/40">
-                <CardTitle>File & Content Sensitivity Labels</CardTitle>
+                <CardTitle>Retention Labels</CardTitle>
                 <CardDescription>
-                  Labels scoped to files, emails, and other content items. These are applied at the document level, not the container level.
+                  Retention labels from Microsoft Purview Records Management. These define how long content is retained and what happens after the retention period.
                 </CardDescription>
               </CardHeader>
               <CardContent className="p-0">
-                {isLoading ? (
-                  <div className="p-8 text-center text-muted-foreground text-sm">Loading labels...</div>
-                ) : fileLabels.length === 0 ? (
+                {isLoadingRetention ? (
+                  <div className="p-8 text-center text-muted-foreground text-sm">Loading retention labels...</div>
+                ) : retentionLabelsData.length === 0 ? (
                   <div className="p-8 text-center space-y-3">
-                    <Tag className="w-10 h-10 text-muted-foreground mx-auto" />
-                    <p className="text-sm text-muted-foreground">No file-scoped labels found. Run a tenant sync to import labels from Purview.</p>
+                    <Clock className="w-10 h-10 text-muted-foreground mx-auto" />
+                    <p className="text-sm text-muted-foreground">No retention labels synced yet. Click "Sync Retention Labels" to import from Purview.</p>
+                    <p className="text-xs text-muted-foreground">
+                      Requires <code className="bg-muted px-1 rounded">RecordsManagement.Read.All</code> permission and M365 E5 Compliance or Records Management license.
+                    </p>
                   </div>
                 ) : (
                   <Table>
                     <TableHeader>
                       <TableRow>
                         <TableHead>Label</TableHead>
-                        <TableHead>Scope</TableHead>
-                        <TableHead>Protection</TableHead>
-                        <TableHead>Priority</TableHead>
+                        <TableHead>Duration</TableHead>
+                        <TableHead>During Retention</TableHead>
+                        <TableHead>After Retention</TableHead>
+                        <TableHead>Record</TableHead>
                         <TableHead>Status</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {fileLabels.map(renderLabelRow)}
+                      {retentionLabelsData.map(label => (
+                        <TableRow key={label.labelId} data-testid={`row-retention-${label.labelId}`}>
+                          <TableCell>
+                            <div>
+                              <div className="font-medium text-sm">{label.name}</div>
+                              {label.description && (
+                                <div className="text-xs text-muted-foreground mt-0.5 max-w-xs truncate">{label.description}</div>
+                              )}
+                            </div>
+                          </TableCell>
+                          <TableCell>
+                            {label.retentionDuration ? (
+                              <Badge variant="outline" className="text-[10px] bg-purple-500/10 text-purple-600 border-purple-500/20">
+                                <Clock className="w-2.5 h-2.5 mr-1" />{label.retentionDuration}
+                              </Badge>
+                            ) : (
+                              <span className="text-xs text-muted-foreground">—</span>
+                            )}
+                          </TableCell>
+                          <TableCell>
+                            <span className="text-xs capitalize">{label.behaviorDuringRetentionPeriod?.replace(/([A-Z])/g, ' $1').trim() || "—"}</span>
+                          </TableCell>
+                          <TableCell>
+                            <span className="text-xs capitalize">{label.actionAfterRetentionPeriod?.replace(/([A-Z])/g, ' $1').trim() || "—"}</span>
+                          </TableCell>
+                          <TableCell>
+                            {label.isRecordLabel ? (
+                              <Badge variant="outline" className="text-[10px] bg-amber-500/10 text-amber-600 border-amber-500/20">
+                                <Lock className="w-2.5 h-2.5 mr-1" />Record
+                              </Badge>
+                            ) : (
+                              <span className="text-xs text-muted-foreground">No</span>
+                            )}
+                          </TableCell>
+                          <TableCell>
+                            {label.isActive ? (
+                              <Badge variant="outline" className="text-[10px] bg-emerald-500/10 text-emerald-600 border-emerald-500/20">Active</Badge>
+                            ) : (
+                              <Badge variant="secondary" className="text-[10px]">Inactive</Badge>
+                            )}
+                          </TableCell>
+                        </TableRow>
+                      ))}
                     </TableBody>
                   </Table>
                 )}
               </CardContent>
             </Card>
+
+            {retentionSyncError && (
+              <Card className="border-red-500/20 bg-red-500/5">
+                <CardContent className="p-4 flex items-start gap-3">
+                  <AlertCircle className="w-5 h-5 text-red-500 shrink-0 mt-0.5" />
+                  <div>
+                    <h4 className="font-semibold text-sm text-red-600">Retention Label Sync Error</h4>
+                    <p className="text-xs text-red-500 mt-1">{retentionSyncError}</p>
+                    <p className="text-xs text-muted-foreground mt-2">
+                      Ensure the Entra app registration has <code className="bg-muted px-1 rounded">RecordsManagement.Read.All</code> permission.
+                      This feature requires Microsoft 365 E5 Compliance or Records Management add-on license.
+                    </p>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
           </TabsContent>
 
+          {/* ── All Labels Tab ── */}
           <TabsContent value="allLabels" className="space-y-6 m-0 animate-in fade-in slide-in-from-bottom-4">
             <Card className="glass-panel border-border/50 shadow-xl">
               <CardHeader className="pb-4 border-b border-border/40">
-                <CardTitle>Complete Label Inventory</CardTitle>
+                <CardTitle>Complete Sensitivity Label Inventory</CardTitle>
                 <CardDescription>
                   All sensitivity labels synced from Microsoft Purview for this tenant.
                 </CardDescription>
@@ -327,7 +667,7 @@ export default function PurviewConfigPage() {
                 ) : labels.length === 0 ? (
                   <div className="p-8 text-center space-y-3">
                     <ShieldCheck className="w-10 h-10 text-muted-foreground mx-auto" />
-                    <p className="text-sm text-muted-foreground">No labels synced yet. Run a tenant sync to import your Purview label inventory.</p>
+                    <p className="text-sm text-muted-foreground">No labels synced yet. Run a sync to import your Purview label inventory.</p>
                   </div>
                 ) : (
                   <Table>
@@ -349,6 +689,7 @@ export default function PurviewConfigPage() {
             </Card>
           </TabsContent>
 
+          {/* ── Orchestration Tab ── */}
           <TabsContent value="orchestration" className="space-y-6 m-0 animate-in fade-in slide-in-from-bottom-4">
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
               <Card className="glass-panel border-border/50 min-h-[200px] flex items-center justify-center">
@@ -395,8 +736,10 @@ export default function PurviewConfigPage() {
         <div>
           <h4 className="font-semibold text-sm">How Label Sync Works</h4>
           <p className="text-xs text-muted-foreground leading-relaxed mt-1">
-            Sensitivity labels are imported from Microsoft Purview during each tenant sync. Labels must be published in a label policy to be discoverable.
-            Site-scoped labels (with "Groups & sites" scope) can be assigned to SharePoint sites. Writing labels back to M365 requires a Standard plan or higher.
+            Sensitivity labels are imported from Microsoft Purview via the Graph API. Labels must be published in a label policy to be discoverable.
+            Site-scoped labels (with "Groups & sites" scope) can be assigned to SharePoint sites. Retention labels require a separate sync and 
+            the <code className="bg-muted px-1 rounded text-[10px]">RecordsManagement.Read.All</code> permission. Label coverage shows which 
+            sites have labels applied based on the latest site inventory sync.
           </p>
         </div>
       </div>

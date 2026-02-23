@@ -1,7 +1,7 @@
 import { Router } from "express";
 import crypto from "crypto";
 import { storage } from "../storage";
-import { testConnection, clearTokenCache, getAppToken, fetchSensitivityLabels } from "../services/graph";
+import { testConnection, clearTokenCache, getAppToken, fetchSensitivityLabels, fetchRetentionLabels } from "../services/graph";
 import { METADATA_CATEGORIES } from "@shared/schema";
 
 const router = Router();
@@ -294,6 +294,110 @@ router.post("/api/admin/tenants/:tenantConnectionId/sensitivity-labels/sync", as
     res.json({ synced, total: labelResult.labels.length });
   } catch (err: any) {
     console.error(`[label-sync] Sync failed: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Retention Labels ──
+router.get("/api/admin/tenants/:tenantConnectionId/retention-labels", async (req, res) => {
+  try {
+    const conn = await storage.getTenantConnection(req.params.tenantConnectionId);
+    if (!conn) return res.status(404).json({ error: "Tenant connection not found" });
+    const labels = await storage.getRetentionLabelsByTenantId(conn.tenantId);
+    res.json(labels);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post("/api/admin/tenants/:tenantConnectionId/retention-labels/sync", async (req, res) => {
+  try {
+    const conn = await storage.getTenantConnection(req.params.tenantConnectionId);
+    if (!conn) return res.status(404).json({ error: "Tenant connection not found" });
+
+    const clientId = process.env.AZURE_CLIENT_ID;
+    const clientSecret = process.env.AZURE_CLIENT_SECRET;
+    if (!clientId || !clientSecret) {
+      return res.status(500).json({ error: "Azure credentials not configured" });
+    }
+
+    const token = await getAppToken(conn.tenantId, clientId, clientSecret);
+    if (!token) {
+      return res.status(500).json({ error: "Failed to acquire app token for tenant" });
+    }
+
+    console.log(`[retention-sync] Manual sync triggered for tenant ${conn.tenantId}`);
+    const result = await fetchRetentionLabels(token);
+
+    if (result.error) {
+      console.error(`[retention-sync] Error: ${result.error}`);
+      return res.json({ synced: 0, total: 0, error: result.error });
+    }
+
+    console.log(`[retention-sync] Graph API returned ${result.labels.length} retention labels`);
+    let synced = 0;
+    for (const label of result.labels) {
+      console.log(`[retention-sync]   - ${label.name} (id=${label.labelId}, duration=${label.retentionDuration}, record=${label.isRecordLabel})`);
+      await storage.upsertRetentionLabel({
+        tenantId: conn.tenantId,
+        labelId: label.labelId,
+        name: label.name,
+        description: label.description || null,
+        retentionDuration: label.retentionDuration || null,
+        retentionAction: label.retentionAction || null,
+        behaviorDuringRetentionPeriod: label.behaviorDuringRetentionPeriod || null,
+        actionAfterRetentionPeriod: label.actionAfterRetentionPeriod || null,
+        isActive: label.isActive,
+        isRecordLabel: label.isRecordLabel,
+      });
+      synced++;
+    }
+
+    res.json({ synced, total: result.labels.length });
+  } catch (err: any) {
+    console.error(`[retention-sync] Sync failed: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Label Coverage (sensitivity + retention labels mapped to workspaces) ──
+router.get("/api/admin/tenants/:tenantConnectionId/label-coverage", async (req, res) => {
+  try {
+    const conn = await storage.getTenantConnection(req.params.tenantConnectionId);
+    if (!conn) return res.status(404).json({ error: "Tenant connection not found" });
+
+    const [coverage, sensitivityLabelsData, retentionLabelsData] = await Promise.all([
+      storage.getWorkspaceLabelCoverage(conn.tenantId),
+      storage.getSensitivityLabelsByTenantId(conn.tenantId),
+      storage.getRetentionLabelsByTenantId(conn.tenantId),
+    ]);
+
+    const sensitivityMap = new Map(sensitivityLabelsData.map(l => [l.labelId, l]));
+    const retentionMap = new Map(retentionLabelsData.map(l => [l.labelId, l]));
+
+    const enriched = coverage.map(w => ({
+      ...w,
+      sensitivityLabelName: w.sensitivityLabelId ? sensitivityMap.get(w.sensitivityLabelId)?.name || null : null,
+      retentionLabelName: w.retentionLabelId ? retentionMap.get(w.retentionLabelId)?.name || null : null,
+    }));
+
+    const totalSites = coverage.length;
+    const withSensitivity = coverage.filter(w => w.sensitivityLabelId).length;
+    const withRetention = coverage.filter(w => w.retentionLabelId).length;
+    const unlabeled = coverage.filter(w => !w.sensitivityLabelId && !w.retentionLabelId).length;
+
+    res.json({
+      workspaces: enriched,
+      stats: {
+        totalSites,
+        withSensitivityLabel: withSensitivity,
+        withRetentionLabel: withRetention,
+        unlabeled,
+        sensitivityCoveragePercent: totalSites > 0 ? Math.round((withSensitivity / totalSites) * 100) : 0,
+        retentionCoveragePercent: totalSites > 0 ? Math.round((withRetention / totalSites) * 100) : 0,
+      },
+    });
+  } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
 });

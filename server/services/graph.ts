@@ -520,6 +520,84 @@ export async function fetchSensitivityLabels(token: string): Promise<{
   }
 }
 
+export async function fetchRetentionLabels(token: string): Promise<{
+  labels: Array<{
+    labelId: string;
+    name: string;
+    description?: string | null;
+    retentionDuration?: string | null;
+    retentionAction?: string | null;
+    behaviorDuringRetentionPeriod?: string | null;
+    actionAfterRetentionPeriod?: string | null;
+    isActive: boolean;
+    isRecordLabel: boolean;
+  }>;
+  error?: string;
+}> {
+  try {
+    const url = "https://graph.microsoft.com/beta/security/labels/retentionLabels";
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+
+    if (!res.ok) {
+      const errText = await res.text();
+      let detail = errText;
+      try {
+        const parsed = JSON.parse(errText);
+        const errObj = parsed.error || {};
+        const parts = [errObj.code, errObj.message].filter(Boolean);
+        if (errObj.innerError?.code) parts.push(`(${errObj.innerError.code})`);
+        detail = parts.length > 0 ? parts.join(" - ") : errText;
+      } catch {}
+      if (res.status === 401 || res.status === 403) {
+        return { labels: [], error: `Graph API ${res.status}: Access denied. Ensure the Entra app registration has the 'RecordsManagement.Read.All' application permission with admin consent granted for this tenant. This requires Microsoft 365 E5 Compliance or Records Management add-on license.` };
+      }
+      if (res.status === 404) {
+        return { labels: [], error: `Retention labels not available for this tenant. The tenant may not have a Microsoft 365 E5 Compliance or Records Management license.` };
+      }
+      return { labels: [], error: `Graph API ${res.status}: ${detail}` };
+    }
+
+    const data = await res.json();
+    const rawLabels = data.value || [];
+
+    let allLabels = [...rawLabels];
+    let nextLink = data["@odata.nextLink"];
+    while (nextLink) {
+      const nextRes = await fetch(nextLink, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!nextRes.ok) break;
+      const nextData = await nextRes.json();
+      allLabels.push(...(nextData.value || []));
+      nextLink = nextData["@odata.nextLink"];
+    }
+
+    const labels = allLabels.map((l: any) => ({
+      labelId: l.id,
+      name: l.displayName || l.name || "Unknown",
+      description: l.descriptionForUsers || l.descriptionForAdmins || l.description || null,
+      retentionDuration: l.retentionDuration?.days
+        ? `${l.retentionDuration.days} days`
+        : l.retentionDuration?.years
+        ? `${l.retentionDuration.years} years`
+        : l.retentionDuration?.months
+        ? `${l.retentionDuration.months} months`
+        : null,
+      retentionAction: l.defaultRecordBehavior || null,
+      behaviorDuringRetentionPeriod: l.behaviorDuringRetentionPeriod || null,
+      actionAfterRetentionPeriod: l.actionAfterRetentionPeriod || null,
+      isActive: l.isInUse !== false,
+      isRecordLabel: l.defaultRecordBehavior === "startLocked" || l.defaultRecordBehavior === "startUnlocked",
+    }));
+
+    return { labels };
+  } catch (e: any) {
+    return { labels: [], error: e.message };
+  }
+}
+
 export function clearTokenCache(tenantId?: string, clientId?: string) {
   if (tenantId && clientId) {
     tokenCache.delete(`${tenantId}:${clientId}`);
