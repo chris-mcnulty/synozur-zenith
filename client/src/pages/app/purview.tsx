@@ -643,8 +643,10 @@ export default function PurviewConfigPage() {
                     <h4 className="font-semibold text-sm text-red-600">Retention Label Sync Error</h4>
                     <p className="text-xs text-red-500 mt-1">{retentionSyncError}</p>
                     <p className="text-xs text-muted-foreground mt-2">
-                      Ensure the Entra app registration has <code className="bg-muted px-1 rounded">RecordsManagement.Read.All</code> permission.
-                      This feature requires Microsoft 365 E5 Compliance or Records Management add-on license.
+                      Microsoft's retention labels API requires <strong>delegated (SSO) authentication</strong> — app-only tokens are not supported by Microsoft for this endpoint.
+                      To fix this: <strong>sign out and sign back in via SSO</strong> to grant the updated <code className="bg-muted px-1 rounded">RecordsManagement.Read.All</code> delegated permission.
+                      A tenant admin must consent to this permission on first login.
+                      This feature also requires Microsoft 365 E5 Compliance or Records Management add-on license.
                     </p>
                   </div>
                 </CardContent>

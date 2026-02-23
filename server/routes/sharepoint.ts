@@ -3,8 +3,46 @@ import { storage } from "../storage";
 import { insertWorkspaceSchema, insertProvisioningRequestSchema, type ServicePlanTier } from "@shared/schema";
 import { fetchSharePointSites, fetchSiteUsageReport, fetchSiteDriveOwner, fetchSiteAnalytics, getAppToken, writeSitePropertyBag, fetchSensitivityLabels, fetchRetentionLabels, getSpoToken, fetchHubSites, fetchSiteHubAssociation } from "../services/graph";
 import { getPlanFeatures } from "../services/feature-gate";
+import { refreshDelegatedToken } from "../routes-entra";
 
 const router = Router();
+
+async function getDelegatedTokenForRetention(currentUserId?: string, organizationId?: string): Promise<string | null> {
+  const tryUser = async (userId: string): Promise<string | null> => {
+    const delegated = await storage.getDecryptedGraphToken(userId, "graph");
+    if (delegated?.token && delegated.expiresAt && delegated.expiresAt > new Date()) {
+      return delegated.token;
+    }
+    const refreshed = await refreshDelegatedToken(userId);
+    if (refreshed) return refreshed;
+    return null;
+  };
+
+  if (currentUserId) {
+    const token = await tryUser(currentUserId);
+    if (token) return token;
+  }
+
+  if (organizationId) {
+    const anyValid = await storage.getAnyValidDelegatedToken("graph", organizationId);
+    if (anyValid) return anyValid.token;
+
+    const { db } = await import("../db");
+    const { graphTokens } = await import("@shared/schema");
+    const { eq, and } = await import("drizzle-orm");
+    const orgTokens = await db.select().from(graphTokens)
+      .where(and(eq(graphTokens.organizationId, organizationId), eq(graphTokens.service, "graph")))
+      .limit(5);
+    for (const t of orgTokens) {
+      if (t.refreshToken) {
+        const refreshed = await refreshDelegatedToken(t.userId);
+        if (refreshed) return refreshed;
+      }
+    }
+  }
+
+  return null;
+}
 
 // ── Workspaces (SharePoint Sites) ──
 router.get("/api/workspaces", async (req, res) => {
@@ -299,44 +337,36 @@ router.post("/api/admin/tenants/:id/sync", async (req, res) => {
         console.log(`[retention-sync] Fetching retention labels for tenant ${connection.tenantId}...`);
         let retResult: Awaited<ReturnType<typeof fetchRetentionLabels>> | null = null;
 
-        const userId = req.session?.userId;
-        if (userId) {
-          const delegated = await storage.getDecryptedGraphToken(userId, "graph");
-          if (delegated?.token && delegated.expiresAt && delegated.expiresAt > new Date()) {
-            console.log(`[retention-sync] Trying delegated token for retention labels...`);
-            const delegatedResult = await fetchRetentionLabels(delegated.token);
-            if (!delegatedResult.error) {
-              console.log(`[retention-sync] Delegated token succeeded with ${delegatedResult.labels.length} labels`);
-              retResult = delegatedResult;
-            } else {
-              console.warn(`[retention-sync] Delegated token failed, falling back to app token`);
-            }
-          }
+        const delegatedToken = await getDelegatedTokenForRetention(req.session?.userId, connection.organizationId);
+        if (delegatedToken) {
+          console.log(`[retention-sync] Using delegated token for retention labels (org: ${connection.organizationId})`);
+          retResult = await fetchRetentionLabels(delegatedToken);
+        } else {
+          console.warn(`[retention-sync] No delegated SSO token available for retention labels. App-only tokens are not supported by Microsoft for this endpoint.`);
+          retentionSyncResult.error = "Retention labels require SSO authentication. Sign out and sign back in via SSO to grant the RecordsManagement.Read.All delegated permission.";
         }
 
-        if (!retResult) {
-          retResult = await fetchRetentionLabels(token);
-        }
-
-        if (retResult.error) {
+        if (retResult?.error) {
           console.error(`[retention-sync] Error from Graph API: ${retResult.error}`);
           retentionSyncResult.error = retResult.error;
         }
-        console.log(`[retention-sync] Graph API returned ${retResult.labels.length} retention labels`);
-        for (const label of retResult.labels) {
-          await storage.upsertRetentionLabel({
-            tenantId: connection.tenantId,
-            labelId: label.labelId,
-            name: label.name,
-            description: label.description || null,
-            retentionDuration: label.retentionDuration || null,
-            retentionAction: label.retentionAction || null,
-            behaviorDuringRetentionPeriod: label.behaviorDuringRetentionPeriod || null,
-            actionAfterRetentionPeriod: label.actionAfterRetentionPeriod || null,
-            isActive: label.isActive,
-            isRecordLabel: label.isRecordLabel,
-          });
-          retentionSyncResult.synced++;
+        if (retResult && retResult.labels.length > 0) {
+          console.log(`[retention-sync] Graph API returned ${retResult.labels.length} retention labels`);
+          for (const label of retResult.labels) {
+            await storage.upsertRetentionLabel({
+              tenantId: connection.tenantId,
+              labelId: label.labelId,
+              name: label.name,
+              description: label.description || null,
+              retentionDuration: label.retentionDuration || null,
+              retentionAction: label.retentionAction || null,
+              behaviorDuringRetentionPeriod: label.behaviorDuringRetentionPeriod || null,
+              actionAfterRetentionPeriod: label.actionAfterRetentionPeriod || null,
+              isActive: label.isActive,
+              isRecordLabel: label.isRecordLabel,
+            });
+            retentionSyncResult.synced++;
+          }
         }
       } catch (e: any) {
         retentionSyncResult.error = e.message;

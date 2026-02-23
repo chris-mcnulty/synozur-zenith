@@ -4,8 +4,46 @@ import { storage } from "../storage";
 import { testConnection, clearTokenCache, getAppToken, fetchSensitivityLabels, fetchRetentionLabels } from "../services/graph";
 import { checkTenantPermissions, REQUIRED_PERMISSIONS, PERMISSIONS_VERSION } from "../services/permissions";
 import { METADATA_CATEGORIES } from "@shared/schema";
+import { refreshDelegatedToken } from "../routes-entra";
 
 const router = Router();
+
+async function getDelegatedTokenForRetention(currentUserId?: string, organizationId?: string): Promise<string | null> {
+  const tryUser = async (userId: string): Promise<string | null> => {
+    const delegated = await storage.getDecryptedGraphToken(userId, "graph");
+    if (delegated?.token && delegated.expiresAt && delegated.expiresAt > new Date()) {
+      return delegated.token;
+    }
+    const refreshed = await refreshDelegatedToken(userId);
+    if (refreshed) return refreshed;
+    return null;
+  };
+
+  if (currentUserId) {
+    const token = await tryUser(currentUserId);
+    if (token) return token;
+  }
+
+  if (organizationId) {
+    const anyValid = await storage.getAnyValidDelegatedToken("graph", organizationId);
+    if (anyValid) return anyValid.token;
+
+    const { db } = await import("../db");
+    const { graphTokens } = await import("@shared/schema");
+    const { eq, and } = await import("drizzle-orm");
+    const orgTokens = await db.select().from(graphTokens)
+      .where(and(eq(graphTokens.organizationId, organizationId), eq(graphTokens.service, "graph")))
+      .limit(5);
+    for (const t of orgTokens) {
+      if (t.refreshToken) {
+        const refreshed = await refreshDelegatedToken(t.userId);
+        if (refreshed) return refreshed;
+      }
+    }
+  }
+
+  return null;
+}
 
 // ── Tenant Connections ──
 router.get("/api/admin/tenants", async (_req, res) => {
@@ -393,28 +431,19 @@ router.post("/api/admin/tenants/:tenantConnectionId/retention-labels/sync", asyn
 
     let result: Awaited<ReturnType<typeof fetchRetentionLabels>> | null = null;
 
-    const userId = req.session?.userId;
-    if (userId) {
-      const delegated = await storage.getDecryptedGraphToken(userId, "graph");
-      if (delegated?.token && delegated.expiresAt && delegated.expiresAt > new Date()) {
-        console.log(`[retention-sync] Trying delegated token for user ${userId}...`);
-        const delegatedResult = await fetchRetentionLabels(delegated.token);
-        if (!delegatedResult.error) {
-          console.log(`[retention-sync] Delegated token succeeded with ${delegatedResult.labels.length} labels`);
-          result = delegatedResult;
-        } else {
-          console.warn(`[retention-sync] Delegated token failed: ${delegatedResult.error}, falling back to app token`);
-        }
-      }
+    const delegatedToken = await getDelegatedTokenForRetention(req.session?.userId, conn.organizationId);
+    if (delegatedToken) {
+      console.log(`[retention-sync] Using delegated token for retention labels (org: ${conn.organizationId})`);
+      result = await fetchRetentionLabels(delegatedToken);
     }
 
     if (!result) {
-      const token = await getAppToken(conn.tenantId, clientId, clientSecret);
-      if (!token) {
-        return res.status(500).json({ error: "Failed to acquire app token for tenant" });
-      }
-      console.log(`[retention-sync] Using app-only token for tenant ${conn.tenantId}`);
-      result = await fetchRetentionLabels(token);
+      console.warn(`[retention-sync] No delegated SSO token available. Retention labels require delegated (SSO) authentication — app-only tokens are not supported by Microsoft for this endpoint.`);
+      return res.json({
+        synced: 0,
+        total: 0,
+        error: "Retention labels require SSO authentication. Please sign out and sign back in via SSO to grant the RecordsManagement.Read.All delegated permission. App-only tokens are not supported by Microsoft for this endpoint.",
+      });
     }
 
     if (result.error) {

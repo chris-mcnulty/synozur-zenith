@@ -8,7 +8,7 @@ import { ZENITH_ROLES } from '@shared/schema';
 const router = Router();
 const cryptoProvider = new CryptoProvider();
 
-const SCOPES = ['openid', 'profile', 'email', 'User.Read'];
+const SCOPES = ['openid', 'profile', 'email', 'User.Read', 'offline_access', 'RecordsManagement.Read.All'];
 
 function getBaseUrl(): string {
   if (process.env.REPLIT_DEV_DOMAIN) {
@@ -43,6 +43,47 @@ function getMsalClient(): ConfidentialClientApplication | null {
   });
 
   return msalClient;
+}
+
+export async function refreshDelegatedToken(userId: string): Promise<string | null> {
+  const client = getMsalClient();
+  if (!client) return null;
+
+  const tokenRecord = await storage.getGraphToken(userId, 'graph');
+  if (!tokenRecord?.refreshToken) return null;
+
+  try {
+    const { decryptToken } = await import('./utils/encryption');
+    const refreshToken = decryptToken(tokenRecord.refreshToken);
+
+    const result = await (client as any).acquireTokenByRefreshToken({
+      refreshToken,
+      scopes: SCOPES.filter(s => s !== 'openid' && s !== 'profile' && s !== 'email' && s !== 'offline_access'),
+    });
+
+    if (result?.accessToken) {
+      const tokenToStore = encryptToken(result.accessToken);
+      const newRefreshToken = (result as any).refreshToken;
+      const refreshTokenToStore = newRefreshToken ? encryptToken(newRefreshToken) : tokenRecord.refreshToken;
+
+      await storage.upsertGraphToken({
+        userId,
+        organizationId: tokenRecord.organizationId,
+        service: 'graph',
+        accessToken: tokenToStore,
+        refreshToken: refreshTokenToStore,
+        expiresAt: result.expiresOn || null,
+        scopes: result.scopes || SCOPES,
+      });
+
+      console.log(`[Entra] Refreshed delegated token for user ${userId}`);
+      return result.accessToken;
+    }
+  } catch (err: any) {
+    console.warn(`[Entra] Token refresh failed for user ${userId}: ${err.message}`);
+  }
+
+  return null;
 }
 
 router.get('/status', (_req: Request, res: Response) => {
@@ -288,13 +329,28 @@ router.get('/callback', async (req: AuthenticatedRequest, res: Response) => {
       try {
         const tokenToStore = encryptToken(tokenResponse.accessToken);
         const encrypted = isEncryptionConfigured();
-        console.log(`[Entra] Storing Graph token for user ${user.id} (encrypted: ${encrypted})`);
+
+        let refreshTokenRaw: string | null = null;
+        try {
+          const cacheContents = client.getTokenCache().serialize();
+          const cacheData = JSON.parse(cacheContents);
+          const refreshTokens = cacheData.RefreshToken || {};
+          const refreshTokenKeys = Object.keys(refreshTokens);
+          if (refreshTokenKeys.length > 0) {
+            refreshTokenRaw = refreshTokens[refreshTokenKeys[refreshTokenKeys.length - 1]]?.secret || null;
+          }
+        } catch (cacheErr) {
+          console.warn('[Entra] Could not extract refresh token from cache:', cacheErr);
+        }
+
+        const refreshTokenToStore = refreshTokenRaw ? encryptToken(refreshTokenRaw) : null;
+        console.log(`[Entra] Storing Graph token for user ${user.id} (encrypted: ${encrypted}, hasRefresh: ${!!refreshTokenRaw}, scopes: ${(tokenResponse.scopes || []).join(',')})`);
         await storage.upsertGraphToken({
           userId: user.id,
           organizationId: user.organizationId,
           service: 'graph',
           accessToken: tokenToStore,
-          refreshToken: null,
+          refreshToken: refreshTokenToStore,
           expiresAt: tokenResponse.expiresOn || null,
           scopes: tokenResponse.scopes || SCOPES,
         });

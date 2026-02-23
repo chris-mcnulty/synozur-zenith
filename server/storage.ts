@@ -79,7 +79,7 @@ export interface IStorage {
   upsertGraphToken(token: InsertGraphToken): Promise<GraphToken>;
   getGraphToken(userId: string, service?: string): Promise<GraphToken | undefined>;
   getDecryptedGraphToken(userId: string, service?: string): Promise<{ token: string; expiresAt: Date | null } | undefined>;
-  getAnyValidDelegatedToken(service?: string): Promise<{ token: string; expiresAt: Date | null; userId: string } | undefined>;
+  getAnyValidDelegatedToken(service?: string, organizationId?: string): Promise<{ token: string; expiresAt: Date | null; userId: string } | undefined>;
 
   createAuditEntry(entry: InsertAuditLog): Promise<AuditLog>;
   getAuditLog(orgId?: string, limit?: number): Promise<AuditLog[]>;
@@ -322,12 +322,16 @@ export class DatabaseStorage implements IStorage {
     };
   }
 
-  async getAnyValidDelegatedToken(service: string = 'graph'): Promise<{ token: string; expiresAt: Date | null; userId: string } | undefined> {
+  async getAnyValidDelegatedToken(service: string = 'graph', organizationId?: string): Promise<{ token: string; expiresAt: Date | null; userId: string } | undefined> {
+    const conditions = [
+      eq(graphTokens.service, service),
+      gt(graphTokens.expiresAt, new Date())
+    ];
+    if (organizationId) {
+      conditions.push(eq(graphTokens.organizationId, organizationId));
+    }
     const records = await db.select().from(graphTokens)
-      .where(and(
-        eq(graphTokens.service, service),
-        gt(graphTokens.expiresAt, new Date())
-      ))
+      .where(and(...conditions))
       .limit(1);
     
     if (records.length === 0 || !records[0].accessToken) return undefined;
