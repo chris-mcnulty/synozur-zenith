@@ -85,9 +85,32 @@ export const insertProvisioningRequestSchema = createInsertSchema(provisioningRe
 export type InsertProvisioningRequest = z.infer<typeof insertProvisioningRequestSchema>;
 export type ProvisioningRequest = typeof provisioningRequests.$inferSelect;
 
+export const governancePolicies = pgTable("governance_policies", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  organizationId: varchar("organization_id").notNull(),
+  name: text("name").notNull(),
+  description: text("description"),
+  policyType: text("policy_type").notNull(), // COPILOT_READINESS, PROVISIONING_GATE, etc.
+  status: text("status").notNull().default("ACTIVE"), // DRAFT, ACTIVE, DISABLED
+  rules: jsonb("rules").notNull().default(sql`'[]'::jsonb`), // Array of rule definitions
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const insertGovernancePolicySchema = createInsertSchema(governancePolicies).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export type InsertGovernancePolicy = z.infer<typeof insertGovernancePolicySchema>;
+export type GovernancePolicy = typeof governancePolicies.$inferSelect;
+
 export const copilotRules = pgTable("copilot_rules", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   workspaceId: varchar("workspace_id").notNull(),
+  policyId: varchar("policy_id"),
+  ruleType: text("rule_type"), // SENSITIVITY_LABEL_REQUIRED, DEPARTMENT_REQUIRED, etc.
   ruleName: text("rule_name").notNull(),
   ruleResult: text("rule_result").notNull(), // PASS, FAIL
   ruleDescription: text("rule_description").notNull(),
@@ -99,6 +122,14 @@ export const insertCopilotRuleSchema = createInsertSchema(copilotRules).omit({
 
 export type InsertCopilotRule = z.infer<typeof insertCopilotRuleSchema>;
 export type CopilotRule = typeof copilotRules.$inferSelect;
+
+export type PolicyRuleDefinition = {
+  ruleType: string;
+  label: string;
+  description: string;
+  enabled: boolean;
+  config?: Record<string, unknown>;
+};
 
 export const tenantConnections = pgTable("tenant_connections", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),

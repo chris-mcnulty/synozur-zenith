@@ -4,6 +4,7 @@ import {
   workspaces,
   provisioningRequests,
   copilotRules,
+  governancePolicies,
   tenantConnections,
   organizations,
   users,
@@ -19,6 +20,8 @@ import {
   type InsertProvisioningRequest,
   type CopilotRule,
   type InsertCopilotRule,
+  type GovernancePolicy,
+  type InsertGovernancePolicy,
   type TenantConnection,
   type InsertTenantConnection,
   type Organization,
@@ -56,6 +59,13 @@ export interface IStorage {
 
   getCopilotRules(workspaceId: string): Promise<CopilotRule[]>;
   setCopilotRules(workspaceId: string, rules: InsertCopilotRule[]): Promise<CopilotRule[]>;
+
+  getGovernancePolicies(organizationId: string): Promise<GovernancePolicy[]>;
+  getGovernancePolicy(id: string): Promise<GovernancePolicy | undefined>;
+  getGovernancePolicyByType(organizationId: string, policyType: string): Promise<GovernancePolicy | undefined>;
+  createGovernancePolicy(policy: InsertGovernancePolicy): Promise<GovernancePolicy>;
+  updateGovernancePolicy(id: string, updates: Partial<InsertGovernancePolicy>): Promise<GovernancePolicy | undefined>;
+  deleteGovernancePolicy(id: string): Promise<void>;
 
   getTenantConnections(): Promise<TenantConnection[]>;
   getTenantConnection(id: string): Promise<TenantConnection | undefined>;
@@ -187,6 +197,36 @@ export class DatabaseStorage implements IStorage {
     if (rules.length === 0) return [];
     const created = await db.insert(copilotRules).values(rules).returning();
     return created;
+  }
+
+  async getGovernancePolicies(organizationId: string): Promise<GovernancePolicy[]> {
+    return db.select().from(governancePolicies).where(eq(governancePolicies.organizationId, organizationId)).orderBy(desc(governancePolicies.createdAt));
+  }
+
+  async getGovernancePolicy(id: string): Promise<GovernancePolicy | undefined> {
+    const [policy] = await db.select().from(governancePolicies).where(eq(governancePolicies.id, id));
+    return policy;
+  }
+
+  async getGovernancePolicyByType(organizationId: string, policyType: string): Promise<GovernancePolicy | undefined> {
+    const [policy] = await db.select().from(governancePolicies).where(
+      and(eq(governancePolicies.organizationId, organizationId), eq(governancePolicies.policyType, policyType), eq(governancePolicies.status, "ACTIVE"))
+    );
+    return policy;
+  }
+
+  async createGovernancePolicy(policy: InsertGovernancePolicy): Promise<GovernancePolicy> {
+    const [created] = await db.insert(governancePolicies).values(policy).returning();
+    return created;
+  }
+
+  async updateGovernancePolicy(id: string, updates: Partial<InsertGovernancePolicy>): Promise<GovernancePolicy | undefined> {
+    const [updated] = await db.update(governancePolicies).set({ ...updates, updatedAt: new Date() }).where(eq(governancePolicies.id, id)).returning();
+    return updated;
+  }
+
+  async deleteGovernancePolicy(id: string): Promise<void> {
+    await db.delete(governancePolicies).where(eq(governancePolicies.id, id));
   }
 
   async getTenantConnections(): Promise<TenantConnection[]> {

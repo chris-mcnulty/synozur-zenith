@@ -1,0 +1,123 @@
+import { Router } from "express";
+import { storage } from "../storage";
+import { insertGovernancePolicySchema } from "@shared/schema";
+import { evaluatePolicy, evaluationResultsToCopilotRules } from "../services/policy-engine";
+
+const router = Router();
+
+router.get("/api/policies", async (req, res) => {
+  const organizationId = req.query.organizationId as string;
+  if (!organizationId) {
+    return res.status(400).json({ message: "organizationId query parameter is required" });
+  }
+  const policies = await storage.getGovernancePolicies(organizationId);
+  res.json(policies);
+});
+
+router.get("/api/policies/:id", async (req, res) => {
+  const policy = await storage.getGovernancePolicy(req.params.id);
+  if (!policy) return res.status(404).json({ message: "Policy not found" });
+  res.json(policy);
+});
+
+router.post("/api/policies", async (req, res) => {
+  const parsed = insertGovernancePolicySchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ message: parsed.error.message });
+  const policy = await storage.createGovernancePolicy(parsed.data);
+  res.status(201).json(policy);
+});
+
+router.patch("/api/policies/:id", async (req, res) => {
+  const existing = await storage.getGovernancePolicy(req.params.id);
+  if (!existing) return res.status(404).json({ message: "Policy not found" });
+
+  const updates: Record<string, unknown> = {};
+  if (req.body.name !== undefined) updates.name = req.body.name;
+  if (req.body.description !== undefined) updates.description = req.body.description;
+  if (req.body.status !== undefined) updates.status = req.body.status;
+  if (req.body.rules !== undefined) updates.rules = req.body.rules;
+
+  const updated = await storage.updateGovernancePolicy(req.params.id, updates as any);
+  res.json(updated);
+});
+
+router.delete("/api/policies/:id", async (req, res) => {
+  await storage.deleteGovernancePolicy(req.params.id);
+  res.json({ message: "Policy deleted" });
+});
+
+router.post("/api/policies/:id/evaluate", async (req, res) => {
+  const policy = await storage.getGovernancePolicy(req.params.id);
+  if (!policy) return res.status(404).json({ message: "Policy not found" });
+
+  const { workspaceIds } = req.body;
+  if (!Array.isArray(workspaceIds) || workspaceIds.length === 0) {
+    return res.status(400).json({ message: "workspaceIds array is required" });
+  }
+
+  const results = [];
+  for (const wsId of workspaceIds) {
+    const workspace = await storage.getWorkspace(wsId);
+    if (!workspace) continue;
+
+    const evaluation = evaluatePolicy(workspace, policy);
+    const ruleRecords = evaluationResultsToCopilotRules(wsId, evaluation);
+    await storage.setCopilotRules(wsId, ruleRecords);
+
+    const copilotReady = evaluation.overallPass;
+    await storage.updateWorkspace(wsId, { copilotReady });
+
+    results.push({ workspaceId: wsId, ...evaluation, copilotReady });
+  }
+
+  res.json({ evaluated: results.length, results });
+});
+
+router.get("/api/workspaces/:id/policy-results", async (req, res) => {
+  const workspace = await storage.getWorkspace(req.params.id);
+  if (!workspace) return res.status(404).json({ message: "Workspace not found" });
+
+  const policyType = (req.query.policyType as string) || "COPILOT_READINESS";
+
+  const connection = workspace.tenantConnectionId
+    ? await storage.getTenantConnection(workspace.tenantConnectionId)
+    : null;
+
+  if (!connection) {
+    const storedRules = await storage.getCopilotRules(req.params.id);
+    return res.json({ policyId: null, policyName: policyType, results: storedRules, overallPass: workspace.copilotReady });
+  }
+
+  const org = connection.organizationId ? await storage.getOrganization(connection.organizationId) : undefined;
+  if (!org) {
+    const storedRules = await storage.getCopilotRules(req.params.id);
+    return res.json({ policyId: null, policyName: policyType, results: storedRules, overallPass: workspace.copilotReady });
+  }
+
+  const policy = await storage.getGovernancePolicyByType(org.id, policyType);
+  if (!policy) {
+    const storedRules = await storage.getCopilotRules(req.params.id);
+    return res.json({ policyId: null, policyName: policyType, results: storedRules, overallPass: workspace.copilotReady });
+  }
+
+  const evaluation = evaluatePolicy(workspace, policy);
+  const ruleRecords = evaluationResultsToCopilotRules(req.params.id, evaluation);
+  await storage.setCopilotRules(req.params.id, ruleRecords);
+
+  const copilotReady = evaluation.overallPass;
+  if (workspace.copilotReady !== copilotReady) {
+    await storage.updateWorkspace(req.params.id, { copilotReady });
+  }
+
+  res.json({
+    policyId: policy.id,
+    policyName: policy.name,
+    policyType: policy.policyType,
+    results: evaluation.results,
+    overallPass: copilotReady,
+    passCount: evaluation.passCount,
+    failCount: evaluation.failCount,
+  });
+});
+
+export default router;

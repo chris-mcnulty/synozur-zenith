@@ -3,7 +3,7 @@ import { Link, useParams } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import type { Workspace, CopilotRule } from "@shared/schema";
+import type { Workspace } from "@shared/schema";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -54,8 +54,16 @@ export default function WorkspaceDetailsPage() {
     enabled: !!id,
   });
 
-  const { data: copilotRules = [] } = useQuery<CopilotRule[]>({
-    queryKey: [`/api/workspaces/${id}/copilot-rules`],
+  const { data: policyResults } = useQuery<{
+    policyId: string | null;
+    policyName: string;
+    policyType?: string;
+    results: { ruleType?: string; ruleName: string; ruleResult: string; ruleDescription: string }[];
+    overallPass: boolean;
+    passCount?: number;
+    failCount?: number;
+  }>({
+    queryKey: [`/api/workspaces/${id}/policy-results`],
     enabled: !!id,
   });
 
@@ -126,7 +134,7 @@ export default function WorkspaceDetailsPage() {
     },
     onSuccess: (responseData: any) => {
       queryClient.invalidateQueries({ queryKey: [`/api/workspaces/${id}`] });
-      queryClient.invalidateQueries({ queryKey: [`/api/workspaces/${id}/copilot-rules`] });
+      queryClient.invalidateQueries({ queryKey: [`/api/workspaces/${id}/policy-results`] });
       queryClient.invalidateQueries({ queryKey: ["/api/workspaces"] });
       setEditMode(false);
       if (responseData?.labelSyncResult) {
@@ -256,14 +264,17 @@ export default function WorkspaceDetailsPage() {
     ? retentionLabelsData.find(l => l.labelId === workspace.retentionLabelId)
     : null;
 
-  const computedRules: { ruleName: string; ruleResult: string; ruleDescription: string }[] = copilotRules.length > 0
-    ? copilotRules.map(r => ({ ruleName: r.ruleName, ruleResult: r.ruleResult, ruleDescription: r.ruleDescription }))
+  const computedRules: { ruleName: string; ruleResult: string; ruleDescription: string }[] = policyResults?.results && policyResults.results.length > 0
+    ? policyResults.results.map(r => ({ ruleName: r.ruleName, ruleResult: r.ruleResult, ruleDescription: r.ruleDescription }))
     : [
-        { ruleName: "Sensitivity Labeled", ruleResult: workspace.sensitivityLabelId ? "PASS" : "FAIL", ruleDescription: "Workspace must have a Purview sensitivity label applied." },
+        { ruleName: "Sensitivity Label", ruleResult: workspace.sensitivityLabelId ? "PASS" : "FAIL", ruleDescription: "Workspace must have a Purview sensitivity label applied." },
+        { ruleName: "Department Assigned", ruleResult: workspace.department ? "PASS" : "FAIL", ruleDescription: "Workspace must have a department assigned." },
+        { ruleName: "Dual Ownership", ruleResult: workspace.owners >= 2 ? "PASS" : "FAIL", ruleDescription: "Workspace must have at least two active owners." },
         { ruleName: "Metadata Complete", ruleResult: workspace.metadataStatus === "COMPLETE" ? "PASS" : "FAIL", ruleDescription: "All required governance metadata fields must be populated." },
         { ruleName: "Sharing Policy", ruleResult: (!workspace.externalSharing || workspace.sensitivity !== "HIGHLY_CONFIDENTIAL") ? "PASS" : "FAIL", ruleDescription: "External sharing policy must align with sensitivity classification." },
-        { ruleName: "Dual Ownership", ruleResult: workspace.owners >= 2 ? "PASS" : "FAIL", ruleDescription: "Workspace must have at least two active owners." },
       ];
+
+  const policyName = policyResults?.policyName || "Copilot Readiness";
 
   const rawJson = JSON.stringify(workspace, null, 2);
   const passCount = computedRules.filter(r => r.ruleResult === "PASS").length;

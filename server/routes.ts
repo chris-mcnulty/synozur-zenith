@@ -6,6 +6,7 @@ import sharepointRouter from "./routes/sharepoint";
 import tenantRouter from "./routes/tenants";
 import adminRouter from "./routes/admin";
 import docsRouter from "./routes/docs";
+import policiesRouter from "./routes/policies";
 
 export async function registerRoutes(
   httpServer: Server,
@@ -19,6 +20,7 @@ export async function registerRoutes(
   app.use(tenantRouter);
   app.use(adminRouter);
   app.use(docsRouter);
+  app.use(policiesRouter);
 
   return httpServer;
 }

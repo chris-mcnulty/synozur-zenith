@@ -37,7 +37,8 @@ The frontend is built with React, Vite, TanStack Query, shadcn/ui for components
 - Hub site hierarchy detection via SharePoint REST API (`SP.HubSites` + per-site `IsHubSite`/`HubSiteId`), supporting nested hubs.
 
 ### System Design Choices
-- **Database Schema**: Core tables include `workspaces`, `provisioning_requests`, `copilot_rules`, `tenant_connections`, `organizations`, `users`, `graph_tokens`, and `audit_log`.
+- **Database Schema**: Core tables include `workspaces`, `provisioning_requests`, `governance_policies`, `copilot_rules`, `tenant_connections`, `organizations`, `users`, `graph_tokens`, and `audit_log`.
+- **Multi-Policy Engine**: Organization-scoped `governance_policies` define composable rule sets (e.g., Copilot Readiness). Each policy contains a JSON array of rule definitions with built-in types: `SENSITIVITY_LABEL_REQUIRED`, `DEPARTMENT_REQUIRED`, `DUAL_OWNERSHIP`, `METADATA_COMPLETE`, `SHARING_POLICY`, `PROPERTY_BAG_CHECK`, `ATTESTATION` (future). Server-side evaluation engine in `server/services/policy-engine.ts` evaluates workspaces against policies and stores results in `copilot_rules`. Policies are organization-owned data.
 - **Audit Trail**: All significant actions are logged with details on WHO, WHAT, WHERE, WHEN, and RESULT, stored in PostgreSQL for auditing and compliance.
 - **API Endpoints**: Comprehensive RESTful APIs for managing workspaces, provisioning requests, tenant connections, user authentication, and organization settings.
 
