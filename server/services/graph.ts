@@ -223,15 +223,23 @@ export async function fetchSharePointSites(tenantId: string, clientId: string, c
   error?: string;
 }> {
   try {
-    const token = await getAppToken(tenantId, clientId, clientSecret);
+    let token = await getAppToken(tenantId, clientId, clientSecret);
 
     const allSites: GraphSite[] = [];
     let nextLink: string | null = "https://graph.microsoft.com/v1.0/sites?$top=100&$select=id,displayName,webUrl,description,createdDateTime,lastModifiedDateTime,isPersonalSite,root,siteCollection";
+    let retriedAuth = false;
 
     while (nextLink) {
       const res: Response = await fetch(nextLink, {
         headers: { Authorization: `Bearer ${token}` },
       });
+
+      if (res.status === 401 && !retriedAuth) {
+        retriedAuth = true;
+        clearTokenCache(tenantId, clientId);
+        token = await getAppToken(tenantId, clientId, clientSecret);
+        continue;
+      }
 
       if (!res.ok) {
         const errText = await res.text();
@@ -283,10 +291,11 @@ export async function fetchSiteUsageReport(tenantId: string, clientId: string, c
   error?: string;
 }> {
   try {
-    const token = await getAppToken(tenantId, clientId, clientSecret);
+    let token = await getAppToken(tenantId, clientId, clientSecret);
 
     const allRows: SiteUsageReportRow[] = [];
     let nextLink: string | null = "https://graph.microsoft.com/beta/reports/getSharePointSiteUsageDetail(period='D7')?$format=application/json";
+    let retriedAuth = false;
 
     while (nextLink) {
       const res: Response = await fetch(nextLink, {
@@ -295,6 +304,13 @@ export async function fetchSiteUsageReport(tenantId: string, clientId: string, c
           Accept: "application/json",
         },
       });
+
+      if (res.status === 401 && !retriedAuth) {
+        retriedAuth = true;
+        clearTokenCache(tenantId, clientId);
+        token = await getAppToken(tenantId, clientId, clientSecret);
+        continue;
+      }
 
       if (!res.ok) {
         const errText = await res.text();

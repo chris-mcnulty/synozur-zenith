@@ -91,6 +91,9 @@ router.get("/api/admin/tenants/consent/callback", async (req, res) => {
     const ownershipType = stateData.ownershipType || 'MSP';
     const organizationId = sessionOrgId || null;
 
+    const envClientId = process.env.AZURE_CLIENT_ID;
+    if (envClientId) clearTokenCache(tenantIdStr, envClientId);
+
     const existing = (await storage.getTenantConnections()).find(
       c => c.tenantId === tenantIdStr && c.organizationId === organizationId
     );
@@ -161,7 +164,10 @@ router.patch("/api/admin/tenants/:id", async (req, res) => {
 
 router.delete("/api/admin/tenants/:id", async (req, res) => {
   const conn = await storage.getTenantConnection(req.params.id);
-  if (conn && conn.clientId) clearTokenCache(conn.tenantId, conn.clientId);
+  if (conn) {
+    const cid = conn.clientId || process.env.AZURE_CLIENT_ID;
+    if (cid) clearTokenCache(conn.tenantId, cid);
+  }
   await storage.deleteTenantConnection(req.params.id);
   res.status(204).send();
 });
