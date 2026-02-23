@@ -73,7 +73,6 @@ export default function GovernancePage() {
   const [showFilterDrawer, setShowFilterDrawer] = useState(false);
 
   const [bulkSensitivity, setBulkSensitivity] = useState("");
-  const [bulkRetention, setBulkRetention] = useState("");
   const [bulkDepartment, setBulkDepartment] = useState("");
   const [bulkCostCenter, setBulkCostCenter] = useState("");
 
@@ -122,7 +121,7 @@ export default function GovernancePage() {
       setIsBulkEditOpen(false);
       setSelectedIds(new Set());
       setBulkSensitivity("");
-      setBulkRetention("");
+
       setBulkDepartment("");
       setBulkCostCenter("");
     },
@@ -176,7 +175,6 @@ export default function GovernancePage() {
         updates.sensitivityLabelId = bulkSensitivity;
       }
     }
-    if (bulkRetention) updates.retentionPolicy = bulkRetention;
     if (bulkDepartment) updates.department = bulkDepartment === "__clear__" ? "" : bulkDepartment;
     if (bulkCostCenter) updates.costCenter = bulkCostCenter === "__clear__" ? "" : bulkCostCenter;
 
@@ -583,19 +581,6 @@ export default function GovernancePage() {
                 </Select>
               </div>
 
-              <div className="space-y-2">
-                <Label>Retention Policy</Label>
-                <Select value={bulkRetention} onValueChange={setBulkRetention}>
-                  <SelectTrigger className="w-full bg-background/50">
-                    <SelectValue placeholder="Select retention policy..." />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="Default 7 Year">Default 7 Year</SelectItem>
-                    <SelectItem value="Executive 10 Year">Executive 10 Year</SelectItem>
-                    <SelectItem value="No Retention (Delete)">No Retention (Delete)</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
 
               <div className="space-y-2">
                 <Label>Department</Label>

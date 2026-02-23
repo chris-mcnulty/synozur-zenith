@@ -43,6 +43,7 @@ import {
 
 type DataDictEntry = { id: string; tenantId: string; category: string; value: string; createdAt: string };
 type SensitivityLabelEntry = { id: string; tenantId: string; labelId: string; name: string; description: string | null; color: string | null; tooltip: string | null; sensitivity: number | null; isActive: boolean; contentFormats: string[] | null; hasProtection: boolean; parentLabelId: string | null; appliesToGroupsSites: boolean; syncedAt: string | null };
+type RetentionLabelEntry = { id: string; tenantId: string; labelId: string; name: string; description: string | null; isInUse: boolean; retentionDuration: string | null; actionAfterRetention: string | null; syncedAt: string | null };
 
 export default function WorkspaceDetailsPage() {
   const { id } = useParams<{ id: string }>();
@@ -72,6 +73,12 @@ export default function WorkspaceDetailsPage() {
     enabled: !!tenantConnectionId,
   });
 
+  const { data: retentionLabelsData = [] } = useQuery<RetentionLabelEntry[]>({
+    queryKey: ["/api/admin/tenants", tenantConnectionId, "retention-labels"],
+    queryFn: () => fetch(`/api/admin/tenants/${tenantConnectionId}/retention-labels`).then(r => r.json()),
+    enabled: !!tenantConnectionId,
+  });
+
   const deptOptions = dictEntries.filter(e => e.category === "department");
   const costCenterOptions = dictEntries.filter(e => e.category === "cost_center");
   const projectCodeOptions = dictEntries.filter(e => e.category === "project_code");
@@ -84,7 +91,6 @@ export default function WorkspaceDetailsPage() {
     projectCode: "",
     sensitivity: "",
     sensitivityLabelId: "",
-    retentionPolicy: "",
     externalSharing: false,
     primarySteward: "",
     secondarySteward: "",
@@ -102,7 +108,7 @@ export default function WorkspaceDetailsPage() {
         projectCode: workspace.projectCode || "",
         sensitivity: workspace.sensitivity || "",
         sensitivityLabelId: workspace.sensitivityLabelId || "",
-        retentionPolicy: workspace.retentionPolicy || "",
+
         externalSharing: workspace.externalSharing,
         primarySteward: workspace.primarySteward || "",
         secondarySteward: workspace.secondarySteward || "",
@@ -165,7 +171,7 @@ export default function WorkspaceDetailsPage() {
         projectCode: workspace.projectCode || "",
         sensitivity: workspace.sensitivity || "",
         sensitivityLabelId: workspace.sensitivityLabelId || "",
-        retentionPolicy: workspace.retentionPolicy || "",
+
         externalSharing: workspace.externalSharing,
         primarySteward: workspace.primarySteward || "",
         secondarySteward: workspace.secondarySteward || "",
@@ -222,6 +228,10 @@ export default function WorkspaceDetailsPage() {
 
   const resolvedPurviewLabel = workspace.sensitivityLabelId
     ? sensitivityLabelsData.find(l => l.labelId === workspace.sensitivityLabelId)
+    : null;
+
+  const resolvedRetentionLabel = workspace.retentionLabelId
+    ? retentionLabelsData.find(l => l.labelId === workspace.retentionLabelId)
     : null;
 
   const computedRules: { ruleName: string; ruleResult: string; ruleDescription: string }[] = copilotRules.length > 0
@@ -489,19 +499,21 @@ export default function WorkspaceDetailsPage() {
                         )}
                       </div>
                       <div className="space-y-2">
-                        <Label>Retention Policy</Label>
-                        {editMode ? (
-                          <Select value={form.retentionPolicy} onValueChange={(v) => setForm({...form, retentionPolicy: v})}>
-                            <SelectTrigger className="bg-background/50" data-testid="select-retention"><SelectValue /></SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="Default 7 Year">Default 7 Year</SelectItem>
-                              <SelectItem value="Executive 10 Year">Executive 10 Year</SelectItem>
-                              <SelectItem value="Legal Hold">Legal Hold</SelectItem>
-                            </SelectContent>
-                          </Select>
-                        ) : (
-                          <div className="h-10 flex items-center px-3 rounded-md bg-muted/50 text-sm">{workspace.retentionPolicy}</div>
-                        )}
+                        <Label>Retention Label (Purview)</Label>
+                        <div className="h-10 flex items-center px-3 rounded-md bg-muted/30 text-sm text-muted-foreground gap-2" data-testid="text-retention-label">
+                          {resolvedRetentionLabel ? (
+                            <>
+                              <span className="text-foreground">{resolvedRetentionLabel.name}</span>
+                              {resolvedRetentionLabel.retentionDuration && (
+                                <span className="text-[10px] text-muted-foreground">({resolvedRetentionLabel.retentionDuration})</span>
+                              )}
+                            </>
+                          ) : workspace.retentionLabelId ? (
+                            <span className="italic text-xs">ID: {workspace.retentionLabelId.substring(0, 8)}… (sync to resolve)</span>
+                          ) : (
+                            <span className="italic">No retention label assigned</span>
+                          )}
+                        </div>
                       </div>
                       <div className="space-y-2">
                         <Label>External Sharing</Label>
@@ -739,20 +751,19 @@ export default function WorkspaceDetailsPage() {
                       </div>
                     </div>
                     <div className="space-y-2">
-                      <Label>Purview Label</Label>
-                      <div className="h-10 flex items-center px-3 rounded-md bg-muted/30 text-sm text-muted-foreground gap-2" data-testid="text-purview-label">
-                        {resolvedPurviewLabel ? (
+                      <Label>Retention Label (Purview)</Label>
+                      <div className="h-10 flex items-center px-3 rounded-md bg-muted/30 text-sm text-muted-foreground gap-2" data-testid="text-retention-label-metadata">
+                        {resolvedRetentionLabel ? (
                           <>
-                            {resolvedPurviewLabel.color && (
-                              <span className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: resolvedPurviewLabel.color }} />
+                            <span className="text-foreground">{resolvedRetentionLabel.name}</span>
+                            {resolvedRetentionLabel.retentionDuration && (
+                              <span className="text-[10px] text-muted-foreground">({resolvedRetentionLabel.retentionDuration})</span>
                             )}
-                            <span className="text-foreground">{resolvedPurviewLabel.name}</span>
-                            {resolvedPurviewLabel.hasProtection && <Lock className="w-3 h-3 text-amber-500" />}
                           </>
-                        ) : workspace.sensitivityLabelId ? (
-                          <span className="italic text-xs">ID: {workspace.sensitivityLabelId.substring(0, 8)}… (sync to resolve)</span>
+                        ) : workspace.retentionLabelId ? (
+                          <span className="italic text-xs">ID: {workspace.retentionLabelId.substring(0, 8)}… (sync to resolve)</span>
                         ) : (
-                          <span className="italic">No Purview label assigned</span>
+                          <span className="italic">No retention label assigned</span>
                         )}
                       </div>
                     </div>
