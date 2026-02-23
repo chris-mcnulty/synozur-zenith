@@ -44,7 +44,12 @@ import {
   ChevronRight,
   Layers,
   List,
-  Unlink
+  Unlink,
+  Trash2,
+  Eye,
+  Tag,
+  Sparkles,
+  AlertCircle
 } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
@@ -104,7 +109,7 @@ export default function GovernancePage() {
   const [filterSize, setFilterSize] = useState("all");
   const [filterAge, setFilterAge] = useState("all");
   const [filterCopilot, setFilterCopilot] = useState("all");
-  const [filterStatus, setFilterStatus] = useState("all");
+  const [filterStatus, setFilterStatus] = useState("active");
 
   const [bulkSensitivity, setBulkSensitivity] = useState("");
   const [bulkDepartment, setBulkDepartment] = useState("");
@@ -303,10 +308,12 @@ export default function GovernancePage() {
     setFilterSize("all");
     setFilterAge("all");
     setFilterCopilot("all");
-    setFilterStatus("all");
+    setFilterStatus("active");
   };
 
-  const activeFilterCount = [filterType, filterSensitivity, filterMetadata, filterDepartment, filterSize, filterAge, filterCopilot, filterStatus].filter(v => v !== "all").length;
+  const isDefaultView = filterStatus === "active";
+  const activeFilterCount = [filterType, filterSensitivity, filterMetadata, filterDepartment, filterSize, filterAge, filterCopilot].filter(v => v !== "all").length
+    + (filterStatus !== "active" ? 1 : 0);
 
   const filteredAndSortedWorkspaces = useMemo(() => {
     let result = [...workspaces];
@@ -835,6 +842,83 @@ export default function GovernancePage() {
             Export CSV
           </Button>
         </div>
+      </div>
+
+      <div className="flex items-center gap-2 flex-wrap" data-testid="quick-filters">
+        <span className="text-xs text-muted-foreground mr-1">Quick filters:</span>
+        <Button
+          variant={filterStatus === "all" ? "secondary" : "ghost"}
+          size="sm"
+          className="h-7 rounded-full text-xs gap-1.5 px-3"
+          onClick={() => { clearAllFilters(); setFilterStatus("all"); }}
+          data-testid="chip-all-sites"
+        >
+          <Eye className="w-3 h-3" />
+          All Sites
+        </Button>
+        <Button
+          variant={filterStatus === "active" ? "secondary" : "ghost"}
+          size="sm"
+          className="h-7 rounded-full text-xs gap-1.5 px-3"
+          onClick={() => { clearAllFilters(); }}
+          data-testid="chip-active-only"
+        >
+          <CheckSquare className="w-3 h-3" />
+          Active Only
+        </Button>
+        <span className="w-px h-4 bg-border" />
+        <Button
+          variant={filterMetadata === "missing" ? "secondary" : "ghost"}
+          size="sm"
+          className={`h-7 rounded-full text-xs gap-1.5 px-3 ${filterMetadata === "missing" ? "bg-amber-500/15 text-amber-600 hover:bg-amber-500/25 border border-amber-500/20" : ""}`}
+          onClick={() => {
+            clearAllFilters();
+            setFilterMetadata("missing");
+          }}
+          data-testid="chip-missing-metadata"
+        >
+          <AlertCircle className="w-3 h-3" />
+          Missing Metadata
+        </Button>
+        <Button
+          variant={filterSensitivity === "__none__" ? "secondary" : "ghost"}
+          size="sm"
+          className={`h-7 rounded-full text-xs gap-1.5 px-3 ${filterSensitivity === "__none__" ? "bg-red-500/15 text-red-600 hover:bg-red-500/25 border border-red-500/20" : ""}`}
+          onClick={() => {
+            clearAllFilters();
+            setFilterSensitivity("__none__");
+          }}
+          data-testid="chip-no-label"
+        >
+          <Tag className="w-3 h-3" />
+          No Label
+        </Button>
+        <Button
+          variant={filterCopilot === "not_ready" ? "secondary" : "ghost"}
+          size="sm"
+          className={`h-7 rounded-full text-xs gap-1.5 px-3 ${filterCopilot === "not_ready" ? "bg-purple-500/15 text-purple-600 hover:bg-purple-500/25 border border-purple-500/20" : ""}`}
+          onClick={() => {
+            clearAllFilters();
+            setFilterCopilot("not_ready");
+          }}
+          data-testid="chip-not-copilot"
+        >
+          <Sparkles className="w-3 h-3" />
+          Not Copilot Ready
+        </Button>
+        <Button
+          variant={filterStatus === "deleted" ? "secondary" : "ghost"}
+          size="sm"
+          className={`h-7 rounded-full text-xs gap-1.5 px-3 ${filterStatus === "deleted" ? "bg-destructive/15 text-destructive hover:bg-destructive/25 border border-destructive/20" : ""}`}
+          onClick={() => {
+            clearAllFilters();
+            setFilterStatus("deleted");
+          }}
+          data-testid="chip-deleted"
+        >
+          <Trash2 className="w-3 h-3" />
+          Deleted
+        </Button>
       </div>
 
       {selectedIds.size > 0 && (
