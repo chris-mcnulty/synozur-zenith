@@ -237,7 +237,7 @@ export default function WorkspaceDetailsPage() {
   const computedRules: { ruleName: string; ruleResult: string; ruleDescription: string }[] = copilotRules.length > 0
     ? copilotRules.map(r => ({ ruleName: r.ruleName, ruleResult: r.ruleResult, ruleDescription: r.ruleDescription }))
     : [
-        { ruleName: "Sensitivity Labeled", ruleResult: workspace.sensitivity ? "PASS" : "FAIL", ruleDescription: "Workspace must have a Purview sensitivity label applied." },
+        { ruleName: "Sensitivity Labeled", ruleResult: workspace.sensitivityLabelId ? "PASS" : "FAIL", ruleDescription: "Workspace must have a Purview sensitivity label applied." },
         { ruleName: "Metadata Complete", ruleResult: workspace.metadataStatus === "COMPLETE" ? "PASS" : "FAIL", ruleDescription: "All required governance metadata fields must be populated." },
         { ruleName: "Sharing Policy", ruleResult: (!workspace.externalSharing || workspace.sensitivity !== "HIGHLY_CONFIDENTIAL") ? "PASS" : "FAIL", ruleDescription: "External sharing policy must align with sensitivity classification." },
         { ruleName: "Dual Ownership", ruleResult: workspace.owners >= 2 ? "PASS" : "FAIL", ruleDescription: "Workspace must have at least two active owners." },
@@ -490,7 +490,7 @@ export default function WorkspaceDetailsPage() {
                                 {resolvedPurviewLabel.hasProtection && <Lock className="w-3 h-3 text-emerald-500" />}
                               </Badge>
                             ) : (
-                              <Badge variant={sensitivityVariant} className={`${sensitivityVariant === "destructive" ? "bg-destructive/10 text-destructive border-destructive/20" : ""}`}>{sensitivityLabel || "None"}</Badge>
+                              <span className="text-muted-foreground italic text-sm">No sensitivity label assigned</span>
                             )}
                           </div>
                         )}
