@@ -391,13 +391,31 @@ router.post("/api/admin/tenants/:tenantConnectionId/retention-labels/sync", asyn
       return res.status(500).json({ error: "Azure credentials not configured" });
     }
 
-    const token = await getAppToken(conn.tenantId, clientId, clientSecret);
-    if (!token) {
-      return res.status(500).json({ error: "Failed to acquire app token for tenant" });
+    let result: Awaited<ReturnType<typeof fetchRetentionLabels>> | null = null;
+
+    const userId = req.session?.userId;
+    if (userId) {
+      const delegated = await storage.getDecryptedGraphToken(userId, "graph");
+      if (delegated?.token && delegated.expiresAt && delegated.expiresAt > new Date()) {
+        console.log(`[retention-sync] Trying delegated token for user ${userId}...`);
+        const delegatedResult = await fetchRetentionLabels(delegated.token);
+        if (!delegatedResult.error) {
+          console.log(`[retention-sync] Delegated token succeeded with ${delegatedResult.labels.length} labels`);
+          result = delegatedResult;
+        } else {
+          console.warn(`[retention-sync] Delegated token failed: ${delegatedResult.error}, falling back to app token`);
+        }
+      }
     }
 
-    console.log(`[retention-sync] Manual sync triggered for tenant ${conn.tenantId}`);
-    const result = await fetchRetentionLabels(token);
+    if (!result) {
+      const token = await getAppToken(conn.tenantId, clientId, clientSecret);
+      if (!token) {
+        return res.status(500).json({ error: "Failed to acquire app token for tenant" });
+      }
+      console.log(`[retention-sync] Using app-only token for tenant ${conn.tenantId}`);
+      result = await fetchRetentionLabels(token);
+    }
 
     if (result.error) {
       console.error(`[retention-sync] Error: ${result.error}`);

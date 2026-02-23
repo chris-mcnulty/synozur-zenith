@@ -297,7 +297,27 @@ router.post("/api/admin/tenants/:id/sync", async (req, res) => {
     if (token) {
       try {
         console.log(`[retention-sync] Fetching retention labels for tenant ${connection.tenantId}...`);
-        const retResult = await fetchRetentionLabels(token);
+        let retResult: Awaited<ReturnType<typeof fetchRetentionLabels>> | null = null;
+
+        const userId = req.session?.userId;
+        if (userId) {
+          const delegated = await storage.getDecryptedGraphToken(userId, "graph");
+          if (delegated?.token && delegated.expiresAt && delegated.expiresAt > new Date()) {
+            console.log(`[retention-sync] Trying delegated token for retention labels...`);
+            const delegatedResult = await fetchRetentionLabels(delegated.token);
+            if (!delegatedResult.error) {
+              console.log(`[retention-sync] Delegated token succeeded with ${delegatedResult.labels.length} labels`);
+              retResult = delegatedResult;
+            } else {
+              console.warn(`[retention-sync] Delegated token failed, falling back to app token`);
+            }
+          }
+        }
+
+        if (!retResult) {
+          retResult = await fetchRetentionLabels(token);
+        }
+
         if (retResult.error) {
           console.error(`[retention-sync] Error from Graph API: ${retResult.error}`);
           retentionSyncResult.error = retResult.error;

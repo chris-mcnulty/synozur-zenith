@@ -534,68 +534,107 @@ export async function fetchRetentionLabels(token: string): Promise<{
   }>;
   error?: string;
 }> {
-  try {
-    const url = "https://graph.microsoft.com/beta/security/labels/retentionLabels";
-    const res = await fetch(url, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
+  const endpoints = [
+    "https://graph.microsoft.com/v1.0/security/labels/retentionLabels",
+    "https://graph.microsoft.com/beta/security/labels/retentionLabels",
+  ];
 
-    if (!res.ok) {
-      const errText = await res.text();
-      let detail = errText;
+  const MAX_RETRIES = 3;
+  let lastError = "";
+
+  for (const url of endpoints) {
+    const apiVersion = url.includes("/v1.0/") ? "v1.0" : "beta";
+
+    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
       try {
-        const parsed = JSON.parse(errText);
-        const errObj = parsed.error || {};
-        const parts = [errObj.code, errObj.message].filter(Boolean);
-        if (errObj.innerError?.code) parts.push(`(${errObj.innerError.code})`);
-        detail = parts.length > 0 ? parts.join(" - ") : errText;
-      } catch {}
-      if (res.status === 401 || res.status === 403) {
-        return { labels: [], error: `Graph API ${res.status}: Access denied. Ensure the Entra app registration has the 'RecordsManagement.Read.All' application permission with admin consent granted for this tenant. This requires Microsoft 365 E5 Compliance or Records Management add-on license.` };
+        if (attempt > 0) {
+          const delay = Math.pow(2, attempt) * 1000;
+          console.log(`[retention-sync] Retry ${attempt}/${MAX_RETRIES} for ${apiVersion} endpoint in ${delay}ms...`);
+          await new Promise(resolve => setTimeout(resolve, delay));
+        }
+
+        const res = await fetch(url, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+
+        if (!res.ok) {
+          const errText = await res.text();
+          let detail = errText;
+          try {
+            const parsed = JSON.parse(errText);
+            const errObj = parsed.error || {};
+            const parts = [errObj.code, errObj.message].filter(Boolean);
+            if (errObj.innerError?.code) parts.push(`(${errObj.innerError.code})`);
+            detail = parts.length > 0 ? parts.join(" - ") : errText;
+          } catch {}
+
+          if (res.status === 401 || res.status === 403) {
+            return { labels: [], error: `Graph API ${res.status}: Access denied. Ensure the Entra app registration has the 'RecordsManagement.Read.All' application permission with admin consent granted for this tenant.` };
+          }
+          if (res.status === 404) {
+            return { labels: [], error: `Retention labels not available for this tenant. The tenant may not have the required Microsoft Purview license.` };
+          }
+
+          const isTransient = res.status === 500 || res.status === 502 || res.status === 503 || res.status === 429;
+          if (isTransient && (detail.includes("DataInsights") || detail.includes("Forbidden"))) {
+            console.warn(`[retention-sync] Transient DataInsights error on ${apiVersion} (attempt ${attempt + 1}): ${detail.substring(0, 200)}`);
+            lastError = `Graph API ${res.status} (${apiVersion}): ${detail}`;
+            continue;
+          }
+
+          if (isTransient) {
+            lastError = `Graph API ${res.status} (${apiVersion}): ${detail}`;
+            continue;
+          }
+
+          return { labels: [], error: `Graph API ${res.status}: ${detail}` };
+        }
+
+        const data = await res.json();
+        const rawLabels = data.value || [];
+
+        let allLabels = [...rawLabels];
+        let nextLink = data["@odata.nextLink"];
+        while (nextLink) {
+          const nextRes = await fetch(nextLink, {
+            headers: { Authorization: `Bearer ${token}` },
+          });
+          if (!nextRes.ok) break;
+          const nextData = await nextRes.json();
+          allLabels.push(...(nextData.value || []));
+          nextLink = nextData["@odata.nextLink"];
+        }
+
+        const labels = allLabels.map((l: any) => ({
+          labelId: l.id,
+          name: l.displayName || l.name || "Unknown",
+          description: l.descriptionForUsers || l.descriptionForAdmins || l.description || null,
+          retentionDuration: l.retentionDuration?.days
+            ? `${l.retentionDuration.days} days`
+            : l.retentionDuration?.years
+            ? `${l.retentionDuration.years} years`
+            : l.retentionDuration?.months
+            ? `${l.retentionDuration.months} months`
+            : null,
+          retentionAction: l.defaultRecordBehavior || null,
+          behaviorDuringRetentionPeriod: l.behaviorDuringRetentionPeriod || null,
+          actionAfterRetentionPeriod: l.actionAfterRetentionPeriod || null,
+          isActive: l.isInUse !== false,
+          isRecordLabel: l.defaultRecordBehavior === "startLocked" || l.defaultRecordBehavior === "startUnlocked",
+        }));
+
+        console.log(`[retention-sync] Successfully fetched ${labels.length} retention labels via ${apiVersion}`);
+        return { labels };
+      } catch (e: any) {
+        lastError = e.message;
+        console.warn(`[retention-sync] Exception on ${apiVersion} (attempt ${attempt + 1}): ${e.message}`);
       }
-      if (res.status === 404) {
-        return { labels: [], error: `Retention labels not available for this tenant. The tenant may not have a Microsoft 365 E5 Compliance or Records Management license.` };
-      }
-      return { labels: [], error: `Graph API ${res.status}: ${detail}` };
     }
 
-    const data = await res.json();
-    const rawLabels = data.value || [];
-
-    let allLabels = [...rawLabels];
-    let nextLink = data["@odata.nextLink"];
-    while (nextLink) {
-      const nextRes = await fetch(nextLink, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (!nextRes.ok) break;
-      const nextData = await nextRes.json();
-      allLabels.push(...(nextData.value || []));
-      nextLink = nextData["@odata.nextLink"];
-    }
-
-    const labels = allLabels.map((l: any) => ({
-      labelId: l.id,
-      name: l.displayName || l.name || "Unknown",
-      description: l.descriptionForUsers || l.descriptionForAdmins || l.description || null,
-      retentionDuration: l.retentionDuration?.days
-        ? `${l.retentionDuration.days} days`
-        : l.retentionDuration?.years
-        ? `${l.retentionDuration.years} years`
-        : l.retentionDuration?.months
-        ? `${l.retentionDuration.months} months`
-        : null,
-      retentionAction: l.defaultRecordBehavior || null,
-      behaviorDuringRetentionPeriod: l.behaviorDuringRetentionPeriod || null,
-      actionAfterRetentionPeriod: l.actionAfterRetentionPeriod || null,
-      isActive: l.isInUse !== false,
-      isRecordLabel: l.defaultRecordBehavior === "startLocked" || l.defaultRecordBehavior === "startUnlocked",
-    }));
-
-    return { labels };
-  } catch (e: any) {
-    return { labels: [], error: e.message };
+    console.warn(`[retention-sync] All ${MAX_RETRIES} attempts failed for ${apiVersion}, trying next endpoint...`);
   }
+
+  return { labels: [], error: `Retention label sync failed after retries. This is a known intermittent issue with Microsoft's Purview backend. Please try again in a few minutes. Last error: ${lastError}` };
 }
 
 export function clearTokenCache(tenantId?: string, clientId?: string) {
