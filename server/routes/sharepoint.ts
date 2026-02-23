@@ -168,6 +168,22 @@ router.patch("/api/workspaces/bulk/update", async (req, res) => {
   res.json({ message: "Bulk update complete", count: ids.length });
 });
 
+router.patch("/api/workspaces/bulk/hub-assignment", async (req, res) => {
+  const { workspaceIds, hubSiteId } = req.body;
+  if (!Array.isArray(workspaceIds) || workspaceIds.length === 0) {
+    return res.status(400).json({ message: "workspaceIds array is required" });
+  }
+  if (hubSiteId) {
+    const allWs = await storage.getWorkspaces();
+    const hubExists = allWs.some(ws => ws.isHubSite && ws.hubSiteId === hubSiteId);
+    if (!hubExists) {
+      return res.status(400).json({ message: "Invalid hub site ID — no hub site found with that identifier" });
+    }
+  }
+  await storage.bulkUpdateWorkspaces(workspaceIds, { hubSiteId: hubSiteId || null });
+  res.json({ message: "Hub assignment updated", count: workspaceIds.length });
+});
+
 // ── Copilot Rules ──
 router.get("/api/workspaces/:id/copilot-rules", async (req, res) => {
   const rules = await storage.getCopilotRules(req.params.id);

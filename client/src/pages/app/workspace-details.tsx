@@ -38,7 +38,9 @@ import {
   Pencil,
   Copy,
   AlertTriangle,
-  Upload
+  Upload,
+  Network,
+  Unlink
 } from "lucide-react";
 
 type DataDictEntry = { id: string; tenantId: string; category: string; value: string; createdAt: string };
@@ -86,6 +88,20 @@ export default function WorkspaceDetailsPage() {
     queryFn: () => fetch(`/api/admin/tenants/${tenantConnectionId}/retention-labels`).then(r => r.json()),
     enabled: !!tenantConnectionId,
   });
+
+  const { data: allWorkspaces = [] } = useQuery<Workspace[]>({
+    queryKey: ["/api/workspaces", tenantConnectionId],
+    queryFn: () => {
+      const params = new URLSearchParams();
+      if (tenantConnectionId) params.set("tenantConnectionId", tenantConnectionId);
+      return fetch(`/api/workspaces?${params.toString()}`).then(r => r.json());
+    },
+    enabled: !!tenantConnectionId,
+  });
+
+  const hubSiteWorkspace = workspace?.hubSiteId && !workspace?.isHubSite
+    ? allWorkspaces.find(w => w.isHubSite && w.hubSiteId === workspace.hubSiteId)
+    : null;
 
   const deptOptions = dictEntries.filter(e => e.category === "department");
   const costCenterOptions = dictEntries.filter(e => e.category === "cost_center");
@@ -310,6 +326,11 @@ export default function WorkspaceDetailsPage() {
               {workspace.teamsConnected && (
                 <Badge variant="outline" className="text-[10px] font-semibold text-blue-500 bg-blue-500/10 border-blue-500/20">Teams Connected</Badge>
               )}
+              {workspace.isHubSite && (
+                <Badge variant="outline" className="text-[10px] font-semibold text-purple-500 bg-purple-500/10 border-purple-500/20 gap-1">
+                  <Network className="w-3 h-3" /> Hub Site
+                </Badge>
+              )}
             </div>
             <div className="flex items-center gap-3 mt-1">
               <Globe className={`w-3.5 h-3.5 ${getSiteTypeColor(workspace.type)}`} />
@@ -480,6 +501,32 @@ export default function WorkspaceDetailsPage() {
                           )}
                         </div>
                       )}
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Hub Association</Label>
+                      <div className="h-10 flex items-center gap-2 px-3 rounded-md bg-muted/50 text-sm" data-testid="text-hub-association">
+                        {workspace.isHubSite ? (
+                          <>
+                            <Network className="w-4 h-4 text-purple-500" />
+                            <span className="font-medium text-purple-600 dark:text-purple-400">This is a Hub Site</span>
+                          </>
+                        ) : hubSiteWorkspace ? (
+                          <>
+                            <Network className="w-4 h-4 text-purple-500" />
+                            <span>{hubSiteWorkspace.displayName}</span>
+                            {hubSiteWorkspace.siteUrl && (
+                              <a href={hubSiteWorkspace.siteUrl} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline text-xs inline-flex items-center gap-0.5 ml-1">
+                                <ExternalLink className="w-3 h-3" />
+                              </a>
+                            )}
+                          </>
+                        ) : (
+                          <>
+                            <Unlink className="w-4 h-4 text-muted-foreground" />
+                            <span className="text-muted-foreground">Standalone (no hub)</span>
+                          </>
+                        )}
+                      </div>
                     </div>
                   </div>
 
