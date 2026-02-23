@@ -382,6 +382,61 @@ export async function fetchSiteDriveOwner(token: string, graphSiteId: string): P
   }
 }
 
+export interface SiteGroupOwner {
+  id: string;
+  displayName: string;
+  mail?: string;
+  userPrincipalName?: string;
+}
+
+export async function fetchSiteGroupOwners(
+  token: string,
+  graphSiteId: string
+): Promise<{ owners: SiteGroupOwner[]; groupId?: string; error?: string }> {
+  try {
+    let groupId: string | undefined;
+
+    const driveRes = await fetch(
+      `https://graph.microsoft.com/v1.0/sites/${graphSiteId}/drive`,
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+
+    if (driveRes.ok) {
+      const driveData = await driveRes.json();
+      const ownerGroup = driveData?.owner?.group;
+      if (ownerGroup?.id) {
+        groupId = ownerGroup.id;
+      }
+    }
+
+    if (!groupId) {
+      return { owners: [], error: "No M365 Group associated with this site" };
+    }
+
+    const ownersRes = await fetch(
+      `https://graph.microsoft.com/v1.0/groups/${groupId}/owners?$select=id,displayName,mail,userPrincipalName`,
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+
+    if (!ownersRes.ok) {
+      const errText = await ownersRes.text();
+      return { owners: [], groupId, error: `Group owners API error ${ownersRes.status}: ${errText}` };
+    }
+
+    const ownersData = await ownersRes.json();
+    const owners: SiteGroupOwner[] = (ownersData.value || []).map((o: any) => ({
+      id: o.id,
+      displayName: o.displayName || '',
+      mail: o.mail,
+      userPrincipalName: o.userPrincipalName,
+    }));
+
+    return { owners, groupId };
+  } catch (err: any) {
+    return { owners: [], error: err.message };
+  }
+}
+
 export async function fetchSiteAnalytics(token: string, graphSiteId: string): Promise<{
   lastActivityDate?: string;
   fileCount?: number;

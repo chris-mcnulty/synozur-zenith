@@ -548,11 +548,11 @@ export default function WorkspaceDetailsPage() {
                   <div>
                     <h3 className="text-sm font-semibold mb-4 flex items-center gap-2">
                       <Users className="w-4 h-4 text-primary" />
-                      Ownership & Stewardship
+                      Ownership
                     </h3>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-5">
                       <div className="space-y-2">
-                        <Label>Primary Steward <span className="text-destructive">*</span></Label>
+                        <Label>Primary Owner <span className="text-destructive">*</span></Label>
                         {editMode ? (
                           <Input value={form.primarySteward} onChange={(e) => setForm({...form, primarySteward: e.target.value})} className="bg-background/50" data-testid="input-primary-steward" />
                         ) : (
@@ -589,7 +589,7 @@ export default function WorkspaceDetailsPage() {
                         <ShieldAlert className="w-4 h-4 text-destructive shrink-0 mt-0.5" />
                         <div className="text-xs text-destructive">
                           <span className="font-semibold block mb-0.5">Dual Ownership Policy Violation</span>
-                          This site requires both a Primary Steward and Secondary Owner to prevent orphaned workspaces.
+                          This site requires both a Primary Owner and Secondary Owner to prevent orphaned workspaces.
                         </div>
                       </div>
                     )}
@@ -969,7 +969,7 @@ export default function WorkspaceDetailsPage() {
                   </div>
                   <div>
                     <p className="text-sm font-medium">{workspace.primarySteward}</p>
-                    <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-semibold">Primary Steward</p>
+                    <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-semibold">Primary Owner</p>
                   </div>
                 </div>
               )}

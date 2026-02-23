@@ -246,13 +246,13 @@ export default function ProvisionNewPage() {
 
           <Card className="glass-panel border-border/50 shadow-sm">
             <CardHeader>
-              <CardTitle>3. Ownership & Stewardship</CardTitle>
+              <CardTitle>3. Ownership</CardTitle>
               <CardDescription>All workspaces require at least two active owners to prevent orphan data.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-6">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div className="space-y-3">
-                  <Label htmlFor="owner1">Primary Steward <span className="text-destructive">*</span></Label>
+                  <Label htmlFor="owner1">Primary Owner <span className="text-destructive">*</span></Label>
                   <Input 
                     id="owner1" 
                     placeholder="Search directory..." 

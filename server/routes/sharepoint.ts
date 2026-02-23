@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { storage } from "../storage";
 import { insertWorkspaceSchema, insertProvisioningRequestSchema, type ServicePlanTier } from "@shared/schema";
-import { fetchSharePointSites, fetchSiteUsageReport, fetchSiteDriveOwner, fetchSiteAnalytics, getAppToken, writeSitePropertyBag, fetchSensitivityLabels, fetchRetentionLabels, getSpoToken, fetchHubSites, fetchSiteHubAssociation } from "../services/graph";
+import { fetchSharePointSites, fetchSiteUsageReport, fetchSiteDriveOwner, fetchSiteAnalytics, fetchSiteGroupOwners, getAppToken, writeSitePropertyBag, fetchSensitivityLabels, fetchRetentionLabels, getSpoToken, fetchHubSites, fetchSiteHubAssociation } from "../services/graph";
 import { getPlanFeatures } from "../services/feature-gate";
 import { refreshDelegatedToken } from "../routes-entra";
 
@@ -188,27 +188,29 @@ router.post("/api/admin/tenants/:id/sync", async (req, res) => {
     const enrichErrors: string[] = [];
 
     const BATCH_SIZE = 5;
-    const enrichCache = new Map<string, { driveOwner: any; analytics: any }>();
+    const enrichCache = new Map<string, { driveOwner: any; analytics: any; groupOwners: any }>();
 
     if (token) {
       for (let i = 0; i < siteResult.sites.length; i += BATCH_SIZE) {
         const batch = siteResult.sites.slice(i, i + BATCH_SIZE);
         const results = await Promise.allSettled(
           batch.map(async (site) => {
-            const [driveResult, analyticsResult] = await Promise.allSettled([
+            const [driveResult, analyticsResult, groupOwnersResult] = await Promise.allSettled([
               fetchSiteDriveOwner(token!, site.id),
               fetchSiteAnalytics(token!, site.id),
+              fetchSiteGroupOwners(token!, site.id),
             ]);
             return {
               siteId: site.id,
               driveOwner: driveResult.status === 'fulfilled' ? driveResult.value : {},
               analytics: analyticsResult.status === 'fulfilled' ? analyticsResult.value : {},
+              groupOwners: groupOwnersResult.status === 'fulfilled' ? groupOwnersResult.value : { owners: [] },
             };
           })
         );
         for (const r of results) {
           if (r.status === 'fulfilled') {
-            enrichCache.set(r.value.siteId, { driveOwner: r.value.driveOwner, analytics: r.value.analytics });
+            enrichCache.set(r.value.siteId, { driveOwner: r.value.driveOwner, analytics: r.value.analytics, groupOwners: r.value.groupOwners });
           }
         }
       }
@@ -224,9 +226,10 @@ router.post("/api/admin/tenants/:id/sync", async (req, res) => {
       }
       if (usage) usageMatched++;
 
-      const enriched = enrichCache.get(site.id) || { driveOwner: {}, analytics: {} };
+      const enriched = enrichCache.get(site.id) || { driveOwner: {}, analytics: {}, groupOwners: { owners: [] } };
       const driveOwner = enriched.driveOwner;
       const siteAnalytics = enriched.analytics;
+      const groupOwners = enriched.groupOwners;
 
       const siteType = inferSiteType(usage?.rootWebTemplate, site.siteCollection?.root);
 
@@ -243,6 +246,14 @@ router.post("/api/admin/tenants/:id/sync", async (req, res) => {
 
       workspaceData.ownerDisplayName = usage?.ownerDisplayName || driveOwner.ownerDisplayName || null;
       workspaceData.ownerPrincipalName = usage?.ownerPrincipalName || driveOwner.ownerEmail || null;
+
+      if (groupOwners.owners && groupOwners.owners.length > 0) {
+        workspaceData.owners = groupOwners.owners.length;
+        workspaceData.primarySteward = groupOwners.owners[0]?.displayName || null;
+        if (groupOwners.owners.length >= 2) {
+          workspaceData.secondarySteward = groupOwners.owners[1]?.displayName || null;
+        }
+      }
 
       const storageUsed = usage?.storageUsedBytes ?? driveOwner.storageUsedBytes ?? null;
       const storageAlloc = usage?.storageAllocatedBytes ?? driveOwner.storageAllocatedBytes ?? null;
