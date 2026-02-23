@@ -2,19 +2,16 @@
 
 **Microsoft 365 Governance Platform — The Synozur Alliance**
 
-Strategic product roadmap outlining planned features, enhancements, and future direction for Zenith.
+The roadmap contains only features we have committed to build. For the full list of ideas, enhancements, and future possibilities, see the [Backlog](/app/support/backlog).
 
 ---
 
 ## Table of Contents
 
 1. [Vision & Strategy](#vision--strategy)
-2. [Recently Completed](#recently-completed)
-3. [Current Focus (Q1 2026)](#current-focus-q1-2026)
-4. [Near-Term Priorities (Q2 2026)](#near-term-priorities-q2-2026)
-5. [Medium-Term Goals (H2 2026)](#medium-term-goals-h2-2026)
-6. [Long-Term Vision (2027+)](#long-term-vision-2027)
-7. [Feature Status Legend](#feature-status-legend)
+2. [Current Focus (Q1 2026)](#current-focus-q1-2026)
+3. [Recently Completed](#recently-completed)
+4. [Feature Status Legend](#feature-status-legend)
 
 ---
 
@@ -58,9 +55,33 @@ Zenith empowers organizations to govern their Microsoft 365 environments with co
 
 ---
 
+## Current Focus (Q1 2026)
+
+### 🔄 Governed Site Provisioning
+
+**Status:** 🔄 In Progress
+**Target Completion:** March 2026
+**Value Proposition:** Enable organizations to provision new SharePoint sites through governed templates with automatic naming conventions, sensitivity label assignment, and ownership requirements.
+
+#### Deliverables
+- Provisioning request workflow (request → review → approve → create)
+- Template library with Deal and Portfolio Company site types
+- Automated DEAL- and PORTCO- prefix enforcement
+- Sensitivity label assignment during provisioning
+- Dual ownership requirement (Primary Steward + Secondary Owner)
+- Provisioning audit trail
+
+---
+
 ## Recently Completed
 
 The following major features have been delivered and are live. See the [Changelog](/app/support/changelog) for detailed release notes.
+
+### ✅ Support & Documentation System
+**Completed:** February 2026
+- In-app Support & About section with Roadmap, Changelog, User Guide, and Backlog
+- Markdown-based documentation served via API and rendered in the UI
+- Sidebar navigation to documentation pages
 
 ### ✅ Hub Site Hierarchy Detection
 **Completed:** February 2026
@@ -125,121 +146,9 @@ The following major features have been delivered and are live. See the [Changelo
 
 ---
 
-## Current Focus (Q1 2026)
-
-### 🔄 Priority: Governed Site Provisioning
-
-**Status:** 🔄 In Progress
-**Target Completion:** March 2026
-**Value Proposition:** Enable organizations to provision new SharePoint sites through governed templates with automatic naming conventions, sensitivity label assignment, and ownership requirements.
-
-#### Deliverables
-- Provisioning request workflow (request → review → approve → create)
-- Template library with Deal and Portfolio Company site types
-- Automated DEAL- and PORTCO- prefix enforcement
-- Sensitivity label assignment during provisioning
-- Dual ownership requirement (Primary Steward + Secondary Owner)
-- Provisioning audit trail
-
----
-
-### 🔄 Priority: Lifecycle Management
-
-**Status:** 📋 Planned
-**Target Completion:** March 2026
-**Value Proposition:** Identify stale, orphaned, and non-compliant sites for remediation.
-
-#### Deliverables
-- Stale site detection based on last activity date thresholds
-- Orphaned site identification (missing owner)
-- Lifecycle review queue with bulk actions
-- Compliance scoring per workspace
-- Automated notifications for site owners approaching lifecycle thresholds
-
----
-
-## Near-Term Priorities (Q2 2026)
-
-### 📋 Priority: Copilot Readiness Dashboard
-
-**Status:** 📋 Planned
-**Target Completion:** Q2 2026
-**Value Proposition:** Provide clear, actionable visibility into which sites are eligible for Microsoft 365 Copilot indexing and why.
-
-#### Deliverables
-- Copilot eligibility scoring per workspace
-- Blocking factor identification (sensitivity labels, external sharing, missing metadata)
-- Remediation recommendations
-- Organization-wide Copilot readiness metrics
-- Export capabilities for compliance reporting
-
----
-
-### 📋 Priority: External Sharing Governance
-
-**Status:** 📋 Planned
-**Target Completion:** Q2 2026
-**Value Proposition:** Monitor and control external sharing across all managed SharePoint sites.
-
-#### Deliverables
-- Sharing capability inventory per site
-- Policy violation detection (sites with sharing enabled that shouldn't)
-- Sharing restriction enforcement via Graph API
-- Guest user access reporting
-- Domain allowlist/blocklist management
-
----
-
-## Medium-Term Goals (H2 2026)
-
-### Document Library Governance
-- Document library inventory within managed sites
-- Content type enforcement and tracking
-- Large file and version sprawl detection
-- Storage optimization recommendations
-
-### Advanced Reporting & Analytics
-- Executive dashboard with governance KPIs
-- Trend analysis for storage growth, usage patterns
-- Compliance posture reporting over time
-- Scheduled report delivery
-
-### Notification System
-- Configurable alerts for governance violations
-- Scheduled digest emails for site owners
-- Teams bot integration for real-time notifications
-- Escalation workflows for unresolved issues
-
----
-
-## Long-Term Vision (2027+)
-
-### AI-Powered Governance
-- AI-driven site classification recommendations
-- Anomaly detection for unusual sharing or access patterns
-- Predictive analytics for storage and usage forecasting
-- Natural language governance queries
-
-### Cross-Platform Governance
-- OneDrive governance integration
-- Exchange Online mailbox governance
-- Power Platform environment monitoring
-- Unified M365 governance dashboard
-
-### Enterprise Features
-- Custom workflow automation
-- API-first extensibility for third-party integrations
-- Advanced audit and forensics capabilities
-- Regulatory compliance templates (GDPR, HIPAA, SOC2)
-
----
-
 ## Feature Status Legend
 
 | Status | Meaning |
 |--------|---------|
 | ✅ Complete | Feature is live in production |
-| 🔄 In Progress | Currently under active development |
-| 📋 Planned | Scoped and scheduled for a specific quarter |
-| 💡 Exploring | Under consideration, not yet committed |
-| ⏸️ Deferred | Postponed to a later date |
+| 🔄 In Progress | Currently under active development and committed |

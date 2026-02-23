@@ -66,7 +66,34 @@ Prioritized backlog of features, enhancements, and technical improvements. Items
 
 ## Medium Priority
 
-### 🟡 BL-004: External Sharing Governance
+### 🟡 BL-004: Job Scheduling & Management System
+**Status:** Backlog | **Design Doc:** [`docs/design/job-scheduling-system.md`](/docs/design/job-scheduling-system.md)
+**Description:** Background job scheduling system for automating recurring governance operations — tenant syncs, stale site detection, compliance scans, label audits, and notification delivery. Architecture follows the proven Orbit pattern with database-backed audit trail, concurrency guards, abort support, and admin monitoring UI.
+**Reference:** Orbit (`synozur-orbit`) `scheduled-jobs.ts` — best job scheduling implementation in the Synozur portfolio.
+**Acceptance Criteria:**
+- `scheduled_job_runs` table with full audit trail (job type, tenant, status, result, error, triggered by)
+- `scheduled_job_configs` table with per-org frequency settings (hourly/daily/weekly/disabled)
+- In-memory job status registry with `isRunning` concurrency guards and `AbortController` for cancellation
+- Generic `trackJobRun<T>()` wrapper for automatic start/complete/fail tracking
+- Stuck job cleanup (auto-fail jobs running > 1 hour)
+- Refactor existing tenant sync into first schedulable job
+- Core jobs: tenantSync, staleSiteScan, labelAudit, ownershipCheck
+- Advanced jobs (Professional+): copilotReadiness, sharingAudit, complianceScore
+- Communication jobs: ownerReminder, digestEmail, planExpiration
+- Admin UI at `/app/admin/scheduled-jobs` with overview cards, run history, manual triggers, frequency config
+- Service plan gating for advanced job types
+
+### 🟡 BL-005: Lifecycle Management
+**Status:** Backlog
+**Description:** Identify stale, orphaned, and non-compliant sites for administrative review and remediation.
+**Acceptance Criteria:**
+- Configurable staleness threshold (default: 90 days no activity)
+- Orphaned site detection (no owner or owner departed)
+- Compliance scoring based on metadata completeness, label assignment, ownership
+- Bulk action support (archive, reassign owner, apply label)
+- Scheduled scan with email digest
+
+### 🟡 BL-006: External Sharing Governance
 **Status:** Planned | **Target:** Q2 2026
 **Description:** Monitor and enforce external sharing policies across managed SharePoint sites.
 **Acceptance Criteria:**
@@ -76,7 +103,7 @@ Prioritized backlog of features, enhancements, and technical improvements. Items
 - Guest user access reporting
 - Bulk sharing restriction updates
 
-### 🟡 BL-005: Document Library Inventory
+### 🟡 BL-007: Document Library Inventory
 **Status:** Planned | **Target:** H2 2026
 **Description:** Extend governance to document library level within managed sites.
 **Acceptance Criteria:**
@@ -86,7 +113,7 @@ Prioritized backlog of features, enhancements, and technical improvements. Items
 - Storage optimization recommendations
 - Library-level sensitivity label tracking
 
-### 🟡 BL-006: Notification System
+### 🟡 BL-008: Notification System
 **Status:** Planned | **Target:** H2 2026
 **Description:** Configurable notification system for governance events and policy violations.
 **Acceptance Criteria:**
@@ -96,7 +123,7 @@ Prioritized backlog of features, enhancements, and technical improvements. Items
 - Teams bot integration (future phase)
 - Notification preferences per user
 
-### 🟡 BL-007: Reporting & Analytics
+### 🟡 BL-009: Reporting & Analytics
 **Status:** Planned | **Target:** H2 2026
 **Description:** Executive reporting dashboard with governance KPIs and trend analysis.
 **Acceptance Criteria:**
@@ -107,7 +134,7 @@ Prioritized backlog of features, enhancements, and technical improvements. Items
 - Scheduled PDF report delivery
 - Export to Excel
 
-### 🟡 BL-008: Provisioning Templates Library
+### 🟡 BL-010: Provisioning Templates Library
 **Status:** Planned | **Target:** Q2 2026
 **Description:** Pre-built and custom provisioning templates for common site types.
 **Acceptance Criteria:**
@@ -121,7 +148,7 @@ Prioritized backlog of features, enhancements, and technical improvements. Items
 
 ## Low Priority
 
-### 🟢 BL-009: AI-Powered Governance Insights
+### 🟢 BL-011: AI-Powered Governance Insights
 **Status:** Exploring | **Target:** 2027
 **Description:** AI-driven classification recommendations and anomaly detection.
 **Acceptance Criteria:**
@@ -130,7 +157,7 @@ Prioritized backlog of features, enhancements, and technical improvements. Items
 - Natural language governance queries
 - Predictive storage forecasting
 
-### 🟢 BL-010: Cross-Platform Governance
+### 🟢 BL-012: Cross-Platform Governance
 **Status:** Exploring | **Target:** 2027
 **Description:** Extend governance beyond SharePoint to OneDrive, Exchange, and Power Platform.
 **Acceptance Criteria:**
@@ -139,7 +166,7 @@ Prioritized backlog of features, enhancements, and technical improvements. Items
 - Power Platform environment monitoring
 - Unified governance dashboard
 
-### 🟢 BL-011: Custom Workflow Automation
+### 🟢 BL-013: Custom Workflow Automation
 **Status:** Exploring | **Target:** 2027
 **Description:** User-defined governance workflows and automation rules.
 **Acceptance Criteria:**
