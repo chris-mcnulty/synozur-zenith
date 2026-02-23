@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { storage } from "../storage";
 import { insertWorkspaceSchema, insertProvisioningRequestSchema, type ServicePlanTier } from "@shared/schema";
-import { fetchSharePointSites, fetchSiteUsageReport, fetchSiteDriveOwner, fetchSiteAnalytics, fetchSiteGroupOwners, getAppToken, writeSitePropertyBag, fetchSensitivityLabels, fetchRetentionLabels, getSpoToken, fetchHubSites, fetchSiteHubAssociation, getGroupIdForSite, applySensitivityLabelToGroup, removeSensitivityLabelFromGroup } from "../services/graph";
+import { fetchSharePointSites, fetchSiteUsageReport, fetchSiteDriveOwner, fetchSiteAnalytics, fetchSiteGroupOwners, getAppToken, writeSitePropertyBag, fetchSensitivityLabels, fetchRetentionLabels, getSpoToken, fetchHubSites, fetchSiteHubAssociation, fetchHubSitesViaSearch, getGroupIdForSite, applySensitivityLabelToGroup, removeSensitivityLabelFromGroup } from "../services/graph";
 import { getPlanFeatures } from "../services/feature-gate";
 import { refreshDelegatedToken } from "../routes-entra";
 
@@ -467,92 +467,148 @@ router.post("/api/admin/tenants/:id/sync", async (req, res) => {
       }
     }
 
-    let hubSyncResult: { hubSitesFound: number; sitesEnriched: number; error?: string } = { hubSitesFound: 0, sitesEnriched: 0 };
+    let hubSyncResult: { hubSitesFound: number; sitesEnriched: number; method?: string; error?: string } = { hubSitesFound: 0, sitesEnriched: 0 };
     try {
       const allWorkspacesForHub = await storage.getWorkspaces(undefined, req.params.id);
-      const spoHostFromSites = allWorkspacesForHub
-        .map(w => w.siteUrl)
-        .filter(Boolean)
-        .map(url => { try { return new URL(url!).hostname; } catch { return null; } })
-        .find(h => h && h.endsWith('.sharepoint.com'));
-
-      const spoHostDomain = spoHostFromSites || connection.domain;
-      console.log(`[hub-sync] Derived SPO host: ${spoHostDomain} (from ${spoHostFromSites ? 'site URLs' : 'connection domain'})`);
-
-      const spoToken = await getSpoToken(connection.tenantId, clientId, clientSecret, spoHostDomain);
-      console.log(`[hub-sync] SPO token acquired, calling SP.HubSites...`);
-      const hubResult = await fetchHubSites(spoToken, spoHostDomain);
-      if (hubResult.error) {
-        console.warn(`[hub-sync] SP.HubSites API error: ${hubResult.error}`);
-        hubSyncResult.error = hubResult.error;
-      }
-      hubSyncResult.hubSitesFound = hubResult.hubSites.length;
-      if (hubResult.hubSites.length > 0) {
-        for (const h of hubResult.hubSites) {
-          console.log(`[hub-sync] SP.HubSites found: "${h.title}" url=${h.siteUrl} id=${h.hubSiteId}`);
-        }
-      } else {
-        console.log(`[hub-sync] SP.HubSites returned 0 hub sites (may need SharePoint Sites.Read.All application permission)`);
-      }
-
       const normalizeHubUrl = (url: string) => url.toLowerCase().replace(/\/+$/, '');
-      const hubUrlToHubInfo = new Map<string, { hubSiteId: string; parentHubSiteId?: string }>();
-      for (const h of hubResult.hubSites) {
-        hubUrlToHubInfo.set(normalizeHubUrl(h.siteUrl), {
-          hubSiteId: h.hubSiteId,
-          parentHubSiteId: h.parentHubSiteId,
-        });
-      }
 
-      console.log(`[hub-sync] Found ${hubResult.hubSites.length} hub sites, matching against ${allWorkspacesForHub.length} workspaces`);
+      let hubDiscoveryDone = false;
 
-      for (const ws of allWorkspacesForHub) {
-        if (ws.siteUrl) {
-          const hubInfo = hubUrlToHubInfo.get(normalizeHubUrl(ws.siteUrl));
-          if (hubInfo) {
-            await storage.updateWorkspace(ws.id, {
-              isHubSite: true,
-              hubSiteId: hubInfo.hubSiteId,
-              parentHubSiteId: hubInfo.parentHubSiteId || null,
-            } as any);
-            hubSyncResult.sitesEnriched++;
+      if (token) {
+        console.log(`[hub-sync] Trying Graph Search API for hub discovery...`);
+        const searchResult = await fetchHubSitesViaSearch(token);
+
+        if (!searchResult.error && searchResult.hubSites.length > 0) {
+          hubSyncResult.method = "graph-search";
+          hubSyncResult.hubSitesFound = searchResult.hubSites.length;
+
+          for (const hub of searchResult.hubSites) {
+            console.log(`[hub-sync] Graph Search found hub: "${hub.displayName}" url=${hub.webUrl} siteCollectionId=${hub.siteCollectionId}`);
           }
-        }
-      }
 
-      const nonHubSites = allWorkspacesForHub.filter(w => w.siteUrl && !hubUrlToHubInfo.has(normalizeHubUrl(w.siteUrl)));
-      console.log(`[hub-sync] Checking ${nonHubSites.length} remaining sites for hub association via per-site API`);
-      const HUB_BATCH_SIZE = 5;
-      let perSiteErrors = 0;
-      for (let i = 0; i < nonHubSites.length; i += HUB_BATCH_SIZE) {
-        const batch = nonHubSites.slice(i, i + HUB_BATCH_SIZE);
-        const results = await Promise.allSettled(
-          batch.map(async (ws) => {
-            const assoc = await fetchSiteHubAssociation(spoToken, ws.siteUrl!);
-            return { workspaceId: ws.id, displayName: ws.displayName, ...assoc };
-          })
-        );
-        for (const r of results) {
-          if (r.status === 'fulfilled' && !r.value.error) {
-            if (r.value.isHubSite) {
-              console.log(`[hub-sync] Discovered hub site via per-site API: "${r.value.displayName}" (hubSiteId=${r.value.hubSiteId})`);
+          const hubUrlToInfo = new Map<string, { siteCollectionId: string }>();
+          for (const hub of searchResult.hubSites) {
+            hubUrlToInfo.set(normalizeHubUrl(hub.webUrl), { siteCollectionId: hub.siteCollectionId });
+          }
+
+          const graphIdToHubSiteCollectionId = new Map<string, string>();
+          for (const [graphId, hubSiteCollectionId] of searchResult.associations) {
+            graphIdToHubSiteCollectionId.set(graphId, hubSiteCollectionId);
+          }
+
+          console.log(`[hub-sync] Graph Search found ${searchResult.associations.size} hub-associated sites`);
+
+          for (const ws of allWorkspacesForHub) {
+            const wsUrl = ws.siteUrl ? normalizeHubUrl(ws.siteUrl) : null;
+            const hubInfo = wsUrl ? hubUrlToInfo.get(wsUrl) : null;
+
+            if (hubInfo) {
+              await storage.updateWorkspace(ws.id, {
+                isHubSite: true,
+                hubSiteId: hubInfo.siteCollectionId,
+                parentHubSiteId: null,
+              } as any);
+              hubSyncResult.sitesEnriched++;
+              continue;
             }
-            await storage.updateWorkspace(r.value.workspaceId, {
-              isHubSite: r.value.isHubSite,
-              hubSiteId: r.value.hubSiteId,
+
+            const wsM365Id = ws.m365ObjectId?.toLowerCase();
+            if (wsM365Id) {
+              const hubSiteColId = graphIdToHubSiteCollectionId.get(wsM365Id);
+              if (hubSiteColId) {
+                const isThisSiteAHub = hubUrlToInfo.has(wsUrl || '');
+                await storage.updateWorkspace(ws.id, {
+                  isHubSite: isThisSiteAHub,
+                  hubSiteId: hubSiteColId,
+                  parentHubSiteId: null,
+                } as any);
+                hubSyncResult.sitesEnriched++;
+                continue;
+              }
+            }
+
+            await storage.updateWorkspace(ws.id, {
+              isHubSite: false,
+              hubSiteId: null,
               parentHubSiteId: null,
             } as any);
             hubSyncResult.sitesEnriched++;
-          } else {
-            perSiteErrors++;
-            if (r.status === 'fulfilled' && r.value.error) {
-              console.warn(`[hub-sync] Per-site API error for "${r.value.displayName}": ${r.value.error}`);
-            }
           }
+
+          hubDiscoveryDone = true;
+        } else if (searchResult.error) {
+          console.warn(`[hub-sync] Graph Search failed: ${searchResult.error}`);
+        } else {
+          console.log(`[hub-sync] Graph Search returned 0 hub sites`);
         }
       }
-      if (perSiteErrors > 0) {
-        console.warn(`[hub-sync] ${perSiteErrors} per-site hub checks failed`);
+
+      if (!hubDiscoveryDone) {
+        console.log(`[hub-sync] Falling back to SharePoint REST API for hub discovery...`);
+        const spoHostFromSites = allWorkspacesForHub
+          .map(w => w.siteUrl)
+          .filter(Boolean)
+          .map(url => { try { return new URL(url!).hostname; } catch { return null; } })
+          .find(h => h && h.endsWith('.sharepoint.com'));
+
+        const spoHostDomain = spoHostFromSites || connection.domain;
+
+        try {
+          const spoToken = await getSpoToken(connection.tenantId, clientId, clientSecret, spoHostDomain);
+          const hubResult = await fetchHubSites(spoToken, spoHostDomain);
+          hubSyncResult.method = "spo-rest";
+
+          if (hubResult.error) {
+            hubSyncResult.error = hubResult.error;
+          }
+          hubSyncResult.hubSitesFound = hubResult.hubSites.length;
+
+          const hubUrlToHubInfo = new Map<string, { hubSiteId: string; parentHubSiteId?: string }>();
+          for (const h of hubResult.hubSites) {
+            hubUrlToHubInfo.set(normalizeHubUrl(h.siteUrl), {
+              hubSiteId: h.hubSiteId,
+              parentHubSiteId: h.parentHubSiteId,
+            });
+          }
+
+          for (const ws of allWorkspacesForHub) {
+            if (ws.siteUrl) {
+              const hubInfo = hubUrlToHubInfo.get(normalizeHubUrl(ws.siteUrl));
+              if (hubInfo) {
+                await storage.updateWorkspace(ws.id, {
+                  isHubSite: true,
+                  hubSiteId: hubInfo.hubSiteId,
+                  parentHubSiteId: hubInfo.parentHubSiteId || null,
+                } as any);
+                hubSyncResult.sitesEnriched++;
+              }
+            }
+          }
+
+          const nonHubSites = allWorkspacesForHub.filter(w => w.siteUrl && !hubUrlToHubInfo.has(normalizeHubUrl(w.siteUrl)));
+          const HUB_BATCH_SIZE = 5;
+          for (let i = 0; i < nonHubSites.length; i += HUB_BATCH_SIZE) {
+            const batch = nonHubSites.slice(i, i + HUB_BATCH_SIZE);
+            const results = await Promise.allSettled(
+              batch.map(async (ws) => {
+                const assoc = await fetchSiteHubAssociation(spoToken, ws.siteUrl!);
+                return { workspaceId: ws.id, displayName: ws.displayName, ...assoc };
+              })
+            );
+            for (const r of results) {
+              if (r.status === 'fulfilled' && !r.value.error) {
+                await storage.updateWorkspace(r.value.workspaceId, {
+                  isHubSite: r.value.isHubSite,
+                  hubSiteId: r.value.hubSiteId,
+                  parentHubSiteId: null,
+                } as any);
+                hubSyncResult.sitesEnriched++;
+              }
+            }
+          }
+        } catch (spoErr: any) {
+          hubSyncResult.error = spoErr.message;
+        }
       }
     } catch (e: any) {
       hubSyncResult.error = hubSyncResult.error || e.message;

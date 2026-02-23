@@ -97,28 +97,110 @@ export interface HubSiteInfo {
   parentHubSiteId?: string;
 }
 
-export async function fetchHubSites(spoToken: string, domain: string): Promise<{
+export async function fetchHubSitesViaSearch(graphToken: string, region: string = "NAM"): Promise<{
+  hubSites: { siteCollectionId: string; displayName: string; webUrl: string; graphId: string }[];
+  associations: Map<string, string>;
+  error?: string;
+}> {
+  const associations = new Map<string, string>();
+
+  try {
+    const hubSearchRes = await fetch("https://graph.microsoft.com/v1.0/search/query", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${graphToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        requests: [{
+          entityTypes: ["site"],
+          query: { queryString: "IsHubSite:true" },
+          region,
+          size: 100,
+        }],
+      }),
+    });
+
+    if (!hubSearchRes.ok) {
+      const errText = await hubSearchRes.text();
+      return { hubSites: [], associations, error: `Graph Search API error ${hubSearchRes.status}: ${errText.substring(0, 200)}` };
+    }
+
+    const hubSearchData = await hubSearchRes.json();
+    const hubHits = hubSearchData.value?.[0]?.hitsContainers?.[0]?.hits || [];
+
+    if (hubHits.length === 0) {
+      return { hubSites: [], associations };
+    }
+
+    const resolvedHubs: { siteCollectionId: string; displayName: string; webUrl: string; graphId: string }[] = [];
+    for (const hit of hubHits) {
+      const graphId = hit.hitId;
+      const siteCollectionId = graphId?.split(',')?.[1];
+      if (!siteCollectionId) continue;
+
+      try {
+        const siteRes = await fetch(`https://graph.microsoft.com/v1.0/sites/${graphId}`, {
+          headers: { Authorization: `Bearer ${graphToken}` },
+        });
+        if (siteRes.ok) {
+          const siteData = await siteRes.json();
+          resolvedHubs.push({
+            siteCollectionId,
+            displayName: siteData.displayName,
+            webUrl: siteData.webUrl,
+            graphId,
+          });
+        }
+      } catch {}
+    }
+
+    for (const hub of resolvedHubs) {
+      try {
+        const assocRes = await fetch("https://graph.microsoft.com/v1.0/search/query", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${graphToken}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            requests: [{
+              entityTypes: ["site"],
+              query: { queryString: `DepartmentId:{${hub.siteCollectionId}}` },
+              region,
+              size: 500,
+            }],
+          }),
+        });
+
+        if (assocRes.ok) {
+          const assocData = await assocRes.json();
+          const assocHits = assocData.value?.[0]?.hitsContainers?.[0]?.hits || [];
+          for (const assocHit of assocHits) {
+            if (assocHit.hitId) {
+              associations.set(assocHit.hitId.toLowerCase(), hub.siteCollectionId);
+            }
+          }
+        }
+      } catch {}
+    }
+
+    return { hubSites: resolvedHubs, associations };
+  } catch (err: any) {
+    return { hubSites: [], associations, error: err.message };
+  }
+}
+
+export async function fetchHubSites(spoToken: string, domain: string, graphToken?: string): Promise<{
   hubSites: HubSiteInfo[];
   error?: string;
 }> {
-  try {
-    const spoHost = domain.includes(".sharepoint.com") ? domain : `${domain.replace(/\..*$/, '')}.sharepoint.com`;
-    const url = `https://${spoHost}/_api/SP.HubSites`;
-    const res = await fetch(url, {
-      headers: {
-        Authorization: `Bearer ${spoToken}`,
-        Accept: "application/json;odata=nometadata",
-      },
-    });
+  const spoHost = domain.includes(".sharepoint.com") ? domain : `${domain.replace(/\..*$/, '')}.sharepoint.com`;
+  const url = `https://${spoHost}/_api/SP.HubSites`;
+  const emptyGuid = "00000000-0000-0000-0000-000000000000";
 
-    if (!res.ok) {
-      const errText = await res.text();
-      return { hubSites: [], error: `SP.HubSites API error ${res.status}: ${errText.substring(0, 200)}` };
-    }
-
-    const data = await res.json();
-    const emptyGuid = "00000000-0000-0000-0000-000000000000";
-    const hubSites: HubSiteInfo[] = (data.value || []).map((h: any) => ({
+  const parseHubResponse = (data: any): HubSiteInfo[] => {
+    return (data.value || []).map((h: any) => ({
       hubSiteId: h.ID || h.Id,
       siteId: h.SiteId,
       siteUrl: h.SiteUrl,
@@ -126,20 +208,9 @@ export async function fetchHubSites(spoToken: string, domain: string): Promise<{
       description: h.Description || undefined,
       parentHubSiteId: h.ParentHubSiteId && h.ParentHubSiteId !== emptyGuid ? h.ParentHubSiteId : undefined,
     }));
+  };
 
-    return { hubSites };
-  } catch (err: any) {
-    return { hubSites: [], error: err.message };
-  }
-}
-
-export async function fetchSiteHubAssociation(spoToken: string, siteUrl: string): Promise<{
-  isHubSite: boolean;
-  hubSiteId: string | null;
-  error?: string;
-}> {
   try {
-    const url = `${siteUrl.replace(/\/+$/, '')}/_api/site?$select=IsHubSite,HubSiteId`;
     const res = await fetch(url, {
       headers: {
         Authorization: `Bearer ${spoToken}`,
@@ -147,17 +218,87 @@ export async function fetchSiteHubAssociation(spoToken: string, siteUrl: string)
       },
     });
 
-    if (!res.ok) {
-      return { isHubSite: false, hubSiteId: null, error: `${res.status}` };
+    if (res.ok) {
+      const data = await res.json();
+      return { hubSites: parseHubResponse(data) };
     }
 
-    const data = await res.json();
+    const errText = await res.text();
+    const spoError = `SP.HubSites API error ${res.status} (SPO token): ${errText.substring(0, 200)}`;
+    console.warn(`[hub-sync] ${spoError}`);
+
+    if (res.status === 401 && graphToken) {
+      console.log(`[hub-sync] SPO token got 401, trying Graph app token as fallback...`);
+      const graphRes = await fetch(url, {
+        headers: {
+          Authorization: `Bearer ${graphToken}`,
+          Accept: "application/json;odata=nometadata",
+        },
+      });
+
+      if (graphRes.ok) {
+        console.log(`[hub-sync] Graph token succeeded for SP.HubSites!`);
+        const data = await graphRes.json();
+        return { hubSites: parseHubResponse(data) };
+      }
+
+      const graphErrText = await graphRes.text();
+      console.warn(`[hub-sync] Graph token also failed for SP.HubSites: ${graphRes.status} ${graphErrText.substring(0, 200)}`);
+      return { hubSites: [], error: `SPO token 401, Graph token ${graphRes.status}. Add SharePoint > Sites.Read.All application permission in Entra app registration.` };
+    }
+
+    return { hubSites: [], error: spoError };
+  } catch (err: any) {
+    return { hubSites: [], error: err.message };
+  }
+}
+
+export async function fetchSiteHubAssociation(spoToken: string, siteUrl: string, graphToken?: string): Promise<{
+  isHubSite: boolean;
+  hubSiteId: string | null;
+  error?: string;
+}> {
+  const url = `${siteUrl.replace(/\/+$/, '')}/_api/site?$select=IsHubSite,HubSiteId`;
+  const emptyGuid = "00000000-0000-0000-0000-000000000000";
+
+  const parseResponse = (data: any) => {
     const hubSiteId = data.HubSiteId;
-    const emptyGuid = "00000000-0000-0000-0000-000000000000";
     return {
       isHubSite: data.IsHubSite === true,
       hubSiteId: hubSiteId && hubSiteId !== emptyGuid ? hubSiteId : null,
     };
+  };
+
+  try {
+    const res = await fetch(url, {
+      headers: {
+        Authorization: `Bearer ${spoToken}`,
+        Accept: "application/json;odata=nometadata",
+      },
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      return parseResponse(data);
+    }
+
+    if (res.status === 401 && graphToken) {
+      const graphRes = await fetch(url, {
+        headers: {
+          Authorization: `Bearer ${graphToken}`,
+          Accept: "application/json;odata=nometadata",
+        },
+      });
+
+      if (graphRes.ok) {
+        const data = await graphRes.json();
+        return parseResponse(data);
+      }
+
+      return { isHubSite: false, hubSiteId: null, error: `SPO:401,Graph:${graphRes.status}` };
+    }
+
+    return { isHubSite: false, hubSiteId: null, error: `${res.status}` };
   } catch (err: any) {
     return { isHubSite: false, hubSiteId: null, error: err.message };
   }
