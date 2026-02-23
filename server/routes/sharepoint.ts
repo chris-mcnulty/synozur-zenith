@@ -480,11 +480,20 @@ router.post("/api/admin/tenants/:id/sync", async (req, res) => {
       console.log(`[hub-sync] Derived SPO host: ${spoHostDomain} (from ${spoHostFromSites ? 'site URLs' : 'connection domain'})`);
 
       const spoToken = await getSpoToken(connection.tenantId, clientId, clientSecret, spoHostDomain);
+      console.log(`[hub-sync] SPO token acquired, calling SP.HubSites...`);
       const hubResult = await fetchHubSites(spoToken, spoHostDomain);
       if (hubResult.error) {
+        console.warn(`[hub-sync] SP.HubSites API error: ${hubResult.error}`);
         hubSyncResult.error = hubResult.error;
       }
       hubSyncResult.hubSitesFound = hubResult.hubSites.length;
+      if (hubResult.hubSites.length > 0) {
+        for (const h of hubResult.hubSites) {
+          console.log(`[hub-sync] SP.HubSites found: "${h.title}" url=${h.siteUrl} id=${h.hubSiteId}`);
+        }
+      } else {
+        console.log(`[hub-sync] SP.HubSites returned 0 hub sites (may need SharePoint Sites.Read.All application permission)`);
+      }
 
       const normalizeHubUrl = (url: string) => url.toLowerCase().replace(/\/+$/, '');
       const hubUrlToHubInfo = new Map<string, { hubSiteId: string; parentHubSiteId?: string }>();
@@ -512,25 +521,38 @@ router.post("/api/admin/tenants/:id/sync", async (req, res) => {
       }
 
       const nonHubSites = allWorkspacesForHub.filter(w => w.siteUrl && !hubUrlToHubInfo.has(normalizeHubUrl(w.siteUrl)));
+      console.log(`[hub-sync] Checking ${nonHubSites.length} remaining sites for hub association via per-site API`);
       const HUB_BATCH_SIZE = 5;
+      let perSiteErrors = 0;
       for (let i = 0; i < nonHubSites.length; i += HUB_BATCH_SIZE) {
         const batch = nonHubSites.slice(i, i + HUB_BATCH_SIZE);
         const results = await Promise.allSettled(
           batch.map(async (ws) => {
             const assoc = await fetchSiteHubAssociation(spoToken, ws.siteUrl!);
-            return { workspaceId: ws.id, ...assoc };
+            return { workspaceId: ws.id, displayName: ws.displayName, ...assoc };
           })
         );
         for (const r of results) {
           if (r.status === 'fulfilled' && !r.value.error) {
+            if (r.value.isHubSite) {
+              console.log(`[hub-sync] Discovered hub site via per-site API: "${r.value.displayName}" (hubSiteId=${r.value.hubSiteId})`);
+            }
             await storage.updateWorkspace(r.value.workspaceId, {
-              isHubSite: false,
+              isHubSite: r.value.isHubSite,
               hubSiteId: r.value.hubSiteId,
               parentHubSiteId: null,
             } as any);
             hubSyncResult.sitesEnriched++;
+          } else {
+            perSiteErrors++;
+            if (r.status === 'fulfilled' && r.value.error) {
+              console.warn(`[hub-sync] Per-site API error for "${r.value.displayName}": ${r.value.error}`);
+            }
           }
         }
+      }
+      if (perSiteErrors > 0) {
+        console.warn(`[hub-sync] ${perSiteErrors} per-site hub checks failed`);
       }
     } catch (e: any) {
       hubSyncResult.error = hubSyncResult.error || e.message;
