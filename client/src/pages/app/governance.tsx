@@ -396,7 +396,10 @@ export default function GovernancePage() {
                               )}
                             </div>
                             {ws.siteUrl && (
-                              <span className="text-[10px] text-muted-foreground/60 truncate max-w-[220px]">{ws.siteUrl.replace(/^https?:\/\//, '')}</span>
+                              <a href={ws.siteUrl} target="_blank" rel="noopener noreferrer" className="text-[10px] text-muted-foreground/60 hover:text-primary truncate max-w-[220px] inline-flex items-center gap-1" data-testid={`link-site-url-${ws.id}`}>
+                                {ws.siteUrl.replace(/^https?:\/\//, '')}
+                                <ExternalLink className="w-2.5 h-2.5 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity" />
+                              </a>
                             )}
                           </div>
                         </div>
