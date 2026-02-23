@@ -8,7 +8,7 @@ import { ZENITH_ROLES } from '@shared/schema';
 const router = Router();
 const cryptoProvider = new CryptoProvider();
 
-const SCOPES = ['openid', 'profile', 'email', 'User.Read', 'offline_access', 'RecordsManagement.Read.All'];
+const SCOPES = ['openid', 'profile', 'email', 'User.Read', 'offline_access', 'RecordsManagement.Read.All', 'Group.ReadWrite.All'];
 
 function getBaseUrl(): string {
   if (process.env.REPLIT_DEV_DOMAIN) {
