@@ -2,6 +2,7 @@ import { Router } from "express";
 import crypto from "crypto";
 import { storage } from "../storage";
 import { testConnection, clearTokenCache, getAppToken, fetchSensitivityLabels, fetchRetentionLabels } from "../services/graph";
+import { checkTenantPermissions, REQUIRED_PERMISSIONS, PERMISSIONS_VERSION } from "../services/permissions";
 import { METADATA_CATEGORIES } from "@shared/schema";
 
 const router = Router();
@@ -181,6 +182,75 @@ router.post("/api/admin/tenants/test", async (req, res) => {
   }
   const result = await testConnection(tenantId, clientId, clientSecret);
   res.json(result);
+});
+
+// ── Permission Health ──
+router.get("/api/admin/tenants/:id/permissions", async (req, res) => {
+  try {
+    const conn = await storage.getTenantConnection(req.params.id);
+    if (!conn) return res.status(404).json({ error: "Tenant connection not found" });
+
+    const clientId = process.env.AZURE_CLIENT_ID;
+    const clientSecret = process.env.AZURE_CLIENT_SECRET;
+    if (!clientId || !clientSecret) {
+      return res.status(503).json({ error: "Zenith Entra app credentials not configured" });
+    }
+
+    const token = await getAppToken(conn.tenantId, clientId, clientSecret);
+    if (!token) {
+      return res.status(500).json({ error: "Failed to acquire app token for tenant" });
+    }
+
+    const result = await checkTenantPermissions(token, clientId);
+    res.json(result);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get("/api/admin/tenants/permissions/manifest", (_req, res) => {
+  res.json({
+    version: PERMISSIONS_VERSION,
+    permissions: REQUIRED_PERMISSIONS,
+  });
+});
+
+router.get("/api/admin/tenants/:id/reconsent", async (req, res) => {
+  try {
+    const conn = await storage.getTenantConnection(req.params.id);
+    if (!conn) return res.status(404).json({ error: "Tenant connection not found" });
+
+    const clientId = process.env.AZURE_CLIENT_ID;
+    if (!clientId) {
+      return res.status(503).json({ error: "Zenith Entra app is not configured. Set AZURE_CLIENT_ID first." });
+    }
+
+    const userId = req.session?.userId;
+    if (!userId) {
+      return res.status(401).json({ error: "You must be logged in." });
+    }
+
+    const nonce = crypto.randomBytes(16).toString('hex');
+    (req.session as any).consentNonce = nonce;
+    (req.session as any).consentOrgId = conn.organizationId;
+
+    const protocol = req.headers['x-forwarded-proto'] || req.protocol;
+    const host = req.headers['x-forwarded-host'] || req.get('host');
+    const baseUrl = `${protocol}://${host}`;
+    const redirectUri = `${baseUrl}/api/admin/tenants/consent/callback`;
+
+    const state = Buffer.from(JSON.stringify({
+      tenantDomain: conn.domain,
+      ownershipType: conn.ownershipType || 'MSP',
+      nonce,
+      isReconsent: true,
+    })).toString('base64url');
+
+    const consentUrl = `https://login.microsoftonline.com/${conn.domain}/adminconsent?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&state=${state}`;
+    res.json({ consentUrl, tenantDomain: conn.domain });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ── Data Dictionaries (tenant-owned, shared across orgs) ──

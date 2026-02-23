@@ -34,6 +34,8 @@ import {
   LogIn,
   Building2,
   X,
+  KeyRound,
+  Lock,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -43,12 +45,35 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 
+type PermissionDetail = {
+  roleId: string;
+  name: string;
+  description: string;
+  feature: string;
+  required: boolean;
+  licenseNote?: string;
+  status: "granted" | "missing";
+};
+
+type PermissionCheckResult = {
+  granted: string[];
+  missing: string[];
+  details: PermissionDetail[];
+  allGranted: boolean;
+  permissionsVersion: number;
+};
+
 export default function TenantConnectionsPage() {
   const { toast } = useToast();
   const [searchTerm, setSearchTerm] = useState("");
   const [showAddDialog, setShowAddDialog] = useState(false);
   const [syncingId, setSyncingId] = useState<string | null>(null);
   const [isInitiating, setIsInitiating] = useState(false);
+  const [permDialogTenantId, setPermDialogTenantId] = useState<string | null>(null);
+  const [permResult, setPermResult] = useState<PermissionCheckResult | null>(null);
+  const [permLoading, setPermLoading] = useState(false);
+  const [permError, setPermError] = useState<string | null>(null);
+  const [reconsentingId, setReconsentingId] = useState<string | null>(null);
 
   const [form, setForm] = useState({
     domain: "",
@@ -110,6 +135,50 @@ export default function TenantConnectionsPage() {
     }
   };
 
+  const handleCheckPermissions = async (connId: string) => {
+    setPermDialogTenantId(connId);
+    setPermResult(null);
+    setPermError(null);
+    setPermLoading(true);
+    try {
+      const res = await fetch(`/api/admin/tenants/${connId}/permissions`);
+      const data = await res.json();
+      if (!res.ok) {
+        setPermError(data.error || "Failed to check permissions");
+      } else {
+        setPermResult(data);
+        if (!data.allGranted) {
+          toast({
+            title: "Missing Permissions",
+            description: `${data.missing.length} permission(s) need admin consent for this tenant.`,
+            variant: "destructive",
+          });
+        }
+      }
+    } catch (err: any) {
+      setPermError(err.message);
+    } finally {
+      setPermLoading(false);
+    }
+  };
+
+  const handleReconsent = async (connId: string) => {
+    setReconsentingId(connId);
+    try {
+      const res = await fetch(`/api/admin/tenants/${connId}/reconsent`);
+      const data = await res.json();
+      if (!res.ok) {
+        toast({ title: "Error", description: data.error || "Failed to generate re-consent URL", variant: "destructive" });
+        return;
+      }
+      window.location.href = data.consentUrl;
+    } catch (err: any) {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    } finally {
+      setReconsentingId(null);
+    }
+  };
+
   const handleSync = async (id: string) => {
     setSyncingId(id);
     try {
@@ -167,7 +236,7 @@ export default function TenantConnectionsPage() {
                         <li>Approve the permissions Zenith needs (read-only)</li>
                         <li>You'll be redirected back here once approved</li>
                       </ol>
-                      <p className="mt-2 text-[10px] opacity-70">Zenith requests: Sites.Read.All, Group.Read.All, Directory.Read.All (Application permissions, read-only)</p>
+                      <p className="mt-2 text-[10px] opacity-70">Zenith requests: Sites.Read.All, Group.Read.All, Directory.Read.All, Reports.Read.All, InformationProtectionPolicy.Read.All, RecordsManagement.Read.All (Application permissions, read-only)</p>
                     </div>
                   </div>
                 </CardContent>
@@ -408,6 +477,17 @@ export default function TenantConnectionsPage() {
                             {syncingId === conn.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCcw className="w-4 h-4" />}
                             {syncingId === conn.id ? "Syncing..." : "Sync Now"}
                           </DropdownMenuItem>
+                          <DropdownMenuItem className="gap-2" onClick={() => handleCheckPermissions(conn.id)}>
+                            <KeyRound className="w-4 h-4" /> Check Permissions
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            className="gap-2"
+                            onClick={() => handleReconsent(conn.id)}
+                            disabled={reconsentingId === conn.id}
+                          >
+                            {reconsentingId === conn.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Lock className="w-4 h-4" />}
+                            Update Permissions
+                          </DropdownMenuItem>
                           <DropdownMenuItem className="gap-2" onClick={() => navigator.clipboard.writeText(conn.tenantId)}>
                             <Copy className="w-4 h-4" /> Copy Tenant ID
                           </DropdownMenuItem>
@@ -433,6 +513,123 @@ export default function TenantConnectionsPage() {
         </CardContent>
       </Card>
 
+      <Dialog open={permDialogTenantId !== null} onOpenChange={(open) => { if (!open) { setPermDialogTenantId(null); setPermResult(null); setPermError(null); } }}>
+        <DialogContent className="sm:max-w-[600px]">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <KeyRound className="w-5 h-5 text-primary" />
+              Permission Health Check
+            </DialogTitle>
+            <DialogDescription>
+              Shows which Microsoft Graph permissions are consented for this tenant vs. what Zenith requires.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            {permLoading && (
+              <div className="flex items-center justify-center h-32">
+                <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
+                <span className="ml-2 text-sm text-muted-foreground">Checking permissions...</span>
+              </div>
+            )}
+            {permError && (
+              <Card className="border-destructive/30 bg-destructive/5">
+                <CardContent className="p-4">
+                  <div className="flex items-start gap-2">
+                    <XCircle className="w-4 h-4 text-destructive mt-0.5 shrink-0" />
+                    <div>
+                      <p className="text-sm font-medium text-destructive">Permission check failed</p>
+                      <p className="text-xs text-muted-foreground mt-1">{permError}</p>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+            {permResult && (
+              <>
+                <div className="flex items-center gap-3 p-3 rounded-lg bg-muted/30 border border-border/50">
+                  {permResult.allGranted ? (
+                    <>
+                      <ShieldCheck className="w-6 h-6 text-emerald-500" />
+                      <div>
+                        <p className="text-sm font-semibold text-emerald-600" data-testid="text-perm-status">All permissions granted</p>
+                        <p className="text-xs text-muted-foreground">{permResult.granted.length} of {permResult.details.length} permissions consented</p>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <ShieldAlert className="w-6 h-6 text-amber-500" />
+                      <div>
+                        <p className="text-sm font-semibold text-amber-600" data-testid="text-perm-status">{permResult.missing.length} permission(s) missing</p>
+                        <p className="text-xs text-muted-foreground">A tenant admin needs to re-consent to grant the new permissions.</p>
+                      </div>
+                    </>
+                  )}
+                </div>
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Permission</TableHead>
+                      <TableHead>Feature</TableHead>
+                      <TableHead className="w-[90px]">Status</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {permResult.details.map((perm) => (
+                      <TableRow key={perm.roleId} data-testid={`row-perm-${perm.name}`}>
+                        <TableCell>
+                          <div className="flex flex-col">
+                            <span className="text-xs font-mono font-semibold">{perm.name}</span>
+                            <span className="text-[10px] text-muted-foreground">{perm.description}</span>
+                            {perm.licenseNote && (
+                              <span className="text-[10px] text-amber-600 mt-0.5">{perm.licenseNote}</span>
+                            )}
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <span className="text-xs text-muted-foreground">{perm.feature}</span>
+                        </TableCell>
+                        <TableCell>
+                          {perm.status === "granted" ? (
+                            <div className="flex items-center gap-1">
+                              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" />
+                              <span className="text-xs text-emerald-500">Granted</span>
+                            </div>
+                          ) : (
+                            <div className="flex items-center gap-1">
+                              <XCircle className="w-3.5 h-3.5 text-red-500" />
+                              <span className="text-xs text-red-500">Missing</span>
+                            </div>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+                {!permResult.allGranted && permDialogTenantId && (
+                  <div className="flex flex-col gap-2 pt-2 border-t border-border/50">
+                    <p className="text-xs text-muted-foreground">
+                      Click below to redirect to Microsoft's consent page. A Global Administrator of this tenant must approve the updated permissions.
+                    </p>
+                    <Button
+                      onClick={() => handleReconsent(permDialogTenantId)}
+                      disabled={reconsentingId === permDialogTenantId}
+                      className="gap-2"
+                      data-testid="button-reconsent"
+                    >
+                      {reconsentingId === permDialogTenantId ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <LogIn className="w-4 h-4" />
+                      )}
+                      Update Permissions via Admin Consent
+                    </Button>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
