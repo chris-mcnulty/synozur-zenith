@@ -36,6 +36,7 @@ import TenantConnectionsPage from "./pages/app/admin/tenant-connections";
 import PolicyBuilderPage from "./pages/app/admin/policy-builder";
 import EntraSetupPage from "./pages/app/admin/entra-setup";
 import DataDictionariesPage from "./pages/app/admin/data-dictionaries";
+import SupportPage from "./pages/app/support";
 import AppShell from "./components/layout/app-shell";
 
 const EmptyPage = ({ title }: { title: string }) => (
@@ -94,6 +95,8 @@ function AppRoutes() {
         <Route path="/app/admin/policies" component={PolicyBuilderPage} />
         <Route path="/app/admin/entra" component={EntraSetupPage} />
         <Route path="/app/admin" component={AdminTemplatesPage} />
+        <Route path="/app/support/:tab" component={SupportPage} />
+        <Route path="/app/support" component={SupportPage} />
         <Route component={NotFound} />
       </Switch>
     </AppShellWrapper>

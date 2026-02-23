@@ -3,6 +3,13 @@
 ## Overview
 Zenith is an MVP Microsoft 365 governance platform designed for The Synozur Alliance. Its primary purpose is to provide governed SharePoint site provisioning, incorporating Deal and Portfolio Company context. Key capabilities include site inventory tracking, sensitivity label enforcement, and explainability for Copilot eligibility. All managed workspaces are SharePoint sites (TEAM_SITE, COMMUNICATION_SITE, HUB_SITE) with optional Microsoft Teams connectivity. The business vision is to streamline M365 governance, enhance security, and improve operational efficiency for organizations managing multiple M365 tenants.
 
+## Synozur Application Portfolio
+Zenith is one of approximately 8 apps published by Synozur, all sharing a common look and feel and multitenant architecture. Key sibling apps include:
+
+- **Constellation** — Estimates, time tracking, expense management, project management, status reporting, and invoicing. Repo: `https://github.com/chris-mcnulty/synozur-scdp`. Constellation is a reference point for common patterns, UI conventions, and multitenant design shared across the Synozur portfolio.
+
+When building Zenith, maintain consistency with the Synozur portfolio's shared design language and architecture conventions.
+
 ## User Preferences
 I prefer clear and direct communication. When making changes, please explain the reasoning and impact before proceeding. I value iterative development and would like to be involved in key decision points. Do not make changes to the `shared/schema.ts` file without explicit approval. Always keep the Entra App Registration permissions documented in this file — this is a permanent rule so the app can be maintained alongside the codebase.
 

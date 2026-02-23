@@ -237,11 +237,15 @@ export default function AppShell({ children }: AppShellProps) {
         </div>
 
         <div className="p-4 border-t border-border/40 bg-card/50">
-          <a href="#" className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium text-muted-foreground hover:bg-muted/80 hover:text-foreground transition-all">
-            <BookOpen className="w-5 h-5 text-muted-foreground/70" />
-            Documentation
+          <Link href="/app/support" className={`flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
+            location.startsWith("/app/support")
+              ? "bg-primary/10 text-primary shadow-sm shadow-primary/5"
+              : "text-muted-foreground hover:bg-muted/80 hover:text-foreground"
+          }`}>
+            <BookOpen className={`w-5 h-5 ${location.startsWith("/app/support") ? "text-primary" : "text-muted-foreground/70"}`} />
+            Support & About
             <ChevronRight className="w-4 h-4 ml-auto opacity-50" />
-          </a>
+          </Link>
         </div>
       </aside>
 
@@ -285,10 +289,14 @@ export default function AppShell({ children }: AppShellProps) {
                   </div>
                   <NavLinks />
                   <div className="mt-8 pt-4 border-t border-border/40">
-                    <a href="#" className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium text-muted-foreground hover:bg-muted/80 hover:text-foreground transition-all">
-                      <BookOpen className="w-5 h-5 text-muted-foreground/70" />
-                      Documentation
-                    </a>
+                    <Link href="/app/support" className={`flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
+                      location.startsWith("/app/support")
+                        ? "bg-primary/10 text-primary shadow-sm shadow-primary/5"
+                        : "text-muted-foreground hover:bg-muted/80 hover:text-foreground"
+                    }`}>
+                      <BookOpen className={`w-5 h-5 ${location.startsWith("/app/support") ? "text-primary" : "text-muted-foreground/70"}`} />
+                      Support & About
+                    </Link>
                   </div>
                 </div>
               </SheetContent>
