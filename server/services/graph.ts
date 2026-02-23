@@ -45,6 +45,121 @@ export async function getAppToken(tenantId: string, clientId: string, clientSecr
   return data.access_token;
 }
 
+const spoTokenCache = new Map<string, TokenCache>();
+
+export async function getSpoToken(tenantId: string, clientId: string, clientSecret: string, domain: string): Promise<string> {
+  const spoHost = domain.includes(".sharepoint.com") ? domain : `${domain.replace(/\..*$/, '')}.sharepoint.com`;
+  const cacheKey = `spo:${tenantId}:${clientId}:${spoHost}`;
+  const cached = spoTokenCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now() + 60000) {
+    return cached.accessToken;
+  }
+
+  const url = `https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/token`;
+  const body = new URLSearchParams({
+    client_id: clientId,
+    client_secret: clientSecret,
+    scope: `https://${spoHost}/.default`,
+    grant_type: "client_credentials",
+  });
+
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: body.toString(),
+  });
+
+  if (!res.ok) {
+    const errorText = await res.text();
+    let errorDetail = errorText;
+    try {
+      const parsed = JSON.parse(errorText);
+      errorDetail = parsed.error_description || parsed.error || errorText;
+    } catch {}
+    throw new Error(`SPO token acquisition failed: ${errorDetail}`);
+  }
+
+  const data = await res.json();
+  spoTokenCache.set(cacheKey, {
+    accessToken: data.access_token,
+    expiresAt: Date.now() + data.expires_in * 1000,
+  });
+
+  return data.access_token;
+}
+
+export interface HubSiteInfo {
+  hubSiteId: string;
+  siteId: string;
+  siteUrl: string;
+  title: string;
+  description?: string;
+}
+
+export async function fetchHubSites(spoToken: string, domain: string): Promise<{
+  hubSites: HubSiteInfo[];
+  error?: string;
+}> {
+  try {
+    const spoHost = domain.includes(".sharepoint.com") ? domain : `${domain.replace(/\..*$/, '')}.sharepoint.com`;
+    const url = `https://${spoHost}/_api/SP.HubSites`;
+    const res = await fetch(url, {
+      headers: {
+        Authorization: `Bearer ${spoToken}`,
+        Accept: "application/json;odata=nometadata",
+      },
+    });
+
+    if (!res.ok) {
+      const errText = await res.text();
+      return { hubSites: [], error: `SP.HubSites API error ${res.status}: ${errText.substring(0, 200)}` };
+    }
+
+    const data = await res.json();
+    const hubSites: HubSiteInfo[] = (data.value || []).map((h: any) => ({
+      hubSiteId: h.ID || h.Id,
+      siteId: h.SiteId,
+      siteUrl: h.SiteUrl,
+      title: h.Title,
+      description: h.Description || undefined,
+    }));
+
+    return { hubSites };
+  } catch (err: any) {
+    return { hubSites: [], error: err.message };
+  }
+}
+
+export async function fetchSiteHubAssociation(spoToken: string, siteUrl: string): Promise<{
+  isHubSite: boolean;
+  hubSiteId: string | null;
+  error?: string;
+}> {
+  try {
+    const url = `${siteUrl.replace(/\/+$/, '')}/_api/site?$select=IsHubSite,HubSiteId`;
+    const res = await fetch(url, {
+      headers: {
+        Authorization: `Bearer ${spoToken}`,
+        Accept: "application/json;odata=nometadata",
+      },
+    });
+
+    if (!res.ok) {
+      return { isHubSite: false, hubSiteId: null, error: `${res.status}` };
+    }
+
+    const data = await res.json();
+    const hubSiteId = data.HubSiteId;
+    const emptyGuid = "00000000-0000-0000-0000-000000000000";
+    return {
+      isHubSite: data.IsHubSite === true,
+      hubSiteId: hubSiteId && hubSiteId !== emptyGuid ? hubSiteId : null,
+    };
+  } catch (err: any) {
+    return { isHubSite: false, hubSiteId: null, error: err.message };
+  }
+}
+
 export async function testConnection(tenantId: string, clientId: string, clientSecret: string): Promise<{
   success: boolean;
   tenantName?: string;

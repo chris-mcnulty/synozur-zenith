@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { storage } from "../storage";
 import { insertWorkspaceSchema, insertProvisioningRequestSchema, type ServicePlanTier } from "@shared/schema";
-import { fetchSharePointSites, fetchSiteUsageReport, fetchSiteDriveOwner, fetchSiteAnalytics, getAppToken, writeSitePropertyBag, fetchSensitivityLabels } from "../services/graph";
+import { fetchSharePointSites, fetchSiteUsageReport, fetchSiteDriveOwner, fetchSiteAnalytics, getAppToken, writeSitePropertyBag, fetchSensitivityLabels, getSpoToken, fetchHubSites, fetchSiteHubAssociation } from "../services/graph";
 import { getPlanFeatures } from "../services/feature-gate";
 
 const router = Router();
@@ -287,6 +287,60 @@ router.post("/api/admin/tenants/:id/sync", async (req, res) => {
       }
     }
 
+    let hubSyncResult: { hubSitesFound: number; sitesEnriched: number; error?: string } = { hubSitesFound: 0, sitesEnriched: 0 };
+    try {
+      const spoToken = await getSpoToken(connection.tenantId, clientId, clientSecret, connection.domain);
+      const hubResult = await fetchHubSites(spoToken, connection.domain);
+      if (hubResult.error) {
+        hubSyncResult.error = hubResult.error;
+      }
+      hubSyncResult.hubSitesFound = hubResult.hubSites.length;
+
+      const normalizeHubUrl = (url: string) => url.toLowerCase().replace(/\/+$/, '');
+      const hubUrlToId = new Map<string, string>();
+      for (const h of hubResult.hubSites) {
+        hubUrlToId.set(normalizeHubUrl(h.siteUrl), h.hubSiteId);
+      }
+
+      const allWorkspaces = await storage.getWorkspaces(undefined, req.params.id);
+
+      for (const ws of allWorkspaces) {
+        if (ws.siteUrl) {
+          const hubId = hubUrlToId.get(normalizeHubUrl(ws.siteUrl));
+          if (hubId) {
+            await storage.updateWorkspace(ws.id, {
+              isHubSite: true,
+              hubSiteId: hubId,
+            } as any);
+            hubSyncResult.sitesEnriched++;
+          }
+        }
+      }
+
+      const nonHubSites = allWorkspaces.filter(w => w.siteUrl && !hubUrlToId.has(normalizeHubUrl(w.siteUrl)));
+      const HUB_BATCH_SIZE = 5;
+      for (let i = 0; i < nonHubSites.length; i += HUB_BATCH_SIZE) {
+        const batch = nonHubSites.slice(i, i + HUB_BATCH_SIZE);
+        const results = await Promise.allSettled(
+          batch.map(async (ws) => {
+            const assoc = await fetchSiteHubAssociation(spoToken, ws.siteUrl!);
+            return { workspaceId: ws.id, ...assoc };
+          })
+        );
+        for (const r of results) {
+          if (r.status === 'fulfilled' && !r.value.error) {
+            await storage.updateWorkspace(r.value.workspaceId, {
+              isHubSite: false,
+              hubSiteId: r.value.hubSiteId,
+            } as any);
+            hubSyncResult.sitesEnriched++;
+          }
+        }
+      }
+    } catch (e: any) {
+      hubSyncResult.error = hubSyncResult.error || e.message;
+    }
+
     await storage.updateTenantConnection(req.params.id, {
       lastSyncAt: new Date(),
       lastSyncStatus: "SUCCESS",
@@ -305,6 +359,7 @@ router.post("/api/admin/tenants/:id/sync", async (req, res) => {
       usageReportError: usageResult.error || null,
       enrichErrors: enrichErrors.length > 0 ? enrichErrors : undefined,
       sensitivityLabels: labelSyncResult,
+      hubSites: hubSyncResult,
     });
   } catch (err: any) {
     await storage.updateTenantConnection(req.params.id, {
@@ -390,6 +445,62 @@ async function handleMetadataWriteback(req: any, res: any) {
 
 router.post("/api/workspaces/writeback/department", handleMetadataWriteback);
 router.post("/api/workspaces/writeback/metadata", handleMetadataWriteback);
+
+router.get("/api/structures", async (req, res) => {
+  const tenantConnectionId = req.query.tenantConnectionId as string | undefined;
+  const workspaces = await storage.getWorkspaces(undefined, tenantConnectionId);
+
+  const hubSites = workspaces.filter(w => w.isHubSite);
+  const nonHubWithAssoc = workspaces.filter(w => !w.isHubSite && w.hubSiteId);
+  const standalone = workspaces.filter(w => !w.isHubSite && !w.hubSiteId);
+
+  interface HubNode {
+    hub: typeof workspaces[0];
+    children: typeof workspaces;
+  }
+
+  const hubNodes: HubNode[] = hubSites.map(hub => ({
+    hub,
+    children: [] as typeof workspaces,
+  }));
+
+  const hubNodeMap = new Map<string, HubNode>();
+  for (const node of hubNodes) {
+    if (node.hub.hubSiteId) {
+      hubNodeMap.set(node.hub.hubSiteId.toLowerCase(), node);
+    }
+  }
+
+  let resolvedCount = 0;
+  const unresolvedSites: typeof workspaces = [];
+  for (const site of nonHubWithAssoc) {
+    const hubId = site.hubSiteId?.toLowerCase();
+    if (hubId) {
+      const node = hubNodeMap.get(hubId);
+      if (node) {
+        node.children.push(site);
+        resolvedCount++;
+      } else {
+        unresolvedSites.push(site);
+      }
+    }
+  }
+
+  const allStandalone = [...standalone, ...unresolvedSites];
+
+  res.json({
+    hubSites: hubNodes.map(n => ({
+      hub: n.hub,
+      children: n.children,
+      childCount: n.children.length,
+    })),
+    unassociatedSites: allStandalone,
+    totalSites: workspaces.length,
+    hubSiteCount: hubSites.length,
+    associatedCount: resolvedCount,
+    unassociatedCount: allStandalone.length,
+  });
+});
 
 function inferSiteType(rootWebTemplate?: string, isRootSite?: object): string {
   if (!rootWebTemplate) return "TEAM_SITE";
