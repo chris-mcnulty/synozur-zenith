@@ -48,6 +48,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 import { useTenant } from "@/lib/tenant-context";
+import { useQuery } from "@tanstack/react-query";
 
 interface AppShellProps {
   children: React.ReactNode;
@@ -90,6 +91,16 @@ const navGroups = [
 export default function AppShell({ children }: AppShellProps) {
   const [location] = useLocation();
   const { tenants, selectedTenant, setSelectedTenantId } = useTenant();
+
+  const { data: authData } = useQuery<{ user: { id: string; name: string | null; email: string; role: string; authProvider: string | null }; organization: { name: string } | null }>({
+    queryKey: ["/api/auth/me"],
+    queryFn: () => fetch("/api/auth/me", { credentials: "include" }).then(r => r.ok ? r.json() : null),
+    staleTime: 5 * 60 * 1000,
+  });
+  const currentUser = authData?.user;
+  const userInitials = currentUser?.name
+    ? currentUser.name.split(" ").map(n => n[0]).join("").toUpperCase().slice(0, 2)
+    : currentUser?.email?.[0]?.toUpperCase() || "?";
 
   const NavLinks = () => (
     <div className="space-y-6 py-4">
@@ -418,20 +429,24 @@ export default function AppShell({ children }: AppShellProps) {
 
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="ghost" className="relative h-10 w-10 rounded-full p-0">
+                <Button variant="ghost" className="relative h-10 w-10 rounded-full p-0" data-testid="button-user-menu">
                   <Avatar className="h-10 w-10 border-2 border-background shadow-sm hover:border-primary/20 transition-colors">
-                    <AvatarImage src="https://github.com/shadcn.png" alt="User" />
-                    <AvatarFallback className="bg-primary/10 text-primary font-semibold">AD</AvatarFallback>
+                    <AvatarFallback className="bg-primary/10 text-primary font-semibold">{userInitials}</AvatarFallback>
                   </Avatar>
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="w-60 rounded-xl p-2">
                 <DropdownMenuLabel className="font-normal p-3">
                   <div className="flex flex-col space-y-1.5">
-                    <p className="text-sm font-semibold leading-none">Admin User</p>
-                    <p className="text-xs leading-none text-muted-foreground">
-                      admin@synozur.demo
+                    <p className="text-sm font-semibold leading-none" data-testid="text-current-user-name">{currentUser?.name || currentUser?.email || "User"}</p>
+                    <p className="text-xs leading-none text-muted-foreground" data-testid="text-current-user-email">
+                      {currentUser?.email || ""}
                     </p>
+                    {currentUser?.role && (
+                      <p className="text-[10px] leading-none text-muted-foreground/70 capitalize mt-0.5">
+                        {currentUser.role.replace(/_/g, " ")}
+                      </p>
+                    )}
                   </div>
                 </DropdownMenuLabel>
                 <DropdownMenuSeparator className="mb-2" />

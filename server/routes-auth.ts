@@ -168,6 +168,27 @@ router.get('/me', async (req: AuthenticatedRequest, res) => {
   }
 });
 
+router.get('/users', async (req: AuthenticatedRequest, res) => {
+  try {
+    const userId = req.session?.userId;
+    if (!userId) {
+      return res.status(401).json({ error: 'Not authenticated' });
+    }
+
+    const user = await storage.getUser(userId);
+    if (!user || !user.organizationId) {
+      return res.status(401).json({ error: 'Not authenticated or no organization' });
+    }
+
+    const orgUsers = await storage.getUsersByOrganization(user.organizationId);
+    const safeUsers = orgUsers.map(u => sanitizeUser(u));
+    return res.json(safeUsers);
+  } catch (error: any) {
+    console.error('[Auth] Get users error:', error);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 router.post('/logout', (req: AuthenticatedRequest, res) => {
   req.session.destroy((err) => {
     if (err) {
