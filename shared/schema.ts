@@ -42,6 +42,7 @@ export const workspaces = pgTable("workspaces", {
   lockState: text("lock_state"),
   isHubSite: boolean("is_hub_site"),
   hubSiteId: text("hub_site_id"),
+  parentHubSiteId: text("parent_hub_site_id"),
   sensitivityLabelId: text("sensitivity_label_id"),
   rootWebTemplate: text("root_web_template"),
   isDeleted: boolean("is_deleted").default(false),

@@ -297,27 +297,31 @@ router.post("/api/admin/tenants/:id/sync", async (req, res) => {
       hubSyncResult.hubSitesFound = hubResult.hubSites.length;
 
       const normalizeHubUrl = (url: string) => url.toLowerCase().replace(/\/+$/, '');
-      const hubUrlToId = new Map<string, string>();
+      const hubUrlToHubInfo = new Map<string, { hubSiteId: string; parentHubSiteId?: string }>();
       for (const h of hubResult.hubSites) {
-        hubUrlToId.set(normalizeHubUrl(h.siteUrl), h.hubSiteId);
+        hubUrlToHubInfo.set(normalizeHubUrl(h.siteUrl), {
+          hubSiteId: h.hubSiteId,
+          parentHubSiteId: h.parentHubSiteId,
+        });
       }
 
       const allWorkspaces = await storage.getWorkspaces(undefined, req.params.id);
 
       for (const ws of allWorkspaces) {
         if (ws.siteUrl) {
-          const hubId = hubUrlToId.get(normalizeHubUrl(ws.siteUrl));
-          if (hubId) {
+          const hubInfo = hubUrlToHubInfo.get(normalizeHubUrl(ws.siteUrl));
+          if (hubInfo) {
             await storage.updateWorkspace(ws.id, {
               isHubSite: true,
-              hubSiteId: hubId,
+              hubSiteId: hubInfo.hubSiteId,
+              parentHubSiteId: hubInfo.parentHubSiteId || null,
             } as any);
             hubSyncResult.sitesEnriched++;
           }
         }
       }
 
-      const nonHubSites = allWorkspaces.filter(w => w.siteUrl && !hubUrlToId.has(normalizeHubUrl(w.siteUrl)));
+      const nonHubSites = allWorkspaces.filter(w => w.siteUrl && !hubUrlToHubInfo.has(normalizeHubUrl(w.siteUrl)));
       const HUB_BATCH_SIZE = 5;
       for (let i = 0; i < nonHubSites.length; i += HUB_BATCH_SIZE) {
         const batch = nonHubSites.slice(i, i + HUB_BATCH_SIZE);
@@ -332,6 +336,7 @@ router.post("/api/admin/tenants/:id/sync", async (req, res) => {
             await storage.updateWorkspace(r.value.workspaceId, {
               isHubSite: false,
               hubSiteId: r.value.hubSiteId,
+              parentHubSiteId: null,
             } as any);
             hubSyncResult.sitesEnriched++;
           }
@@ -451,54 +456,73 @@ router.get("/api/structures", async (req, res) => {
   const workspaces = await storage.getWorkspaces(undefined, tenantConnectionId);
 
   const hubSites = workspaces.filter(w => w.isHubSite);
-  const nonHubWithAssoc = workspaces.filter(w => !w.isHubSite && w.hubSiteId);
-  const standalone = workspaces.filter(w => !w.isHubSite && !w.hubSiteId);
+  const nonHubSites = workspaces.filter(w => !w.isHubSite);
+
+  type WS = typeof workspaces[0];
 
   interface HubNode {
-    hub: typeof workspaces[0];
-    children: typeof workspaces;
+    hub: WS;
+    childHubs: HubNode[];
+    associatedSites: WS[];
   }
-
-  const hubNodes: HubNode[] = hubSites.map(hub => ({
-    hub,
-    children: [] as typeof workspaces,
-  }));
 
   const hubNodeMap = new Map<string, HubNode>();
-  for (const node of hubNodes) {
-    if (node.hub.hubSiteId) {
-      hubNodeMap.set(node.hub.hubSiteId.toLowerCase(), node);
+  for (const hub of hubSites) {
+    if (hub.hubSiteId) {
+      hubNodeMap.set(hub.hubSiteId.toLowerCase(), {
+        hub,
+        childHubs: [],
+        associatedSites: [],
+      });
     }
   }
 
-  let resolvedCount = 0;
-  const unresolvedSites: typeof workspaces = [];
-  for (const site of nonHubWithAssoc) {
-    const hubId = site.hubSiteId?.toLowerCase();
-    if (hubId) {
-      const node = hubNodeMap.get(hubId);
-      if (node) {
-        node.children.push(site);
-        resolvedCount++;
-      } else {
-        unresolvedSites.push(site);
+  const rootHubs: HubNode[] = [];
+  for (const node of Array.from(hubNodeMap.values())) {
+    const parentId = node.hub.parentHubSiteId?.toLowerCase();
+    if (parentId) {
+      const parentNode = hubNodeMap.get(parentId);
+      if (parentNode) {
+        parentNode.childHubs.push(node);
+        continue;
       }
     }
+    rootHubs.push(node);
   }
 
-  const allStandalone = [...standalone, ...unresolvedSites];
+  let associatedCount = 0;
+  const standaloneSites: WS[] = [];
+  for (const site of nonHubSites) {
+    const assocHubId = site.hubSiteId?.toLowerCase();
+    if (assocHubId) {
+      const node = hubNodeMap.get(assocHubId);
+      if (node) {
+        node.associatedSites.push(site);
+        associatedCount++;
+        continue;
+      }
+    }
+    standaloneSites.push(site);
+  }
+
+  function serializeNode(node: HubNode): any {
+    return {
+      hub: node.hub,
+      childHubs: node.childHubs.map(serializeNode),
+      associatedSites: node.associatedSites,
+      totalChildren: node.associatedSites.length + node.childHubs.reduce(
+        (sum, ch) => sum + ch.associatedSites.length + ch.childHubs.length, 0
+      ),
+    };
+  }
 
   res.json({
-    hubSites: hubNodes.map(n => ({
-      hub: n.hub,
-      children: n.children,
-      childCount: n.children.length,
-    })),
-    unassociatedSites: allStandalone,
+    hubHierarchy: rootHubs.map(serializeNode),
+    unassociatedSites: standaloneSites,
     totalSites: workspaces.length,
     hubSiteCount: hubSites.length,
-    associatedCount: resolvedCount,
-    unassociatedCount: allStandalone.length,
+    associatedCount,
+    unassociatedCount: standaloneSites.length,
   });
 });
 

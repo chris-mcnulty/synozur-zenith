@@ -35,6 +35,7 @@ The frontend is built with React, Vite, TanStack Query, shadcn/ui for components
     - Enforcement of "Highly Confidential" sensitivity labels to block external sharing and Copilot indexing by default.
     - Requirement of dual ownership (Primary Steward + Secondary Owner) for workspaces to prevent orphaned sites.
     - Clear display of Copilot eligibility criteria.
+    - Hub site hierarchy detection via SharePoint REST API (`SP.HubSites` + per-site `IsHubSite`/`HubSiteId`). Supports nested hubs (root hub → child hubs → associated sites) using `parentHubSiteId`. Hub enrichment runs as non-fatal step during tenant sync.
 
 ### System Design Choices
 - **Database Schema**: Core tables include `workspaces`, `provisioning_requests`, `copilot_rules`, `tenant_connections`, `organizations`, `users`, `graph_tokens`, and `audit_log`.

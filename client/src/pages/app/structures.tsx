@@ -3,19 +3,20 @@ import type { Workspace } from "@shared/schema";
 import { useTenant } from "@/lib/tenant-context";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Layers, Globe, Users, ChevronRight, Search, Info, Building2, Folder, Link2, Unlink } from "lucide-react";
+import { Layers, Globe, Users, ChevronRight, Search, Info, Building2, Folder, Unlink, Network } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Link } from "wouter";
 import { useState, useMemo } from "react";
 
 interface HubNode {
   hub: Workspace;
-  children: Workspace[];
-  childCount: number;
+  childHubs: HubNode[];
+  associatedSites: Workspace[];
+  totalChildren: number;
 }
 
 interface StructuresData {
-  hubSites: HubNode[];
+  hubHierarchy: HubNode[];
   unassociatedSites: Workspace[];
   totalSites: number;
   hubSiteCount: number;
@@ -93,14 +94,18 @@ export default function StructuresPage() {
     }
   };
 
-  const filteredHubs = useMemo(() => {
+  const matchesSearch = (node: HubNode, term: string): boolean => {
+    if (node.hub.displayName?.toLowerCase().includes(term)) return true;
+    if (node.associatedSites.some(s => s.displayName?.toLowerCase().includes(term))) return true;
+    if (node.childHubs.some(ch => matchesSearch(ch, term))) return true;
+    return false;
+  };
+
+  const filteredHierarchy = useMemo(() => {
     if (!data) return [];
-    if (!searchTerm) return data.hubSites;
+    if (!searchTerm) return data.hubHierarchy;
     const term = searchTerm.toLowerCase();
-    return data.hubSites.filter(node =>
-      node.hub.displayName?.toLowerCase().includes(term) ||
-      node.children.some(c => c.displayName?.toLowerCase().includes(term))
-    );
+    return data.hubHierarchy.filter(node => matchesSearch(node, term));
   }, [data, searchTerm]);
 
   const filteredUnassociated = useMemo(() => {
@@ -124,20 +129,22 @@ export default function StructuresPage() {
 
   const hasHubData = data && data.hubSiteCount > 0;
 
-  const renderSiteRow = (site: Workspace) => (
+  const renderSiteRow = (site: Workspace, indent: number = 0) => (
     <Link key={site.id} href={`/app/workspaces/${site.id}`}>
-      <div className="pl-14 pr-4 py-3 hover:bg-muted/10 transition-colors flex items-center justify-between cursor-pointer" data-testid={`row-site-${site.id}`}>
+      <div
+        className="pr-4 py-3 hover:bg-muted/10 transition-colors flex items-center justify-between cursor-pointer"
+        style={{ paddingLeft: `${indent * 16 + 56}px` }}
+        data-testid={`row-site-${site.id}`}
+      >
         <div className="flex items-center gap-3">
           <div className={`w-7 h-7 rounded flex items-center justify-center ${getTypeColor(site.type)}`}>
             {getTypeIcon(site.type)}
           </div>
           <div>
             <span className="text-sm font-medium" data-testid={`text-site-name-${site.id}`}>{site.displayName}</span>
-            <div className="flex items-center gap-2 mt-0.5">
-              {site.siteUrl && (
-                <span className="text-[10px] text-muted-foreground truncate max-w-[280px]">{site.siteUrl}</span>
-              )}
-            </div>
+            {site.siteUrl && (
+              <div className="text-[10px] text-muted-foreground truncate max-w-[280px]">{site.siteUrl}</div>
+            )}
           </div>
         </div>
         <div className="flex items-center gap-2">
@@ -152,6 +159,97 @@ export default function StructuresPage() {
       </div>
     </Link>
   );
+
+  const renderHubNode = (node: HubNode, depth: number = 0) => {
+    const isChildHub = depth > 0;
+    const totalAssociated = node.associatedSites.length;
+    const totalChildHubs = node.childHubs.length;
+
+    return (
+      <details key={node.hub.id} className="group/hub" open={depth === 0 || filteredHierarchy.length <= 3}>
+        <summary
+          className="hover:bg-muted/10 transition-colors flex items-center justify-between cursor-pointer list-none"
+          style={{ padding: `12px 16px 12px ${depth * 16 + 16}px` }}
+          data-testid={`toggle-hub-${node.hub.id}`}
+        >
+          <div className="flex items-center gap-4">
+            <div className={`w-10 h-10 rounded-lg flex items-center justify-center border ${
+              isChildHub
+                ? "border-indigo-500/30 bg-indigo-500/10 text-indigo-500"
+                : "border-purple-500/30 bg-purple-500/10 text-purple-500"
+            }`}>
+              {isChildHub ? <Network className="w-5 h-5" /> : <Layers className="w-5 h-5" />}
+            </div>
+            <div>
+              <h3 className="font-semibold" data-testid={`text-hub-name-${node.hub.id}`}>{node.hub.displayName}</h3>
+              <div className="flex items-center gap-2 text-xs text-muted-foreground mt-0.5">
+                {totalChildHubs > 0 && (
+                  <span>{totalChildHubs} child hub{totalChildHubs !== 1 ? "s" : ""}</span>
+                )}
+                {totalChildHubs > 0 && totalAssociated > 0 && <span>·</span>}
+                {totalAssociated > 0 && (
+                  <span>{totalAssociated} site{totalAssociated !== 1 ? "s" : ""}</span>
+                )}
+                {totalChildHubs === 0 && totalAssociated === 0 && (
+                  <span className="text-muted-foreground/60">No children</span>
+                )}
+                {node.hub.siteUrl && (
+                  <>
+                    <span>·</span>
+                    <span className="truncate max-w-[220px]">{node.hub.siteUrl}</span>
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <Badge className={`text-[9px] ${
+              isChildHub
+                ? "bg-indigo-500/10 text-indigo-600 border-indigo-500/20"
+                : "bg-purple-500/10 text-purple-600 border-purple-500/20"
+            }`}>
+              {isChildHub ? "Child Hub" : "Root Hub"}
+            </Badge>
+            <ChevronRight className="w-4 h-4 text-muted-foreground transition-transform group-open/hub:rotate-90" />
+          </div>
+        </summary>
+        <div className="border-t border-border/20 bg-muted/5">
+          <Link href={`/app/workspaces/${node.hub.id}`}>
+            <div
+              className="pr-4 py-2.5 hover:bg-muted/10 transition-colors flex items-center gap-3 cursor-pointer border-b border-border/10"
+              style={{ paddingLeft: `${depth * 16 + 56}px` }}
+              data-testid={`row-hub-self-${node.hub.id}`}
+            >
+              <div className={`w-6 h-6 rounded flex items-center justify-center ${
+                isChildHub ? "bg-indigo-500/10 text-indigo-500" : "bg-purple-500/10 text-purple-500"
+              }`}>
+                {isChildHub ? <Network className="w-3.5 h-3.5" /> : <Layers className="w-3.5 h-3.5" />}
+              </div>
+              <span className={`text-sm font-medium ${isChildHub ? "text-indigo-600" : "text-purple-600"}`}>
+                {node.hub.displayName}
+              </span>
+              <Badge variant="outline" className="text-[9px] ml-1">Hub Root</Badge>
+            </div>
+          </Link>
+
+          {node.childHubs.map(childNode => renderHubNode(childNode, depth + 1))}
+
+          {node.associatedSites.length > 0 && (
+            node.associatedSites.map(site => renderSiteRow(site, depth + 1))
+          )}
+
+          {node.childHubs.length === 0 && node.associatedSites.length === 0 && (
+            <div
+              className="pr-4 py-3 text-xs text-muted-foreground"
+              style={{ paddingLeft: `${depth * 16 + 56}px` }}
+            >
+              No child sites or hubs associated.
+            </div>
+          )}
+        </div>
+      </details>
+    );
+  };
 
   return (
     <div className="space-y-6 animate-in fade-in duration-500 pb-12">
@@ -277,57 +375,14 @@ export default function StructuresPage() {
                 <Layers className="w-10 h-10 text-muted-foreground/30 mx-auto mb-3" />
                 <p className="text-sm font-medium text-muted-foreground">No hub sites detected</p>
                 <p className="text-xs text-muted-foreground/70 mt-1 max-w-md mx-auto">
-                  Hub site associations are fetched from SharePoint during tenant sync. If your tenant uses hub sites, run a sync to populate this view.
+                  Hub site hierarchy is fetched from SharePoint during tenant sync. If your tenant uses hub sites, run a sync to populate this view.
                 </p>
               </div>
-            ) : filteredHubs.length === 0 ? (
+            ) : filteredHierarchy.length === 0 ? (
               <div className="p-8 text-center text-muted-foreground text-sm" data-testid="status-no-results">No matching hub sites found.</div>
             ) : (
               <div className="divide-y divide-border/40">
-                {filteredHubs.map((node) => (
-                  <details key={node.hub.id} className="group" open={filteredHubs.length <= 5}>
-                    <summary className="p-4 hover:bg-muted/10 transition-colors flex items-center justify-between cursor-pointer list-none" data-testid={`toggle-hub-${node.hub.id}`}>
-                      <div className="flex items-center gap-4">
-                        <div className="w-10 h-10 rounded-lg flex items-center justify-center border border-purple-500/30 bg-purple-500/10 text-purple-500">
-                          <Layers className="w-5 h-5" />
-                        </div>
-                        <div>
-                          <h3 className="font-semibold" data-testid={`text-hub-name-${node.hub.id}`}>{node.hub.displayName}</h3>
-                          <div className="flex items-center gap-2 text-xs text-muted-foreground mt-0.5">
-                            <Link2 className="w-3 h-3" />
-                            <span>{node.childCount} associated site{node.childCount !== 1 ? "s" : ""}</span>
-                            {node.hub.siteUrl && (
-                              <>
-                                <span>·</span>
-                                <span className="truncate max-w-[250px]">{node.hub.siteUrl}</span>
-                              </>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <Badge className="bg-purple-500/10 text-purple-600 border-purple-500/20 text-[9px]">Hub Site</Badge>
-                        <ChevronRight className="w-4 h-4 text-muted-foreground transition-transform group-open:rotate-90" />
-                      </div>
-                    </summary>
-                    <div className="border-t border-border/30 bg-muted/5">
-                      <Link href={`/app/workspaces/${node.hub.id}`}>
-                        <div className="pl-14 pr-4 py-2.5 hover:bg-muted/10 transition-colors flex items-center gap-3 cursor-pointer border-b border-border/20" data-testid={`row-hub-self-${node.hub.id}`}>
-                          <div className="w-6 h-6 rounded flex items-center justify-center bg-purple-500/10 text-purple-500">
-                            <Layers className="w-3.5 h-3.5" />
-                          </div>
-                          <span className="text-sm font-medium text-purple-600">{node.hub.displayName}</span>
-                          <Badge variant="outline" className="text-[9px] ml-1">Hub Root</Badge>
-                        </div>
-                      </Link>
-                      {node.children.length === 0 ? (
-                        <div className="pl-14 pr-4 py-3 text-xs text-muted-foreground">No child sites associated with this hub.</div>
-                      ) : (
-                        node.children.map(renderSiteRow)
-                      )}
-                    </div>
-                  </details>
-                ))}
+                {filteredHierarchy.map(node => renderHubNode(node, 0))}
               </div>
             )
           ) : activeTab === "unassociated" ? (
@@ -346,11 +401,9 @@ export default function StructuresPage() {
                         </div>
                         <div>
                           <span className="text-sm font-medium">{site.displayName}</span>
-                          <div className="flex items-center gap-2 mt-0.5">
-                            {site.siteUrl && (
-                              <span className="text-[10px] text-muted-foreground truncate max-w-[300px]">{site.siteUrl}</span>
-                            )}
-                          </div>
+                          {site.siteUrl && (
+                            <div className="text-[10px] text-muted-foreground truncate max-w-[300px]">{site.siteUrl}</div>
+                          )}
                         </div>
                       </div>
                       <div className="flex items-center gap-2">
@@ -394,7 +447,7 @@ export default function StructuresPage() {
                       <ChevronRight className="w-4 h-4 text-muted-foreground transition-transform group-open:rotate-90" />
                     </summary>
                     <div className="border-t border-border/30 bg-muted/5">
-                      {sites.map(renderSiteRow)}
+                      {sites.map(site => renderSiteRow(site))}
                     </div>
                   </details>
                 ))}
@@ -412,8 +465,8 @@ export default function StructuresPage() {
           <div>
             <h4 className="font-semibold text-sm">Hub Site Detection</h4>
             <p className="text-xs text-muted-foreground leading-relaxed mt-1">
-              Hub site associations are now fetched directly from SharePoint REST API during tenant sync. This detects which sites are hub sites and which sites are associated with each hub. 
-              Run a tenant sync to populate the hub hierarchy.
+              Hub site hierarchy is fetched from the SharePoint REST API during tenant sync. This detects root hubs, child hubs (hubs joined to a parent hub), and which regular sites are associated with each hub. 
+              Run a tenant sync to populate the hierarchy.
             </p>
           </div>
         </div>

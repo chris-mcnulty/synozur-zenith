@@ -94,6 +94,7 @@ export interface HubSiteInfo {
   siteUrl: string;
   title: string;
   description?: string;
+  parentHubSiteId?: string;
 }
 
 export async function fetchHubSites(spoToken: string, domain: string): Promise<{
@@ -116,12 +117,14 @@ export async function fetchHubSites(spoToken: string, domain: string): Promise<{
     }
 
     const data = await res.json();
+    const emptyGuid = "00000000-0000-0000-0000-000000000000";
     const hubSites: HubSiteInfo[] = (data.value || []).map((h: any) => ({
       hubSiteId: h.ID || h.Id,
       siteId: h.SiteId,
       siteUrl: h.SiteUrl,
       title: h.Title,
       description: h.Description || undefined,
+      parentHubSiteId: h.ParentHubSiteId && h.ParentHubSiteId !== emptyGuid ? h.ParentHubSiteId : undefined,
     }));
 
     return { hubSites };
