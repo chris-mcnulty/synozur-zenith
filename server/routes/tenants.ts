@@ -343,6 +343,76 @@ router.delete("/api/admin/tenants/:tenantConnectionId/data-dictionaries/:entryId
   }
 });
 
+// ── Required Metadata Fields (tenant-owned config) ──
+const CONFIGURABLE_METADATA_FIELDS = [
+  { field: "department", label: "Department", description: "Business department or team assignment" },
+  { field: "costCenter", label: "Cost Center", description: "Financial cost center code" },
+  { field: "projectCode", label: "Project Code", description: "Project or engagement code" },
+  { field: "description", label: "Description", description: "Workspace description or purpose" },
+  { field: "sensitivityLabelId", label: "Sensitivity Label (Purview)", description: "Microsoft Purview sensitivity label" },
+  { field: "primarySteward", label: "Primary Owner", description: "Primary steward / owner assigned" },
+  { field: "secondarySteward", label: "Secondary Owner", description: "Secondary steward / owner assigned" },
+];
+
+router.get("/api/admin/tenants/:tenantConnectionId/required-metadata", async (req, res) => {
+  try {
+    const conn = await storage.getTenantConnection(req.params.tenantConnectionId);
+    if (!conn) return res.status(404).json({ error: "Tenant connection not found" });
+    const entries = await storage.getDataDictionary(conn.tenantId, "required_metadata_field");
+    const requiredFields = entries.map(e => e.value);
+    res.json({
+      availableFields: CONFIGURABLE_METADATA_FIELDS,
+      requiredFields,
+      entries,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.put("/api/admin/tenants/:tenantConnectionId/required-metadata", async (req, res) => {
+  try {
+    const conn = await storage.getTenantConnection(req.params.tenantConnectionId);
+    if (!conn) return res.status(404).json({ error: "Tenant connection not found" });
+    const { requiredFields } = req.body;
+    if (!Array.isArray(requiredFields)) {
+      return res.status(400).json({ error: "requiredFields must be an array of field names" });
+    }
+    const validFieldNames = CONFIGURABLE_METADATA_FIELDS.map(f => f.field);
+    const invalid = requiredFields.filter((f: string) => !validFieldNames.includes(f));
+    if (invalid.length > 0) {
+      return res.status(400).json({ error: `Invalid field names: ${invalid.join(", ")}` });
+    }
+
+    const existingEntries = await storage.getDataDictionary(conn.tenantId, "required_metadata_field");
+    const existingFields = existingEntries.map(e => e.value);
+
+    const toRemove = existingEntries.filter(e => !requiredFields.includes(e.value));
+    const toAdd = requiredFields.filter((f: string) => !existingFields.includes(f));
+
+    for (const entry of toRemove) {
+      await storage.deleteDataDictionaryEntry(entry.id);
+    }
+
+    for (const field of toAdd) {
+      await storage.createDataDictionaryEntry({
+        tenantId: conn.tenantId,
+        category: "required_metadata_field",
+        value: field,
+      });
+    }
+
+    const updatedEntries = await storage.getDataDictionary(conn.tenantId, "required_metadata_field");
+    res.json({
+      availableFields: CONFIGURABLE_METADATA_FIELDS,
+      requiredFields,
+      entries: updatedEntries,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.get("/api/admin/tenants/:tenantConnectionId/sensitivity-labels", async (req, res) => {
   try {
     const conn = await storage.getTenantConnection(req.params.tenantConnectionId);

@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { storage } from "../storage";
 import { insertGovernancePolicySchema } from "@shared/schema";
-import { evaluatePolicy, evaluationResultsToCopilotRules } from "../services/policy-engine";
+import { evaluatePolicy, evaluationResultsToCopilotRules, type EvaluationContext } from "../services/policy-engine";
 
 const router = Router();
 
@@ -55,12 +55,29 @@ router.post("/api/policies/:id/evaluate", async (req, res) => {
     return res.status(400).json({ message: "workspaceIds array is required" });
   }
 
+  const tenantMetadataCache = new Map<string, string[]>();
+
   const results = [];
   for (const wsId of workspaceIds) {
     const workspace = await storage.getWorkspace(wsId);
     if (!workspace) continue;
 
-    const evaluation = evaluatePolicy(workspace, policy);
+    let requiredMetadataFields: string[] = [];
+    if (workspace.tenantConnectionId) {
+      if (tenantMetadataCache.has(workspace.tenantConnectionId)) {
+        requiredMetadataFields = tenantMetadataCache.get(workspace.tenantConnectionId)!;
+      } else {
+        const conn = await storage.getTenantConnection(workspace.tenantConnectionId);
+        if (conn) {
+          const entries = await storage.getDataDictionary(conn.tenantId, "required_metadata_field");
+          requiredMetadataFields = entries.map(e => e.value);
+          tenantMetadataCache.set(workspace.tenantConnectionId, requiredMetadataFields);
+        }
+      }
+    }
+
+    const context: EvaluationContext = { requiredMetadataFields };
+    const evaluation = evaluatePolicy(workspace, policy, context);
     const ruleRecords = evaluationResultsToCopilotRules(wsId, evaluation);
     await storage.setCopilotRules(wsId, ruleRecords);
 
@@ -100,7 +117,12 @@ router.get("/api/workspaces/:id/policy-results", async (req, res) => {
     return res.json({ policyId: null, policyName: policyType, results: storedRules, overallPass: workspace.copilotReady });
   }
 
-  const evaluation = evaluatePolicy(workspace, policy);
+  const requiredMetadataEntries = await storage.getDataDictionary(connection.tenantId, "required_metadata_field");
+  const context: EvaluationContext = {
+    requiredMetadataFields: requiredMetadataEntries.map(e => e.value),
+  };
+
+  const evaluation = evaluatePolicy(workspace, policy, context);
   const ruleRecords = evaluationResultsToCopilotRules(req.params.id, evaluation);
   await storage.setCopilotRules(req.params.id, ruleRecords);
 

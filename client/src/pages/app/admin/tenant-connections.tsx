@@ -1,8 +1,9 @@
 import { useState, useEffect } from "react";
-import { useQuery, useMutation } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import type { TenantConnection } from "@shared/schema";
+import { Switch } from "@/components/ui/switch";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -74,6 +75,7 @@ export default function TenantConnectionsPage() {
   const [permLoading, setPermLoading] = useState(false);
   const [permError, setPermError] = useState<string | null>(null);
   const [reconsentingId, setReconsentingId] = useState<string | null>(null);
+  const [metadataDialogTenantId, setMetadataDialogTenantId] = useState<string | null>(null);
 
   const [form, setForm] = useState({
     domain: "",
@@ -488,6 +490,9 @@ export default function TenantConnectionsPage() {
                             {reconsentingId === conn.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Lock className="w-4 h-4" />}
                             Update Permissions
                           </DropdownMenuItem>
+                          <DropdownMenuItem className="gap-2" onClick={() => setMetadataDialogTenantId(conn.id)}>
+                            <Settings2 className="w-4 h-4" /> Governance Settings
+                          </DropdownMenuItem>
                           <DropdownMenuItem className="gap-2" onClick={() => navigator.clipboard.writeText(conn.tenantId)}>
                             <Copy className="w-4 h-4" /> Copy Tenant ID
                           </DropdownMenuItem>
@@ -630,6 +635,139 @@ export default function TenantConnectionsPage() {
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* Governance Settings Dialog */}
+      <Dialog open={metadataDialogTenantId !== null} onOpenChange={(open) => { if (!open) setMetadataDialogTenantId(null); }}>
+        <DialogContent className="sm:max-w-[550px]">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Settings2 className="w-5 h-5 text-primary" />
+              Governance Settings
+            </DialogTitle>
+            <DialogDescription>
+              Configure which metadata fields are required for workspaces in this tenant. Required fields feed into the Metadata Complete policy rule.
+            </DialogDescription>
+          </DialogHeader>
+          {metadataDialogTenantId && (
+            <RequiredMetadataConfig tenantConnectionId={metadataDialogTenantId} />
+          )}
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
+interface MetadataField {
+  field: string;
+  label: string;
+  description: string;
+}
+
+interface RequiredMetadataResponse {
+  availableFields: MetadataField[];
+  requiredFields: string[];
+  entries: Array<{ id: string; value: string }>;
+}
+
+function RequiredMetadataConfig({ tenantConnectionId }: { tenantConnectionId: string }) {
+  const { toast } = useToast();
+  const qc = useQueryClient();
+  const [localRequired, setLocalRequired] = useState<string[]>([]);
+  const [hasChanges, setHasChanges] = useState(false);
+
+  const { data, isLoading } = useQuery<RequiredMetadataResponse>({
+    queryKey: [`/api/admin/tenants/${tenantConnectionId}/required-metadata`],
+    queryFn: () => fetch(`/api/admin/tenants/${tenantConnectionId}/required-metadata`, { credentials: "include" }).then(r => r.ok ? r.json() : null),
+  });
+
+  useEffect(() => {
+    if (data) {
+      setLocalRequired(data.requiredFields);
+      setHasChanges(false);
+    }
+  }, [data]);
+
+  const saveMutation = useMutation({
+    mutationFn: async (requiredFields: string[]) => {
+      const res = await fetch(`/api/admin/tenants/${tenantConnectionId}/required-metadata`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ requiredFields }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      return res.json();
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: [`/api/admin/tenants/${tenantConnectionId}/required-metadata`] });
+      setHasChanges(false);
+      toast({ title: "Saved", description: "Required metadata fields updated. Workspace evaluations will use the new configuration." });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Save failed", description: err.message, variant: "destructive" });
+    },
+  });
+
+  function toggleField(field: string) {
+    setLocalRequired(prev => {
+      const next = prev.includes(field) ? prev.filter(f => f !== field) : [...prev, field];
+      setHasChanges(true);
+      return next;
+    });
+  }
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center py-8">
+        <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+
+  if (!data) {
+    return <p className="text-sm text-muted-foreground py-4">Unable to load metadata configuration.</p>;
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="text-sm text-muted-foreground">
+        Toggle fields on to make them required. The <span className="font-medium text-foreground">Metadata Complete</span> policy rule will check that these fields are populated for every workspace.
+      </div>
+      <div className="space-y-2">
+        {data.availableFields.map((f) => (
+          <div
+            key={f.field}
+            className={`flex items-center justify-between p-3 rounded-lg border transition-all ${
+              localRequired.includes(f.field) ? "bg-primary/5 border-primary/20" : "bg-card/50 border-border/50"
+            }`}
+            data-testid={`metadata-field-${f.field}`}
+          >
+            <div className="min-w-0">
+              <div className="font-medium text-sm">{f.label}</div>
+              <div className="text-xs text-muted-foreground">{f.description}</div>
+            </div>
+            <Switch
+              checked={localRequired.includes(f.field)}
+              onCheckedChange={() => toggleField(f.field)}
+              data-testid={`switch-require-${f.field}`}
+            />
+          </div>
+        ))}
+      </div>
+      <div className="flex items-center justify-between pt-2 border-t border-border/50">
+        <span className="text-xs text-muted-foreground">
+          {localRequired.length} of {data.availableFields.length} fields required
+        </span>
+        <Button
+          onClick={() => saveMutation.mutate(localRequired)}
+          disabled={!hasChanges || saveMutation.isPending}
+          className="gap-2"
+          data-testid="button-save-required-metadata"
+        >
+          {saveMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
+          Save Configuration
+        </Button>
+      </div>
     </div>
   );
 }

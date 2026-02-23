@@ -39,12 +39,51 @@ const BUILT_IN_EVALUATORS: Record<string, (workspace: Workspace, config?: Record
     ruleDescription: "Workspace must have at least two active owners.",
   }),
 
-  METADATA_COMPLETE: (workspace, _config) => ({
-    ruleType: "METADATA_COMPLETE",
-    ruleName: "Metadata Complete",
-    ruleResult: workspace.metadataStatus === "COMPLETE" ? "PASS" : "FAIL",
-    ruleDescription: "All required governance metadata fields must be populated.",
-  }),
+  METADATA_COMPLETE: (workspace, config) => {
+    const requiredFields = (config?.requiredFields as string[]) || [];
+
+    if (requiredFields.length === 0) {
+      return {
+        ruleType: "METADATA_COMPLETE",
+        ruleName: "Metadata Complete",
+        ruleResult: workspace.metadataStatus === "COMPLETE" ? "PASS" : "FAIL",
+        ruleDescription: "All required governance metadata fields must be populated.",
+      };
+    }
+
+    const fieldAccessors: Record<string, (w: Workspace) => unknown> = {
+      department: (w) => w.department,
+      costCenter: (w) => w.costCenter,
+      projectCode: (w) => w.projectCode,
+      description: (w) => w.description,
+      sensitivityLabelId: (w) => w.sensitivityLabelId,
+      primarySteward: (w) => w.primarySteward,
+      secondarySteward: (w) => w.secondarySteward,
+    };
+
+    const missingFields: string[] = [];
+    for (const field of requiredFields) {
+      const accessor = fieldAccessors[field];
+      if (accessor) {
+        const value = accessor(workspace);
+        if (!value || (typeof value === "string" && value.trim() === "")) {
+          missingFields.push(field);
+        }
+      }
+    }
+
+    const pass = missingFields.length === 0;
+    const desc = pass
+      ? "All required governance metadata fields are populated."
+      : `Missing required fields: ${missingFields.join(", ")}`;
+
+    return {
+      ruleType: "METADATA_COMPLETE",
+      ruleName: "Metadata Complete",
+      ruleResult: pass ? "PASS" : "FAIL",
+      ruleDescription: desc,
+    };
+  },
 
   SHARING_POLICY: (workspace, _config) => ({
     ruleType: "SHARING_POLICY",
@@ -93,7 +132,11 @@ const BUILT_IN_EVALUATORS: Record<string, (workspace: Workspace, config?: Record
   },
 };
 
-export function evaluatePolicy(workspace: Workspace, policy: GovernancePolicy): PolicyEvaluationResult {
+export interface EvaluationContext {
+  requiredMetadataFields?: string[];
+}
+
+export function evaluatePolicy(workspace: Workspace, policy: GovernancePolicy, context?: EvaluationContext): PolicyEvaluationResult {
   const ruleDefinitions = (policy.rules as PolicyRuleDefinition[]) || [];
   const results: RuleEvaluationResult[] = [];
 
@@ -102,7 +145,11 @@ export function evaluatePolicy(workspace: Workspace, policy: GovernancePolicy): 
 
     const evaluator = BUILT_IN_EVALUATORS[ruleDef.ruleType];
     if (evaluator) {
-      const result = evaluator(workspace, ruleDef.config);
+      let config = ruleDef.config || {};
+      if (ruleDef.ruleType === "METADATA_COMPLETE" && context?.requiredMetadataFields) {
+        config = { ...config, requiredFields: context.requiredMetadataFields };
+      }
+      const result = evaluator(workspace, config);
       results.push({
         ...result,
         ruleName: ruleDef.label || result.ruleName,
