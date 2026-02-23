@@ -25,6 +25,13 @@ export const REQUIRED_PERMISSIONS: RequiredPermission[] = [
     required: true,
   },
   {
+    roleId: "62a82d76-70ea-41e2-9197-370581804d09",
+    name: "Group.ReadWrite.All",
+    description: "Read and write all groups",
+    feature: "Sensitivity Label Write-Back",
+    required: true,
+  },
+  {
     roleId: "7ab1d382-f21e-4acd-a863-ba3e13f7da61",
     name: "Directory.Read.All",
     description: "Read directory data",
@@ -55,7 +62,7 @@ export const REQUIRED_PERMISSIONS: RequiredPermission[] = [
   },
 ];
 
-export const PERMISSIONS_VERSION = 2;
+export const PERMISSIONS_VERSION = 3;
 
 export interface PermissionCheckResult {
   granted: string[];
