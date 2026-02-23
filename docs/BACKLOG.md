@@ -39,11 +39,15 @@ Gap analysis performed against the authoritative Zenith Engineering Product Spec
 
 | Spec Section | Area | Status | Gap Severity | Backlog |
 |-------------|------|--------|-------------|---------|
+| 3.1 | Governed Provisioning — no M365 site/group creation | UI + request CRUD only | **High** | BL-005 |
 | 3.1 | Governed Provisioning — M365 Groups & Teams | Partial | Medium | BL-005, BL-018 |
 | 3.1 | Document Library Management | UI only (mock data) | Medium | BL-015 |
 | 3.1 | Content Type Hub & Syndication | UI only (mock data) | Medium | BL-016 |
 | 3.1 | Syntex / AI Builder Model Governance | UI only (mock data) | Medium | BL-017 |
 | 3.1 | Teams Inventory & Channel Governance | Missing | Medium | BL-018 |
+| 3.1 | Archive & Backup Management | UI only (mock data) | Medium | BL-019 |
+| 3.1 | SharePoint Embedded Container Governance | UI only (mock data) | Medium | BL-020 |
+| 3.1 | Lifecycle Review & Stale Site Detection | UI only (mock data) | High | BL-007 |
 | 3.2 | Retention & Lifecycle Classification enforcement | Partial | Medium | BL-012 |
 | 3.3 | Copilot Explainability (scoring, remediation, exclusions) | Partial | High | BL-006 |
 | 4.2 | Tenant Status Lifecycle (Suspended/Revoked) | Missing | Critical | BL-004 |
@@ -51,9 +55,10 @@ Gap analysis performed against the authoritative Zenith Engineering Product Spec
 | 4.4 | Operator Allowlisting | Missing | Critical | BL-003 |
 | 4.7 | Comprehensive Audit Trail (governance actions, access denials) | Partial | Critical | BL-001 |
 | 4.7 | Audit Log Immutability & Export | Missing | High | BL-008, TD-001 |
-| 5 | MGDC Integration (Enterprise tier) | Missing | Low | BL-019 |
-| 6 | File Share Analysis Module (Enterprise tier) | Missing | Low | BL-020 |
-| 7 | Native M365 Policy Integration (SPO Advanced Mgmt, Teams policies, Entra access models) | Missing | Medium | BL-021 |
+| 5 | MGDC Integration (Enterprise tier) | Missing | Low | BL-021 |
+| 6 | File Share Analysis Module (Enterprise tier) | Missing | Low | BL-022 |
+| 7 | Native M365 Policy Integration (SPO Advanced Mgmt, Teams policies, Entra access models) | Missing | Medium | BL-023 |
+| 9 | Job Scheduling & Management System | Design doc exists, no implementation | **High** | BL-009 |
 | 10 | Engineering Acceptance Criteria — multi-owner prevention | Not enforced | Critical | BL-002 |
 | 10 | Engineering Acceptance Criteria — no polling-based data collection | Needs guardrails | Medium | BL-009 |
 
@@ -121,19 +126,21 @@ Gap analysis performed against the authoritative Zenith Engineering Product Spec
 ### 🟠 BL-005: Governed Site Provisioning Workflow
 **Status:** In Progress | **Target:** Q1 2026 | **Spec Reference:** Section 3.1
 **Description:** End-to-end provisioning workflow for creating new collaboration workspaces through governed templates with Deal and Portfolio Company context.
-**Current State:** Provisioning request form and approval workflow exist. Graph API write-back for actual site creation is gated by service plan.
+**Current State:** Provisioning request form (`provision-new.tsx`) and approvals queue (`approvals.tsx`) exist with database-backed request CRUD. However, **no actual M365 site/group/team creation exists** — approving a request only changes its status. No `createSite`, `createTeam`, or `createGroup` Graph API calls are implemented anywhere. Sensitivity label assignment is captured as text, not linked to synced Purview label IDs.
 **Acceptance Criteria:**
-- Provisioning request form with template selection
-- Approval workflow (request → review → approve → create)
-- Automated DEAL- and PORTCO- naming prefix enforcement
-- Sensitivity label assignment during provisioning
-- Default sharing posture enforcement at creation time
-- Dual ownership requirement (Primary Steward + Secondary Owner)
+- Provisioning request form with template selection (currently hardcoded, needs template library)
+- Approval workflow (request → review → approve → **create in M365**)
+- **Graph API site creation** via `POST /sites` (SPO REST) or `POST /groups` (Graph) — requires `Sites.Manage.All` or `Group.ReadWrite.All`
+- Automated DEAL- and PORTCO- naming prefix enforcement (client-side exists, needs server-side validation)
+- **Sensitivity label assignment during provisioning** — link to synced Purview label ID, assign via Graph API
+- **Default sharing posture enforcement at creation time** — currently client-derived, needs server-side enforcement
+- Dual ownership requirement (Primary Steward + Secondary Owner) — form fields exist, needs server validation
 - Lifecycle classification selection (Deal, PortCo, Internal, Department, Project)
 - M365 Group creation support (not just SharePoint sites) — spec Section 3.1
-- Teams-connected site provisioning option
-- Audit log entry for every provisioning action
+- Teams-connected site provisioning option — requires `Team.Create` permission
+- Audit log entry for every provisioning action (request, approve, reject, provision, fail)
 - Retention policy assignment during provisioning
+- **Post-provisioning**: write Zenith property bag metadata to new site, add to workspace inventory
 
 ### 🟠 BL-006: Copilot Readiness Dashboard
 **Status:** Backlog | **Spec Reference:** Section 3.3
@@ -301,11 +308,44 @@ Gap analysis performed against the authoritative Zenith Engineering Product Spec
 - Teams creation policy awareness (who can create Teams in the tenant)
 - Graph API permissions needed: `Team.ReadBasic.All`, `Channel.ReadBasic.All`, `TeamMember.Read.All`
 
+### 🟡 BL-019: Archive & Backup Management
+**Status:** Backlog | **UI exists:** `archive-backup.tsx` (294 lines, mock data only) | **Spec Reference:** Section 3.1 (lifecycle)
+**Description:** Workspace archival and M365 backup management. A full UI page exists with archive inventory, backup policies, restore queue, and storage statistics — all driven by hardcoded mock data. No backend API, no database tables, no Graph API integration. This is a complete prototype shell with nothing behind it.
+**Current State:** UI design prototype only. Zero backend.
+**Acceptance Criteria:**
+- Archive workflow: lock site via Graph API (`PATCH /sites/{id}` with `isLocked: true`), update workspace status
+- Archive inventory table (database-backed) — which sites are archived, when, by whom, retention period
+- Backup policy management — define backup frequency, scope (by sensitivity, by site collection, by user set), retention
+- Integration with Microsoft 365 Backup Storage (via Graph API `/solutions/backupRestore`)
+- Restore workflow: request → approval → restore from backup → verify
+- Storage tracking: archived vs. active storage consumption
+- Retention enforcement: auto-delete after retention period expires (with admin warning)
+- Replace all mock data in existing UI with live data
+- Audit trail for every archive/restore/delete action
+- Graph API permissions needed: `Sites.Manage.All`, `BackupRestore.ReadWrite.All` (for M365 Backup)
+- Service plan gated (Professional+ for backup policies, Standard+ for manual archive)
+
+### 🟡 BL-020: SharePoint Embedded (SPE) Container Governance
+**Status:** Backlog | **UI exists:** `embedded-containers.tsx` (277 lines, mock data only) | **Spec Reference:** Section 3.1
+**Description:** Governance for SharePoint Embedded containers — headless SharePoint storage used by custom applications. A full UI page exists with container type registry, active container inventory, storage usage, and API call statistics — all driven by hardcoded mock data. Zero backend.
+**Current State:** UI design prototype only. Zero backend.
+**Acceptance Criteria:**
+- Container Type registry: register Entra App IDs, set per-type storage quotas
+- Container inventory via Graph API (`/storage/fileStorage/containers`)
+- Container properties: name, type, storage used, quota, status, owning app, permissions model
+- Storage quota monitoring and alerting (containers approaching/exceeding quota)
+- Sensitivity label tracking on containers (SPE containers support labels)
+- Sharing policy enforcement on containers
+- Container lifecycle: create, archive, delete with governance controls
+- Replace all mock data in existing UI with live data
+- Graph API permissions needed: `FileStorageContainer.Selected` or `FileStorageContainer.ReadWrite.All`
+- Enterprise tier only (SPE requires separate Microsoft licensing)
+
 ---
 
 ## Low Priority
 
-### 🟢 BL-019: MGDC Integration (Enterprise Tier)
+### 🟢 BL-021: MGDC Integration (Enterprise Tier)
 **Status:** Backlog | **Spec Reference:** Sections 5.1, 5.2
 **Description:** Microsoft Graph Data Connect integration for large-scale file share analysis and deep content classification. Per the spec, MGDC is Enterprise tier only, explicitly opt-in, and used only for large-scale data readiness programs.
 **Acceptance Criteria:**
@@ -318,7 +358,7 @@ Gap analysis performed against the authoritative Zenith Engineering Product Spec
 - Non-interactive, read-only, time-bounded operations
 - No user behavior monitoring (spec non-goal)
 
-### 🟢 BL-020: File Share Analysis Module (Enterprise Tier)
+### 🟢 BL-022: File Share Analysis Module (Enterprise Tier)
 **Status:** Backlog | **Spec Reference:** Section 6
 **Description:** Separate module for analyzing on-premises and cloud file shares to identify migration candidates and assess classification readiness. Logically distinct from core governance.
 **Acceptance Criteria:**
@@ -329,7 +369,7 @@ Gap analysis performed against the authoritative Zenith Engineering Product Spec
 - Non-interactive, read-only, time-bounded
 - Enterprise tier only
 
-### 🟢 BL-021: Native M365 Policy Integration
+### 🟢 BL-023: Native M365 Policy Integration
 **Status:** Backlog | **Spec Reference:** Section 7
 **Description:** Integration with native Microsoft 365 policy controls. The spec positions Zenith as configuring, validating, and reporting on native Microsoft controls — not replacing them. This covers SharePoint Advanced Management, Teams policies, and Entra ID access models.
 **Acceptance Criteria:**
@@ -339,7 +379,7 @@ Gap analysis performed against the authoritative Zenith Engineering Product Spec
 - Policy compliance reporting: which workspaces comply/violate each native policy
 - Read-only posture — Zenith reports on policy state, does not replace the admin centers
 
-### 🟢 BL-022: AI-Powered Governance Insights
+### 🟢 BL-024: AI-Powered Governance Insights
 **Status:** Exploring | **Target:** 2027
 **Description:** AI-driven classification recommendations and anomaly detection.
 **Acceptance Criteria:**
@@ -348,7 +388,7 @@ Gap analysis performed against the authoritative Zenith Engineering Product Spec
 - Natural language governance queries
 - Predictive storage forecasting
 
-### 🟢 BL-023: Cross-Platform Governance
+### 🟢 BL-025: Cross-Platform Governance
 **Status:** Exploring | **Target:** 2027 | **Spec Reference:** Section 3.1 (Teams, M365 Groups)
 **Description:** Extend governance beyond SharePoint to OneDrive, Exchange, and Power Platform.
 **Acceptance Criteria:**
@@ -357,7 +397,7 @@ Gap analysis performed against the authoritative Zenith Engineering Product Spec
 - Power Platform environment monitoring
 - Unified governance dashboard
 
-### 🟢 BL-024: Custom Workflow Automation
+### 🟢 BL-026: Custom Workflow Automation
 **Status:** Exploring | **Target:** 2027
 **Description:** User-defined governance workflows and automation rules.
 **Acceptance Criteria:**
