@@ -37,21 +37,25 @@ Prioritized backlog of features, enhancements, and technical improvements. Items
 
 Gap analysis performed against the authoritative Zenith Engineering Product Specification. The following areas have incomplete or missing implementation:
 
-| Spec Section | Area | Status | Gap Severity |
-|-------------|------|--------|-------------|
-| 3.1 | Governed Provisioning — M365 Groups & Teams | Partial | Medium |
-| 3.2 | Retention & Lifecycle Classification enforcement | Partial | Medium |
-| 3.3 | Copilot Explainability (scoring, remediation, exclusions) | Partial | High |
-| 4.2 | Tenant Status Lifecycle (Suspended/Revoked) | Missing | Critical |
-| 4.3 | One-Owner Tenant Lock & Ownership Transfer | Missing | Critical |
-| 4.4 | Operator Allowlisting | Missing | Critical |
-| 4.7 | Comprehensive Audit Trail (governance actions, access denials) | Partial | Critical |
-| 4.7 | Audit Log Immutability & Export | Missing | High |
-| 5 | MGDC Integration (Enterprise tier) | Missing | Low |
-| 6 | File Share Analysis Module (Enterprise tier) | Missing | Low |
-| 7 | Native M365 Policy Integration (SPO Advanced Mgmt, Teams policies, Entra access models) | Missing | Medium |
-| 10 | Engineering Acceptance Criteria — multi-owner prevention | Not enforced | Critical |
-| 10 | Engineering Acceptance Criteria — no polling-based data collection | Needs guardrails | Medium |
+| Spec Section | Area | Status | Gap Severity | Backlog |
+|-------------|------|--------|-------------|---------|
+| 3.1 | Governed Provisioning — M365 Groups & Teams | Partial | Medium | BL-005, BL-018 |
+| 3.1 | Document Library Management | UI only (mock data) | Medium | BL-015 |
+| 3.1 | Content Type Hub & Syndication | UI only (mock data) | Medium | BL-016 |
+| 3.1 | Syntex / AI Builder Model Governance | UI only (mock data) | Medium | BL-017 |
+| 3.1 | Teams Inventory & Channel Governance | Missing | Medium | BL-018 |
+| 3.2 | Retention & Lifecycle Classification enforcement | Partial | Medium | BL-012 |
+| 3.3 | Copilot Explainability (scoring, remediation, exclusions) | Partial | High | BL-006 |
+| 4.2 | Tenant Status Lifecycle (Suspended/Revoked) | Missing | Critical | BL-004 |
+| 4.3 | One-Owner Tenant Lock & Ownership Transfer | Missing | Critical | BL-002 |
+| 4.4 | Operator Allowlisting | Missing | Critical | BL-003 |
+| 4.7 | Comprehensive Audit Trail (governance actions, access denials) | Partial | Critical | BL-001 |
+| 4.7 | Audit Log Immutability & Export | Missing | High | BL-008, TD-001 |
+| 5 | MGDC Integration (Enterprise tier) | Missing | Low | BL-019 |
+| 6 | File Share Analysis Module (Enterprise tier) | Missing | Low | BL-020 |
+| 7 | Native M365 Policy Integration (SPO Advanced Mgmt, Teams policies, Entra access models) | Missing | Medium | BL-021 |
+| 10 | Engineering Acceptance Criteria — multi-owner prevention | Not enforced | Critical | BL-002 |
+| 10 | Engineering Acceptance Criteria — no polling-based data collection | Needs guardrails | Medium | BL-009 |
 
 ---
 
@@ -246,21 +250,62 @@ Gap analysis performed against the authoritative Zenith Engineering Product Spec
 - Scheduled PDF report delivery
 - Export to Excel
 
-### 🟡 BL-015: Document Library Inventory
-**Status:** Backlog
-**Description:** Extend governance to document library level within managed sites.
+### 🟡 BL-015: Document Library Management
+**Status:** Backlog | **UI exists:** `document-library.tsx` (532 lines, mock data only)
+**Description:** Extend governance to document library level within managed sites. A full UI page already exists with library inventory views, column detail, versioning settings, and sensitivity indicators — but it is entirely driven by hardcoded mock data. This item covers connecting it to real data via Microsoft Graph API.
 **Acceptance Criteria:**
-- Library discovery and inventory per site
-- Content type tracking
-- Large file and version sprawl detection
-- Storage optimization recommendations
-- Library-level sensitivity label tracking
+- Sync document libraries per site via Graph API (`/sites/{id}/lists` filtered to documentLibrary template)
+- Library properties: item count, storage used, versioning config, content types applied, sensitivity label
+- Large file and version sprawl detection (configurable thresholds)
+- Storage optimization recommendations (libraries over quota, excessive versions)
+- Library-level sensitivity label tracking and compliance reporting
+- Replace all mock data in existing UI with live Graph data
+- Library-level governance actions (require checkout, version limits, IRM enforcement) — service plan gated
+
+### 🟡 BL-016: Content Type Hub & Syndication Management
+**Status:** Backlog | **UI exists:** `content-types.tsx` (285 lines, mock data only)
+**Description:** Manage and monitor SharePoint Content Type Hub syndication across managed sites. A UI page exists with content type inventory, syndication status, and error reporting — all driven by mock data. This item covers connecting to real Graph API content type endpoints and adding governance controls.
+**Acceptance Criteria:**
+- Sync content types from Content Type Hub via Graph API (`/sites/{hubSiteId}/contentTypes`)
+- Track content type syndication/publishing status across sites
+- Monitor syndication errors and conflicts (column type mismatches, locked sites)
+- Content type column inventory (site columns, managed metadata columns)
+- Content type compliance: which sites are missing required content types
+- Force-sync capability for specific content types or sites
+- Replace all mock data in existing UI with live Graph data
+- Content type usage analytics (which content types are most/least used)
+
+### 🟡 BL-017: Syntex / AI Builder Model Governance
+**Status:** Backlog | **UI exists:** `syntex.tsx` (351 lines, mock data only)
+**Description:** Govern SharePoint Syntex (now Microsoft Syntex / AI Builder) document processing models across managed sites. A UI page exists with model inventory, accuracy tracking, autofill rules, and processing statistics — all driven by mock data. This item covers connecting to real Syntex APIs and adding governance visibility.
+**Acceptance Criteria:**
+- Sync Syntex/AI Builder models via Graph API or SharePoint REST API
+- Model inventory: name, type (Document Understanding, Form Processing, Prebuilt), status, accuracy, library associations
+- Autofill rule tracking: which extracted fields map to which site columns
+- Processing statistics: documents processed, success/failure rates
+- Model lifecycle governance: who created, when trained, where applied
+- Replace all mock data in existing UI with live Graph data
+- Enterprise tier only (Syntex requires separate Microsoft licensing)
+
+### 🟡 BL-018: Teams Inventory & Channel Governance
+**Status:** Backlog | **Spec Reference:** Section 3.1 (Microsoft Teams provisioning)
+**Description:** The spec lists Microsoft Teams as a core provisionable workspace type alongside SharePoint sites and M365 Groups. Currently Teams connectivity is tracked only as a boolean flag (`teamsConnected`) on workspaces. There is no dedicated Teams inventory, channel listing, or Teams-specific governance.
+**Acceptance Criteria:**
+- Teams inventory via Graph API (`/groups?$filter=resourceProvisioningOptions/Any(x:x eq 'Team')`)
+- Team details: display name, description, visibility (public/private), member count, owner count, archive status
+- Channel listing per team: standard, private, and shared channels
+- Channel governance: which channels have guests, which are private, naming convention compliance
+- Teams ↔ SharePoint site linkage (every Team has an underlying SharePoint site — show bidirectional relationship)
+- Orphaned Teams detection (Teams with no owners or inactive Teams)
+- Teams provisioning support in governed provisioning workflow (BL-005)
+- Teams creation policy awareness (who can create Teams in the tenant)
+- Graph API permissions needed: `Team.ReadBasic.All`, `Channel.ReadBasic.All`, `TeamMember.Read.All`
 
 ---
 
 ## Low Priority
 
-### 🟢 BL-016: MGDC Integration (Enterprise Tier)
+### 🟢 BL-019: MGDC Integration (Enterprise Tier)
 **Status:** Backlog | **Spec Reference:** Sections 5.1, 5.2
 **Description:** Microsoft Graph Data Connect integration for large-scale file share analysis and deep content classification. Per the spec, MGDC is Enterprise tier only, explicitly opt-in, and used only for large-scale data readiness programs.
 **Acceptance Criteria:**
@@ -273,7 +318,7 @@ Gap analysis performed against the authoritative Zenith Engineering Product Spec
 - Non-interactive, read-only, time-bounded operations
 - No user behavior monitoring (spec non-goal)
 
-### 🟢 BL-017: File Share Analysis Module (Enterprise Tier)
+### 🟢 BL-020: File Share Analysis Module (Enterprise Tier)
 **Status:** Backlog | **Spec Reference:** Section 6
 **Description:** Separate module for analyzing on-premises and cloud file shares to identify migration candidates and assess classification readiness. Logically distinct from core governance.
 **Acceptance Criteria:**
@@ -284,7 +329,7 @@ Gap analysis performed against the authoritative Zenith Engineering Product Spec
 - Non-interactive, read-only, time-bounded
 - Enterprise tier only
 
-### 🟢 BL-018: Native M365 Policy Integration
+### 🟢 BL-021: Native M365 Policy Integration
 **Status:** Backlog | **Spec Reference:** Section 7
 **Description:** Integration with native Microsoft 365 policy controls. The spec positions Zenith as configuring, validating, and reporting on native Microsoft controls — not replacing them. This covers SharePoint Advanced Management, Teams policies, and Entra ID access models.
 **Acceptance Criteria:**
@@ -294,7 +339,7 @@ Gap analysis performed against the authoritative Zenith Engineering Product Spec
 - Policy compliance reporting: which workspaces comply/violate each native policy
 - Read-only posture — Zenith reports on policy state, does not replace the admin centers
 
-### 🟢 BL-019: AI-Powered Governance Insights
+### 🟢 BL-022: AI-Powered Governance Insights
 **Status:** Exploring | **Target:** 2027
 **Description:** AI-driven classification recommendations and anomaly detection.
 **Acceptance Criteria:**
@@ -303,7 +348,7 @@ Gap analysis performed against the authoritative Zenith Engineering Product Spec
 - Natural language governance queries
 - Predictive storage forecasting
 
-### 🟢 BL-020: Cross-Platform Governance
+### 🟢 BL-023: Cross-Platform Governance
 **Status:** Exploring | **Target:** 2027 | **Spec Reference:** Section 3.1 (Teams, M365 Groups)
 **Description:** Extend governance beyond SharePoint to OneDrive, Exchange, and Power Platform.
 **Acceptance Criteria:**
@@ -312,7 +357,7 @@ Gap analysis performed against the authoritative Zenith Engineering Product Spec
 - Power Platform environment monitoring
 - Unified governance dashboard
 
-### 🟢 BL-021: Custom Workflow Automation
+### 🟢 BL-024: Custom Workflow Automation
 **Status:** Exploring | **Target:** 2027
 **Description:** User-defined governance workflows and automation rules.
 **Acceptance Criteria:**
