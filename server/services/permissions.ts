@@ -39,7 +39,7 @@ export const REQUIRED_PERMISSIONS: RequiredPermission[] = [
     required: true,
   },
   {
-    roleId: "19da66cb-0927-4e6e-8f8b-180e48dd0e8e",
+    roleId: "19da66cb-0fb0-4390-b071-ebc76a349482",
     name: "InformationProtectionPolicy.Read.All",
     description: "Read sensitivity labels and label policies",
     feature: "Purview Sensitivity Labels",
