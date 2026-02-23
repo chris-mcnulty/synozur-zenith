@@ -49,7 +49,8 @@ import {
   Eye,
   Tag,
   Sparkles,
-  AlertCircle
+  AlertCircle,
+  RefreshCw
 } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
@@ -184,6 +185,25 @@ export default function GovernancePage() {
     onError: (err: any) => {
       const msg = err?.message || "Failed to sync metadata to SharePoint";
       toast({ title: "Sync Failed", description: msg, variant: "destructive" });
+    },
+  });
+
+  const inventorySyncMutation = useMutation({
+    mutationFn: async () => {
+      if (!selectedTenant) throw new Error("No tenant selected");
+      const res = await apiRequest("POST", `/api/admin/tenants/${selectedTenant.id}/sync`);
+      return res.json();
+    },
+    onSuccess: (data: any) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/workspaces"] });
+      if (data.success) {
+        toast({ title: "Inventory Synced", description: `${data.sitesFound || 0} sites synced from Microsoft 365.` });
+      } else {
+        toast({ title: "Sync Issue", description: data.error || "Sync completed with issues.", variant: "destructive" });
+      }
+    },
+    onError: (err: any) => {
+      toast({ title: "Sync Failed", description: err?.message || "Failed to sync inventory.", variant: "destructive" });
     },
   });
 
@@ -838,6 +858,16 @@ export default function GovernancePage() {
               </Button>
             )}
           </div>
+          <Button
+            variant="outline"
+            className="gap-2 rounded-full"
+            onClick={() => inventorySyncMutation.mutate()}
+            disabled={inventorySyncMutation.isPending || !selectedTenant}
+            data-testid="button-sync-inventory"
+          >
+            <RefreshCw className={`w-4 h-4 ${inventorySyncMutation.isPending ? 'animate-spin' : ''}`} />
+            {inventorySyncMutation.isPending ? "Syncing..." : "Sync Inventory"}
+          </Button>
           <Button className="gap-2 rounded-full shadow-md shadow-primary/20">
             Export CSV
           </Button>

@@ -159,6 +159,128 @@ router.delete("/api/workspaces/:id", async (req, res) => {
   res.status(204).send();
 });
 
+router.post("/api/workspaces/:id/sync", async (req, res) => {
+  try {
+    const workspace = await storage.getWorkspace(req.params.id);
+    if (!workspace) return res.status(404).json({ message: "Workspace not found" });
+    if (!workspace.tenantConnectionId) return res.status(400).json({ message: "Workspace has no tenant connection" });
+
+    const connection = await storage.getTenantConnection(workspace.tenantConnectionId);
+    if (!connection) return res.status(404).json({ message: "Tenant connection not found" });
+
+    const clientId = connection.clientId || process.env.AZURE_CLIENT_ID;
+    const clientSecret = connection.clientSecret || process.env.AZURE_CLIENT_SECRET;
+    if (!clientId || !clientSecret) {
+      return res.status(503).json({ success: false, error: "Zenith app credentials not configured." });
+    }
+
+    const graphSiteId = workspace.m365ObjectId;
+    if (!graphSiteId) return res.status(400).json({ message: "No M365 object ID on this workspace" });
+
+    let token: string | null = null;
+    try { token = await getAppToken(connection.tenantId, clientId, clientSecret); } catch {}
+    if (!token) return res.status(503).json({ success: false, error: "Could not acquire Graph API token." });
+
+    const siteRes = await fetch(`https://graph.microsoft.com/v1.0/sites/${graphSiteId}?$select=id,displayName,webUrl,description,createdDateTime,lastModifiedDateTime,isPersonalSite,root,siteCollection`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+
+    let siteData: any = null;
+    let siteDeleted = false;
+    if (siteRes.ok) {
+      siteData = await siteRes.json();
+    } else if (siteRes.status === 404) {
+      siteDeleted = true;
+    } else {
+      const errText = await siteRes.text();
+      return res.status(502).json({ success: false, error: `Graph API error ${siteRes.status}: ${errText}` });
+    }
+
+    const updates: Record<string, any> = {};
+
+    if (siteDeleted) {
+      updates.isDeleted = true;
+      await storage.updateWorkspace(workspace.id, updates);
+      return res.json({ success: true, siteDeleted: true, message: "Site no longer found in Microsoft 365 — marked as deleted." });
+    }
+
+    if (siteData) {
+      updates.displayName = siteData.displayName || workspace.displayName;
+      updates.siteUrl = siteData.webUrl || workspace.siteUrl;
+      updates.description = siteData.description || null;
+      updates.siteCreatedDate = siteData.createdDateTime || null;
+      updates.lastContentModifiedDate = siteData.lastModifiedDateTime || null;
+    }
+
+    const siteUrl = siteData?.webUrl || workspace.siteUrl || "";
+    const domain = siteUrl.match(/https?:\/\/([^/]+)/)?.[1] || "";
+
+    let spoToken: string | null = null;
+    if (domain) {
+      try { spoToken = await getSpoToken(connection.tenantId, clientId, clientSecret, domain); } catch {}
+    }
+
+    const [driveResult, analyticsResult, groupOwnersResult, lockStateResult] = await Promise.allSettled([
+      fetchSiteDriveOwner(token, graphSiteId),
+      fetchSiteAnalytics(token, graphSiteId),
+      fetchSiteGroupOwners(token, graphSiteId),
+      spoToken && siteUrl ? fetchSiteLockState(spoToken, siteUrl) : Promise.resolve({ lockState: "Unlock" }),
+    ]);
+
+    const driveOwner = driveResult.status === 'fulfilled' ? driveResult.value : {} as any;
+    const siteAnalytics = analyticsResult.status === 'fulfilled' ? analyticsResult.value : {} as any;
+    const groupOwners = groupOwnersResult.status === 'fulfilled' ? groupOwnersResult.value : { owners: [] } as any;
+    const lockState = lockStateResult.status === 'fulfilled' ? (lockStateResult.value as any).lockState : "Unlock";
+
+    updates.ownerDisplayName = driveOwner.ownerDisplayName || workspace.ownerDisplayName || null;
+    updates.ownerPrincipalName = driveOwner.ownerEmail || workspace.ownerPrincipalName || null;
+
+    if (groupOwners.owners && groupOwners.owners.length > 0) {
+      updates.owners = groupOwners.owners.length;
+      updates.primarySteward = groupOwners.owners[0]?.displayName || null;
+      if (groupOwners.owners.length >= 2) {
+        updates.secondarySteward = groupOwners.owners[1]?.displayName || null;
+      }
+    }
+
+    const storageUsed = driveOwner.storageUsedBytes ?? workspace.storageUsedBytes ?? null;
+    const storageAlloc = driveOwner.storageAllocatedBytes ?? workspace.storageAllocatedBytes ?? null;
+    updates.storageUsedBytes = storageUsed;
+    updates.storageAllocatedBytes = storageAlloc;
+
+    const activityDate = siteAnalytics.lastActivityDate || workspace.lastActivityDate || null;
+    updates.lastActivityDate = activityDate;
+
+    updates.lockState = lockState;
+    updates.isDeleted = false;
+
+    if (storageUsed != null) {
+      const usedMB = Math.round(storageUsed / (1024 * 1024));
+      updates.size = usedMB >= 1024 ? `${(usedMB / 1024).toFixed(1)} GB` : `${usedMB} MB`;
+    }
+
+    if (activityDate) {
+      const d = new Date(activityDate);
+      const now = new Date();
+      const diffDays = Math.floor((now.getTime() - d.getTime()) / (1000 * 60 * 60 * 24));
+      if (diffDays === 0) updates.lastActive = "Today";
+      else if (diffDays === 1) updates.lastActive = "Yesterday";
+      else if (diffDays <= 7) updates.lastActive = `${diffDays} days ago`;
+      else if (diffDays <= 30) updates.lastActive = `${Math.floor(diffDays / 7)} weeks ago`;
+      else updates.lastActive = `${Math.floor(diffDays / 30)} months ago`;
+    }
+
+    const siteType = inferSiteType(workspace.rootWebTemplate as string | undefined, siteData?.siteCollection?.root);
+    updates.type = siteType;
+
+    const updated = await storage.updateWorkspace(workspace.id, updates);
+    res.json({ success: true, workspace: updated });
+  } catch (err: any) {
+    console.error("[single-site-sync] Error:", err);
+    res.status(500).json({ success: false, error: err.message || "Sync failed" });
+  }
+});
+
 router.patch("/api/workspaces/bulk/update", async (req, res) => {
   const { ids, updates } = req.body;
   if (!Array.isArray(ids) || ids.length === 0) {

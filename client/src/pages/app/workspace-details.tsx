@@ -41,7 +41,8 @@ import {
   Upload,
   Network,
   Unlink,
-  Trash2
+  Trash2,
+  RefreshCw
 } from "lucide-react";
 
 type DataDictEntry = { id: string; tenantId: string; category: string; value: string; createdAt: string };
@@ -202,6 +203,24 @@ export default function WorkspaceDetailsPage() {
       } else {
         toast({ title: "Sync Failed", description: msg, variant: "destructive" });
       }
+    },
+  });
+
+  const siteSyncMutation = useMutation({
+    mutationFn: () =>
+      apiRequest("POST", `/api/workspaces/${id}/sync`).then(r => r.json()),
+    onSuccess: (data: any) => {
+      queryClient.invalidateQueries({ queryKey: [`/api/workspaces/${id}`] });
+      if (data.siteDeleted) {
+        toast({ title: "Site Deleted", description: data.message || "This site is no longer in Microsoft 365.", variant: "destructive" });
+      } else if (data.success) {
+        toast({ title: "Site Refreshed", description: "Latest data pulled from Microsoft 365." });
+      } else {
+        toast({ title: "Refresh Issue", description: data.error || "Completed with issues.", variant: "destructive" });
+      }
+    },
+    onError: (err: any) => {
+      toast({ title: "Refresh Failed", description: err?.message || "Could not refresh site data.", variant: "destructive" });
     },
   });
 
@@ -372,6 +391,16 @@ export default function WorkspaceDetailsPage() {
             </>
           ) : (
             <>
+              <Button
+                variant="outline"
+                className="gap-2"
+                onClick={() => siteSyncMutation.mutate()}
+                disabled={siteSyncMutation.isPending}
+                data-testid="button-refresh-site"
+              >
+                <RefreshCw className={`w-4 h-4 ${siteSyncMutation.isPending ? 'animate-spin' : ''}`} />
+                {siteSyncMutation.isPending ? "Refreshing..." : "Refresh from M365"}
+              </Button>
               <Button variant="outline" className="gap-2 text-primary border-primary/30 hover:bg-primary/10" data-testid="button-apply-defaults">
                 <Wand2 className="w-4 h-4" /> Apply Defaults
               </Button>
