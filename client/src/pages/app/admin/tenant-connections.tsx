@@ -181,14 +181,29 @@ export default function TenantConnectionsPage() {
     }
   };
 
+  const [syncWarnings, setSyncWarnings] = useState<{ area: string; permission: string; message: string; severity: "error" | "warning" }[]>([]);
+
   const handleSync = async (id: string) => {
     setSyncingId(id);
+    setSyncWarnings([]);
     try {
       const res = await apiRequest("POST", `/api/admin/tenants/${id}/sync`);
       const result = await res.json();
       queryClient.invalidateQueries({ queryKey: ["/api/admin/tenants"] });
       if (result.success) {
-        toast({ title: "Sync Complete", description: `Found ${result.sitesFound} SharePoint sites.` });
+        const warnings = result.permissionWarnings || [];
+        if (warnings.length > 0) {
+          setSyncWarnings(warnings);
+          const errorCount = warnings.filter((w: any) => w.severity === "error").length;
+          const warnCount = warnings.filter((w: any) => w.severity === "warning").length;
+          toast({
+            title: `Sync Complete — ${errorCount + warnCount} Permission Issue${errorCount + warnCount > 1 ? 's' : ''}`,
+            description: `Found ${result.sitesFound} sites. ${errorCount > 0 ? `${errorCount} error(s)` : ''}${errorCount > 0 && warnCount > 0 ? ', ' : ''}${warnCount > 0 ? `${warnCount} warning(s)` : ''} — see details below.`,
+            variant: "default",
+          });
+        } else {
+          toast({ title: "Sync Complete", description: `Found ${result.sitesFound} SharePoint sites. All permissions OK.` });
+        }
       } else {
         toast({ title: "Sync Error", description: result.error, variant: "destructive" });
       }
@@ -344,6 +359,49 @@ export default function TenantConnectionsPage() {
         </Card>
       </div>
 
+      {syncWarnings.length > 0 && (
+        <Card className="border-amber-500/30 bg-amber-500/5" data-testid="card-sync-warnings">
+          <CardHeader className="pb-2 flex flex-row items-center justify-between">
+            <CardTitle className="text-sm font-medium flex items-center gap-2 text-amber-600 dark:text-amber-400">
+              <AlertTriangle className="w-4 h-4" />
+              Permission Issues Detected During Sync
+            </CardTitle>
+            <Button variant="ghost" size="sm" onClick={() => setSyncWarnings([])} className="h-6 w-6 p-0" data-testid="button-dismiss-warnings">
+              <X className="w-4 h-4" />
+            </Button>
+          </CardHeader>
+          <CardContent className="space-y-2 pt-0">
+            <p className="text-xs text-muted-foreground mb-3">
+              The following permissions may need to be configured in your Entra app registration for full functionality:
+            </p>
+            {syncWarnings.map((w, i) => (
+              <div
+                key={i}
+                className={`flex items-start gap-3 p-3 rounded-lg border text-sm ${
+                  w.severity === "error"
+                    ? "border-red-500/30 bg-red-500/5"
+                    : "border-amber-500/20 bg-amber-500/5"
+                }`}
+                data-testid={`warning-item-${i}`}
+              >
+                {w.severity === "error" ? (
+                  <XCircle className="w-4 h-4 text-red-500 mt-0.5 shrink-0" />
+                ) : (
+                  <AlertTriangle className="w-4 h-4 text-amber-500 mt-0.5 shrink-0" />
+                )}
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="font-medium">{w.area}</span>
+                    <Badge variant="outline" className="text-[10px] h-5 font-mono">{w.permission}</Badge>
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-1">{w.message}</p>
+                </div>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
+
       <Card className="glass-panel border-border/50 shadow-xl">
         <CardHeader className="pb-4 border-b border-border/40 bg-muted/10">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -441,6 +499,18 @@ export default function TenantConnectionsPage() {
                           <>
                             <ShieldCheck className="w-3.5 h-3.5 text-emerald-500" />
                             <span className="text-xs font-medium text-emerald-500">Healthy</span>
+                          </>
+                        )}
+                        {conn.status === 'ACTIVE' && conn.lastSyncStatus === 'SUCCESS_WITH_WARNINGS' && (
+                          <>
+                            <AlertTriangle className="w-3.5 h-3.5 text-amber-500" />
+                            <span className="text-xs font-medium text-amber-500">Warnings</span>
+                          </>
+                        )}
+                        {conn.status === 'ACTIVE' && conn.lastSyncStatus === 'SUCCESS_WITH_ERRORS' && (
+                          <>
+                            <ShieldAlert className="w-3.5 h-3.5 text-orange-500" />
+                            <span className="text-xs font-medium text-orange-500">Permission Issues</span>
                           </>
                         )}
                         {conn.status === 'ACTIVE' && !conn.lastSyncStatus && (

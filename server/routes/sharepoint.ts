@@ -378,6 +378,16 @@ router.post("/api/admin/tenants/:id/sync", async (req, res) => {
     let upsertedCount = 0;
     let usageMatched = 0;
     const enrichErrors: string[] = [];
+    const permissionWarnings: { area: string; permission: string; message: string; severity: "error" | "warning" }[] = [];
+
+    if (!token) {
+      permissionWarnings.push({
+        area: "Graph API",
+        permission: "Application credentials",
+        message: "Could not acquire a Graph API token. Site enrichment (owners, analytics, lock state) was skipped.",
+        severity: "error",
+      });
+    }
 
     const BATCH_SIZE = 5;
     const enrichCache = new Map<string, { driveOwner: any; analytics: any; groupOwners: any; lockState?: string }>();
@@ -412,6 +422,21 @@ router.post("/api/admin/tenants/:id/sync", async (req, res) => {
           }
         }
       }
+    }
+
+    let spoTokenFailed = false;
+    for (const [domain, t] of Array.from(spoTokenCache.entries())) {
+      if (t === null) {
+        spoTokenFailed = true;
+      }
+    }
+    if (spoTokenFailed) {
+      permissionWarnings.push({
+        area: "SharePoint REST API",
+        permission: "Sites.Read.All",
+        message: "Could not acquire a SharePoint token. Archive/lock state detection may be incomplete. Ensure the app registration has Sites.Read.All application permission.",
+        severity: "warning",
+      });
     }
 
     for (const site of siteResult.sites) {
@@ -731,9 +756,42 @@ router.post("/api/admin/tenants/:id/sync", async (req, res) => {
       hubSyncResult.error = hubSyncResult.error || e.message;
     }
 
+    if (usageResult.error) {
+      permissionWarnings.push({
+        area: "Usage Report",
+        permission: "Reports.Read.All",
+        message: `Usage report unavailable: ${usageResult.error}. Storage, file counts, and activity data may be missing. Ensure Reports.Read.All application permission is granted.`,
+        severity: "warning",
+      });
+    }
+    if (labelSyncResult.error) {
+      permissionWarnings.push({
+        area: "Sensitivity Labels",
+        permission: "InformationProtectionPolicy.Read.All",
+        message: `Sensitivity label sync failed: ${labelSyncResult.error}. Ensure InformationProtectionPolicy.Read.All application permission is granted in Entra.`,
+        severity: "warning",
+      });
+    }
+    if (retentionSyncResult.error) {
+      permissionWarnings.push({
+        area: "Retention Labels",
+        permission: "RecordsManagement.Read.All (delegated)",
+        message: `Retention label sync failed: ${retentionSyncResult.error}`,
+        severity: "warning",
+      });
+    }
+    if (hubSyncResult.error) {
+      permissionWarnings.push({
+        area: "Hub Sites",
+        permission: "Sites.Read.All",
+        message: `Hub site discovery encountered an error: ${hubSyncResult.error}`,
+        severity: "warning",
+      });
+    }
+
     await storage.updateTenantConnection(req.params.id, {
       lastSyncAt: new Date(),
-      lastSyncStatus: "SUCCESS",
+      lastSyncStatus: permissionWarnings.some(w => w.severity === "error") ? "SUCCESS_WITH_ERRORS" : permissionWarnings.length > 0 ? "SUCCESS_WITH_WARNINGS" : "SUCCESS",
       lastSyncSiteCount: siteResult.sites.length,
       status: "ACTIVE",
       consentGranted: true,
@@ -751,6 +809,7 @@ router.post("/api/admin/tenants/:id/sync", async (req, res) => {
       sensitivityLabels: labelSyncResult,
       retentionLabels: retentionSyncResult,
       hubSites: hubSyncResult,
+      permissionWarnings: permissionWarnings.length > 0 ? permissionWarnings : undefined,
     });
   } catch (err: any) {
     await storage.updateTenantConnection(req.params.id, {
