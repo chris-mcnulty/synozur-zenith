@@ -325,6 +325,22 @@ Gap analysis performed against the authoritative Zenith Engineering Product Spec
 - Graph API permissions needed: `Sites.Manage.All`, `BackupRestore.ReadWrite.All` (for M365 Backup)
 - Service plan gated (Professional+ for backup policies, Standard+ for manual archive)
 
+### 🟡 BL-027: Stale / Removed Site Detection During Sync
+**Status:** Backlog | **Spec Reference:** Section 3.1
+**Description:** During sync, sites that previously existed in Zenith's inventory but are no longer returned by the Microsoft Graph site enumeration are not detected or flagged. If a site is fully purged from the tenant (past recycle bin retention), Zenith retains the stale record indefinitely with no indication it's gone. Soft-deleted sites are handled correctly via the usage report's `isDeleted` flag, but fully removed sites are a blind spot.
+**Design Considerations:**
+- **Must avoid false positives from transient API failures.** A pagination error, throttling, or partial Graph response should not mass-flag healthy sites as deleted.
+- Consider a "not seen" counter: increment each sync when a site is missing, only flag after N consecutive misses (e.g., 3 syncs).
+- Consider a threshold safeguard: if more than X% of known sites are missing from a sync result, skip deletion detection entirely and log a warning.
+- Consider a `lastSeenInSync` timestamp on each workspace to track when it was last confirmed by Graph.
+- Flagged sites should get a distinct status (e.g., `REMOVED_FROM_TENANT`) rather than reusing `isDeleted`, to distinguish from soft-delete.
+**Acceptance Criteria:**
+- Track `lastSeenInSync` timestamp per workspace
+- After N consecutive syncs where a site is absent, flag it as removed
+- Threshold safeguard prevents mass false-positive flagging
+- UI shows "Removed from Tenant" status distinct from "Deleted" (recycle bin)
+- Audit log entry when a site is flagged as removed
+
 ### 🟡 BL-020: SharePoint Embedded (SPE) Container Governance
 **Status:** Backlog | **UI exists:** `embedded-containers.tsx` (277 lines, mock data only) | **Spec Reference:** Section 3.1
 **Description:** Governance for SharePoint Embedded containers — headless SharePoint storage used by custom applications. A full UI page exists with container type registry, active container inventory, storage usage, and API call statistics — all driven by hardcoded mock data. Zero backend.
