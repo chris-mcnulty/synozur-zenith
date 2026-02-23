@@ -3,16 +3,13 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useTenant } from "@/lib/tenant-context";
 import { useToast } from "@/hooks/use-toast";
-import type { TenantConnection } from "@shared/schema";
 import { METADATA_CATEGORIES } from "@shared/schema";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
-  BookOpen,
   Plus,
   X,
   Loader2,
@@ -22,6 +19,7 @@ import {
   Hash,
   Globe,
   AlertTriangle,
+  ShieldCheck,
 } from "lucide-react";
 
 type DataDictionaryEntry = {
@@ -65,18 +63,23 @@ const CATEGORY_CONFIG: Record<string, { label: string; icon: typeof Building2; d
   },
 };
 
+const REQUIRED_METADATA_OPTIONS = [
+  { value: "department", label: "Department" },
+  { value: "costCenter", label: "Cost Center" },
+  { value: "projectCode", label: "Project Code" },
+  { value: "description", label: "Description" },
+  { value: "sensitivityLabelId", label: "Sensitivity Label" },
+  { value: "primarySteward", label: "Primary Steward" },
+  { value: "secondarySteward", label: "Secondary Steward" },
+];
+
 export default function DataDictionariesPage() {
   const { toast } = useToast();
   const { selectedTenant } = useTenant();
   const [selectedCategory, setSelectedCategory] = useState<string>("department");
   const [newValue, setNewValue] = useState("");
-  const [selectedTenantId, setSelectedTenantId] = useState<string>("");
 
-  const { data: connections = [] } = useQuery<TenantConnection[]>({
-    queryKey: ["/api/admin/tenants"],
-  });
-
-  const activeTenantId = selectedTenantId || selectedTenant?.id || connections[0]?.id || "";
+  const activeTenantId = selectedTenant?.id || "";
 
   const { data: entries = [], isLoading } = useQuery<DataDictionaryEntry[]>({
     queryKey: ["/api/admin/tenants", activeTenantId, "data-dictionaries", selectedCategory],
@@ -90,6 +93,14 @@ export default function DataDictionariesPage() {
     queryKey: ["/api/admin/tenants", activeTenantId, "data-dictionaries"],
     queryFn: () =>
       fetch(`/api/admin/tenants/${activeTenantId}/data-dictionaries`).then(r => r.json()),
+    enabled: !!activeTenantId,
+  });
+
+  const { data: requiredMetadataEntries = [] } = useQuery<DataDictionaryEntry[]>({
+    queryKey: ["/api/admin/tenants", activeTenantId, "data-dictionaries", "required_metadata_field"],
+    queryFn: () =>
+      fetch(`/api/admin/tenants/${activeTenantId}/data-dictionaries?category=required_metadata_field`)
+        .then(r => r.json()),
     enabled: !!activeTenantId,
   });
 
@@ -120,7 +131,15 @@ export default function DataDictionariesPage() {
     },
   });
 
-  const activeTenant = connections.find(c => c.id === activeTenantId);
+  const toggleRequiredField = async (fieldValue: string) => {
+    const existing = requiredMetadataEntries.find(e => e.value === fieldValue);
+    if (existing) {
+      deleteMutation.mutate(existing.id);
+    } else {
+      addMutation.mutate({ category: "required_metadata_field", value: fieldValue });
+    }
+  };
+
   const config = CATEGORY_CONFIG[selectedCategory] || CATEGORY_CONFIG.department;
   const Icon = config.icon;
 
@@ -129,29 +148,15 @@ export default function DataDictionariesPage() {
     return acc;
   }, {} as Record<string, number>);
 
-  const totalEntries = allEntries.length;
+  const requiredFieldValues = new Set(requiredMetadataEntries.map(e => e.value));
 
   return (
     <div className="space-y-6 animate-in fade-in duration-500 pb-12">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight" data-testid="text-page-title">Data Dictionaries</h1>
-          <p className="text-muted-foreground mt-1">
-            Define allowed values for site metadata fields. These are shared across all organizations connected to the same tenant.
-          </p>
-        </div>
-        {connections.length > 1 && (
-          <Select value={activeTenantId} onValueChange={setSelectedTenantId}>
-            <SelectTrigger className="w-[260px]" data-testid="select-tenant">
-              <SelectValue placeholder="Select tenant..." />
-            </SelectTrigger>
-            <SelectContent>
-              {connections.map(c => (
-                <SelectItem key={c.id} value={c.id}>{c.tenantName} ({c.domain})</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        )}
+      <div>
+        <h1 className="text-3xl font-bold tracking-tight" data-testid="text-page-title">Data Dictionaries</h1>
+        <p className="text-muted-foreground mt-1">
+          Define allowed values for site metadata fields. These are shared across all organizations connected to the same tenant.
+        </p>
       </div>
 
       {!activeTenantId ? (
@@ -198,8 +203,8 @@ export default function DataDictionariesPage() {
                   <CardTitle className="text-lg flex items-center gap-2">
                     <Icon className="w-5 h-5 text-primary" />
                     {config.label}
-                    {activeTenant && (
-                      <Badge variant="outline" className="text-[10px] ml-2 text-muted-foreground">{activeTenant.tenantName}</Badge>
+                    {selectedTenant && (
+                      <Badge variant="outline" className="text-[10px] ml-2 text-muted-foreground">{selectedTenant.tenantName}</Badge>
                     )}
                   </CardTitle>
                   <CardDescription className="mt-1">{config.description}</CardDescription>
@@ -269,6 +274,50 @@ export default function DataDictionariesPage() {
                     ))}
                   </div>
                 )}
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="glass-panel border-border/50 shadow-xl">
+            <CardHeader className="pb-4 border-b border-border/40 bg-muted/10">
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle className="text-lg flex items-center gap-2">
+                    <ShieldCheck className="w-5 h-5 text-primary" />
+                    Required Metadata Fields
+                  </CardTitle>
+                  <CardDescription className="mt-1">
+                    Select which metadata fields must be populated for a site to pass the Copilot readiness "Metadata Complete" check. Changes take effect next time policies are evaluated.
+                  </CardDescription>
+                </div>
+                <Badge variant="secondary" className="text-xs">{requiredFieldValues.size} required</Badge>
+              </div>
+            </CardHeader>
+            <CardContent className="p-6">
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3" data-testid="required-metadata-fields">
+                {REQUIRED_METADATA_OPTIONS.map(opt => {
+                  const isRequired = requiredFieldValues.has(opt.value);
+                  return (
+                    <label
+                      key={opt.value}
+                      className={`flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-all ${
+                        isRequired
+                          ? 'border-primary/50 bg-primary/5'
+                          : 'border-border/50 hover:border-border hover:bg-muted/20'
+                      }`}
+                      data-testid={`checkbox-required-${opt.value}`}
+                    >
+                      <Checkbox
+                        checked={isRequired}
+                        onCheckedChange={() => toggleRequiredField(opt.value)}
+                        disabled={addMutation.isPending || deleteMutation.isPending}
+                      />
+                      <span className={`text-sm font-medium ${isRequired ? 'text-primary' : 'text-foreground'}`}>
+                        {opt.label}
+                      </span>
+                    </label>
+                  );
+                })}
               </div>
             </CardContent>
           </Card>
