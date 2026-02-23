@@ -356,6 +356,42 @@ export async function leaveHubSite(spoToken: string, siteUrl: string): Promise<{
   }
 }
 
+export async function fetchSiteLockState(spoToken: string, siteUrl: string): Promise<{
+  lockState: string;
+  error?: string;
+}> {
+  const url = `${siteUrl.replace(/\/+$/, '')}/_api/site?$select=ReadOnly,WriteLocked,LockIssue`;
+  try {
+    const res = await fetch(url, {
+      headers: {
+        Authorization: `Bearer ${spoToken}`,
+        Accept: "application/json;odata=nometadata",
+      },
+    });
+
+    if (res.status === 403 || res.status === 401) {
+      return { lockState: "NoAccess" };
+    }
+
+    if (!res.ok) {
+      return { lockState: "Unlock", error: `API ${res.status}` };
+    }
+
+    const data = await res.json();
+    if (data.ReadOnly === true) {
+      console.log(`[lock-state] ${siteUrl} → ReadOnly`);
+      return { lockState: "ReadOnly" };
+    }
+    if (data.WriteLocked === true) {
+      console.log(`[lock-state] ${siteUrl} → NoAdditions (WriteLocked)`);
+      return { lockState: "NoAdditions" };
+    }
+    return { lockState: "Unlock" };
+  } catch (err: any) {
+    return { lockState: "Unlock", error: err.message };
+  }
+}
+
 export async function testConnection(tenantId: string, clientId: string, clientSecret: string): Promise<{
   success: boolean;
   tenantName?: string;

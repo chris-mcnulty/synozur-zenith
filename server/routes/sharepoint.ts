@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { storage } from "../storage";
 import { insertWorkspaceSchema, insertProvisioningRequestSchema, type ServicePlanTier } from "@shared/schema";
-import { fetchSharePointSites, fetchSiteUsageReport, fetchSiteDriveOwner, fetchSiteAnalytics, fetchSiteGroupOwners, getAppToken, writeSitePropertyBag, fetchSensitivityLabels, fetchRetentionLabels, getSpoToken, fetchHubSites, fetchSiteHubAssociation, fetchHubSitesViaSearch, getGroupIdForSite, applySensitivityLabelToGroup, removeSensitivityLabelFromGroup, joinHubSite, leaveHubSite } from "../services/graph";
+import { fetchSharePointSites, fetchSiteUsageReport, fetchSiteDriveOwner, fetchSiteAnalytics, fetchSiteGroupOwners, getAppToken, writeSitePropertyBag, fetchSensitivityLabels, fetchRetentionLabels, getSpoToken, fetchHubSites, fetchSiteHubAssociation, fetchHubSitesViaSearch, getGroupIdForSite, applySensitivityLabelToGroup, removeSensitivityLabelFromGroup, joinHubSite, leaveHubSite, fetchSiteLockState } from "../services/graph";
 import { getPlanFeatures } from "../services/feature-gate";
 import { refreshDelegatedToken } from "../routes-entra";
 
@@ -361,34 +361,54 @@ router.post("/api/admin/tenants/:id/sync", async (req, res) => {
       token = await getAppToken(connection.tenantId, clientId, clientSecret);
     } catch {}
 
+    const spoTokenCache = new Map<string, string | null>();
+    const getSpoTokenForDomain = async (domain: string): Promise<string | null> => {
+      if (spoTokenCache.has(domain)) return spoTokenCache.get(domain)!;
+      try {
+        const t = await getSpoToken(connection.tenantId, clientId, clientSecret, domain);
+        spoTokenCache.set(domain, t);
+        return t;
+      } catch (err: any) {
+        console.warn(`[sync] SPO token failed for ${domain}: ${err.message}`);
+        spoTokenCache.set(domain, null);
+        return null;
+      }
+    };
+
     let upsertedCount = 0;
     let usageMatched = 0;
     const enrichErrors: string[] = [];
 
     const BATCH_SIZE = 5;
-    const enrichCache = new Map<string, { driveOwner: any; analytics: any; groupOwners: any }>();
+    const enrichCache = new Map<string, { driveOwner: any; analytics: any; groupOwners: any; lockState?: string }>();
 
     if (token) {
       for (let i = 0; i < siteResult.sites.length; i += BATCH_SIZE) {
         const batch = siteResult.sites.slice(i, i + BATCH_SIZE);
         const results = await Promise.allSettled(
           batch.map(async (site) => {
-            const [driveResult, analyticsResult, groupOwnersResult] = await Promise.allSettled([
+            const siteUrl = site.webUrl || "";
+            const domain = siteUrl.match(/https?:\/\/([^/]+)/)?.[1] || "";
+            const spoToken = domain ? await getSpoTokenForDomain(domain) : null;
+
+            const [driveResult, analyticsResult, groupOwnersResult, lockStateResult] = await Promise.allSettled([
               fetchSiteDriveOwner(token!, site.id),
               fetchSiteAnalytics(token!, site.id),
               fetchSiteGroupOwners(token!, site.id),
+              spoToken && siteUrl ? fetchSiteLockState(spoToken, siteUrl) : Promise.resolve({ lockState: "Unlock" }),
             ]);
             return {
               siteId: site.id,
               driveOwner: driveResult.status === 'fulfilled' ? driveResult.value : {},
               analytics: analyticsResult.status === 'fulfilled' ? analyticsResult.value : {},
               groupOwners: groupOwnersResult.status === 'fulfilled' ? groupOwnersResult.value : { owners: [] },
+              lockState: lockStateResult.status === 'fulfilled' ? lockStateResult.value.lockState : "Unlock",
             };
           })
         );
         for (const r of results) {
           if (r.status === 'fulfilled') {
-            enrichCache.set(r.value.siteId, { driveOwner: r.value.driveOwner, analytics: r.value.analytics, groupOwners: r.value.groupOwners });
+            enrichCache.set(r.value.siteId, { driveOwner: r.value.driveOwner, analytics: r.value.analytics, groupOwners: r.value.groupOwners, lockState: r.value.lockState });
           }
         }
       }
@@ -404,7 +424,7 @@ router.post("/api/admin/tenants/:id/sync", async (req, res) => {
       }
       if (usage) usageMatched++;
 
-      const enriched = enrichCache.get(site.id) || { driveOwner: {}, analytics: {}, groupOwners: { owners: [] } };
+      const enriched = enrichCache.get(site.id) || { driveOwner: {}, analytics: {}, groupOwners: { owners: [] }, lockState: undefined };
       const driveOwner = enriched.driveOwner;
       const siteAnalytics = enriched.analytics;
       const groupOwners = enriched.groupOwners;
@@ -448,11 +468,12 @@ router.post("/api/admin/tenants/:id/sync", async (req, res) => {
         workspaceData.visitedPageCount = usage.visitedPageCount;
         workspaceData.rootWebTemplate = usage.rootWebTemplate || null;
         workspaceData.isDeleted = usage.isDeleted;
-        workspaceData.lockState = usage.lockState || null;
         workspaceData.reportRefreshDate = usage.reportRefreshDate || null;
         workspaceData.sensitivityLabelId = usage.sensitivityLabelId || null;
         workspaceData.sharingCapability = usage.externalSharing || null;
       }
+
+      workspaceData.lockState = enriched.lockState || "Unlock";
 
       if (storageUsed != null) {
         const usedMB = Math.round(storageUsed / (1024 * 1024));
