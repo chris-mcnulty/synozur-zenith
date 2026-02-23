@@ -316,8 +316,10 @@ export default function GovernancePage() {
     }
 
     if (filterSensitivity !== "all") {
-      if (filterSensitivity === "__none__") {
+      if (filterSensitivity === "__none__" || filterSensitivity === "__blank__") {
         result = result.filter(ws => !ws.sensitivityLabelId);
+      } else if (filterSensitivity === "__not_blank__") {
+        result = result.filter(ws => !!ws.sensitivityLabelId);
       } else {
         result = result.filter(ws => ws.sensitivityLabelId === filterSensitivity);
       }
@@ -333,39 +335,57 @@ export default function GovernancePage() {
     }
 
     if (filterDepartment !== "all") {
-      result = result.filter(ws => ws.department === filterDepartment);
+      if (filterDepartment === "__blank__") {
+        result = result.filter(ws => !ws.department);
+      } else if (filterDepartment === "__not_blank__") {
+        result = result.filter(ws => !!ws.department);
+      } else {
+        result = result.filter(ws => ws.department === filterDepartment);
+      }
     }
 
     if (filterSize !== "all") {
-      const MB = 1024 * 1024;
-      const GB = 1024 * MB;
-      result = result.filter(ws => {
-        const bytes = ws.storageUsedBytes ?? 0;
-        switch (filterSize) {
-          case "lt10mb": return bytes < 10 * MB;
-          case "10to100mb": return bytes >= 10 * MB && bytes < 100 * MB;
-          case "100mbto1gb": return bytes >= 100 * MB && bytes < GB;
-          case "gt1gb": return bytes >= GB;
-          default: return true;
-        }
-      });
+      if (filterSize === "__blank__") {
+        result = result.filter(ws => ws.storageUsedBytes == null);
+      } else if (filterSize === "__not_blank__") {
+        result = result.filter(ws => ws.storageUsedBytes != null);
+      } else {
+        const MB = 1024 * 1024;
+        const GB = 1024 * MB;
+        result = result.filter(ws => {
+          const bytes = ws.storageUsedBytes ?? 0;
+          switch (filterSize) {
+            case "lt10mb": return bytes < 10 * MB;
+            case "10to100mb": return bytes >= 10 * MB && bytes < 100 * MB;
+            case "100mbto1gb": return bytes >= 100 * MB && bytes < GB;
+            case "gt1gb": return bytes >= GB;
+            default: return true;
+          }
+        });
+      }
     }
 
     if (filterAge !== "all") {
-      const now = Date.now();
-      const DAY = 86400000;
-      result = result.filter(ws => {
-        if (!ws.siteCreatedDate) return false;
-        const created = new Date(ws.siteCreatedDate).getTime();
-        const age = now - created;
-        switch (filterAge) {
-          case "lt30d": return age < 30 * DAY;
-          case "1to6m": return age >= 30 * DAY && age < 180 * DAY;
-          case "6to12m": return age >= 180 * DAY && age < 365 * DAY;
-          case "gt1y": return age >= 365 * DAY;
-          default: return true;
-        }
-      });
+      if (filterAge === "__blank__") {
+        result = result.filter(ws => !ws.siteCreatedDate);
+      } else if (filterAge === "__not_blank__") {
+        result = result.filter(ws => !!ws.siteCreatedDate);
+      } else {
+        const now = Date.now();
+        const DAY = 86400000;
+        result = result.filter(ws => {
+          if (!ws.siteCreatedDate) return false;
+          const created = new Date(ws.siteCreatedDate).getTime();
+          const age = now - created;
+          switch (filterAge) {
+            case "lt30d": return age < 30 * DAY;
+            case "1to6m": return age >= 30 * DAY && age < 180 * DAY;
+            case "6to12m": return age >= 180 * DAY && age < 365 * DAY;
+            case "gt1y": return age >= 365 * DAY;
+            default: return true;
+          }
+        });
+      }
     }
 
     if (filterCopilot !== "all") {
@@ -1097,7 +1117,8 @@ export default function GovernancePage() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All Labels</SelectItem>
-                  <SelectItem value="__none__">No Label Assigned</SelectItem>
+                  <SelectItem value="__none__">Blank (No Label)</SelectItem>
+                  <SelectItem value="__not_blank__">Not Blank (Has Label)</SelectItem>
                   {sensitivityLabelsData.filter(l => l.appliesToGroupsSites).map((l) => (
                     <SelectItem key={l.labelId} value={l.labelId}>
                       <span className="flex items-center gap-2">
@@ -1132,6 +1153,8 @@ export default function GovernancePage() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All Departments</SelectItem>
+                  <SelectItem value="__blank__">Blank (No Department)</SelectItem>
+                  <SelectItem value="__not_blank__">Not Blank</SelectItem>
                   {deptOptions.map((d) => (
                     <SelectItem key={d.id} value={d.value}>
                       {d.value}
@@ -1149,6 +1172,8 @@ export default function GovernancePage() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All Sizes</SelectItem>
+                  <SelectItem value="__blank__">Blank (No Data)</SelectItem>
+                  <SelectItem value="__not_blank__">Not Blank</SelectItem>
                   <SelectItem value="lt10mb">&lt; 10 MB</SelectItem>
                   <SelectItem value="10to100mb">10 MB – 100 MB</SelectItem>
                   <SelectItem value="100mbto1gb">100 MB – 1 GB</SelectItem>
@@ -1165,6 +1190,8 @@ export default function GovernancePage() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All Ages</SelectItem>
+                  <SelectItem value="__blank__">Blank (No Date)</SelectItem>
+                  <SelectItem value="__not_blank__">Not Blank</SelectItem>
                   <SelectItem value="lt30d">&lt; 30 days</SelectItem>
                   <SelectItem value="1to6m">1-6 months</SelectItem>
                   <SelectItem value="6to12m">6-12 months</SelectItem>
