@@ -10,9 +10,10 @@ The roadmap contains only features we have committed to build. For the full list
 
 1. [Vision & Strategy](#vision--strategy)
 2. [Current Focus (Q1 2026)](#current-focus-q1-2026)
-3. [Recommended for Roadmap (Pending Approval)](#recommended-for-roadmap-pending-approval)
-4. [Recently Completed](#recently-completed)
-5. [Feature Status Legend](#feature-status-legend)
+3. [Committed — Next Up](#committed--next-up)
+4. [Recommended for Roadmap (Pending Approval)](#recommended-for-roadmap-pending-approval)
+5. [Recently Completed](#recently-completed)
+6. [Feature Status Legend](#feature-status-legend)
 
 ---
 
@@ -71,6 +72,28 @@ Zenith empowers organizations to govern their Microsoft 365 environments with co
 - Sensitivity label assignment during provisioning
 - Dual ownership requirement (Primary Steward + Secondary Owner)
 - Provisioning audit trail
+
+---
+
+## Committed — Next Up
+
+### 🔄 Workspace Archive Lifecycle (BL-019 / BL-007)
+
+**Status:** 🔄 Committed
+**Target Completion:** Q1 2026
+**Value Proposition:** Enable administrators to archive and restore SharePoint sites directly from Zenith, with full lifecycle tracking. This closes the gap between provisioning (creating governed sites) and lifecycle management (maintaining them over time). Currently the "Archive Workspace" action in Site Governance is non-functional, archive status is not synced from SharePoint, and there is no way to distinguish active from archived sites.
+
+#### Deliverables
+- **Archive state sync from Graph API:** Pull `isArchived` / lock state during tenant sync so archived sites are visually distinguished from active ones
+- **Archive action:** Lock a SharePoint site via Graph API (`POST /sites/{id}/archive`) with confirmation dialog and reason capture
+- **Unarchive / restore action:** Unlock a site via Graph API (`POST /sites/{id}/unarchive`) to bring it back to active state
+- **Lifecycle status tracking:** New `lifecycleState` field on workspaces (Active, Archived, PendingArchive, PendingRestore)
+- **Filtering in Site Governance:** Filter by lifecycle state so admins can view active sites, archived sites, or all
+- **Audit trail:** Every archive/restore action logged with WHO, WHAT, WHEN, and reason
+- **Service plan gating:** Standard+ for manual archive/restore
+
+#### Graph API Permissions Required
+- `Sites.ReadWrite.All` (Application) — needed to archive/unarchive sites (currently only `Sites.Read.All` is configured)
 
 ---
 
