@@ -48,7 +48,7 @@ export default function SplashPage() {
           <span className="text-transparent bg-clip-text bg-gradient-to-r from-secondary to-primary">Microsoft 365</span>
         </h1>
         
-        <p className="text-xl md:text-2xl text-muted-foreground max-w-2xl mx-auto mb-10 font-light">Secure, provision, and manage your M365 tenan. Event-driven architecture built for the Copilot era.</p>
+        <p className="text-xl md:text-2xl text-muted-foreground max-w-2xl mx-auto mb-10 font-light">Secure, provision, and manage your M365 tenant. Event-driven architecture built for the Copilot era.</p>
         
         <div className="flex flex-col sm:flex-row gap-4 items-center justify-center">
           <Link href="/auth/entra/callback">
