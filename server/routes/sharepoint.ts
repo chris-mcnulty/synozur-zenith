@@ -104,9 +104,11 @@ router.patch("/api/workspaces/:id", async (req, res) => {
     try {
       const connection = await storage.getTenantConnection(existing.tenantConnectionId);
       if (connection) {
-        const clientId = process.env.AZURE_CLIENT_ID!;
-        const clientSecret = process.env.AZURE_CLIENT_SECRET!;
-        const token = await getAppToken(connection.tenantId, clientId, clientSecret);
+        const delegatedToken = await getDelegatedTokenForRetention(req.session?.userId, connection.organizationId);
+        if (!delegatedToken) {
+          return res.status(401).json({ message: "No delegated token available. A user with SSO must sign in to enable label write-back to M365." });
+        }
+        const token = delegatedToken;
 
         const { groupId, error: groupError } = await getGroupIdForSite(token, existing.m365ObjectId);
 
