@@ -304,6 +304,58 @@ export async function fetchSiteHubAssociation(spoToken: string, siteUrl: string,
   }
 }
 
+export async function joinHubSite(spoToken: string, siteUrl: string, hubSiteId: string): Promise<{
+  success: boolean;
+  error?: string;
+}> {
+  const url = `${siteUrl.replace(/\/+$/, '')}/_api/site/JoinHubSite('${hubSiteId}')`;
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${spoToken}`,
+        Accept: "application/json;odata=nometadata",
+        "Content-Length": "0",
+      },
+    });
+
+    if (res.ok) {
+      return { success: true };
+    }
+
+    const errText = await res.text();
+    return { success: false, error: `SharePoint API ${res.status}: ${errText.substring(0, 300)}` };
+  } catch (err: any) {
+    return { success: false, error: err.message };
+  }
+}
+
+export async function leaveHubSite(spoToken: string, siteUrl: string): Promise<{
+  success: boolean;
+  error?: string;
+}> {
+  const url = `${siteUrl.replace(/\/+$/, '')}/_api/site/UnJoinHubSite`;
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${spoToken}`,
+        Accept: "application/json;odata=nometadata",
+        "Content-Length": "0",
+      },
+    });
+
+    if (res.ok) {
+      return { success: true };
+    }
+
+    const errText = await res.text();
+    return { success: false, error: `SharePoint API ${res.status}: ${errText.substring(0, 300)}` };
+  } catch (err: any) {
+    return { success: false, error: err.message };
+  }
+}
+
 export async function testConnection(tenantId: string, clientId: string, clientSecret: string): Promise<{
   success: boolean;
   tenantName?: string;

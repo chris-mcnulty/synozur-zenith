@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { storage } from "../storage";
 import { insertWorkspaceSchema, insertProvisioningRequestSchema, type ServicePlanTier } from "@shared/schema";
-import { fetchSharePointSites, fetchSiteUsageReport, fetchSiteDriveOwner, fetchSiteAnalytics, fetchSiteGroupOwners, getAppToken, writeSitePropertyBag, fetchSensitivityLabels, fetchRetentionLabels, getSpoToken, fetchHubSites, fetchSiteHubAssociation, fetchHubSitesViaSearch, getGroupIdForSite, applySensitivityLabelToGroup, removeSensitivityLabelFromGroup } from "../services/graph";
+import { fetchSharePointSites, fetchSiteUsageReport, fetchSiteDriveOwner, fetchSiteAnalytics, fetchSiteGroupOwners, getAppToken, writeSitePropertyBag, fetchSensitivityLabels, fetchRetentionLabels, getSpoToken, fetchHubSites, fetchSiteHubAssociation, fetchHubSitesViaSearch, getGroupIdForSite, applySensitivityLabelToGroup, removeSensitivityLabelFromGroup, joinHubSite, leaveHubSite } from "../services/graph";
 import { getPlanFeatures } from "../services/feature-gate";
 import { refreshDelegatedToken } from "../routes-entra";
 
@@ -173,15 +173,94 @@ router.patch("/api/workspaces/bulk/hub-assignment", async (req, res) => {
   if (!Array.isArray(workspaceIds) || workspaceIds.length === 0) {
     return res.status(400).json({ message: "workspaceIds array is required" });
   }
+
+  const allWs = await storage.getWorkspaces();
+
   if (hubSiteId) {
-    const allWs = await storage.getWorkspaces();
     const hubExists = allWs.some(ws => ws.isHubSite && ws.hubSiteId === hubSiteId);
     if (!hubExists) {
       return res.status(400).json({ message: "Invalid hub site ID — no hub site found with that identifier" });
     }
   }
+
   await storage.bulkUpdateWorkspaces(workspaceIds, { hubSiteId: hubSiteId || null });
-  res.json({ message: "Hub assignment updated", count: workspaceIds.length });
+
+  const spoSyncResults: { workspaceId: string; displayName: string; success: boolean; error?: string }[] = [];
+  const targetWorkspaces = allWs.filter(ws => workspaceIds.includes(ws.id));
+
+  const clientId = process.env.AZURE_CLIENT_ID;
+  const clientSecret = process.env.AZURE_CLIENT_SECRET;
+
+  if (!clientId || !clientSecret) {
+    for (const ws of targetWorkspaces) {
+      spoSyncResults.push({ workspaceId: ws.id, displayName: ws.displayName, success: false, error: "Azure credentials not configured" });
+    }
+    return res.json({
+      message: "Hub assignment saved to Zenith. SharePoint sync skipped — Azure credentials not configured.",
+      count: workspaceIds.length,
+      spoSync: { attempted: targetWorkspaces.length, succeeded: 0, failed: targetWorkspaces.length, results: spoSyncResults },
+    });
+  }
+
+  for (const ws of targetWorkspaces) {
+    if (!ws.siteUrl || !ws.tenantConnectionId) {
+      spoSyncResults.push({ workspaceId: ws.id, displayName: ws.displayName, success: false, error: "No site URL or tenant connection" });
+      continue;
+    }
+
+    try {
+      const connection = await storage.getTenantConnection(ws.tenantConnectionId);
+      if (!connection) {
+        spoSyncResults.push({ workspaceId: ws.id, displayName: ws.displayName, success: false, error: "Tenant connection not found" });
+        continue;
+      }
+
+      const domain = ws.siteUrl.match(/https?:\/\/([^/]+)/)?.[1] || "";
+      if (!domain) {
+        spoSyncResults.push({ workspaceId: ws.id, displayName: ws.displayName, success: false, error: "Invalid site URL format" });
+        continue;
+      }
+
+      const spoToken = await getSpoToken(connection.tenantId, clientId, clientSecret, domain);
+
+      let result;
+      if (hubSiteId) {
+        result = await joinHubSite(spoToken, ws.siteUrl, hubSiteId);
+      } else {
+        result = await leaveHubSite(spoToken, ws.siteUrl);
+      }
+
+      spoSyncResults.push({ workspaceId: ws.id, displayName: ws.displayName, success: result.success, error: result.error });
+
+      if (result.success) {
+        console.log(`[hub-assign] ${hubSiteId ? 'Joined' : 'Left'} hub for ${ws.displayName} (${ws.siteUrl})`);
+      } else {
+        console.warn(`[hub-assign] SharePoint sync failed for ${ws.displayName}: ${result.error}`);
+      }
+    } catch (err: any) {
+      spoSyncResults.push({ workspaceId: ws.id, displayName: ws.displayName, success: false, error: err.message });
+      console.error(`[hub-assign] Error syncing ${ws.displayName}: ${err.message}`);
+    }
+  }
+
+  const allSynced = spoSyncResults.every(r => r.success);
+  const noneSynced = spoSyncResults.every(r => !r.success);
+  const syncedCount = spoSyncResults.filter(r => r.success).length;
+
+  res.json({
+    message: allSynced
+      ? `Hub assignment updated and synced to SharePoint (${syncedCount}/${spoSyncResults.length})`
+      : noneSynced
+        ? "Hub assignment saved to Zenith. SharePoint sync failed — check permissions."
+        : `Hub assignment saved. Partially synced to SharePoint (${syncedCount}/${spoSyncResults.length}).`,
+    count: workspaceIds.length,
+    spoSync: {
+      attempted: spoSyncResults.length,
+      succeeded: syncedCount,
+      failed: spoSyncResults.length - syncedCount,
+      results: spoSyncResults,
+    },
+  });
 });
 
 // ── Copilot Rules ──

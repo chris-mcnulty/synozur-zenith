@@ -502,14 +502,25 @@ export default function GovernancePage() {
   };
 
   const hubAssignMutation = useMutation({
-    mutationFn: (data: { workspaceIds: string[]; hubSiteId: string | null }) =>
-      apiRequest("PATCH", "/api/workspaces/bulk/hub-assignment", data),
-    onSuccess: () => {
+    mutationFn: async (data: { workspaceIds: string[]; hubSiteId: string | null }) => {
+      const res = await apiRequest("PATCH", "/api/workspaces/bulk/hub-assignment", data);
+      return res.json();
+    },
+    onSuccess: (data: any) => {
       queryClient.invalidateQueries({ queryKey: ["/api/workspaces"] });
       setHubAssignDialogOpen(false);
       setHubAssignTargetIds([]);
       setHubAssignValue("");
-      toast({ title: "Hub Assignment Updated", description: "Site hub associations have been updated." });
+      const sync = data?.spoSync;
+      if (sync && sync.succeeded > 0 && sync.failed === 0) {
+        toast({ title: "Hub Assignment Synced", description: `Updated in Zenith and SharePoint (${sync.succeeded} site${sync.succeeded > 1 ? 's' : ''}).` });
+      } else if (sync && sync.succeeded > 0) {
+        toast({ title: "Partially Synced", description: `Saved in Zenith. ${sync.succeeded}/${sync.attempted} synced to SharePoint, ${sync.failed} failed.`, variant: "default" });
+      } else if (sync && sync.failed > 0) {
+        toast({ title: "Saved to Zenith", description: "Hub assignment saved locally. SharePoint sync failed — ensure Sites.FullControl.All permission is granted in Entra.", variant: "default" });
+      } else {
+        toast({ title: "Hub Assignment Updated", description: "Site hub associations have been updated." });
+      }
     },
     onError: (err: any) => {
       toast({ title: "Update Failed", description: err?.message || "Failed to update hub assignment", variant: "destructive" });
