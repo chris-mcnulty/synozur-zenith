@@ -261,9 +261,15 @@ router.post("/api/admin/tenants/:id/sync", async (req, res) => {
     let labelSyncResult: { synced: number; error?: string } = { synced: 0 };
     if (token) {
       try {
+        console.log(`[label-sync] Fetching sensitivity labels for tenant ${connection.tenantId}...`);
         const labelResult = await fetchSensitivityLabels(token);
         if (labelResult.error) {
+          console.error(`[label-sync] Error from Graph API: ${labelResult.error}`);
           labelSyncResult.error = labelResult.error;
+        }
+        console.log(`[label-sync] Graph API returned ${labelResult.labels.length} labels`);
+        for (const label of labelResult.labels) {
+          console.log(`[label-sync]   - ${label.name} (id=${label.id}, site-scope=${label.appliesToGroupsSites}, formats=${(label.contentFormats || []).join(',')})`);
         }
         for (const label of labelResult.labels) {
           await storage.upsertSensitivityLabel({

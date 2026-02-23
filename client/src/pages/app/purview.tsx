@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -12,10 +13,14 @@ import {
   Lock,
   Tag,
   Globe,
-  Info
+  Info,
+  AlertCircle,
+  Loader2,
+  Download
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useTenant } from "@/lib/tenant-context";
+import { queryClient } from "@/lib/queryClient";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   Table,
@@ -47,6 +52,8 @@ export default function PurviewConfigPage() {
   const { toast } = useToast();
   const { selectedTenant } = useTenant();
   const tenantConnectionId = selectedTenant?.id;
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [syncError, setSyncError] = useState<string | null>(null);
 
   const { data: labels = [], isLoading, refetch, isRefetching } = useQuery<SensitivityLabel[]>({
     queryKey: ["/api/admin/tenants", tenantConnectionId, "sensitivity-labels"],
@@ -60,6 +67,30 @@ export default function PurviewConfigPage() {
     if (!l.syncedAt) return latest;
     return !latest || new Date(l.syncedAt) > new Date(latest) ? l.syncedAt : latest;
   }, null as string | null) : null;
+
+  const handleSyncLabels = async () => {
+    if (!tenantConnectionId) return;
+    setIsSyncing(true);
+    setSyncError(null);
+    try {
+      const res = await fetch(`/api/admin/tenants/${tenantConnectionId}/sensitivity-labels/sync`, {
+        method: "POST",
+      });
+      const data = await res.json();
+      if (data.error) {
+        setSyncError(data.error);
+        toast({ title: "Label sync completed with errors", description: data.error, variant: "destructive" });
+      } else {
+        toast({ title: "Labels synced from Purview", description: `${data.synced} labels synced from Microsoft Purview.` });
+      }
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/tenants", tenantConnectionId, "sensitivity-labels"] });
+    } catch (err: any) {
+      setSyncError(err.message);
+      toast({ title: "Sync failed", description: err.message, variant: "destructive" });
+    } finally {
+      setIsSyncing(false);
+    }
+  };
 
   const handleRefresh = async () => {
     await refetch();
@@ -145,8 +176,28 @@ export default function PurviewConfigPage() {
             <RefreshCcw className={`w-4 h-4 ${isRefetching ? "animate-spin" : ""}`} />
             Refresh
           </Button>
+          <Button onClick={handleSyncLabels} disabled={isSyncing} className="gap-2 shadow-md shadow-primary/20" data-testid="button-sync-labels">
+            {isSyncing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+            Sync from Purview
+          </Button>
         </div>
       </div>
+
+      {syncError && (
+        <Card className="border-red-500/20 bg-red-500/5" data-testid="card-sync-error">
+          <CardContent className="p-4 flex items-start gap-3">
+            <AlertCircle className="w-5 h-5 text-red-500 shrink-0 mt-0.5" />
+            <div>
+              <h4 className="font-semibold text-sm text-red-600">Label Sync Error</h4>
+              <p className="text-xs text-red-500 mt-1">{syncError}</p>
+              <p className="text-xs text-muted-foreground mt-2">
+                Common causes: missing <code className="bg-muted px-1 rounded">InformationProtectionPolicy.Read.All</code> permission on the Entra app registration,
+                or the tenant hasn't enabled sensitivity labels for Groups & Sites.
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {!tenantConnectionId && (
         <Card className="border-amber-500/20 bg-amber-500/5">

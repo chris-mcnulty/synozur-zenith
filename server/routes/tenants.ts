@@ -1,7 +1,7 @@
 import { Router } from "express";
 import crypto from "crypto";
 import { storage } from "../storage";
-import { testConnection, clearTokenCache } from "../services/graph";
+import { testConnection, clearTokenCache, getAppToken, fetchSensitivityLabels } from "../services/graph";
 import { METADATA_CATEGORIES } from "@shared/schema";
 
 const router = Router();
@@ -236,6 +236,58 @@ router.get("/api/admin/tenants/:tenantConnectionId/sensitivity-labels", async (r
     const labels = await storage.getSensitivityLabelsByTenantId(conn.tenantId);
     res.json(labels);
   } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post("/api/admin/tenants/:tenantConnectionId/sensitivity-labels/sync", async (req, res) => {
+  try {
+    const conn = await storage.getTenantConnection(req.params.tenantConnectionId);
+    if (!conn) return res.status(404).json({ error: "Tenant connection not found" });
+
+    const clientId = process.env.AZURE_CLIENT_ID;
+    const clientSecret = process.env.AZURE_CLIENT_SECRET;
+    if (!clientId || !clientSecret) {
+      return res.status(500).json({ error: "Azure credentials not configured" });
+    }
+
+    const token = await getAppToken(conn.tenantId, clientId, clientSecret);
+    if (!token) {
+      return res.status(500).json({ error: "Failed to acquire app token for tenant" });
+    }
+
+    console.log(`[label-sync] Manual sync triggered for tenant ${conn.tenantId}`);
+    const labelResult = await fetchSensitivityLabels(token);
+
+    if (labelResult.error) {
+      console.error(`[label-sync] Error: ${labelResult.error}`);
+      return res.json({ synced: 0, total: 0, error: labelResult.error });
+    }
+
+    console.log(`[label-sync] Graph API returned ${labelResult.labels.length} labels`);
+    let synced = 0;
+    for (const label of labelResult.labels) {
+      console.log(`[label-sync]   - ${label.name} (id=${label.id}, site-scope=${label.appliesToGroupsSites}, formats=${(label.contentFormats || []).join(',')})`);
+      await storage.upsertSensitivityLabel({
+        tenantId: conn.tenantId,
+        labelId: label.id,
+        name: label.name,
+        description: label.description || null,
+        color: label.color || null,
+        tooltip: label.tooltip || null,
+        sensitivity: label.sensitivity ?? null,
+        isActive: label.isActive,
+        contentFormats: label.contentFormats || null,
+        hasProtection: label.hasProtection,
+        parentLabelId: label.parentLabelId || null,
+        appliesToGroupsSites: label.appliesToGroupsSites,
+      });
+      synced++;
+    }
+
+    res.json({ synced, total: labelResult.labels.length });
+  } catch (err: any) {
+    console.error(`[label-sync] Sync failed: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });

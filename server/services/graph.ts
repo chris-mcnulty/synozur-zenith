@@ -425,7 +425,7 @@ export async function fetchSensitivityLabels(token: string): Promise<{
     tooltip?: string;
     sensitivity?: number;
     isActive: boolean;
-    contentFormats?: string[];
+    contentFormats?: string[] | null;
     hasProtection: boolean;
     parentLabelId?: string;
     appliesToGroupsSites: boolean;
@@ -443,17 +443,43 @@ export async function fetchSensitivityLabels(token: string): Promise<{
       let detail = errText;
       try {
         const parsed = JSON.parse(errText);
-        detail = parsed.error?.message || parsed.error?.code || errText;
+        const errObj = parsed.error || {};
+        const parts = [errObj.code, errObj.message].filter(Boolean);
+        if (errObj.innerError?.code) parts.push(`(${errObj.innerError.code})`);
+        if (errObj.innerError?.message && errObj.innerError.message !== errObj.message) parts.push(errObj.innerError.message);
+        detail = parts.length > 0 ? parts.join(" - ") : errText;
       } catch {}
+      if (res.status === 403 && (detail.includes("UnknownError") || detail.includes("Access"))) {
+        return { labels: [], error: `Graph API 403: Access denied. Ensure the Entra app registration has the 'InformationProtectionPolicy.Read.All' application permission with admin consent granted for this tenant. Some tenants may also require an M365 E3/E5 license with Information Protection capabilities.` };
+      }
       return { labels: [], error: `Graph API ${res.status}: ${detail}` };
     }
 
     const data = await res.json();
     const rawLabels = data.value || [];
 
-    const labels = rawLabels.map((l: any) => {
+    const allLabels: any[] = [];
+    let nextUrl: string | null = null;
+
+    allLabels.push(...rawLabels);
+    nextUrl = data["@odata.nextLink"] || null;
+
+    while (nextUrl) {
+      const nextRes = await fetch(nextUrl, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!nextRes.ok) break;
+      const nextData = await nextRes.json();
+      allLabels.push(...(nextData.value || []));
+      nextUrl = nextData["@odata.nextLink"] || null;
+    }
+
+    const labels = allLabels.map((l: any) => {
       const contentFormats: string[] = l.contentFormats || [];
-      const appliesToGroupsSites = contentFormats.includes("schematizeddata") ||
+      const appliesToGroupsSites =
+        contentFormats.includes("site") ||
+        contentFormats.includes("unifiedgroup") ||
+        contentFormats.includes("schematizeddata") ||
         (l.parent && l.parent["@odata.type"]?.includes("group")) ||
         false;
 
