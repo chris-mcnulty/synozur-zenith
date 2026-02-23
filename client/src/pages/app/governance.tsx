@@ -814,15 +814,23 @@ export default function GovernancePage() {
               Group by Hubs
             </Button>
           </div>
-          <Button variant="outline" className="gap-2 rounded-full relative" onClick={() => setShowFilterDrawer(true)} data-testid="button-open-filters">
-            <Filter className="w-4 h-4" />
-            Filters
+          <div className="flex items-center gap-1">
+            <Button variant="outline" className="gap-2 rounded-full relative" onClick={() => setShowFilterDrawer(true)} data-testid="button-open-filters">
+              <Filter className="w-4 h-4" />
+              Filters
+              {activeFilterCount > 0 && (
+                <Badge className="absolute -top-2 -right-2 h-5 w-5 p-0 flex items-center justify-center text-[10px] bg-primary text-primary-foreground" data-testid="badge-active-filter-count">
+                  {activeFilterCount}
+                </Badge>
+              )}
+            </Button>
             {activeFilterCount > 0 && (
-              <Badge className="absolute -top-2 -right-2 h-5 w-5 p-0 flex items-center justify-center text-[10px] bg-primary text-primary-foreground" data-testid="badge-active-filter-count">
-                {activeFilterCount}
-              </Badge>
+              <Button variant="ghost" size="sm" onClick={clearAllFilters} className="gap-1 text-xs text-muted-foreground hover:text-destructive rounded-full h-8 px-2" data-testid="button-reset-filters">
+                <X className="w-3 h-3" />
+                Reset
+              </Button>
             )}
-          </Button>
+          </div>
           <Button className="gap-2 rounded-full shadow-md shadow-primary/20">
             Export CSV
           </Button>
@@ -888,6 +896,18 @@ export default function GovernancePage() {
             </div>
           ) : (
             <>
+              <div className="flex items-center justify-between px-6 py-2 border-b border-border/30 bg-muted/10">
+                <span className="text-xs text-muted-foreground" data-testid="text-results-summary">
+                  {filteredAndSortedWorkspaces.length === workspaces.length
+                    ? `${workspaces.length} workspace${workspaces.length !== 1 ? 's' : ''}`
+                    : `${filteredAndSortedWorkspaces.length} of ${workspaces.length} workspace${workspaces.length !== 1 ? 's' : ''}`}
+                  {activeFilterCount > 0 && ` \u00B7 ${activeFilterCount} filter${activeFilterCount !== 1 ? 's' : ''} applied`}
+                  {searchTerm && ` \u00B7 search: "${searchTerm}"`}
+                </span>
+                {selectedIds.size > 0 && (
+                  <span className="text-xs text-primary font-medium">{selectedIds.size} selected</span>
+                )}
+              </div>
               <div className="overflow-x-auto">
               <Table>
                 <TableHeader className="bg-muted/30">
