@@ -369,6 +369,7 @@ router.post("/api/admin/tenants/:id/sync", async (req, res) => {
         workspaceData.visitedPageCount = usage.visitedPageCount;
         workspaceData.rootWebTemplate = usage.rootWebTemplate || null;
         workspaceData.isDeleted = usage.isDeleted;
+        workspaceData.lockState = usage.lockState || null;
         workspaceData.reportRefreshDate = usage.reportRefreshDate || null;
         workspaceData.sensitivityLabelId = usage.sensitivityLabelId || null;
         workspaceData.sharingCapability = usage.externalSharing || null;

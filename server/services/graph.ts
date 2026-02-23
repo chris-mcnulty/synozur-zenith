@@ -423,6 +423,7 @@ export interface SiteUsageReportRow {
   rootWebTemplate: string;
   sensitivityLabelId: string;
   externalSharing: string;
+  lockState: string;
   reportRefreshDate: string;
   reportPeriod: string;
 }
@@ -478,6 +479,7 @@ export async function fetchSiteUsageReport(tenantId: string, clientId: string, c
           rootWebTemplate: row.rootWebTemplate || '',
           sensitivityLabelId: row.siteSensitivityLabelId || '',
           externalSharing: row.externalSharing || '',
+          lockState: row.lockState || 'Unlock',
           reportRefreshDate: row.reportRefreshDate || '',
           reportPeriod: String(row.reportPeriod || ''),
         });

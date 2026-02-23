@@ -503,6 +503,22 @@ export default function WorkspaceDetailsPage() {
                       )}
                     </div>
                     <div className="space-y-2">
+                      <Label>Site Status</Label>
+                      <div className="h-10 flex items-center gap-2 px-3 rounded-md bg-muted/50 text-sm" data-testid="text-site-status">
+                        {workspace.isDeleted ? (
+                          <Badge variant="destructive" className="text-xs">Deleted</Badge>
+                        ) : !workspace.lockState || workspace.lockState === "Unlock" ? (
+                          <Badge variant="outline" className="bg-emerald-500/10 text-emerald-600 border-emerald-500/20 text-xs">Active</Badge>
+                        ) : workspace.lockState === "NoAccess" ? (
+                          <Badge variant="outline" className="bg-destructive/10 text-destructive border-destructive/20 text-xs">Locked (No Access)</Badge>
+                        ) : workspace.lockState === "ReadOnly" ? (
+                          <Badge variant="outline" className="bg-amber-500/10 text-amber-600 border-amber-500/20 text-xs">Read-Only</Badge>
+                        ) : (
+                          <Badge variant="outline" className="bg-amber-500/10 text-amber-600 border-amber-500/20 text-xs">{workspace.lockState}</Badge>
+                        )}
+                      </div>
+                    </div>
+                    <div className="space-y-2">
                       <Label>Hub Association</Label>
                       <div className="h-10 flex items-center gap-2 px-3 rounded-md bg-muted/50 text-sm" data-testid="text-hub-association">
                         {workspace.isHubSite ? (

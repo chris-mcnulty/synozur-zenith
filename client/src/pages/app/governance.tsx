@@ -104,6 +104,7 @@ export default function GovernancePage() {
   const [filterSize, setFilterSize] = useState("all");
   const [filterAge, setFilterAge] = useState("all");
   const [filterCopilot, setFilterCopilot] = useState("all");
+  const [filterStatus, setFilterStatus] = useState("all");
 
   const [bulkSensitivity, setBulkSensitivity] = useState("");
   const [bulkDepartment, setBulkDepartment] = useState("");
@@ -302,9 +303,10 @@ export default function GovernancePage() {
     setFilterSize("all");
     setFilterAge("all");
     setFilterCopilot("all");
+    setFilterStatus("all");
   };
 
-  const activeFilterCount = [filterType, filterSensitivity, filterMetadata, filterDepartment, filterSize, filterAge, filterCopilot].filter(v => v !== "all").length;
+  const activeFilterCount = [filterType, filterSensitivity, filterMetadata, filterDepartment, filterSize, filterAge, filterCopilot, filterStatus].filter(v => v !== "all").length;
 
   const filteredAndSortedWorkspaces = useMemo(() => {
     let result = [...workspaces];
@@ -374,6 +376,19 @@ export default function GovernancePage() {
       });
     }
 
+    if (filterStatus !== "all") {
+      result = result.filter(ws => {
+        const state = ws.lockState || "Unlock";
+        if (filterStatus === "active") return state === "Unlock" && !ws.isDeleted;
+        if (filterStatus === "locked") return state === "NoAccess";
+        if (filterStatus === "readonly") return state === "ReadOnly";
+        if (filterStatus === "noadd") return state === "NoAdditions";
+        if (filterStatus === "deleted") return ws.isDeleted === true;
+        if (filterStatus === "archived") return state !== "Unlock";
+        return true;
+      });
+    }
+
     result.sort((a, b) => {
       let cmp = 0;
       switch (sortColumn) {
@@ -399,7 +414,7 @@ export default function GovernancePage() {
     });
 
     return result;
-  }, [workspaces, filterType, filterSensitivity, filterMetadata, filterDepartment, filterSize, filterAge, filterCopilot, sortColumn, sortDirection]);
+  }, [workspaces, filterType, filterSensitivity, filterMetadata, filterDepartment, filterSize, filterAge, filterCopilot, filterStatus, sortColumn, sortDirection]);
 
   const hubSites = useMemo(() => workspaces.filter(ws => ws.isHubSite), [workspaces]);
 
@@ -559,6 +574,11 @@ export default function GovernancePage() {
                 )}
                 {ws.isDeleted && (
                   <span className="text-[10px] font-semibold text-destructive bg-destructive/10 px-1.5 py-0.5 rounded">Deleted</span>
+                )}
+                {ws.lockState && ws.lockState !== "Unlock" && (
+                  <span className="text-[10px] font-semibold text-amber-600 bg-amber-500/10 px-1.5 py-0.5 rounded">
+                    {ws.lockState === "NoAccess" ? "Locked" : ws.lockState === "ReadOnly" ? "Read-Only" : ws.lockState}
+                  </span>
                 )}
                 {!groupByHubs && hubName && (
                   <span className="text-[10px] font-medium text-purple-500/80 bg-purple-500/5 px-1.5 py-0.5 rounded inline-flex items-center gap-0.5">
@@ -1152,6 +1172,24 @@ export default function GovernancePage() {
                   <SelectItem value="all">All</SelectItem>
                   <SelectItem value="ready">Ready</SelectItem>
                   <SelectItem value="not_ready">Not Ready</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-2">
+              <Label>Site Status</Label>
+              <Select value={filterStatus} onValueChange={setFilterStatus}>
+                <SelectTrigger className="w-full bg-background/50" data-testid="filter-status">
+                  <SelectValue placeholder="All Statuses" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Statuses</SelectItem>
+                  <SelectItem value="active">Active</SelectItem>
+                  <SelectItem value="archived">Archived (Any Lock)</SelectItem>
+                  <SelectItem value="readonly">Read-Only</SelectItem>
+                  <SelectItem value="locked">Locked (No Access)</SelectItem>
+                  <SelectItem value="noadd">No Additions</SelectItem>
+                  <SelectItem value="deleted">Deleted</SelectItem>
                 </SelectContent>
               </Select>
             </div>
