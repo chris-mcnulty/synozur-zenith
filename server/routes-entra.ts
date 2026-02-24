@@ -263,8 +263,32 @@ router.get('/login', async (req: AuthenticatedRequest, res: Response) => {
     req.session.pkceVerifier = verifier;
     req.session.authState = state;
 
+    const loginScopes = [...SCOPES];
+    try {
+      const connections = await storage.getTenantConnections();
+      const spoHostsArr: string[] = [];
+      for (const conn of connections) {
+        if (conn.domain) {
+          const host = conn.domain.includes('.sharepoint.com')
+            ? conn.domain
+            : `${conn.domain.replace(/\..*$/, '')}.sharepoint.com`;
+          if (!spoHostsArr.includes(host)) {
+            spoHostsArr.push(host);
+          }
+        }
+      }
+      for (const host of spoHostsArr) {
+        loginScopes.push(`https://${host}/AllSites.FullControl`);
+      }
+      if (spoHostsArr.length > 0) {
+        console.log(`[Entra] Including SPO scopes for login: ${spoHostsArr.join(', ')}`);
+      }
+    } catch (err) {
+      console.warn('[Entra] Could not look up tenant connections for SPO scopes:', err);
+    }
+
     const authUrl = await client.getAuthCodeUrl({
-      scopes: SCOPES,
+      scopes: loginScopes,
       redirectUri: getRedirectUri(),
       codeChallenge: challenge,
       codeChallengeMethod: 'S256',
@@ -295,9 +319,25 @@ router.get('/callback', async (req: AuthenticatedRequest, res: Response) => {
       return res.redirect('/login?error=sso_not_configured');
     }
 
+    const callbackScopes = [...SCOPES];
+    try {
+      const connections = await storage.getTenantConnections();
+      for (const conn of connections) {
+        if (conn.domain) {
+          const host = conn.domain.includes('.sharepoint.com')
+            ? conn.domain
+            : `${conn.domain.replace(/\..*$/, '')}.sharepoint.com`;
+          const scope = `https://${host}/AllSites.FullControl`;
+          if (!callbackScopes.includes(scope)) {
+            callbackScopes.push(scope);
+          }
+        }
+      }
+    } catch {}
+
     const tokenRequest: AuthorizationCodeRequest = {
       code: code as string,
-      scopes: SCOPES,
+      scopes: callbackScopes,
       redirectUri: getRedirectUri(),
       codeVerifier: req.session.pkceVerifier,
     };
