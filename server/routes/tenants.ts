@@ -316,8 +316,9 @@ router.post("/api/admin/tenants/:tenantConnectionId/data-dictionaries", async (r
     if (!category || !value || typeof category !== "string" || typeof value !== "string" || !value.trim()) {
       return res.status(400).json({ error: "category and value are required" });
     }
-    if (!METADATA_CATEGORIES.includes(category as any)) {
-      return res.status(400).json({ error: `Invalid category. Must be one of: ${METADATA_CATEGORIES.join(", ")}` });
+    const ALLOWED_CATEGORIES = [...METADATA_CATEGORIES, "required_metadata_field"];
+    if (!ALLOWED_CATEGORIES.includes(category)) {
+      return res.status(400).json({ error: `Invalid category. Must be one of: ${ALLOWED_CATEGORIES.join(", ")}` });
     }
     const existing = await storage.getDataDictionary(conn.tenantId, category);
     if (existing.some(e => e.value.toLowerCase() === value.trim().toLowerCase())) {
