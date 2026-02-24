@@ -5,7 +5,7 @@ Zenith is an MVP Microsoft 365 governance platform designed for The Synozur Alli
 
 ### Synozur Application Portfolio
 - **Zenith**: Microsoft 365 governance platform (this app)
-- **Constellation**: Sibling app (shared design language and multitenant architecture)
+- **Constellation**: Sibling app (shared design language and multitenant architecture). Codebase: https://github.com/chris-mcnulty/synozur-scdp
 - **Orbit**: Sibling app (shared design language and multitenant architecture)
 - **Vega**: Strategy and OKRs app. Codebase: https://github.com/chris-mcnulty/synozur-vega
 
