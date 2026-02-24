@@ -779,62 +779,30 @@ export async function fetchSiteAnalytics(token: string, graphSiteId: string): Pr
   }
 }
 
-export async function writeSitePropertyBag(
+async function executeCsomQuery(
   spoToken: string,
   siteUrl: string,
-  properties: Record<string, string>
+  csomXml: string
 ): Promise<{ success: boolean; error?: string }> {
+  const normalizedUrl = siteUrl.replace(/\/$/, '');
   try {
-    const normalizedUrl = siteUrl.replace(/\/$/, '');
-
-    const digestRes = await fetch(`${normalizedUrl}/_api/contextinfo`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${spoToken}`,
-        Accept: 'application/json;odata=verbose',
-      },
-    });
-
-    if (!digestRes.ok) {
-      const errText = await digestRes.text();
-      return { success: false, error: `ContextInfo failed ${digestRes.status}: ${errText}` };
-    }
-
-    const digestData = await digestRes.json();
-    const formDigest = digestData.d.GetContextWebInformation.FormDigestValue;
-
-    let actionId = 5;
-    let actionsXml = '';
-    actionsXml += '<ObjectPath Id="2" ObjectPathId="1" />';
-    actionsXml += '<ObjectPath Id="4" ObjectPathId="3" />';
-
-    for (const [key, value] of Object.entries(properties)) {
-      const safeKey = key.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-      const safeVal = value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-      actionsXml += `<Method Name="SetFieldValue" Id="${actionId}" ObjectPathId="3"><Parameters><Parameter Type="String">${safeKey}</Parameter><Parameter Type="String">${safeVal}</Parameter></Parameters></Method>`;
-      actionId++;
-    }
-
-    actionsXml += `<Method Name="Update" Id="${actionId}" ObjectPathId="1" />`;
-
-    const csomXml = `<Request AddExpandoFieldTypeSuffix="true" SchemaVersion="15.0.0.0" LibraryVersion="16.0.0.0" ApplicationName="Zenith" xmlns="http://schemas.microsoft.com/sharepoint/clientquery/2009"><Actions>${actionsXml}</Actions><ObjectPaths><Property Id="1" ParentId="0" Name="Web" /><Property Id="3" ParentId="1" Name="AllProperties" /><StaticProperty Id="0" TypeId="{3747adcd-a3c3-41b9-bfab-4a64dd2f1e0a}" Name="Current" /></ObjectPaths></Request>`;
-
-    const csomRes = await fetch(`${normalizedUrl}/_vti_bin/client.svc/ProcessQuery`, {
+    const res = await fetch(`${normalizedUrl}/_vti_bin/client.svc/ProcessQuery`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${spoToken}`,
         'Content-Type': 'text/xml',
-        'X-RequestDigest': formDigest,
+        Accept: 'application/json;odata=nometadata',
+        'X-RequestDigest': '0',
       },
       body: csomXml,
     });
 
-    if (!csomRes.ok) {
-      const errText = await csomRes.text();
-      return { success: false, error: `CSOM ProcessQuery failed ${csomRes.status}: ${errText}` };
+    if (!res.ok) {
+      const errText = await res.text();
+      return { success: false, error: `CSOM ${res.status}: ${errText}` };
     }
 
-    const responseText = await csomRes.text();
+    const responseText = await res.text();
     try {
       const parsed = JSON.parse(responseText);
       if (Array.isArray(parsed)) {
@@ -845,11 +813,52 @@ export async function writeSitePropertyBag(
         }
       }
     } catch {}
-
     return { success: true };
   } catch (e: any) {
     return { success: false, error: e.message };
   }
+}
+
+export async function writeSitePropertyBag(
+  spoToken: string,
+  siteUrl: string,
+  properties: Record<string, string>
+): Promise<{ success: boolean; error?: string }> {
+  let actionId = 5;
+  let actionsXml = '';
+  actionsXml += '<ObjectPath Id="2" ObjectPathId="1" />';
+  actionsXml += '<ObjectPath Id="4" ObjectPathId="3" />';
+
+  for (const [key, value] of Object.entries(properties)) {
+    const safeKey = key.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const safeVal = value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    actionsXml += `<Method Name="SetFieldValue" Id="${actionId}" ObjectPathId="3"><Parameters><Parameter Type="String">${safeKey}</Parameter><Parameter Type="String">${safeVal}</Parameter></Parameters></Method>`;
+    actionId++;
+  }
+  actionsXml += `<Method Name="Update" Id="${actionId}" ObjectPathId="1" />`;
+
+  const csomXml = `<Request AddExpandoFieldTypeSuffix="true" SchemaVersion="15.0.0.0" LibraryVersion="16.0.0.0" ApplicationName="Zenith" xmlns="http://schemas.microsoft.com/sharepoint/clientquery/2009"><Actions>${actionsXml}</Actions><ObjectPaths><Property Id="1" ParentId="0" Name="Web" /><Property Id="3" ParentId="1" Name="AllProperties" /><StaticProperty Id="0" TypeId="{3747adcd-a3c3-41b9-bfab-4a64dd2f1e0a}" Name="Current" /></ObjectPaths></Request>`;
+
+  return executeCsomQuery(spoToken, siteUrl, csomXml);
+}
+
+export async function applySensitivityLabelToSite(
+  spoToken: string,
+  siteUrl: string,
+  sensitivityLabelId: string
+): Promise<{ success: boolean; error?: string }> {
+  const csomXml = `<Request SchemaVersion="15.0.0.0" LibraryVersion="16.0.0.0" ApplicationName="Zenith" xmlns="http://schemas.microsoft.com/sharepoint/clientquery/2009"><Actions><ObjectPath Id="2" ObjectPathId="1" /><SetProperty Id="3" ObjectPathId="1" Name="SensitivityLabelId"><Parameter Type="Guid">{${sensitivityLabelId}}</Parameter></SetProperty><Method Name="Update" Id="4" ObjectPathId="1" /></Actions><ObjectPaths><Property Id="1" ParentId="0" Name="Site" /><StaticProperty Id="0" TypeId="{3747adcd-a3c3-41b9-bfab-4a64dd2f1e0a}" Name="Current" /></ObjectPaths></Request>`;
+
+  return executeCsomQuery(spoToken, siteUrl, csomXml);
+}
+
+export async function removeSensitivityLabelFromSite(
+  spoToken: string,
+  siteUrl: string
+): Promise<{ success: boolean; error?: string }> {
+  const csomXml = `<Request SchemaVersion="15.0.0.0" LibraryVersion="16.0.0.0" ApplicationName="Zenith" xmlns="http://schemas.microsoft.com/sharepoint/clientquery/2009"><Actions><ObjectPath Id="2" ObjectPathId="1" /><SetProperty Id="3" ObjectPathId="1" Name="SensitivityLabelId"><Parameter Type="Guid">{00000000-0000-0000-0000-000000000000}</Parameter></SetProperty><Method Name="Update" Id="4" ObjectPathId="1" /></Actions><ObjectPaths><Property Id="1" ParentId="0" Name="Site" /><StaticProperty Id="0" TypeId="{3747adcd-a3c3-41b9-bfab-4a64dd2f1e0a}" Name="Current" /></ObjectPaths></Request>`;
+
+  return executeCsomQuery(spoToken, siteUrl, csomXml);
 }
 
 export async function fetchSensitivityLabels(token: string): Promise<{

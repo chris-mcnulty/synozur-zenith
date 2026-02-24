@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { storage } from "../storage";
 import { insertWorkspaceSchema, insertProvisioningRequestSchema, type ServicePlanTier } from "@shared/schema";
-import { fetchSharePointSites, fetchSiteUsageReport, fetchSiteDriveOwner, fetchSiteAnalytics, fetchSiteGroupOwners, getAppToken, writeSitePropertyBag, fetchSensitivityLabels, fetchRetentionLabels, getSpoToken, fetchHubSites, fetchSiteHubAssociation, fetchHubSitesViaSearch, getGroupIdForSite, applySensitivityLabelToGroup, removeSensitivityLabelFromGroup, joinHubSite, leaveHubSite, fetchSiteLockState } from "../services/graph";
+import { fetchSharePointSites, fetchSiteUsageReport, fetchSiteDriveOwner, fetchSiteAnalytics, fetchSiteGroupOwners, getAppToken, writeSitePropertyBag, fetchSensitivityLabels, fetchRetentionLabels, getSpoToken, fetchHubSites, fetchSiteHubAssociation, fetchHubSitesViaSearch, getGroupIdForSite, applySensitivityLabelToGroup, removeSensitivityLabelFromGroup, applySensitivityLabelToSite, removeSensitivityLabelFromSite, joinHubSite, leaveHubSite, fetchSiteLockState } from "../services/graph";
 import { getPlanFeatures } from "../services/feature-gate";
 import { refreshDelegatedToken } from "../routes-entra";
 
@@ -135,9 +135,31 @@ router.patch("/api/workspaces/:id", async (req, res) => {
               return res.status(502).json({ message: `Failed to remove label in M365: ${result.error}`, labelSyncResult });
             }
           }
+        } else if (existing.siteUrl) {
+          console.log(`[label-push] No M365 group for ${existing.displayName} (${groupError || 'not group-connected'}), using CSOM site-level label push`);
+          const spoToken = await getSpoToken(connection.tenantId, clientId, clientSecret, connection.domain);
+          if (req.body.sensitivityLabelId) {
+            const result = await applySensitivityLabelToSite(spoToken, existing.siteUrl, req.body.sensitivityLabelId);
+            labelSyncResult = { pushed: result.success, error: result.error };
+            if (result.success) {
+              console.log(`[label-push] Applied sensitivity label ${req.body.sensitivityLabelId} to site ${existing.siteUrl} via CSOM for workspace ${existing.displayName}`);
+            } else {
+              console.error(`[label-push] Failed to apply label to site ${existing.siteUrl}: ${result.error}`);
+              return res.status(502).json({ message: `Failed to apply label to site: ${result.error}`, labelSyncResult });
+            }
+          } else {
+            const result = await removeSensitivityLabelFromSite(spoToken, existing.siteUrl);
+            labelSyncResult = { pushed: result.success, error: result.error };
+            if (result.success) {
+              console.log(`[label-push] Removed sensitivity label from site ${existing.siteUrl} via CSOM for workspace ${existing.displayName}`);
+            } else {
+              console.error(`[label-push] Failed to remove label from site ${existing.siteUrl}: ${result.error}`);
+              return res.status(502).json({ message: `Failed to remove label from site: ${result.error}`, labelSyncResult });
+            }
+          }
         } else {
-          labelSyncResult = { pushed: false, error: groupError || "No M365 Group found for this site. Label saved locally but not applied to SharePoint." };
-          console.warn(`[label-push] Cannot apply label (no group): ${groupError}. Saving metadata locally.`);
+          labelSyncResult = { pushed: false, error: "No group or site URL available for label push." };
+          console.warn(`[label-push] No group or siteUrl for workspace ${existing.displayName}. Label saved locally.`);
         }
       }
     } catch (err: any) {

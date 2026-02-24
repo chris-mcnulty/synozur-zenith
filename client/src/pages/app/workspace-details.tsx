@@ -162,7 +162,7 @@ export default function WorkspaceDetailsPage() {
         if (responseData.labelSyncResult.pushed) {
           toast({ title: "Changes saved & label applied", description: "Workspace updated and sensitivity label pushed to M365." });
         } else {
-          toast({ title: "Changes saved", description: `Workspace updated. Note: sensitivity label saved locally but could not be synced to SharePoint (non-group sites require PowerShell for label push).` });
+          toast({ title: "Changes saved", description: `Workspace updated but label sync note: ${responseData.labelSyncResult.error || "Label could not be applied to SharePoint."}` });
         }
       } else {
         toast({ title: "Changes saved", description: "Workspace properties updated successfully." });
