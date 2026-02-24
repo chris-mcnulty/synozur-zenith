@@ -1,17 +1,17 @@
 import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Shield, Lock, Layers, Zap, ArrowRight, CheckCircle2 } from "lucide-react";
-import heroBg from "@/assets/images/hero-bg.png";
+import heroBg from "@assets/AdobeStock_382432785_1771938099802.jpeg";
 
 export default function SplashPage() {
   return (
     <div className="min-h-screen bg-background text-foreground flex flex-col selection:bg-primary/30 relative overflow-hidden">
       {/* Background Image with Overlay */}
       <div 
-        className="absolute inset-0 z-0 pointer-events-none opacity-40 dark:opacity-20 bg-cover bg-center bg-no-repeat"
+        className="absolute inset-0 z-0 pointer-events-none bg-cover bg-center bg-no-repeat"
         style={{ backgroundImage: `url(${heroBg})` }}
       />
-      <div className="absolute inset-0 z-0 pointer-events-none bg-gradient-to-b from-background/40 via-background/80 to-background" />
+      <div className="absolute inset-0 z-0 pointer-events-none bg-gradient-to-b from-background/60 via-background/70 to-background" />
       {/* Navigation */}
       <nav className="relative z-10 w-full border-b border-border/40 bg-background/50 backdrop-blur-md sticky top-0">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
