@@ -956,26 +956,35 @@ export default function WorkspaceDetailsPage() {
                     <CardDescription>Raw key-value pairs stored directly on the underlying SharePoint site.</CardDescription>
                   </CardHeader>
                   <CardContent>
-                    <div className="space-y-1">
-                      <div className="grid grid-cols-3 gap-2 py-2 border-b border-border/50">
-                        <span className="font-semibold text-xs text-muted-foreground col-span-1">Key</span>
-                        <span className="font-semibold text-xs text-muted-foreground col-span-2">Value</span>
-                      </div>
-                      {[
-                        { key: "vti_extenderversion", value: "16.0.0.2612", zenith: false },
-                        { key: "vti_defaultlanguage", value: "en-us", zenith: false },
-                        { key: "Zenith_DataClass", value: sensitivityLabel, zenith: true },
-                        { key: "Zenith_DeptId", value: workspace.department || "—", zenith: true },
-                        { key: "Zenith_CostCenter", value: workspace.costCenter || "—", zenith: true },
-                        { key: "Zenith_ProjectType", value: workspace.projectType, zenith: true },
-                        { key: "vti_siteusagedata", value: "391024;1024", zenith: false },
-                      ].map((prop, idx) => (
-                        <div key={idx} className={`grid grid-cols-3 gap-2 py-1.5 ${prop.zenith ? 'bg-primary/5 rounded px-2 -mx-2' : ''}`}>
-                          <span className="font-mono text-xs col-span-1 break-all text-primary">{prop.key}</span>
-                          <span className={`font-mono text-xs col-span-2 break-all ${prop.zenith ? 'font-medium text-foreground' : 'text-muted-foreground'}`}>{prop.value}</span>
+                    {workspace.propertyBag && Object.keys(workspace.propertyBag).length > 0 ? (
+                      <div className="space-y-1">
+                        <div className="grid grid-cols-3 gap-2 py-2 border-b border-border/50">
+                          <span className="font-semibold text-xs text-muted-foreground col-span-1">Key</span>
+                          <span className="font-semibold text-xs text-muted-foreground col-span-2">Value</span>
                         </div>
-                      ))}
-                    </div>
+                        {Object.entries(workspace.propertyBag as Record<string, string>)
+                          .sort(([a], [b]) => {
+                            const aZenith = a.startsWith('Zenith_');
+                            const bZenith = b.startsWith('Zenith_');
+                            if (aZenith && !bZenith) return -1;
+                            if (!aZenith && bZenith) return 1;
+                            return a.localeCompare(b);
+                          })
+                          .map(([key, value]) => {
+                            const isZenith = key.startsWith('Zenith_');
+                            return (
+                              <div key={key} className={`grid grid-cols-3 gap-2 py-1.5 ${isZenith ? 'bg-primary/5 rounded px-2 -mx-2' : ''}`}>
+                                <span className="font-mono text-xs col-span-1 break-all text-primary">{key}</span>
+                                <span className={`font-mono text-xs col-span-2 break-all ${isZenith ? 'font-medium text-foreground' : 'text-muted-foreground'}`}>{value}</span>
+                              </div>
+                            );
+                          })}
+                      </div>
+                    ) : (
+                      <div className="text-sm text-muted-foreground py-4 text-center">
+                        No property bag data available. Sync this site to retrieve property bag entries from SharePoint.
+                      </div>
+                    )}
                   </CardContent>
                 </Card>
 
