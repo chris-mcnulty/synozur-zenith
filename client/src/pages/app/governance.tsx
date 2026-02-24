@@ -144,6 +144,20 @@ export default function GovernancePage() {
   const deptOptions = dictEntries.filter(e => e.category === "department");
   const costCenterOptions = dictEntries.filter(e => e.category === "cost_center");
 
+  const FIELD_LABELS: Record<string, string> = {
+    department: "Dept",
+    costCenter: "Cost",
+    projectCode: "Project",
+    description: "Desc",
+    sensitivityLabelId: "Label",
+  };
+  const requiredMetadataKeys = dictEntries
+    .filter(e => e.category === "required_metadata_field")
+    .map(e => e.value);
+  const requiredMetadataFields = requiredMetadataKeys.length > 0
+    ? requiredMetadataKeys.map(key => ({ key, label: FIELD_LABELS[key] || key }))
+    : [{ key: "department", label: "Dept" }, { key: "costCenter", label: "Cost" }];
+
   const { data: workspaces = [], isLoading, isError } = useQuery<Workspace[]>({
     queryKey: ["/api/workspaces", debouncedSearch, tenantConnectionId],
     queryFn: () => {
@@ -354,9 +368,10 @@ export default function GovernancePage() {
 
     if (filterMetadata !== "all") {
       result = result.filter(ws => {
-        const filled = [ws.department, ws.costCenter].filter(Boolean).length;
-        if (filterMetadata === "complete") return filled === 2;
-        if (filterMetadata === "missing") return filled < 2;
+        const filled = requiredMetadataFields.filter(f => !!(ws as any)[f.key]).length;
+        const total = requiredMetadataFields.length;
+        if (filterMetadata === "complete") return filled === total;
+        if (filterMetadata === "missing") return filled < total;
         return true;
       });
     }
@@ -461,7 +476,7 @@ export default function GovernancePage() {
     });
 
     return result;
-  }, [workspaces, filterType, filterSensitivity, filterMetadata, filterDepartment, filterSize, filterAge, filterCopilot, filterStatus, sortColumn, sortDirection]);
+  }, [workspaces, filterType, filterSensitivity, filterMetadata, filterDepartment, filterSize, filterAge, filterCopilot, filterStatus, sortColumn, sortDirection, requiredMetadataFields]);
 
   const hubSites = useMemo(() => workspaces.filter(ws => ws.isHubSite), [workspaces]);
 
@@ -710,12 +725,8 @@ export default function GovernancePage() {
         </TableCell>
         <TableCell className="relative z-10">
           {(() => {
-            const requiredFields = [
-              { key: "department", label: "Dept" },
-              { key: "costCenter", label: "Cost" },
-            ];
-            const filled = requiredFields.filter(f => !!(ws as any)[f.key]).length;
-            const total = requiredFields.length;
+            const filled = requiredMetadataFields.filter(f => !!(ws as any)[f.key]).length;
+            const total = requiredMetadataFields.length;
             const isComplete = filled === total;
             return (
               <Link href={`/app/governance/workspaces/${ws.id}`}>
@@ -729,7 +740,7 @@ export default function GovernancePage() {
                     </div>
                   </TooltipTrigger>
                   <TooltipContent side="left" className="text-xs">
-                    {requiredFields.map(f => (
+                    {requiredMetadataFields.map(f => (
                       <div key={f.key} className="flex items-center gap-1.5">
                         <span className={`${(ws as any)[f.key] ? 'text-emerald-500' : 'text-destructive'}`}>
                           {(ws as any)[f.key] ? '\u2713' : '\u2717'}
