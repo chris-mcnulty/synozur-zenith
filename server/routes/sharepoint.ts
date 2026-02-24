@@ -1,9 +1,10 @@
 import { Router } from "express";
 import { storage } from "../storage";
-import { insertWorkspaceSchema, insertProvisioningRequestSchema, type ServicePlanTier } from "@shared/schema";
-import { fetchSharePointSites, fetchSiteUsageReport, fetchSiteDriveOwner, fetchSiteAnalytics, fetchSiteGroupOwners, getAppToken, writeSitePropertyBag, fetchSensitivityLabels, fetchRetentionLabels, fetchHubSites, fetchSiteHubAssociation, fetchHubSitesViaSearch, getGroupIdForSite, applySensitivityLabelToGroup, removeSensitivityLabelFromGroup, applySensitivityLabelToSite, removeSensitivityLabelFromSite, joinHubSite, leaveHubSite, fetchSiteLockState } from "../services/graph";
+import { insertWorkspaceSchema, insertProvisioningRequestSchema, type ServicePlanTier, ZENITH_ROLES } from "@shared/schema";
+import { fetchSharePointSites, fetchSiteUsageReport, fetchSiteDriveOwner, fetchSiteAnalytics, fetchSiteGroupOwners, getAppToken, writeSitePropertyBag, fetchSensitivityLabels, fetchRetentionLabels, fetchHubSites, fetchSiteHubAssociation, fetchHubSitesViaSearch, applySensitivityLabelToSite, removeSensitivityLabelFromSite, joinHubSite, leaveHubSite, fetchSiteLockState } from "../services/graph";
 import { getPlanFeatures } from "../services/feature-gate";
 import { refreshDelegatedToken, getDelegatedSpoToken } from "../routes-entra";
+import { requireRole, type AuthenticatedRequest } from "../middleware/rbac";
 
 const router = Router();
 
@@ -18,25 +19,18 @@ async function getDelegatedTokenForRetention(currentUserId?: string, organizatio
     return null;
   };
 
+  if (currentUserId) {
+    const token = await tryUser(currentUserId);
+    if (token) return token;
+  }
+
   if (organizationId) {
-    const { db } = await import("../db");
-    const { graphTokens, users } = await import("@shared/schema");
-    const { eq, and, inArray } = await import("drizzle-orm");
-
-    const adminRoles = ['platform_owner', 'tenant_admin', 'governance_admin'];
-    const adminUsers = await db.select({ id: users.id }).from(users)
-      .where(and(
-        eq(users.organizationId, organizationId),
-        inArray(users.role, adminRoles)
-      ));
-    for (const admin of adminUsers) {
-      const token = await tryUser(admin.id);
-      if (token) return token;
-    }
-
     const anyValid = await storage.getAnyValidDelegatedToken("graph", organizationId);
     if (anyValid) return anyValid.token;
 
+    const { db } = await import("../db");
+    const { graphTokens } = await import("@shared/schema");
+    const { eq, and } = await import("drizzle-orm");
     const orgTokens = await db.select().from(graphTokens)
       .where(and(eq(graphTokens.organizationId, organizationId), eq(graphTokens.service, "graph")))
       .limit(5);
@@ -48,57 +42,27 @@ async function getDelegatedTokenForRetention(currentUserId?: string, organizatio
     }
   }
 
-  if (currentUserId) {
-    const token = await tryUser(currentUserId);
-    if (token) return token;
-  }
-
   return null;
 }
 
 async function getDelegatedSpoTokenForOrg(spoHost: string, currentUserId?: string, organizationId?: string): Promise<string | null> {
+  if (currentUserId) {
+    const token = await getDelegatedSpoToken(currentUserId, spoHost);
+    if (token) return token;
+  }
   if (organizationId) {
     const { db } = await import("../db");
-    const { graphTokens, users } = await import("@shared/schema");
-    const { eq, and, inArray } = await import("drizzle-orm");
-
-    const adminRoles = ['platform_owner', 'tenant_admin', 'governance_admin'];
-    const adminUsers = await db.select({ id: users.id, role: users.role }).from(users)
-      .where(and(
-        eq(users.organizationId, organizationId),
-        inArray(users.role, adminRoles)
-      ));
-    const adminUserIds = adminUsers.map(u => u.id);
-
-    if (adminUserIds.length > 0) {
-      const adminTokens = await db.select().from(graphTokens)
-        .where(and(
-          eq(graphTokens.organizationId, organizationId),
-          eq(graphTokens.service, "graph"),
-          inArray(graphTokens.userId, adminUserIds)
-        ));
-      for (const t of adminTokens) {
-        if (t.refreshToken) {
-          const token = await getDelegatedSpoToken(t.userId, spoHost);
-          if (token) return token;
-        }
-      }
-    }
-
-    const fallbackTokens = await db.select().from(graphTokens)
+    const { graphTokens } = await import("@shared/schema");
+    const { eq, and } = await import("drizzle-orm");
+    const orgTokens = await db.select().from(graphTokens)
       .where(and(eq(graphTokens.organizationId, organizationId), eq(graphTokens.service, "graph")))
       .limit(5);
-    for (const t of fallbackTokens) {
+    for (const t of orgTokens) {
       if (t.refreshToken) {
         const token = await getDelegatedSpoToken(t.userId, spoHost);
         if (token) return token;
       }
     }
-  }
-
-  if (currentUserId) {
-    const token = await getDelegatedSpoToken(currentUserId, spoHost);
-    if (token) return token;
   }
   return null;
 }
@@ -117,14 +81,14 @@ router.get("/api/workspaces/:id", async (req, res) => {
   res.json(workspace);
 });
 
-router.post("/api/workspaces", async (req, res) => {
+router.post("/api/workspaces", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN), async (req, res) => {
   const parsed = insertWorkspaceSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ message: parsed.error.message });
   const workspace = await storage.createWorkspace(parsed.data);
   res.status(201).json(workspace);
 });
 
-router.patch("/api/workspaces/:id", async (req, res) => {
+router.patch("/api/workspaces/:id", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN), async (req: AuthenticatedRequest, res) => {
   const existing = await storage.getWorkspace(req.params.id);
   if (!existing) return res.status(404).json({ message: "Workspace not found" });
 
@@ -164,10 +128,10 @@ router.patch("/api/workspaces/:id", async (req, res) => {
       const connection = await storage.getTenantConnection(existing.tenantConnectionId);
       if (connection && existing.siteUrl) {
         const spoHost = connection.domain.includes('.sharepoint.com') ? connection.domain : `${connection.domain.replace(/\..*$/, '')}.sharepoint.com`;
-        const spoToken = await getDelegatedSpoTokenForOrg(spoHost, req.session?.userId, connection.organizationId);
+        const spoToken = await getDelegatedSpoToken(req.user!.id, spoHost);
         if (!spoToken) {
-          labelSyncResult = { pushed: false, error: "No delegated SPO token available. Please sign out and sign back in with SSO." };
-          console.warn(`[label-push] No delegated SPO token for ${existing.displayName}. Label saved locally.`);
+          labelSyncResult = { pushed: false, error: "Could not acquire a SharePoint token for your account. Please sign out and sign back in with SSO. You must be a SharePoint administrator in the tenant to apply labels." };
+          console.warn(`[label-push] No delegated SPO token for user ${req.user!.email} on ${existing.displayName}. Label saved locally.`);
         } else if (req.body.sensitivityLabelId) {
           const result = await applySensitivityLabelToSite(spoToken, existing.siteUrl, req.body.sensitivityLabelId);
           labelSyncResult = { pushed: result.success, error: result.error };
@@ -204,12 +168,12 @@ router.patch("/api/workspaces/:id", async (req, res) => {
   res.json({ ...workspace, labelSyncResult });
 });
 
-router.delete("/api/workspaces/:id", async (req, res) => {
+router.delete("/api/workspaces/:id", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN), async (req, res) => {
   await storage.deleteWorkspace(req.params.id);
   res.status(204).send();
 });
 
-router.post("/api/workspaces/:id/sync", async (req, res) => {
+router.post("/api/workspaces/:id/sync", requireRole(ZENITH_ROLES.OPERATOR, ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN), async (req, res) => {
   try {
     const workspace = await storage.getWorkspace(req.params.id);
     if (!workspace) return res.status(404).json({ message: "Workspace not found" });
@@ -278,10 +242,17 @@ router.post("/api/workspaces/:id/sync", async (req, res) => {
       spoToken && siteUrl ? fetchSiteLockState(spoToken, siteUrl) : Promise.resolve({ lockState: "Unlock" }),
     ]);
 
+    const warnings: string[] = [];
     const driveOwner = driveResult.status === 'fulfilled' ? driveResult.value : {} as any;
     const siteAnalytics = analyticsResult.status === 'fulfilled' ? analyticsResult.value : {} as any;
     const groupOwners = groupOwnersResult.status === 'fulfilled' ? groupOwnersResult.value : { owners: [] } as any;
     const lockState = lockStateResult.status === 'fulfilled' ? (lockStateResult.value as any).lockState : "Unlock";
+
+    if (driveResult.status === 'rejected') warnings.push("Storage/drive data unavailable — your account may lack read permissions for this site.");
+    if (analyticsResult.status === 'rejected') warnings.push("Analytics data unavailable — Reports.Read.All permission may be missing or your account may lack access.");
+    if (groupOwnersResult.status === 'rejected') warnings.push("Group owners data unavailable — Group.Read.All permission may be missing.");
+    if (lockStateResult.status === 'rejected') warnings.push("Lock state unavailable — SharePoint admin permissions required to read site lock state.");
+    if (!spoToken) warnings.push("No SharePoint delegated token available — some data (lock state, property bags) could not be synced. Sign out and sign back in with SSO.");
 
     updates.ownerDisplayName = driveOwner.ownerDisplayName || workspace.ownerDisplayName || null;
     updates.ownerPrincipalName = driveOwner.ownerEmail || workspace.ownerPrincipalName || null;
@@ -325,14 +296,14 @@ router.post("/api/workspaces/:id/sync", async (req, res) => {
     updates.type = siteType;
 
     const updated = await storage.updateWorkspace(workspace.id, updates);
-    res.json({ success: true, workspace: updated });
+    res.json({ success: true, workspace: updated, warnings: warnings.length > 0 ? warnings : undefined });
   } catch (err: any) {
     console.error("[single-site-sync] Error:", err);
     res.status(500).json({ success: false, error: err.message || "Sync failed" });
   }
 });
 
-router.patch("/api/workspaces/bulk/update", async (req, res) => {
+router.patch("/api/workspaces/bulk/update", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN), async (req, res) => {
   const { ids, updates } = req.body;
   if (!Array.isArray(ids) || ids.length === 0) {
     return res.status(400).json({ message: "ids array is required" });
@@ -341,7 +312,7 @@ router.patch("/api/workspaces/bulk/update", async (req, res) => {
   res.json({ message: "Bulk update complete", count: ids.length });
 });
 
-router.patch("/api/workspaces/bulk/hub-assignment", async (req, res) => {
+router.patch("/api/workspaces/bulk/hub-assignment", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN), async (req, res) => {
   const { workspaceIds, hubSiteId } = req.body;
   if (!Array.isArray(workspaceIds) || workspaceIds.length === 0) {
     return res.status(400).json({ message: "workspaceIds array is required" });
@@ -395,9 +366,9 @@ router.patch("/api/workspaces/bulk/hub-assignment", async (req, res) => {
       }
 
       const spoHost = domain.includes('.sharepoint.com') ? domain : `${domain.replace(/\..*$/, '')}.sharepoint.com`;
-      const spoToken = await getDelegatedSpoTokenForOrg(spoHost, req.session?.userId, connection.organizationId);
+      const spoToken = req.session?.userId ? await getDelegatedSpoToken(req.session.userId, spoHost) : null;
       if (!spoToken) {
-        spoSyncResults.push({ workspaceId: ws.id, displayName: ws.displayName, success: false, error: "No delegated SPO token available. Please sign out and sign back in with SSO." });
+        spoSyncResults.push({ workspaceId: ws.id, displayName: ws.displayName, success: false, error: "No SharePoint token available for your account. You must be a SharePoint administrator and sign in via SSO." });
         continue;
       }
 
@@ -447,7 +418,7 @@ router.get("/api/workspaces/:id/copilot-rules", async (req, res) => {
   res.json(rules);
 });
 
-router.put("/api/workspaces/:id/copilot-rules", async (req, res) => {
+router.put("/api/workspaces/:id/copilot-rules", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN), async (req, res) => {
   const { rules } = req.body;
   if (!Array.isArray(rules)) {
     return res.status(400).json({ message: "rules array is required" });
@@ -468,14 +439,14 @@ router.get("/api/provisioning-requests/:id", async (req, res) => {
   res.json(request);
 });
 
-router.post("/api/provisioning-requests", async (req, res) => {
+router.post("/api/provisioning-requests", requireRole(ZENITH_ROLES.OPERATOR, ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN), async (req, res) => {
   const parsed = insertProvisioningRequestSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ message: parsed.error.message });
   const request = await storage.createProvisioningRequest(parsed.data);
   res.status(201).json(request);
 });
 
-router.patch("/api/provisioning-requests/:id/status", async (req, res) => {
+router.patch("/api/provisioning-requests/:id/status", requireRole(ZENITH_ROLES.TENANT_ADMIN), async (req, res) => {
   const { status } = req.body;
   if (!["PENDING", "APPROVED", "PROVISIONED", "REJECTED"].includes(status)) {
     return res.status(400).json({ message: "Invalid status" });
@@ -499,7 +470,7 @@ router.patch("/api/provisioning-requests/:id/status", async (req, res) => {
 });
 
 // ── Site Inventory Sync ──
-router.post("/api/admin/tenants/:id/sync", async (req, res) => {
+router.post("/api/admin/tenants/:id/sync", requireRole(ZENITH_ROLES.TENANT_ADMIN), async (req, res) => {
   const connection = await storage.getTenantConnection(req.params.id);
   if (!connection) return res.status(404).json({ message: "Tenant connection not found" });
 
@@ -1070,9 +1041,9 @@ async function handleMetadataWriteback(req: any, res: any) {
 
     try {
       const spoHost = conn.domain.includes('.sharepoint.com') ? conn.domain : `${conn.domain.replace(/\..*$/, '')}.sharepoint.com`;
-      const spoToken = await getDelegatedSpoTokenForOrg(spoHost, req.session?.userId, conn.organizationId);
+      const spoToken = req.session?.userId ? await getDelegatedSpoToken(req.session.userId, spoHost) : null;
       if (!spoToken) {
-        results.push({ workspaceId: wsId, displayName: workspace.displayName, success: false, error: "No delegated SPO token available. Please sign out and sign back in with SSO." });
+        results.push({ workspaceId: wsId, displayName: workspace.displayName, success: false, error: "No SharePoint token available for your account. You must be a SharePoint administrator and sign in via SSO." });
         continue;
       }
       const result = await writeSitePropertyBag(spoToken, workspace.siteUrl, properties);
@@ -1087,8 +1058,8 @@ async function handleMetadataWriteback(req: any, res: any) {
   res.json({ succeeded, failed, results });
 }
 
-router.post("/api/workspaces/writeback/department", handleMetadataWriteback);
-router.post("/api/workspaces/writeback/metadata", handleMetadataWriteback);
+router.post("/api/workspaces/writeback/department", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN), handleMetadataWriteback);
+router.post("/api/workspaces/writeback/metadata", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN), handleMetadataWriteback);
 
 router.get("/api/debug/spo-test/:workspaceId", async (req, res) => {
   const workspace = await storage.getWorkspace(req.params.workspaceId);
