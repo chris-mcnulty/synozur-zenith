@@ -3,16 +3,19 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { 
-  Users, 
-  Search, 
-  UserPlus, 
-  ShieldCheck, 
+import {
+  Users,
+  Search,
+  UserPlus,
+  ShieldCheck,
   MoreVertical,
   Mail,
   Key,
-  Loader2
+  Loader2,
+  UserCheck,
+  UserX,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -21,8 +24,35 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
+import { apiRequest, queryClient } from "@/lib/queryClient";
+import { useToast } from "@/hooks/use-toast";
 
 type OrgUser = {
   id: string;
@@ -35,8 +65,18 @@ type OrgUser = {
   createdAt: string | null;
 };
 
+const ZENITH_ROLES = [
+  { value: "platform_owner", label: "Platform Owner", description: "Full platform control" },
+  { value: "tenant_admin", label: "Tenant Admin", description: "Organization management" },
+  { value: "governance_admin", label: "Governance Admin", description: "Governance & compliance" },
+  { value: "operator", label: "Operator", description: "Day-to-day operations" },
+  { value: "viewer", label: "Viewer", description: "Read-only access" },
+  { value: "read_only_auditor", label: "Read-Only Auditor", description: "Audit trail access" },
+];
+
 function getRoleDisplay(role: string): string {
-  return role.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+  const found = ZENITH_ROLES.find(r => r.value === role);
+  return found?.label || role.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
 }
 
 function getInitials(name: string | null, email: string): string {
@@ -50,8 +90,20 @@ function isAdminRole(role: string): boolean {
 
 export default function UserManagementPage() {
   const [searchTerm, setSearchTerm] = useState("");
+  const [addUserOpen, setAddUserOpen] = useState(false);
+  const [editRoleOpen, setEditRoleOpen] = useState(false);
+  const [deactivateOpen, setDeactivateOpen] = useState(false);
+  const [reactivateOpen, setReactivateOpen] = useState(false);
+  const [selectedUser, setSelectedUser] = useState<OrgUser | null>(null);
 
-  const { data: authData } = useQuery<{ user: { organizationId: string }; organization: { name: string } | null }>({
+  const [newUserEmail, setNewUserEmail] = useState("");
+  const [newUserName, setNewUserName] = useState("");
+  const [newUserRole, setNewUserRole] = useState("viewer");
+  const [editRole, setEditRole] = useState("");
+
+  const { toast } = useToast();
+
+  const { data: authData } = useQuery<{ user: { organizationId: string; role: string }; organization: { name: string } | null }>({
     queryKey: ["/api/auth/me"],
     queryFn: () => fetch("/api/auth/me", { credentials: "include" }).then(r => r.ok ? r.json() : null),
   });
@@ -61,7 +113,86 @@ export default function UserManagementPage() {
     queryFn: () => fetch("/api/auth/users", { credentials: "include" }).then(r => r.ok ? r.json() : []),
   });
 
+  const canManageUsers = authData?.user && ["platform_owner", "tenant_admin"].includes(authData.user.role);
   const orgName = authData?.organization?.name || "your organization";
+
+  const addUserMutation = useMutation({
+    mutationFn: async (data: { email: string; name: string; role: string }) => {
+      const res = await apiRequest("POST", "/api/auth/users/add", data);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/auth/users"] });
+      setAddUserOpen(false);
+      setNewUserEmail("");
+      setNewUserName("");
+      setNewUserRole("viewer");
+      toast({ title: "User added", description: "The user has been added to your organization." });
+    },
+    onError: (error: Error) => {
+      const msg = error.message.includes(":") ? error.message.split(":").slice(1).join(":").trim() : error.message;
+      let parsed = msg;
+      try { parsed = JSON.parse(msg).error || msg; } catch {}
+      toast({ title: "Failed to add user", description: parsed, variant: "destructive" });
+    },
+  });
+
+  const editRoleMutation = useMutation({
+    mutationFn: async ({ userId, role }: { userId: string; role: string }) => {
+      const res = await apiRequest("PATCH", `/api/auth/users/${userId}/role`, { role });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/auth/users"] });
+      setEditRoleOpen(false);
+      setSelectedUser(null);
+      toast({ title: "Role updated", description: "The user's role has been changed." });
+    },
+    onError: (error: Error) => {
+      const msg = error.message.includes(":") ? error.message.split(":").slice(1).join(":").trim() : error.message;
+      let parsed = msg;
+      try { parsed = JSON.parse(msg).error || msg; } catch {}
+      toast({ title: "Failed to update role", description: parsed, variant: "destructive" });
+    },
+  });
+
+  const deactivateMutation = useMutation({
+    mutationFn: async (userId: string) => {
+      const res = await apiRequest("PATCH", `/api/auth/users/${userId}/deactivate`);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/auth/users"] });
+      setDeactivateOpen(false);
+      setSelectedUser(null);
+      toast({ title: "User deactivated", description: "The user has been deactivated." });
+    },
+    onError: (error: Error) => {
+      const msg = error.message.includes(":") ? error.message.split(":").slice(1).join(":").trim() : error.message;
+      let parsed = msg;
+      try { parsed = JSON.parse(msg).error || msg; } catch {}
+      toast({ title: "Failed to deactivate user", description: parsed, variant: "destructive" });
+    },
+  });
+
+  const reactivateMutation = useMutation({
+    mutationFn: async (userId: string) => {
+      const res = await apiRequest("PATCH", `/api/auth/users/${userId}/reactivate`);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/auth/users"] });
+      setReactivateOpen(false);
+      setSelectedUser(null);
+      toast({ title: "User reactivated", description: "The user has been reactivated." });
+    },
+    onError: (error: Error) => {
+      const msg = error.message.includes(":") ? error.message.split(":").slice(1).join(":").trim() : error.message;
+      let parsed = msg;
+      try { parsed = JSON.parse(msg).error || msg; } catch {}
+      toast({ title: "Failed to reactivate user", description: parsed, variant: "destructive" });
+    },
+  });
 
   const filteredUsers = users.filter(u => {
     if (!searchTerm) return true;
@@ -80,16 +211,18 @@ export default function UserManagementPage() {
           <h1 className="text-3xl font-bold tracking-tight" data-testid="text-page-title">User Management</h1>
           <p className="text-muted-foreground mt-1">Manage users, roles, and access for {orgName}.</p>
         </div>
-        <div className="flex gap-3">
-          <Button variant="outline" className="gap-2" data-testid="button-invite-users">
-            <Mail className="w-4 h-4" />
-            Invite Users
-          </Button>
-          <Button className="gap-2 shadow-md shadow-primary/20" data-testid="button-add-user">
-            <UserPlus className="w-4 h-4" />
-            Add User
-          </Button>
-        </div>
+        {canManageUsers && (
+          <div className="flex gap-3">
+            <Button
+              className="gap-2 shadow-md shadow-primary/20"
+              onClick={() => setAddUserOpen(true)}
+              data-testid="button-add-user"
+            >
+              <UserPlus className="w-4 h-4" />
+              Add User
+            </Button>
+          </div>
+        )}
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
@@ -158,7 +291,7 @@ export default function UserManagementPage() {
                 <TableHead>Role</TableHead>
                 <TableHead>Auth Provider</TableHead>
                 <TableHead>Status</TableHead>
-                <TableHead className="w-[50px]"></TableHead>
+                {canManageUsers && <TableHead className="w-[50px]"></TableHead>}
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -197,21 +330,45 @@ export default function UserManagementPage() {
                       {user.emailVerified ? 'Active' : 'Pending'}
                     </Badge>
                   </TableCell>
-                  <TableCell>
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Button variant="ghost" size="icon" className="h-8 w-8" data-testid={`button-user-actions-${user.id}`}>
-                          <MoreVertical className="w-4 h-4 text-muted-foreground" />
-                        </Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end">
-                        <DropdownMenuItem>Edit Roles</DropdownMenuItem>
-                        <DropdownMenuItem>Reset Password</DropdownMenuItem>
-                        <DropdownMenuSeparator />
-                        <DropdownMenuItem className="text-destructive">Deactivate User</DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  </TableCell>
+                  {canManageUsers && (
+                    <TableCell>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button variant="ghost" size="icon" className="h-8 w-8" data-testid={`button-user-actions-${user.id}`}>
+                            <MoreVertical className="w-4 h-4 text-muted-foreground" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          <DropdownMenuItem
+                            onClick={() => { setSelectedUser(user); setEditRole(user.role); setEditRoleOpen(true); }}
+                            data-testid={`button-edit-role-${user.id}`}
+                          >
+                            <ShieldCheck className="w-4 h-4 mr-2" />
+                            Edit Role
+                          </DropdownMenuItem>
+                          <DropdownMenuSeparator />
+                          {user.emailVerified ? (
+                            <DropdownMenuItem
+                              className="text-destructive"
+                              onClick={() => { setSelectedUser(user); setDeactivateOpen(true); }}
+                              data-testid={`button-deactivate-${user.id}`}
+                            >
+                              <UserX className="w-4 h-4 mr-2" />
+                              Deactivate User
+                            </DropdownMenuItem>
+                          ) : (
+                            <DropdownMenuItem
+                              onClick={() => { setSelectedUser(user); setReactivateOpen(true); }}
+                              data-testid={`button-reactivate-${user.id}`}
+                            >
+                              <UserCheck className="w-4 h-4 mr-2" />
+                              Reactivate User
+                            </DropdownMenuItem>
+                          )}
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </TableCell>
+                  )}
                 </TableRow>
               ))}
             </TableBody>
@@ -219,6 +376,167 @@ export default function UserManagementPage() {
           )}
         </CardContent>
       </Card>
+
+      <Dialog open={addUserOpen} onOpenChange={setAddUserOpen}>
+        <DialogContent className="sm:max-w-[425px]">
+          <DialogHeader>
+            <DialogTitle>Add User</DialogTitle>
+            <DialogDescription>
+              Add a new user to {orgName}. They will receive a temporary password and can set their own on first login.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4 py-4">
+            <div className="grid gap-2">
+              <Label htmlFor="add-email">Email</Label>
+              <Input
+                id="add-email"
+                type="email"
+                placeholder="user@example.com"
+                value={newUserEmail}
+                onChange={(e) => setNewUserEmail(e.target.value)}
+                data-testid="input-add-user-email"
+              />
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="add-name">Name (optional)</Label>
+              <Input
+                id="add-name"
+                placeholder="Jane Doe"
+                value={newUserName}
+                onChange={(e) => setNewUserName(e.target.value)}
+                data-testid="input-add-user-name"
+              />
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="add-role">Role</Label>
+              <Select value={newUserRole} onValueChange={setNewUserRole}>
+                <SelectTrigger data-testid="select-add-user-role">
+                  <SelectValue placeholder="Select a role" />
+                </SelectTrigger>
+                <SelectContent>
+                  {ZENITH_ROLES.filter(r => r.value !== 'platform_owner' || authData?.user?.role === 'platform_owner').map((role) => (
+                    <SelectItem key={role.value} value={role.value} data-testid={`option-role-${role.value}`}>
+                      <div className="flex flex-col">
+                        <span>{role.label}</span>
+                        <span className="text-xs text-muted-foreground">{role.description}</span>
+                      </div>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setAddUserOpen(false)} data-testid="button-cancel-add-user">
+              Cancel
+            </Button>
+            <Button
+              onClick={() => addUserMutation.mutate({ email: newUserEmail, name: newUserName, role: newUserRole })}
+              disabled={!newUserEmail || addUserMutation.isPending}
+              data-testid="button-confirm-add-user"
+            >
+              {addUserMutation.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+              Add User
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={editRoleOpen} onOpenChange={setEditRoleOpen}>
+        <DialogContent className="sm:max-w-[425px]">
+          <DialogHeader>
+            <DialogTitle>Edit Role</DialogTitle>
+            <DialogDescription>
+              Change the role for {selectedUser?.name || selectedUser?.email}.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4 py-4">
+            <div className="grid gap-2">
+              <Label>Current Role</Label>
+              <Badge variant="outline" className="w-fit">{getRoleDisplay(selectedUser?.role || '')}</Badge>
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="edit-role">New Role</Label>
+              <Select value={editRole} onValueChange={setEditRole}>
+                <SelectTrigger data-testid="select-edit-role">
+                  <SelectValue placeholder="Select a role" />
+                </SelectTrigger>
+                <SelectContent>
+                  {ZENITH_ROLES.filter(r => r.value !== 'platform_owner' || authData?.user?.role === 'platform_owner').map((role) => (
+                    <SelectItem key={role.value} value={role.value} data-testid={`option-edit-role-${role.value}`}>
+                      <div className="flex flex-col">
+                        <span>{role.label}</span>
+                        <span className="text-xs text-muted-foreground">{role.description}</span>
+                      </div>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEditRoleOpen(false)} data-testid="button-cancel-edit-role">
+              Cancel
+            </Button>
+            <Button
+              onClick={() => selectedUser && editRoleMutation.mutate({ userId: selectedUser.id, role: editRole })}
+              disabled={!editRole || editRole === selectedUser?.role || editRoleMutation.isPending}
+              data-testid="button-confirm-edit-role"
+            >
+              {editRoleMutation.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+              Save Role
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <AlertDialog open={deactivateOpen} onOpenChange={setDeactivateOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Deactivate User</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to deactivate <strong>{selectedUser?.name || selectedUser?.email}</strong>?
+              They will lose access to {orgName} immediately.
+              This action can be reversed by reactivating the user.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel data-testid="button-cancel-deactivate">Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => selectedUser && deactivateMutation.mutate(selectedUser.id)}
+              disabled={deactivateMutation.isPending}
+              data-testid="button-confirm-deactivate"
+            >
+              {deactivateMutation.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+              Deactivate
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={reactivateOpen} onOpenChange={setReactivateOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Reactivate User</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to reactivate <strong>{selectedUser?.name || selectedUser?.email}</strong>?
+              They will regain access to {orgName} with their current role.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel data-testid="button-cancel-reactivate">Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => selectedUser && reactivateMutation.mutate(selectedUser.id)}
+              disabled={reactivateMutation.isPending}
+              data-testid="button-confirm-reactivate"
+            >
+              {reactivateMutation.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+              Reactivate
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

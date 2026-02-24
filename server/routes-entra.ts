@@ -4,6 +4,7 @@ import { storage } from './storage';
 import { encryptToken, isEncryptionConfigured } from './utils/encryption';
 import type { AuthenticatedRequest } from './middleware/rbac';
 import { ZENITH_ROLES } from '@shared/schema';
+import { isPublicEmailDomain } from './utils/publicDomains';
 
 const router = Router();
 const cryptoProvider = new CryptoProvider();
@@ -317,6 +318,11 @@ router.get('/callback', async (req: AuthenticatedRequest, res: Response) => {
     let user = await storage.getUserByEmail(email);
 
     if (user) {
+      if (!user.emailVerified) {
+        console.warn(`[Entra] Deactivated user attempted SSO login: ${email}`);
+        return res.redirect('/login?error=account_deactivated');
+      }
+
       const updates: Record<string, any> = {
         authProvider: 'entra',
         lastLoginAt: new Date(),
@@ -331,18 +337,30 @@ router.get('/callback', async (req: AuthenticatedRequest, res: Response) => {
       user = (await storage.getUser(user.id))!;
     } else {
       const domain = email.split('@')[1].toLowerCase();
+      const isPublicDomain = isPublicEmailDomain(email);
       const orgs = await storage.getOrganizations();
       let org = orgs.find(o => o.azureTenantId === azureTenantId) ||
-                orgs.find(o => o.domain === domain);
+                (!isPublicDomain ? orgs.find(o => o.domain === domain) : undefined);
       let isFirstUser = false;
 
       if (!org) {
-        org = await storage.upsertOrganization({
-          name: domain.split('.')[0].charAt(0).toUpperCase() + domain.split('.')[0].slice(1),
-          domain,
-          servicePlan: 'TRIAL',
-          azureTenantId: azureTenantId || undefined,
-        });
+        if (isPublicDomain) {
+          const personalOrgName = name
+            ? `${name}'s Workspace`
+            : `${email.split('@')[0]}'s Workspace`;
+          org = await storage.upsertOrganization({
+            name: personalOrgName,
+            domain: `personal-${email.split('@')[0].replace(/[^a-z0-9]/gi, '')}-${Date.now()}`,
+            servicePlan: 'TRIAL',
+          });
+        } else {
+          org = await storage.upsertOrganization({
+            name: domain.split('.')[0].charAt(0).toUpperCase() + domain.split('.')[0].slice(1),
+            domain,
+            servicePlan: 'TRIAL',
+            azureTenantId: azureTenantId || undefined,
+          });
+        }
         isFirstUser = true;
       } else {
         const orgUsers = await storage.getUsersByOrganization(org.id);
