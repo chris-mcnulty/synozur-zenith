@@ -42,7 +42,8 @@ import {
   Network,
   Unlink,
   Trash2,
-  RefreshCw
+  RefreshCw,
+  Archive
 } from "lucide-react";
 
 type DataDictEntry = { id: string; tenantId: string; category: string; value: string; createdAt: string };
@@ -354,7 +355,12 @@ export default function WorkspaceDetailsPage() {
                   <Trash2 className="w-3 h-3" /> Deleted
                 </Badge>
               )}
-              {!workspace.isDeleted && workspace.lockState && workspace.lockState !== "Unlock" && (
+              {workspace.isArchived && (
+                <Badge variant="outline" className="text-xs text-indigo-600 bg-indigo-500/10 border-indigo-500/20 gap-1" data-testid="badge-archived">
+                  <Archive className="w-3 h-3" /> Archived
+                </Badge>
+              )}
+              {!workspace.isDeleted && !workspace.isArchived && workspace.lockState && workspace.lockState !== "Unlock" && (
                 <Badge variant="outline" className="text-xs text-amber-600 bg-amber-500/10 border-amber-500/20 gap-1">
                   <Lock className="w-3 h-3" /> {workspace.lockState === "NoAccess" ? "Locked" : workspace.lockState === "ReadOnly" ? "Read-Only" : workspace.lockState}
                 </Badge>
@@ -425,7 +431,19 @@ export default function WorkspaceDetailsPage() {
         </div>
       )}
 
-      {!workspace.isDeleted && workspace.lockState && workspace.lockState !== "Unlock" && (
+      {workspace.isArchived && (
+        <div className="flex items-center gap-3 p-4 rounded-xl bg-indigo-500/10 border border-indigo-500/20 text-indigo-600 dark:text-indigo-400" data-testid="banner-archived">
+          <Archive className="w-5 h-5 shrink-0" />
+          <div>
+            <p className="font-semibold text-sm">This site is archived (M365 Archive)</p>
+            <p className="text-xs text-indigo-600/80 dark:text-indigo-400/80 mt-0.5">
+              Archived sites are read-only and stored at reduced cost. A SharePoint administrator can reactivate this site from the SharePoint admin center.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {!workspace.isDeleted && !workspace.isArchived && workspace.lockState && workspace.lockState !== "Unlock" && (
         <div className="flex items-center gap-3 p-4 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-600 dark:text-amber-500" data-testid="banner-locked">
           <Lock className="w-5 h-5 shrink-0" />
           <div>
@@ -578,6 +596,8 @@ export default function WorkspaceDetailsPage() {
                       <div className="h-10 flex items-center gap-2 px-3 rounded-md bg-muted/50 text-sm" data-testid="text-site-status">
                         {workspace.isDeleted ? (
                           <Badge variant="destructive" className="text-xs">Deleted</Badge>
+                        ) : workspace.isArchived ? (
+                          <Badge variant="outline" className="bg-indigo-500/10 text-indigo-600 border-indigo-500/20 text-xs">Archived</Badge>
                         ) : !workspace.lockState || workspace.lockState === "Unlock" ? (
                           <Badge variant="outline" className="bg-emerald-500/10 text-emerald-600 border-emerald-500/20 text-xs">Active</Badge>
                         ) : workspace.lockState === "NoAccess" ? (

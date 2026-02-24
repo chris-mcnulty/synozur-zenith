@@ -239,14 +239,16 @@ router.post("/api/workspaces/:id/sync", requireRole(ZENITH_ROLES.OPERATOR, ZENIT
       fetchSiteDriveOwner(token, graphSiteId),
       fetchSiteAnalytics(token, graphSiteId),
       fetchSiteGroupOwners(token, graphSiteId),
-      spoToken && siteUrl ? fetchSiteLockState(spoToken, siteUrl) : Promise.resolve({ lockState: "Unlock" }),
+      spoToken && siteUrl ? fetchSiteLockState(spoToken, siteUrl) : Promise.resolve({ lockState: "Unlock", isArchived: false }),
     ]);
 
     const warnings: string[] = [];
     const driveOwner = driveResult.status === 'fulfilled' ? driveResult.value : {} as any;
     const siteAnalytics = analyticsResult.status === 'fulfilled' ? analyticsResult.value : {} as any;
     const groupOwners = groupOwnersResult.status === 'fulfilled' ? groupOwnersResult.value : { owners: [] } as any;
-    const lockState = lockStateResult.status === 'fulfilled' ? (lockStateResult.value as any).lockState : "Unlock";
+    const lockStateData = lockStateResult.status === 'fulfilled' ? lockStateResult.value as any : { lockState: "Unlock", isArchived: false };
+    const lockState = lockStateData.lockState;
+    const isArchived = lockStateData.isArchived === true;
 
     if (driveResult.status === 'rejected') warnings.push("Storage/drive data unavailable — your account may lack read permissions for this site.");
     if (analyticsResult.status === 'rejected') warnings.push("Analytics data unavailable — Reports.Read.All permission may be missing or your account may lack access.");
@@ -274,6 +276,7 @@ router.post("/api/workspaces/:id/sync", requireRole(ZENITH_ROLES.OPERATOR, ZENIT
     updates.lastActivityDate = activityDate;
 
     updates.lockState = lockState;
+    updates.isArchived = isArchived;
     updates.isDeleted = false;
 
     if (storageUsed != null) {
@@ -540,7 +543,7 @@ router.post("/api/admin/tenants/:id/sync", requireRole(ZENITH_ROLES.TENANT_ADMIN
     }
 
     const BATCH_SIZE = 5;
-    const enrichCache = new Map<string, { driveOwner: any; analytics: any; groupOwners: any; lockState?: string }>();
+    const enrichCache = new Map<string, { driveOwner: any; analytics: any; groupOwners: any; lockState?: string; isArchived?: boolean }>();
 
     if (token) {
       for (let i = 0; i < siteResult.sites.length; i += BATCH_SIZE) {
@@ -555,20 +558,22 @@ router.post("/api/admin/tenants/:id/sync", requireRole(ZENITH_ROLES.TENANT_ADMIN
               fetchSiteDriveOwner(token!, site.id),
               fetchSiteAnalytics(token!, site.id),
               fetchSiteGroupOwners(token!, site.id),
-              spoToken && siteUrl ? fetchSiteLockState(spoToken, siteUrl) : Promise.resolve({ lockState: "Unlock" }),
+              spoToken && siteUrl ? fetchSiteLockState(spoToken, siteUrl) : Promise.resolve({ lockState: "Unlock", isArchived: false }),
             ]);
+            const lockData = lockStateResult.status === 'fulfilled' ? lockStateResult.value : { lockState: "Unlock", isArchived: false };
             return {
               siteId: site.id,
               driveOwner: driveResult.status === 'fulfilled' ? driveResult.value : {},
               analytics: analyticsResult.status === 'fulfilled' ? analyticsResult.value : {},
               groupOwners: groupOwnersResult.status === 'fulfilled' ? groupOwnersResult.value : { owners: [] },
-              lockState: lockStateResult.status === 'fulfilled' ? lockStateResult.value.lockState : "Unlock",
+              lockState: lockData.lockState,
+              isArchived: lockData.isArchived === true,
             };
           })
         );
         for (const r of results) {
           if (r.status === 'fulfilled') {
-            enrichCache.set(r.value.siteId, { driveOwner: r.value.driveOwner, analytics: r.value.analytics, groupOwners: r.value.groupOwners, lockState: r.value.lockState });
+            enrichCache.set(r.value.siteId, { driveOwner: r.value.driveOwner, analytics: r.value.analytics, groupOwners: r.value.groupOwners, lockState: r.value.lockState, isArchived: r.value.isArchived });
           }
         }
       }
@@ -599,7 +604,7 @@ router.post("/api/admin/tenants/:id/sync", requireRole(ZENITH_ROLES.TENANT_ADMIN
       }
       if (usage) usageMatched++;
 
-      const enriched = enrichCache.get(site.id) || { driveOwner: {}, analytics: {}, groupOwners: { owners: [] }, lockState: undefined };
+      const enriched = enrichCache.get(site.id) || { driveOwner: {}, analytics: {}, groupOwners: { owners: [] }, lockState: undefined, isArchived: false };
       const driveOwner = enriched.driveOwner;
       const siteAnalytics = enriched.analytics;
       const groupOwners = enriched.groupOwners;
@@ -649,6 +654,7 @@ router.post("/api/admin/tenants/:id/sync", requireRole(ZENITH_ROLES.TENANT_ADMIN
       }
 
       workspaceData.lockState = enriched.lockState || "Unlock";
+      workspaceData.isArchived = enriched.isArchived === true;
 
       if (storageUsed != null) {
         const usedMB = Math.round(storageUsed / (1024 * 1024));

@@ -46,6 +46,7 @@ export const workspaces = pgTable("workspaces", {
   sensitivityLabelId: text("sensitivity_label_id"),
   retentionLabelId: text("retention_label_id"),
   rootWebTemplate: text("root_web_template"),
+  isArchived: boolean("is_archived").default(false),
   isDeleted: boolean("is_deleted").default(false),
   siteCreatedDate: text("site_created_date"),
   reportRefreshDate: text("report_refresh_date"),

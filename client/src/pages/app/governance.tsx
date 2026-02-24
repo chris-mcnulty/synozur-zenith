@@ -441,12 +441,12 @@ export default function GovernancePage() {
     if (filterStatus !== "all") {
       result = result.filter(ws => {
         const state = ws.lockState || "Unlock";
-        if (filterStatus === "active") return state === "Unlock" && !ws.isDeleted;
+        if (filterStatus === "active") return state === "Unlock" && !ws.isDeleted && !ws.isArchived;
         if (filterStatus === "locked") return state === "NoAccess";
         if (filterStatus === "readonly") return state === "ReadOnly";
         if (filterStatus === "noadd") return state === "NoAdditions";
         if (filterStatus === "deleted") return ws.isDeleted === true;
-        if (filterStatus === "archived") return state !== "Unlock";
+        if (filterStatus === "archived") return ws.isArchived === true;
         return true;
       });
     }
@@ -648,7 +648,10 @@ export default function GovernancePage() {
                 {ws.isDeleted && (
                   <span className="text-[10px] font-semibold text-destructive bg-destructive/10 px-1.5 py-0.5 rounded">Deleted</span>
                 )}
-                {ws.lockState && ws.lockState !== "Unlock" && (
+                {ws.isArchived && (
+                  <span className="text-[10px] font-semibold text-indigo-600 bg-indigo-500/10 px-1.5 py-0.5 rounded" data-testid={`badge-archived-${ws.id}`}>Archived</span>
+                )}
+                {!ws.isArchived && ws.lockState && ws.lockState !== "Unlock" && (
                   <span className="text-[10px] font-semibold text-amber-600 bg-amber-500/10 px-1.5 py-0.5 rounded">
                     {ws.lockState === "NoAccess" ? "Locked" : ws.lockState === "ReadOnly" ? "Read-Only" : ws.lockState}
                   </span>
@@ -1368,7 +1371,7 @@ export default function GovernancePage() {
                 <SelectContent>
                   <SelectItem value="all">All Statuses</SelectItem>
                   <SelectItem value="active">Active</SelectItem>
-                  <SelectItem value="archived">Archived (Any Lock)</SelectItem>
+                  <SelectItem value="archived">Archived</SelectItem>
                   <SelectItem value="readonly">Read-Only</SelectItem>
                   <SelectItem value="locked">Locked (No Access)</SelectItem>
                   <SelectItem value="noadd">No Additions</SelectItem>

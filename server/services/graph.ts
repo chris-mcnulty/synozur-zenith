@@ -358,9 +358,10 @@ export async function leaveHubSite(spoToken: string, siteUrl: string): Promise<{
 
 export async function fetchSiteLockState(spoToken: string, siteUrl: string): Promise<{
   lockState: string;
+  isArchived: boolean;
   error?: string;
 }> {
-  const url = `${siteUrl.replace(/\/+$/, '')}/_api/site?$select=ReadOnly,WriteLocked,LockIssue`;
+  const url = `${siteUrl.replace(/\/+$/, '')}/_api/site?$select=ReadOnly,WriteLocked,LockIssue,IsArchived`;
   try {
     const res = await fetch(url, {
       headers: {
@@ -370,25 +371,31 @@ export async function fetchSiteLockState(spoToken: string, siteUrl: string): Pro
     });
 
     if (res.status === 403 || res.status === 401) {
-      return { lockState: "Unlock", error: `Permission denied (${res.status}) — cannot determine lock state` };
+      return { lockState: "Unlock", isArchived: false, error: `Permission denied (${res.status}) — cannot determine lock state` };
     }
 
     if (!res.ok) {
-      return { lockState: "Unlock", error: `API ${res.status}` };
+      return { lockState: "Unlock", isArchived: false, error: `API ${res.status}` };
     }
 
     const data = await res.json();
+    const isArchived = data.IsArchived === true;
+
+    if (isArchived) {
+      console.log(`[lock-state] ${siteUrl} → Archived`);
+      return { lockState: data.ReadOnly ? "ReadOnly" : "Unlock", isArchived: true };
+    }
     if (data.ReadOnly === true) {
       console.log(`[lock-state] ${siteUrl} → ReadOnly`);
-      return { lockState: "ReadOnly" };
+      return { lockState: "ReadOnly", isArchived: false };
     }
     if (data.WriteLocked === true) {
       console.log(`[lock-state] ${siteUrl} → NoAdditions (WriteLocked)`);
-      return { lockState: "NoAdditions" };
+      return { lockState: "NoAdditions", isArchived: false };
     }
-    return { lockState: "Unlock" };
+    return { lockState: "Unlock", isArchived: false };
   } catch (err: any) {
-    return { lockState: "Unlock", error: err.message };
+    return { lockState: "Unlock", isArchived: false, error: err.message };
   }
 }
 
