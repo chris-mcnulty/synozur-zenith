@@ -1,28 +1,107 @@
+import { useState, useEffect } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
+import { useToast } from "@/hooks/use-toast";
 import { 
   Building2, 
   Save, 
   ShieldCheck, 
   Globe, 
   CreditCard,
-  Bell
+  X,
+  Plus,
+  Loader2,
+  UserPlus,
+  Lock
 } from "lucide-react";
 import { Link } from "wouter";
 import { useServicePlan } from "@/hooks/use-service-plan";
-import { PLAN_FEATURES } from "@shared/schema";
+import { useQuery, useMutation } from "@tanstack/react-query";
+import { queryClient } from "@/lib/queryClient";
 
 export default function OrganizationSettingsPage() {
   const { plan, features, org } = useServicePlan();
+  const { toast } = useToast();
+
+  const { data: authData } = useQuery<{
+    user: any;
+    organization: { id: string; name: string; domain: string; allowedDomains: string[] | null; inviteOnly: boolean | null } | null;
+  }>({
+    queryKey: ["/api/auth/me"],
+    queryFn: () => fetch("/api/auth/me", { credentials: "include" }).then(r => r.ok ? r.json() : null),
+    staleTime: 5 * 60 * 1000,
+  });
+
+  const activeOrg = authData?.organization;
+
+  const [inviteOnly, setInviteOnly] = useState(false);
+  const [allowedDomains, setAllowedDomains] = useState<string[]>([]);
+  const [newDomain, setNewDomain] = useState("");
+
+  useEffect(() => {
+    if (activeOrg) {
+      setInviteOnly(activeOrg.inviteOnly ?? false);
+      setAllowedDomains(activeOrg.allowedDomains ?? []);
+    }
+  }, [activeOrg]);
+
+  const settingsMutation = useMutation({
+    mutationFn: async (updates: { allowedDomains?: string[]; inviteOnly?: boolean }) => {
+      if (!activeOrg) throw new Error("No active organization");
+      const res = await fetch(`/api/orgs/${activeOrg.id}/settings`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify(updates),
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || "Failed to update settings");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
+      toast({ title: "Settings updated", description: "Organization access settings have been saved." });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const handleAddDomain = () => {
+    const domain = newDomain.toLowerCase().trim();
+    if (!domain) return;
+    if (allowedDomains.includes(domain)) {
+      toast({ title: "Domain already exists", variant: "destructive" });
+      return;
+    }
+    const updated = [...allowedDomains, domain];
+    setAllowedDomains(updated);
+    setNewDomain("");
+    settingsMutation.mutate({ allowedDomains: updated });
+  };
+
+  const handleRemoveDomain = (domain: string) => {
+    const updated = allowedDomains.filter(d => d !== domain);
+    setAllowedDomains(updated);
+    settingsMutation.mutate({ allowedDomains: updated });
+  };
+
+  const handleInviteOnlyToggle = (checked: boolean) => {
+    setInviteOnly(checked);
+    settingsMutation.mutate({ inviteOnly: checked });
+  };
+
   return (
     <div className="space-y-6 animate-in fade-in duration-500 pb-12">
       <div>
         <h1 className="text-3xl font-bold tracking-tight">Organization Settings</h1>
-        <p className="text-muted-foreground mt-1">Manage profile, security, and preferences for The Synozur Alliance.</p>
+        <p className="text-muted-foreground mt-1">Manage profile, security, and preferences for {activeOrg?.name || 'your organization'}.</p>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
@@ -39,15 +118,15 @@ export default function OrganizationSettingsPage() {
               <div className="grid grid-cols-2 gap-6">
                 <div className="space-y-2 col-span-2 sm:col-span-1">
                   <Label>Organization Name</Label>
-                  <Input defaultValue="The Synozur Alliance" className="bg-background/50" />
+                  <Input defaultValue={activeOrg?.name || ""} className="bg-background/50" data-testid="input-org-name" />
                 </div>
                 <div className="space-y-2 col-span-2 sm:col-span-1">
                   <Label>Primary Domain</Label>
-                  <Input defaultValue="synozur.demo" disabled className="bg-muted/50" />
+                  <Input value={activeOrg?.domain || ""} disabled className="bg-muted/50" data-testid="text-org-domain" />
                 </div>
                 <div className="space-y-2 col-span-2">
                   <Label>Support Email</Label>
-                  <Input defaultValue="it-support@synozur.demo" className="bg-background/50" />
+                  <Input defaultValue={`it-support@${activeOrg?.domain || "example.com"}`} className="bg-background/50" />
                 </div>
               </div>
             </CardContent>
@@ -56,6 +135,93 @@ export default function OrganizationSettingsPage() {
                 <Save className="w-4 h-4" /> Save Profile
               </Button>
             </CardFooter>
+          </Card>
+
+          <Card className="glass-panel border-border/50 shadow-xl">
+            <CardHeader className="border-b border-border/40 bg-muted/10 pb-4">
+              <CardTitle className="flex items-center gap-2">
+                <UserPlus className="w-5 h-5 text-blue-500" />
+                Membership & Access Controls
+              </CardTitle>
+              <CardDescription>Control how users join this organization.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-6 pt-6">
+              <div className="flex items-center justify-between p-4 rounded-xl border border-border/50 bg-background/50">
+                <div>
+                  <h4 className="font-semibold text-sm flex items-center gap-2">
+                    <Lock className="w-4 h-4 text-amber-500" />
+                    Invite Only
+                  </h4>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    When enabled, new users cannot self-join this organization. They must be invited by an admin.
+                  </p>
+                </div>
+                <Switch
+                  checked={inviteOnly}
+                  onCheckedChange={handleInviteOnlyToggle}
+                  disabled={settingsMutation.isPending}
+                  data-testid="switch-invite-only"
+                />
+              </div>
+
+              <div className="p-4 rounded-xl border border-border/50 bg-background/50 space-y-4">
+                <div>
+                  <h4 className="font-semibold text-sm flex items-center gap-2">
+                    <Globe className="w-4 h-4 text-blue-500" />
+                    Allowed Email Domains
+                  </h4>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Only users with email addresses matching these domains can join. Leave empty to allow any domain.
+                  </p>
+                </div>
+
+                <div className="flex gap-2">
+                  <Input
+                    placeholder="e.g. contoso.com"
+                    value={newDomain}
+                    onChange={(e) => setNewDomain(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && handleAddDomain()}
+                    className="bg-background"
+                    data-testid="input-allowed-domain"
+                  />
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleAddDomain}
+                    disabled={!newDomain.trim() || settingsMutation.isPending}
+                    className="shrink-0"
+                    data-testid="button-add-domain"
+                  >
+                    {settingsMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+                  </Button>
+                </div>
+
+                {allowedDomains.length > 0 ? (
+                  <div className="flex flex-wrap gap-2">
+                    {allowedDomains.map((domain) => (
+                      <Badge
+                        key={domain}
+                        variant="secondary"
+                        className="gap-1 pr-1 text-xs"
+                        data-testid={`badge-domain-${domain}`}
+                      >
+                        {domain}
+                        <button
+                          onClick={() => handleRemoveDomain(domain)}
+                          className="ml-1 rounded-full p-0.5 hover:bg-destructive/20 transition-colors"
+                          disabled={settingsMutation.isPending}
+                          data-testid={`button-remove-domain-${domain}`}
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      </Badge>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-xs text-muted-foreground italic">No domain restrictions — any email domain is allowed.</p>
+                )}
+              </div>
+            </CardContent>
           </Card>
 
           <Card className="glass-panel border-border/50 shadow-xl">

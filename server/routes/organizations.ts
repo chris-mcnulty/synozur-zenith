@@ -1,0 +1,313 @@
+import { Router } from 'express';
+import { storage } from '../storage';
+import { AuthenticatedRequest, requireAuth, requirePermission } from '../middleware/rbac';
+import { ZENITH_ROLES, type ZenithRole } from '@shared/schema';
+
+const router = Router();
+
+const VALID_ROLES: ZenithRole[] = Object.values(ZENITH_ROLES);
+
+router.get('/api/orgs/mine', requireAuth(), async (req: AuthenticatedRequest, res) => {
+  try {
+    const user = req.user!;
+    const memberships = await storage.getOrgMemberships(user.id);
+
+    const orgsWithRoles = await Promise.all(
+      memberships.map(async (m) => {
+        const org = await storage.getOrganization(m.organizationId);
+        return org ? {
+          id: org.id,
+          name: org.name,
+          domain: org.domain,
+          servicePlan: org.servicePlan,
+          role: m.role,
+          isPrimary: m.isPrimary,
+          membershipId: m.id,
+        } : null;
+      })
+    );
+
+    const filtered = orgsWithRoles.filter(Boolean);
+
+    if (filtered.length === 0 && user.organizationId) {
+      const org = await storage.getOrganization(user.organizationId);
+      if (org) {
+        filtered.push({
+          id: org.id,
+          name: org.name,
+          domain: org.domain,
+          servicePlan: org.servicePlan,
+          role: user.role,
+          isPrimary: true,
+          membershipId: null as string | null,
+        });
+      }
+    }
+
+    return res.json(filtered);
+  } catch (error: any) {
+    console.error('[Orgs] Get my orgs error:', error);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.post('/api/orgs/switch', requireAuth(), async (req: AuthenticatedRequest, res) => {
+  try {
+    const user = req.user!;
+    const { organizationId } = req.body;
+
+    if (!organizationId) {
+      return res.status(400).json({ error: 'organizationId is required' });
+    }
+
+    const membership = await storage.getOrgMembership(user.id, organizationId);
+    if (!membership && user.organizationId !== organizationId) {
+      return res.status(403).json({ error: 'You are not a member of this organization' });
+    }
+
+    req.session.activeOrganizationId = organizationId;
+
+    const org = await storage.getOrganization(organizationId);
+
+    await storage.createAuditEntry({
+      userId: user.id,
+      userEmail: user.email,
+      action: 'ORG_SWITCHED',
+      resource: 'organization',
+      resourceId: organizationId,
+      organizationId,
+      details: { organizationName: org?.name },
+      result: 'SUCCESS',
+      ipAddress: req.ip || null,
+    });
+
+    return res.json({
+      success: true,
+      organization: org,
+      role: membership?.role || user.role,
+    });
+  } catch (error: any) {
+    console.error('[Orgs] Switch org error:', error);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.get('/api/orgs/:id/members', requireAuth(), async (req: AuthenticatedRequest, res) => {
+  try {
+    const user = req.user!;
+    const orgId = req.params.id as string;
+
+    const membership = await storage.getOrgMembership(user.id, orgId);
+    if (!membership && user.organizationId !== orgId) {
+      return res.status(403).json({ error: 'You are not a member of this organization' });
+    }
+
+    const members = await storage.getOrgMembers(orgId);
+
+    const enriched = await Promise.all(
+      members.map(async (m) => {
+        const memberUser = await storage.getUser(m.userId);
+        return {
+          id: m.id,
+          userId: m.userId,
+          email: memberUser?.email || 'unknown',
+          name: memberUser?.name || null,
+          role: m.role,
+          isPrimary: m.isPrimary,
+          joinedAt: m.joinedAt,
+          emailVerified: memberUser?.emailVerified || false,
+          authProvider: memberUser?.authProvider || null,
+        };
+      })
+    );
+
+    return res.json(enriched);
+  } catch (error: any) {
+    console.error('[Orgs] Get members error:', error);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.post('/api/orgs/:id/members', requireAuth(), requirePermission('users:manage'), async (req: AuthenticatedRequest, res) => {
+  try {
+    const adminUser = req.user!;
+    const orgId = req.params.id as string;
+    const { userId, email, role } = req.body;
+
+    const adminMembership = await storage.getOrgMembership(adminUser.id, orgId);
+    if (!adminMembership && adminUser.organizationId !== orgId) {
+      return res.status(403).json({ error: 'You are not a member of this organization' });
+    }
+
+    const assignedRole: ZenithRole = role && VALID_ROLES.includes(role) ? role : 'viewer';
+
+    let targetUserId = userId;
+    if (!targetUserId && email) {
+      const targetUser = await storage.getUserByEmail(email);
+      if (!targetUser) {
+        return res.status(404).json({ error: 'User not found' });
+      }
+      targetUserId = targetUser.id;
+    }
+
+    if (!targetUserId) {
+      return res.status(400).json({ error: 'userId or email is required' });
+    }
+
+    const existing = await storage.getOrgMembership(targetUserId, orgId);
+    if (existing) {
+      return res.status(409).json({ error: 'User is already a member of this organization' });
+    }
+
+    const membership = await storage.createOrgMembership({
+      userId: targetUserId,
+      organizationId: orgId,
+      role: assignedRole,
+      isPrimary: false,
+    });
+
+    await storage.createAuditEntry({
+      userId: adminUser.id,
+      userEmail: adminUser.email,
+      action: 'ORG_MEMBER_ADDED',
+      resource: 'organization_user',
+      resourceId: membership.id,
+      organizationId: orgId,
+      details: { targetUserId, assignedRole, addedBy: adminUser.email },
+      result: 'SUCCESS',
+      ipAddress: req.ip || null,
+    });
+
+    return res.status(201).json(membership);
+  } catch (error: any) {
+    console.error('[Orgs] Add member error:', error);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.patch('/api/orgs/:id/members/:userId/role', requireAuth(), requirePermission('users:manage'), async (req: AuthenticatedRequest, res) => {
+  try {
+    const adminUser = req.user!;
+    const orgId = req.params.id as string;
+    const targetUserId = req.params.userId as string;
+    const { role } = req.body;
+
+    if (!role || !VALID_ROLES.includes(role)) {
+      return res.status(400).json({ error: `Invalid role. Valid roles: ${VALID_ROLES.join(', ')}` });
+    }
+
+    const membership = await storage.getOrgMembership(targetUserId, orgId);
+    if (!membership) {
+      return res.status(404).json({ error: 'Membership not found' });
+    }
+
+    const previousRole = membership.role;
+    const updated = await storage.updateOrgMembership(membership.id, { role });
+
+    await storage.createAuditEntry({
+      userId: adminUser.id,
+      userEmail: adminUser.email,
+      action: 'ORG_MEMBER_ROLE_CHANGED',
+      resource: 'organization_user',
+      resourceId: membership.id,
+      organizationId: orgId,
+      details: { targetUserId, previousRole, newRole: role, changedBy: adminUser.email },
+      result: 'SUCCESS',
+      ipAddress: req.ip || null,
+    });
+
+    return res.json(updated);
+  } catch (error: any) {
+    console.error('[Orgs] Update member role error:', error);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.delete('/api/orgs/:id/members/:userId', requireAuth(), requirePermission('users:manage'), async (req: AuthenticatedRequest, res) => {
+  try {
+    const adminUser = req.user!;
+    const orgId = req.params.id as string;
+    const targetUserId = req.params.userId as string;
+
+    if (targetUserId === adminUser.id) {
+      return res.status(400).json({ error: 'Cannot remove yourself from an organization' });
+    }
+
+    const membership = await storage.getOrgMembership(targetUserId, orgId);
+    if (!membership) {
+      return res.status(404).json({ error: 'Membership not found' });
+    }
+
+    await storage.deleteOrgMembership(targetUserId, orgId);
+
+    await storage.createAuditEntry({
+      userId: adminUser.id,
+      userEmail: adminUser.email,
+      action: 'ORG_MEMBER_REMOVED',
+      resource: 'organization_user',
+      resourceId: membership.id,
+      organizationId: orgId,
+      details: { targetUserId, removedBy: adminUser.email },
+      result: 'SUCCESS',
+      ipAddress: req.ip || null,
+    });
+
+    return res.json({ success: true });
+  } catch (error: any) {
+    console.error('[Orgs] Remove member error:', error);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.patch('/api/orgs/:id/settings', requireAuth(), requirePermission('settings:manage'), async (req: AuthenticatedRequest, res) => {
+  try {
+    const adminUser = req.user!;
+    const orgId = req.params.id as string;
+
+    const adminMembership = await storage.getOrgMembership(adminUser.id, orgId);
+    if (!adminMembership && adminUser.organizationId !== orgId) {
+      return res.status(403).json({ error: 'You are not a member of this organization' });
+    }
+
+    const { allowedDomains, inviteOnly } = req.body;
+
+    const updates: Record<string, any> = {};
+    if (allowedDomains !== undefined) {
+      if (!Array.isArray(allowedDomains) || !allowedDomains.every((d: any) => typeof d === 'string')) {
+        return res.status(400).json({ error: 'allowedDomains must be an array of strings' });
+      }
+      updates.allowedDomains = allowedDomains.map((d: string) => d.toLowerCase().trim());
+    }
+    if (inviteOnly !== undefined) {
+      if (typeof inviteOnly !== 'boolean') {
+        return res.status(400).json({ error: 'inviteOnly must be a boolean' });
+      }
+      updates.inviteOnly = inviteOnly;
+    }
+
+    if (Object.keys(updates).length === 0) {
+      return res.status(400).json({ error: 'No valid settings provided' });
+    }
+
+    const updated = await storage.updateOrganizationSettings(orgId, updates);
+
+    await storage.createAuditEntry({
+      userId: adminUser.id,
+      userEmail: adminUser.email,
+      action: 'ORG_SETTINGS_UPDATED',
+      resource: 'organization',
+      resourceId: orgId,
+      organizationId: orgId,
+      details: { updates, updatedBy: adminUser.email },
+      result: 'SUCCESS',
+      ipAddress: req.ip || null,
+    });
+
+    return res.json(updated);
+  } catch (error: any) {
+    console.error('[Orgs] Update settings error:', error);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+export default router;

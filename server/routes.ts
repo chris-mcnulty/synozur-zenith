@@ -7,6 +7,7 @@ import tenantRouter from "./routes/tenants";
 import adminRouter from "./routes/admin";
 import docsRouter from "./routes/docs";
 import policiesRouter from "./routes/policies";
+import organizationsRouter from "./routes/organizations";
 
 export async function registerRoutes(
   httpServer: Server,
@@ -21,6 +22,7 @@ export async function registerRoutes(
   app.use(adminRouter);
   app.use(docsRouter);
   app.use(policiesRouter);
+  app.use(organizationsRouter);
 
   return httpServer;
 }

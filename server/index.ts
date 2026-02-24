@@ -5,6 +5,7 @@ import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
 import { loadCurrentUser } from "./middleware/rbac";
+import { storage } from "./storage";
 import crypto from "crypto";
 
 const app = express();
@@ -88,8 +89,39 @@ app.use((req, res, next) => {
   next();
 });
 
+async function backfillOrgMemberships() {
+  try {
+    const orgs = await storage.getOrganizations();
+    let backfilledCount = 0;
+
+    for (const org of orgs) {
+      const orgUsers = await storage.getUsersByOrganization(org.id);
+      for (const user of orgUsers) {
+        const existing = await storage.getOrgMembership(user.id, org.id);
+        if (!existing) {
+          await storage.createOrgMembership({
+            userId: user.id,
+            organizationId: org.id,
+            role: user.role,
+            isPrimary: true,
+          });
+          backfilledCount++;
+        }
+      }
+    }
+
+    if (backfilledCount > 0) {
+      log(`Backfilled ${backfilledCount} organization memberships`);
+    }
+  } catch (err) {
+    console.error('[Backfill] Failed to backfill org memberships:', err);
+  }
+}
+
 (async () => {
   await registerRoutes(httpServer, app);
+
+  await backfillOrgMemberships();
 
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
     const status = err.status || err.statusCode || 500;

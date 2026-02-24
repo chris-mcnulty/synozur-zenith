@@ -69,6 +69,20 @@ router.post('/signup', async (req: AuthenticatedRequest, res) => {
       });
       isFirstUser = true;
     } else {
+      if (org.inviteOnly) {
+        return res.status(403).json({
+          error: 'This organization requires an invitation to join. Please contact your administrator.',
+        });
+      }
+
+      if (org.allowedDomains && org.allowedDomains.length > 0) {
+        if (!org.allowedDomains.includes(domain)) {
+          return res.status(403).json({
+            error: 'Your email domain is not allowed to join this organization.',
+          });
+        }
+      }
+
       const orgUsers = await storage.getUsersByOrganization(org.id);
       isFirstUser = orgUsers.length === 0;
     }
@@ -85,6 +99,13 @@ router.post('/signup', async (req: AuthenticatedRequest, res) => {
       emailVerified: false,
       verificationToken,
       authProvider: 'local',
+    });
+
+    await storage.createOrgMembership({
+      userId: user.id,
+      organizationId: org.id,
+      role,
+      isPrimary: true,
     });
 
     await storage.createAuditEntry({
@@ -145,6 +166,12 @@ router.post('/login', async (req: AuthenticatedRequest, res) => {
 
     req.session.userId = user.id;
 
+    if (user.organizationId) {
+      const memberships = await storage.getOrgMemberships(user.id);
+      const primaryMembership = memberships.find(m => m.isPrimary) || memberships[0];
+      req.session.activeOrganizationId = primaryMembership?.organizationId || user.organizationId;
+    }
+
     await storage.createAuditEntry({
       userId: user.id,
       userEmail: user.email,
@@ -176,12 +203,27 @@ router.get('/me', async (req: AuthenticatedRequest, res) => {
       return res.status(401).json({ error: 'User not found' });
     }
 
+    const activeOrgId = req.session?.activeOrganizationId || user.organizationId;
     let organization = null;
-    if (user.organizationId) {
-      organization = await storage.getOrganization(user.organizationId);
+    if (activeOrgId) {
+      organization = await storage.getOrganization(activeOrgId);
     }
 
-    return res.json({ user: sanitizeUser(user), organization });
+    const memberships = await storage.getOrgMemberships(userId);
+    const activeMembership = activeOrgId
+      ? memberships.find(m => m.organizationId === activeOrgId)
+      : null;
+
+    const effectiveRole = user.role === 'PLATFORM_OWNER'
+      ? 'PLATFORM_OWNER'
+      : (activeMembership?.role || user.role);
+
+    return res.json({
+      user: { ...sanitizeUser(user), effectiveRole },
+      organization,
+      activeOrganizationId: activeOrgId,
+      membershipCount: memberships.length,
+    });
   } catch (error: any) {
     console.error('[Auth] Get current user error:', error);
     return res.status(500).json({ error: 'Internal server error' });

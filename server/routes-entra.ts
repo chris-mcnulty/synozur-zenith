@@ -363,6 +363,16 @@ router.get('/callback', async (req: AuthenticatedRequest, res: Response) => {
         }
         isFirstUser = true;
       } else {
+        if (org.inviteOnly) {
+          return res.redirect('/login?error=invite_only');
+        }
+
+        if (org.allowedDomains && org.allowedDomains.length > 0) {
+          if (!org.allowedDomains.includes(domain)) {
+            return res.redirect('/login?error=domain_not_allowed');
+          }
+        }
+
         const orgUsers = await storage.getUsersByOrganization(org.id);
         isFirstUser = orgUsers.length === 0;
       }
@@ -379,6 +389,13 @@ router.get('/callback', async (req: AuthenticatedRequest, res: Response) => {
         authProvider: 'entra',
         azureObjectId: azureObjectId || null,
         azureTenantId: azureTenantId || null,
+      });
+
+      await storage.createOrgMembership({
+        userId: user.id,
+        organizationId: org.id,
+        role,
+        isPrimary: true,
       });
     }
 
@@ -419,6 +436,12 @@ router.get('/callback', async (req: AuthenticatedRequest, res: Response) => {
     req.session.userId = user.id;
     delete req.session.pkceVerifier;
     delete req.session.authState;
+
+    if (user.organizationId) {
+      const memberships = await storage.getOrgMemberships(user.id);
+      const primaryMembership = memberships.find(m => m.isPrimary) || memberships[0];
+      req.session.activeOrganizationId = primaryMembership?.organizationId || user.organizationId;
+    }
 
     await storage.createAuditEntry({
       userId: user.id,

@@ -323,6 +323,8 @@ export const organizations = pgTable("organizations", {
   azureTenantId: text("azure_tenant_id"),
   enforceSso: boolean("enforce_sso").default(false),
   allowLocalAuth: boolean("allow_local_auth").default(true),
+  allowedDomains: text("allowed_domains").array(),
+  inviteOnly: boolean("invite_only").default(false),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -370,6 +372,25 @@ export const insertUserSchema = createInsertSchema(users).omit({
 
 export type InsertUser = z.infer<typeof insertUserSchema>;
 export type User = typeof users.$inferSelect;
+
+export const organizationUsers = pgTable("organization_users", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: 'cascade' }),
+  organizationId: varchar("organization_id").notNull().references(() => organizations.id, { onDelete: 'cascade' }),
+  role: text("role").notNull().default("viewer"),
+  isPrimary: boolean("is_primary").notNull().default(false),
+  joinedAt: timestamp("joined_at").defaultNow(),
+}, (table) => [
+  unique("uq_user_org").on(table.userId, table.organizationId),
+]);
+
+export const insertOrganizationUserSchema = createInsertSchema(organizationUsers).omit({
+  id: true,
+  joinedAt: true,
+});
+
+export type InsertOrganizationUser = z.infer<typeof insertOrganizationUserSchema>;
+export type OrganizationUser = typeof organizationUsers.$inferSelect;
 
 export const graphTokens = pgTable("graph_tokens", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),

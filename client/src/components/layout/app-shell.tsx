@@ -48,7 +48,8 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 import { useTenant } from "@/lib/tenant-context";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
+import { queryClient } from "@/lib/queryClient";
 
 interface AppShellProps {
   children: React.ReactNode;
@@ -88,16 +89,58 @@ const navGroups = [
   }
 ];
 
+type OrgMembership = {
+  id: string;
+  name: string;
+  domain: string;
+  servicePlan: string;
+  role: string;
+  isPrimary: boolean;
+  membershipId: string | null;
+};
+
 export default function AppShell({ children }: AppShellProps) {
   const [location] = useLocation();
   const { tenants, selectedTenant, setSelectedTenantId } = useTenant();
 
-  const { data: authData } = useQuery<{ user: { id: string; name: string | null; email: string; role: string; authProvider: string | null }; organization: { name: string } | null }>({
+  const { data: authData } = useQuery<{
+    user: { id: string; name: string | null; email: string; role: string; effectiveRole?: string; authProvider: string | null };
+    organization: { id: string; name: string } | null;
+    activeOrganizationId: string | null;
+    membershipCount: number;
+  }>({
     queryKey: ["/api/auth/me"],
     queryFn: () => fetch("/api/auth/me", { credentials: "include" }).then(r => r.ok ? r.json() : null),
     staleTime: 5 * 60 * 1000,
   });
+
+  const { data: myOrgs = [] } = useQuery<OrgMembership[]>({
+    queryKey: ["/api/orgs/mine"],
+    queryFn: () => fetch("/api/orgs/mine", { credentials: "include" }).then(r => r.ok ? r.json() : []),
+    staleTime: 5 * 60 * 1000,
+    enabled: !!authData?.user,
+  });
+
+  const switchOrgMutation = useMutation({
+    mutationFn: async (organizationId: string) => {
+      const res = await fetch("/api/orgs/switch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ organizationId }),
+      });
+      if (!res.ok) throw new Error("Failed to switch organization");
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/orgs/mine"] });
+      queryClient.invalidateQueries();
+    },
+  });
+
   const currentUser = authData?.user;
+  const activeOrg = authData?.organization;
   const userInitials = currentUser?.name
     ? currentUser.name.split(" ").map(n => n[0]).join("").toUpperCase().slice(0, 2)
     : currentUser?.email?.[0]?.toUpperCase() || "?";
@@ -285,10 +328,36 @@ export default function AppShell({ children }: AppShellProps) {
                     <div className="flex items-center gap-2.5 px-3 py-2 rounded-xl bg-primary/5">
                       <Building2 className="w-4 h-4 text-primary shrink-0" />
                       <div className="flex flex-col -space-y-0.5">
-                        <span className="text-[9px] font-bold text-muted-foreground uppercase tracking-widest">Platform Org</span>
-                        <span className="font-semibold text-sm leading-none">The Synozur Alliance</span>
+                        <span className="text-[9px] font-bold text-muted-foreground uppercase tracking-widest">Organization</span>
+                        <span className="font-semibold text-sm leading-none">{activeOrg?.name || 'No organization'}</span>
                       </div>
                     </div>
+                    {myOrgs.length > 1 && (
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <button className="flex items-center gap-2.5 px-3 py-2 rounded-xl bg-muted/30 hover:bg-muted/50 transition-colors w-full text-left">
+                            <Building2 className="w-4 h-4 text-muted-foreground shrink-0" />
+                            <span className="text-xs font-medium text-muted-foreground">Switch organization...</span>
+                            <ChevronDown className="w-3 h-3 text-muted-foreground/50 ml-auto" />
+                          </button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="start" className="w-56 rounded-xl p-2">
+                          {myOrgs.filter(o => o.id !== activeOrg?.id).map((org) => (
+                            <DropdownMenuItem
+                              key={org.id}
+                              className="rounded-lg p-2.5 cursor-pointer"
+                              onClick={() => switchOrgMutation.mutate(org.id)}
+                            >
+                              <Building2 className="w-3.5 h-3.5 mr-2 text-muted-foreground" />
+                              <div className="flex flex-col">
+                                <span className="font-medium text-sm">{org.name}</span>
+                                <span className="text-[10px] text-muted-foreground capitalize">{org.role.replace(/_/g, ' ')}</span>
+                              </div>
+                            </DropdownMenuItem>
+                          ))}
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    )}
                     <Link href="/app/admin/tenants" className="flex items-center gap-2.5 px-3 py-2 rounded-xl bg-secondary/5 hover:bg-secondary/10 transition-colors">
                       <Cloud className="w-4 h-4 text-secondary shrink-0" />
                       <div className="flex flex-col -space-y-0.5">
@@ -319,40 +388,47 @@ export default function AppShell({ children }: AppShellProps) {
               {/* Company/Org Selector */}
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <Button variant="ghost" className="h-9 gap-2 rounded-full px-3 hover:bg-muted/60 data-[state=open]:bg-muted/60 text-left">
+                  <Button variant="ghost" className="h-9 gap-2 rounded-full px-3 hover:bg-muted/60 data-[state=open]:bg-muted/60 text-left" data-testid="button-org-switcher">
                     <Building2 className="w-4 h-4 text-primary shrink-0" />
                     <div className="flex flex-col items-start -space-y-0.5">
-                      <span className="text-[9px] font-bold text-muted-foreground uppercase tracking-widest">Platform Org</span>
-                      <span className="font-semibold text-sm leading-none text-foreground">The Synozur Alliance</span>
+                      <span className="text-[9px] font-bold text-muted-foreground uppercase tracking-widest">Organization</span>
+                      <span className="font-semibold text-sm leading-none text-foreground" data-testid="text-active-org">{activeOrg?.name || 'No organization'}</span>
                     </div>
-                    <ChevronDown className="w-3 h-3 text-muted-foreground opacity-50 ml-1 shrink-0" />
+                    {myOrgs.length > 1 && <ChevronDown className="w-3 h-3 text-muted-foreground opacity-50 ml-1 shrink-0" />}
                   </Button>
                 </DropdownMenuTrigger>
-                <DropdownMenuContent align="start" className="w-60 rounded-xl p-2">
-                  <DropdownMenuLabel className="text-xs text-muted-foreground uppercase tracking-wider">Organization</DropdownMenuLabel>
+                <DropdownMenuContent align="start" className="w-64 rounded-xl p-2">
+                  <DropdownMenuLabel className="text-xs text-muted-foreground uppercase tracking-wider">
+                    {myOrgs.length > 1 ? 'Switch Organization' : 'Organization'}
+                  </DropdownMenuLabel>
                   <DropdownMenuSeparator className="mb-2 mt-1" />
-                  <DropdownMenuItem className="flex justify-between rounded-lg p-2.5 bg-primary/10 cursor-default">
-                    <div className="flex items-center gap-2.5">
-                      <div className="w-6 h-6 rounded bg-primary/20 flex items-center justify-center">
-                        <Building2 className="w-3.5 h-3.5 text-primary" />
-                      </div>
-                      <span className="font-semibold text-primary">The Synozur Alliance</span>
-                    </div>
-                    <Check className="w-4 h-4 text-primary" />
-                  </DropdownMenuItem>
-                  <DropdownMenuItem className="flex items-center gap-2.5 rounded-lg p-2.5 cursor-pointer text-muted-foreground hover:text-foreground mt-1">
-                    <div className="w-6 h-6 rounded bg-muted flex items-center justify-center">
-                      <Building2 className="w-3.5 h-3.5 text-muted-foreground" />
-                    </div>
-                    <span className="font-medium">Contoso Corp</span>
-                  </DropdownMenuItem>
-                  <DropdownMenuSeparator className="my-2" />
-                  <DropdownMenuItem asChild className="rounded-lg p-2.5 cursor-pointer group">
-                    <Link href="/app/add-tenant" className="flex items-center text-primary font-medium">
-                      <FolderPlus className="w-4 h-4 mr-2" />
-                      Register new org...
-                    </Link>
-                  </DropdownMenuItem>
+                  {myOrgs.map((org) => {
+                    const isActive = activeOrg?.id === org.id;
+                    return (
+                      <DropdownMenuItem
+                        key={org.id}
+                        className={`flex justify-between rounded-lg p-2.5 mt-1 ${isActive ? 'bg-primary/10 cursor-default' : 'cursor-pointer text-muted-foreground hover:text-foreground'}`}
+                        onClick={() => !isActive && switchOrgMutation.mutate(org.id)}
+                        data-testid={`button-switch-org-${org.id}`}
+                      >
+                        <div className="flex items-center gap-2.5">
+                          <div className={`w-6 h-6 rounded flex items-center justify-center ${isActive ? 'bg-primary/20' : 'bg-muted'}`}>
+                            <Building2 className={`w-3.5 h-3.5 ${isActive ? 'text-primary' : 'text-muted-foreground'}`} />
+                          </div>
+                          <div className="flex flex-col">
+                            <span className={`font-semibold text-sm ${isActive ? 'text-primary' : ''}`}>{org.name}</span>
+                            <span className="text-[10px] text-muted-foreground capitalize">{org.role.replace(/_/g, ' ')}</span>
+                          </div>
+                        </div>
+                        {isActive && <Check className="w-4 h-4 text-primary shrink-0" />}
+                      </DropdownMenuItem>
+                    );
+                  })}
+                  {myOrgs.length === 0 && (
+                    <DropdownMenuItem className="rounded-lg p-2.5 text-muted-foreground cursor-default">
+                      No organizations
+                    </DropdownMenuItem>
+                  )}
                 </DropdownMenuContent>
               </DropdownMenu>
 
@@ -442,9 +518,12 @@ export default function AppShell({ children }: AppShellProps) {
                     <p className="text-xs leading-none text-muted-foreground" data-testid="text-current-user-email">
                       {currentUser?.email || ""}
                     </p>
-                    {currentUser?.role && (
+                    {(currentUser?.effectiveRole || currentUser?.role) && (
                       <p className="text-[10px] leading-none text-muted-foreground/70 capitalize mt-0.5">
-                        {currentUser.role.replace(/_/g, " ")}
+                        {(currentUser.effectiveRole || currentUser.role).replace(/_/g, " ")}
+                        {activeOrg && myOrgs.length > 1 && (
+                          <span className="text-muted-foreground/50"> in {activeOrg.name}</span>
+                        )}
                       </p>
                     )}
                   </div>

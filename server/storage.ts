@@ -8,6 +8,7 @@ import {
   tenantConnections,
   organizations,
   users,
+  organizationUsers,
   graphTokens,
   auditLog,
   domainBlocklist,
@@ -28,6 +29,8 @@ import {
   type InsertOrganization,
   type User,
   type InsertUser,
+  type OrganizationUser,
+  type InsertOrganizationUser,
   type GraphToken,
   type InsertGraphToken,
   type AuditLog,
@@ -113,6 +116,14 @@ export interface IStorage {
   deleteRetentionLabelsByTenantId(tenantId: string): Promise<void>;
 
   getWorkspaceLabelCoverage(tenantId: string): Promise<{ workspaceId: string; displayName: string; siteUrl: string | null; sensitivityLabelId: string | null; retentionLabelId: string | null; type: string }[]>;
+
+  getOrgMembership(userId: string, organizationId: string): Promise<OrganizationUser | undefined>;
+  getOrgMemberships(userId: string): Promise<OrganizationUser[]>;
+  getOrgMembers(organizationId: string): Promise<OrganizationUser[]>;
+  createOrgMembership(membership: InsertOrganizationUser): Promise<OrganizationUser>;
+  updateOrgMembership(id: string, updates: Partial<InsertOrganizationUser>): Promise<OrganizationUser | undefined>;
+  deleteOrgMembership(userId: string, organizationId: string): Promise<void>;
+  updateOrganizationSettings(id: string, updates: Partial<InsertOrganization>): Promise<Organization | undefined>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -527,6 +538,51 @@ export class DatabaseStorage implements IStorage {
       .orderBy(workspaces.displayName);
 
     return results;
+  }
+
+  async getOrgMembership(userId: string, organizationId: string): Promise<OrganizationUser | undefined> {
+    const [membership] = await db.select().from(organizationUsers)
+      .where(and(eq(organizationUsers.userId, userId), eq(organizationUsers.organizationId, organizationId)));
+    return membership;
+  }
+
+  async getOrgMemberships(userId: string): Promise<OrganizationUser[]> {
+    return db.select().from(organizationUsers)
+      .where(eq(organizationUsers.userId, userId))
+      .orderBy(desc(organizationUsers.isPrimary), organizationUsers.joinedAt);
+  }
+
+  async getOrgMembers(organizationId: string): Promise<OrganizationUser[]> {
+    return db.select().from(organizationUsers)
+      .where(eq(organizationUsers.organizationId, organizationId))
+      .orderBy(organizationUsers.joinedAt);
+  }
+
+  async createOrgMembership(membership: InsertOrganizationUser): Promise<OrganizationUser> {
+    const [created] = await db.insert(organizationUsers).values(membership)
+      .onConflictDoUpdate({
+        target: [organizationUsers.userId, organizationUsers.organizationId],
+        set: { role: membership.role, isPrimary: membership.isPrimary },
+      })
+      .returning();
+    return created;
+  }
+
+  async updateOrgMembership(id: string, updates: Partial<InsertOrganizationUser>): Promise<OrganizationUser | undefined> {
+    const [updated] = await db.update(organizationUsers).set(updates)
+      .where(eq(organizationUsers.id, id)).returning();
+    return updated;
+  }
+
+  async deleteOrgMembership(userId: string, organizationId: string): Promise<void> {
+    await db.delete(organizationUsers)
+      .where(and(eq(organizationUsers.userId, userId), eq(organizationUsers.organizationId, organizationId)));
+  }
+
+  async updateOrganizationSettings(id: string, updates: Partial<InsertOrganization>): Promise<Organization | undefined> {
+    const [updated] = await db.update(organizations).set(updates)
+      .where(eq(organizations.id, id)).returning();
+    return updated;
   }
 }
 
