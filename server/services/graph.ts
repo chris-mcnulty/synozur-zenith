@@ -356,6 +356,34 @@ export async function leaveHubSite(spoToken: string, siteUrl: string): Promise<{
   }
 }
 
+export async function fetchSiteArchiveStatus(token: string, graphSiteId: string): Promise<{
+  isArchived: boolean;
+  archiveStatus: string | null;
+  error?: string;
+}> {
+  try {
+    const res = await fetch(`https://graph.microsoft.com/beta/sites/${graphSiteId}?$select=id,siteCollection`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+
+    if (!res.ok) {
+      return { isArchived: false, archiveStatus: null, error: `Graph API ${res.status}` };
+    }
+
+    const data = await res.json();
+    const archiveStatus = data?.siteCollection?.archivalDetails?.archiveStatus || null;
+    const isArchived = archiveStatus === 'recentlyArchived' || archiveStatus === 'fullyArchived';
+
+    if (archiveStatus) {
+      console.log(`[archive-status] ${graphSiteId} → ${archiveStatus} (isArchived=${isArchived})`);
+    }
+
+    return { isArchived, archiveStatus };
+  } catch (err: any) {
+    return { isArchived: false, archiveStatus: null, error: err.message };
+  }
+}
+
 export async function fetchSiteLockState(spoToken: string, siteUrl: string): Promise<{
   lockState: string;
   isArchived: boolean;
@@ -451,6 +479,9 @@ export interface GraphSite {
   siteCollection?: {
     hostname?: string;
     root?: object;
+    archivalDetails?: {
+      archiveStatus?: string;
+    };
   };
 }
 
@@ -462,7 +493,7 @@ export async function fetchSharePointSites(tenantId: string, clientId: string, c
     let token = await getAppToken(tenantId, clientId, clientSecret);
 
     const allSites: GraphSite[] = [];
-    let nextLink: string | null = "https://graph.microsoft.com/v1.0/sites?$top=100&$select=id,displayName,webUrl,description,createdDateTime,lastModifiedDateTime,isPersonalSite,root,siteCollection";
+    let nextLink: string | null = "https://graph.microsoft.com/beta/sites?$top=100&$select=id,displayName,webUrl,description,createdDateTime,lastModifiedDateTime,isPersonalSite,root,siteCollection";
     let retriedAuth = false;
 
     while (nextLink) {
@@ -1110,6 +1141,49 @@ export async function fetchRetentionLabels(token: string): Promise<{
   }
 
   return { labels: [], error: `Retention label sync failed after retries. This is a known intermittent issue with Microsoft's Purview backend. Please try again in a few minutes. Last error: ${lastError}` };
+}
+
+export interface EntraUser {
+  id: string;
+  displayName: string;
+  mail: string | null;
+  userPrincipalName: string;
+  jobTitle: string | null;
+  department: string | null;
+}
+
+export async function searchEntraUsers(token: string, query: string, limit: number = 10): Promise<{
+  users: EntraUser[];
+  error?: string;
+}> {
+  try {
+    const escapedQuery = query.replace(/'/g, "''");
+    const filter = `startswith(displayName,'${escapedQuery}') or startswith(mail,'${escapedQuery}') or startswith(userPrincipalName,'${escapedQuery}')`;
+    const url = `https://graph.microsoft.com/v1.0/users?$filter=${encodeURIComponent(filter)}&$select=id,displayName,mail,userPrincipalName,jobTitle,department&$top=${limit}&$orderby=displayName`;
+
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+
+    if (!res.ok) {
+      const errText = await res.text();
+      return { users: [], error: `Graph API error ${res.status}: ${errText}` };
+    }
+
+    const data = await res.json();
+    const users: EntraUser[] = (data.value || []).map((u: any) => ({
+      id: u.id,
+      displayName: u.displayName || '',
+      mail: u.mail || null,
+      userPrincipalName: u.userPrincipalName || '',
+      jobTitle: u.jobTitle || null,
+      department: u.department || null,
+    }));
+
+    return { users };
+  } catch (err: any) {
+    return { users: [], error: err.message };
+  }
 }
 
 export function clearTokenCache(tenantId?: string, clientId?: string) {

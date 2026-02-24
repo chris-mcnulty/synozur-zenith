@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -16,6 +16,7 @@ import {
   Loader2,
   UserCheck,
   UserX,
+  Building2,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -65,6 +66,15 @@ type OrgUser = {
   createdAt: string | null;
 };
 
+type EntraUser = {
+  id: string;
+  displayName: string;
+  mail: string | null;
+  userPrincipalName: string;
+  jobTitle: string | null;
+  department: string | null;
+};
+
 const ZENITH_ROLES = [
   { value: "platform_owner", label: "Platform Owner", description: "Full platform control" },
   { value: "tenant_admin", label: "Tenant Admin", description: "Organization management" },
@@ -100,6 +110,13 @@ export default function UserManagementPage() {
   const [newUserName, setNewUserName] = useState("");
   const [newUserRole, setNewUserRole] = useState("viewer");
   const [editRole, setEditRole] = useState("");
+  const [entraSearch, setEntraSearch] = useState("");
+  const [entraResults, setEntraResults] = useState<EntraUser[]>([]);
+  const [entraLoading, setEntraLoading] = useState(false);
+  const [showEntraDropdown, setShowEntraDropdown] = useState(false);
+  const [selectedEntraUser, setSelectedEntraUser] = useState<EntraUser | null>(null);
+  const entraDropdownRef = useRef<HTMLDivElement>(null);
+  const entraSearchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const { toast } = useToast();
 
@@ -107,6 +124,61 @@ export default function UserManagementPage() {
     queryKey: ["/api/auth/me"],
     queryFn: () => fetch("/api/auth/me", { credentials: "include" }).then(r => r.ok ? r.json() : null),
   });
+
+  const searchEntraDirectory = useCallback(async (q: string) => {
+    if (!authData?.user?.organizationId || q.length < 2) {
+      setEntraResults([]);
+      setShowEntraDropdown(false);
+      return;
+    }
+    setEntraLoading(true);
+    try {
+      const res = await fetch(`/api/orgs/${authData.user.organizationId}/entra-users?q=${encodeURIComponent(q)}`, { credentials: "include" });
+      if (res.ok) {
+        const data = await res.json();
+        setEntraResults(data.users || []);
+        setShowEntraDropdown((data.users || []).length > 0);
+      } else {
+        setEntraResults([]);
+        setShowEntraDropdown(false);
+      }
+    } catch {
+      setEntraResults([]);
+      setShowEntraDropdown(false);
+    } finally {
+      setEntraLoading(false);
+    }
+  }, [authData?.user?.organizationId]);
+
+  const handleEntraSearchChange = (value: string) => {
+    setEntraSearch(value);
+    setSelectedEntraUser(null);
+    if (entraSearchTimerRef.current) clearTimeout(entraSearchTimerRef.current);
+    if (value.length >= 2) {
+      entraSearchTimerRef.current = setTimeout(() => searchEntraDirectory(value), 300);
+    } else {
+      setEntraResults([]);
+      setShowEntraDropdown(false);
+    }
+  };
+
+  const selectEntraUser = (user: EntraUser) => {
+    setSelectedEntraUser(user);
+    setNewUserEmail(user.mail || user.userPrincipalName);
+    setNewUserName(user.displayName);
+    setEntraSearch(user.displayName);
+    setShowEntraDropdown(false);
+  };
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (entraDropdownRef.current && !entraDropdownRef.current.contains(e.target as Node)) {
+        setShowEntraDropdown(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
 
   const { data: users = [], isLoading } = useQuery<OrgUser[]>({
     queryKey: ["/api/auth/users"],
@@ -377,15 +449,87 @@ export default function UserManagementPage() {
         </CardContent>
       </Card>
 
-      <Dialog open={addUserOpen} onOpenChange={setAddUserOpen}>
-        <DialogContent className="sm:max-w-[425px]">
+      <Dialog open={addUserOpen} onOpenChange={(open) => {
+        setAddUserOpen(open);
+        if (!open) {
+          setEntraSearch("");
+          setEntraResults([]);
+          setShowEntraDropdown(false);
+          setSelectedEntraUser(null);
+          setNewUserEmail("");
+          setNewUserName("");
+          setNewUserRole("viewer");
+        }
+      }}>
+        <DialogContent className="sm:max-w-[480px]">
           <DialogHeader>
             <DialogTitle>Add User</DialogTitle>
             <DialogDescription>
-              Add a new user to {orgName}. They will receive a temporary password and can set their own on first login.
+              Search your Entra ID directory to find and add users to {orgName}.
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-4 py-4">
+            <div className="grid gap-2 relative" ref={entraDropdownRef}>
+              <Label htmlFor="entra-search" className="flex items-center gap-1.5">
+                <Building2 className="w-3.5 h-3.5 text-blue-500" />
+                Search Entra Directory
+              </Label>
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                <Input
+                  id="entra-search"
+                  placeholder="Start typing a name or email..."
+                  className="pl-9 pr-9"
+                  value={entraSearch}
+                  onChange={(e) => handleEntraSearchChange(e.target.value)}
+                  autoComplete="off"
+                  data-testid="input-entra-search"
+                />
+                {entraLoading && <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 animate-spin text-muted-foreground" />}
+              </div>
+              {showEntraDropdown && entraResults.length > 0 && (
+                <div className="absolute z-50 top-[calc(100%+4px)] left-0 right-0 bg-popover border border-border rounded-lg shadow-lg max-h-[240px] overflow-y-auto">
+                  {entraResults.map((user) => (
+                    <button
+                      key={user.id}
+                      className="w-full flex items-start gap-3 px-3 py-2.5 hover:bg-muted/50 transition-colors text-left border-b border-border/30 last:border-b-0"
+                      onClick={() => selectEntraUser(user)}
+                      data-testid={`entra-user-${user.id}`}
+                    >
+                      <Avatar className="h-8 w-8 bg-blue-500/10 text-blue-600 shrink-0 mt-0.5">
+                        <AvatarFallback className="text-xs">{getInitials(user.displayName, user.userPrincipalName)}</AvatarFallback>
+                      </Avatar>
+                      <div className="min-w-0">
+                        <div className="font-medium text-sm truncate">{user.displayName}</div>
+                        <div className="text-xs text-muted-foreground truncate">{user.mail || user.userPrincipalName}</div>
+                        {(user.jobTitle || user.department) && (
+                          <div className="text-xs text-muted-foreground/70 truncate mt-0.5">
+                            {[user.jobTitle, user.department].filter(Boolean).join(" · ")}
+                          </div>
+                        )}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
+              {entraSearch.length >= 2 && !entraLoading && entraResults.length === 0 && !selectedEntraUser && (
+                <p className="text-xs text-muted-foreground mt-1">No users found. You can still add manually below.</p>
+              )}
+            </div>
+
+            {selectedEntraUser && (
+              <div className="flex items-center gap-3 p-3 rounded-lg bg-blue-500/5 border border-blue-500/20">
+                <Avatar className="h-9 w-9 bg-blue-500/10 text-blue-600">
+                  <AvatarFallback className="text-xs">{getInitials(selectedEntraUser.displayName, selectedEntraUser.userPrincipalName)}</AvatarFallback>
+                </Avatar>
+                <div className="min-w-0 flex-1">
+                  <div className="font-medium text-sm">{selectedEntraUser.displayName}</div>
+                  <div className="text-xs text-muted-foreground">{selectedEntraUser.mail || selectedEntraUser.userPrincipalName}</div>
+                </div>
+                <Badge variant="outline" className="bg-blue-500/10 text-blue-600 border-blue-500/20 text-[10px] shrink-0">Entra ID</Badge>
+              </div>
+            )}
+
             <div className="grid gap-2">
               <Label htmlFor="add-email">Email</Label>
               <Input
@@ -398,7 +542,7 @@ export default function UserManagementPage() {
               />
             </div>
             <div className="grid gap-2">
-              <Label htmlFor="add-name">Name (optional)</Label>
+              <Label htmlFor="add-name">Name</Label>
               <Input
                 id="add-name"
                 placeholder="Jane Doe"

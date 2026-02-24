@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { storage } from '../storage';
 import { AuthenticatedRequest, requireAuth, requirePermission } from '../middleware/rbac';
 import { ZENITH_ROLES, type ZenithRole } from '@shared/schema';
+import { getAppToken, searchEntraUsers } from '../services/graph';
 
 const router = Router();
 
@@ -306,6 +307,47 @@ router.patch('/api/orgs/:id/settings', requireAuth(), requirePermission('setting
     return res.json(updated);
   } catch (error: any) {
     console.error('[Orgs] Update settings error:', error);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.get('/api/orgs/:id/entra-users', requireAuth(), requirePermission('users:manage'), async (req: AuthenticatedRequest, res) => {
+  try {
+    const adminUser = req.user!;
+    const orgId = req.params.id as string;
+    const query = (req.query.q as string || '').trim();
+
+    if (!query || query.length < 2) {
+      return res.json({ users: [] });
+    }
+
+    const adminMembership = await storage.getOrgMembership(adminUser.id, orgId);
+    if (!adminMembership && adminUser.organizationId !== orgId) {
+      return res.status(403).json({ error: 'You are not a member of this organization' });
+    }
+
+    const connections = await storage.getTenantConnections(orgId);
+    if (!connections || connections.length === 0) {
+      return res.status(404).json({ error: 'No tenant connections found for this organization. Connect an M365 tenant first.' });
+    }
+
+    const connection = connections[0];
+    const clientId = process.env.AZURE_CLIENT_ID;
+    const clientSecret = process.env.AZURE_CLIENT_SECRET;
+    if (!clientId || !clientSecret) {
+      return res.status(503).json({ error: 'Azure credentials not configured' });
+    }
+
+    const token = await getAppToken(connection.tenantId, clientId, clientSecret);
+    const result = await searchEntraUsers(token, query, 10);
+
+    if (result.error) {
+      return res.status(502).json({ error: result.error });
+    }
+
+    return res.json({ users: result.users });
+  } catch (error: any) {
+    console.error('[Orgs] Entra user search error:', error);
     return res.status(500).json({ error: 'Internal server error' });
   }
 });
