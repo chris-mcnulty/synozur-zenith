@@ -916,22 +916,25 @@ export async function fetchSitePropertyBag(
     const data = await res.json();
     const props: Record<string, string> = {};
 
+    const keepVtiKeys = new Set([
+      'vti_extenderversion',
+      'vti_defaultlanguage',
+      'vti_siteusagedata',
+    ]);
+
     const skipPrefixes = [
-      'vti_',
+      'vti_x005f_',
       '__',
       'odata.',
       'dlc_',
       'ecm_',
-      'taxonomy',
       'clientformcustomformatter',
-    ];
-    const skipSuffixes = [
-      'vti',
     ];
     const skipKeys = new Set([
       'allowinfodb',
       'profileschemaversion',
       'siteclassification',
+      'taxonomyhiddenlist',
     ]);
 
     for (const [key, value] of Object.entries(data)) {
@@ -939,12 +942,15 @@ export async function fetchSitePropertyBag(
       const strVal = String(value);
       if (strVal === '' || strVal === 'null' || strVal === 'undefined') continue;
       const lk = key.toLowerCase();
+      if (keepVtiKeys.has(lk)) {
+        props[key] = strVal;
+        continue;
+      }
+      if (lk.startsWith('vti_')) continue;
       if (skipKeys.has(lk)) continue;
       if (skipPrefixes.some(p => lk.startsWith(p))) continue;
-      if (skipSuffixes.some(s => lk.endsWith(s))) continue;
       const guidOnly = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
       if (guidOnly.test(key)) continue;
-      if (guidOnly.test(strVal) && !lk.includes('label') && !lk.includes('group') && !lk.includes('hub')) continue;
       props[key] = strVal;
     }
 
