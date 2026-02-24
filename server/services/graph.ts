@@ -780,25 +780,71 @@ export async function fetchSiteAnalytics(token: string, graphSiteId: string): Pr
 }
 
 export async function writeSitePropertyBag(
-  token: string,
-  graphSiteId: string,
+  spoToken: string,
+  siteUrl: string,
   properties: Record<string, string>
 ): Promise<{ success: boolean; error?: string }> {
   try {
-    const url = `https://graph.microsoft.com/v1.0/sites/${graphSiteId}/lists/Site Information/items/1/fields`;
-    const res: Response = await fetch(url, {
-      method: 'PATCH',
+    const normalizedUrl = siteUrl.replace(/\/$/, '');
+
+    const digestRes = await fetch(`${normalizedUrl}/_api/contextinfo`, {
+      method: 'POST',
       headers: {
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json',
+        Authorization: `Bearer ${spoToken}`,
+        Accept: 'application/json;odata=verbose',
       },
-      body: JSON.stringify(properties),
     });
 
-    if (!res.ok) {
-      const errText = await res.text();
-      return { success: false, error: `Graph API ${res.status}: ${errText}` };
+    if (!digestRes.ok) {
+      const errText = await digestRes.text();
+      return { success: false, error: `ContextInfo failed ${digestRes.status}: ${errText}` };
     }
+
+    const digestData = await digestRes.json();
+    const formDigest = digestData.d.GetContextWebInformation.FormDigestValue;
+
+    let actionId = 5;
+    let actionsXml = '';
+    actionsXml += '<ObjectPath Id="2" ObjectPathId="1" />';
+    actionsXml += '<ObjectPath Id="4" ObjectPathId="3" />';
+
+    for (const [key, value] of Object.entries(properties)) {
+      const safeKey = key.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      const safeVal = value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      actionsXml += `<Method Name="SetFieldValue" Id="${actionId}" ObjectPathId="3"><Parameters><Parameter Type="String">${safeKey}</Parameter><Parameter Type="String">${safeVal}</Parameter></Parameters></Method>`;
+      actionId++;
+    }
+
+    actionsXml += `<Method Name="Update" Id="${actionId}" ObjectPathId="1" />`;
+
+    const csomXml = `<Request AddExpandoFieldTypeSuffix="true" SchemaVersion="15.0.0.0" LibraryVersion="16.0.0.0" ApplicationName="Zenith" xmlns="http://schemas.microsoft.com/sharepoint/clientquery/2009"><Actions>${actionsXml}</Actions><ObjectPaths><Property Id="1" ParentId="0" Name="Web" /><Property Id="3" ParentId="1" Name="AllProperties" /><StaticProperty Id="0" TypeId="{3747adcd-a3c3-41b9-bfab-4a64dd2f1e0a}" Name="Current" /></ObjectPaths></Request>`;
+
+    const csomRes = await fetch(`${normalizedUrl}/_vti_bin/client.svc/ProcessQuery`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${spoToken}`,
+        'Content-Type': 'text/xml',
+        'X-RequestDigest': formDigest,
+      },
+      body: csomXml,
+    });
+
+    if (!csomRes.ok) {
+      const errText = await csomRes.text();
+      return { success: false, error: `CSOM ProcessQuery failed ${csomRes.status}: ${errText}` };
+    }
+
+    const responseText = await csomRes.text();
+    try {
+      const parsed = JSON.parse(responseText);
+      if (Array.isArray(parsed)) {
+        for (const item of parsed) {
+          if (item?.ErrorInfo) {
+            return { success: false, error: `CSOM error: ${item.ErrorInfo.ErrorMessage}` };
+          }
+        }
+      }
+    } catch {}
 
     return { success: true };
   } catch (e: any) {

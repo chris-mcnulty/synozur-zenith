@@ -1000,9 +1000,14 @@ async function handleMetadataWriteback(req: any, res: any) {
       continue;
     }
 
+    if (!workspace.siteUrl) {
+      results.push({ workspaceId: wsId, displayName: workspace.displayName, success: false, error: "No site URL available for property bag write" });
+      continue;
+    }
+
     try {
-      const token = await getAppToken(conn.tenantId, clientId, clientSecret);
-      const result = await writeSitePropertyBag(token, workspace.m365ObjectId, properties);
+      const spoToken = await getSpoToken(conn.tenantId, clientId, clientSecret, conn.domain);
+      const result = await writeSitePropertyBag(spoToken, workspace.siteUrl, properties);
       results.push({ workspaceId: wsId, displayName: workspace.displayName, fieldsSynced, ...result });
     } catch (err: any) {
       results.push({ workspaceId: wsId, displayName: workspace.displayName, success: false, error: err.message });
