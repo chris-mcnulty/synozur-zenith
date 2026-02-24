@@ -69,8 +69,6 @@ const REQUIRED_METADATA_OPTIONS = [
   { value: "projectCode", label: "Project Code" },
   { value: "description", label: "Description" },
   { value: "sensitivityLabelId", label: "Sensitivity Label" },
-  { value: "primarySteward", label: "Primary Owner" },
-  { value: "secondarySteward", label: "Secondary Owner" },
 ];
 
 export default function DataDictionariesPage() {
