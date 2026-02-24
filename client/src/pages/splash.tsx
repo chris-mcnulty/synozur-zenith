@@ -1,7 +1,6 @@
 import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Shield, Lock, Layers, Zap, ArrowRight, CheckCircle2, ShieldCheck, Cloud, BrainCircuit, Users } from "lucide-react";
-import heroBg from "@assets/AdobeStock_382432785_1771938099802.jpeg";
 
 export default function SplashPage() {
   return (
@@ -9,7 +8,7 @@ export default function SplashPage() {
       {/* Background Image with Overlay */}
       <div 
         className="absolute inset-0 z-0 pointer-events-none bg-cover bg-center bg-no-repeat"
-        style={{ backgroundImage: `url(${heroBg})` }}
+        style={{ backgroundImage: `url(/images/brand/hero-bg.jpeg)` }}
       />
       <div className="absolute inset-0 z-0 pointer-events-none bg-gradient-to-b from-background/60 via-background/70 to-background" />
       {/* Navigation */}
