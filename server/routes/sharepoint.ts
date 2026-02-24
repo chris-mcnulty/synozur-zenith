@@ -18,18 +18,25 @@ async function getDelegatedTokenForRetention(currentUserId?: string, organizatio
     return null;
   };
 
-  if (currentUserId) {
-    const token = await tryUser(currentUserId);
-    if (token) return token;
-  }
-
   if (organizationId) {
+    const { db } = await import("../db");
+    const { graphTokens, users } = await import("@shared/schema");
+    const { eq, and, inArray } = await import("drizzle-orm");
+
+    const adminRoles = ['platform_owner', 'tenant_admin', 'governance_admin'];
+    const adminUsers = await db.select({ id: users.id }).from(users)
+      .where(and(
+        eq(users.organizationId, organizationId),
+        inArray(users.role, adminRoles)
+      ));
+    for (const admin of adminUsers) {
+      const token = await tryUser(admin.id);
+      if (token) return token;
+    }
+
     const anyValid = await storage.getAnyValidDelegatedToken("graph", organizationId);
     if (anyValid) return anyValid.token;
 
-    const { db } = await import("../db");
-    const { graphTokens } = await import("@shared/schema");
-    const { eq, and } = await import("drizzle-orm");
     const orgTokens = await db.select().from(graphTokens)
       .where(and(eq(graphTokens.organizationId, organizationId), eq(graphTokens.service, "graph")))
       .limit(5);
@@ -41,27 +48,57 @@ async function getDelegatedTokenForRetention(currentUserId?: string, organizatio
     }
   }
 
+  if (currentUserId) {
+    const token = await tryUser(currentUserId);
+    if (token) return token;
+  }
+
   return null;
 }
 
 async function getDelegatedSpoTokenForOrg(spoHost: string, currentUserId?: string, organizationId?: string): Promise<string | null> {
-  if (currentUserId) {
-    const token = await getDelegatedSpoToken(currentUserId, spoHost);
-    if (token) return token;
-  }
   if (organizationId) {
     const { db } = await import("../db");
-    const { graphTokens } = await import("@shared/schema");
-    const { eq, and } = await import("drizzle-orm");
-    const orgTokens = await db.select().from(graphTokens)
+    const { graphTokens, users } = await import("@shared/schema");
+    const { eq, and, inArray } = await import("drizzle-orm");
+
+    const adminRoles = ['platform_owner', 'tenant_admin', 'governance_admin'];
+    const adminUsers = await db.select({ id: users.id, role: users.role }).from(users)
+      .where(and(
+        eq(users.organizationId, organizationId),
+        inArray(users.role, adminRoles)
+      ));
+    const adminUserIds = adminUsers.map(u => u.id);
+
+    if (adminUserIds.length > 0) {
+      const adminTokens = await db.select().from(graphTokens)
+        .where(and(
+          eq(graphTokens.organizationId, organizationId),
+          eq(graphTokens.service, "graph"),
+          inArray(graphTokens.userId, adminUserIds)
+        ));
+      for (const t of adminTokens) {
+        if (t.refreshToken) {
+          const token = await getDelegatedSpoToken(t.userId, spoHost);
+          if (token) return token;
+        }
+      }
+    }
+
+    const fallbackTokens = await db.select().from(graphTokens)
       .where(and(eq(graphTokens.organizationId, organizationId), eq(graphTokens.service, "graph")))
       .limit(5);
-    for (const t of orgTokens) {
+    for (const t of fallbackTokens) {
       if (t.refreshToken) {
         const token = await getDelegatedSpoToken(t.userId, spoHost);
         if (token) return token;
       }
     }
+  }
+
+  if (currentUserId) {
+    const token = await getDelegatedSpoToken(currentUserId, spoHost);
+    if (token) return token;
   }
   return null;
 }
@@ -125,68 +162,34 @@ router.patch("/api/workspaces/:id", async (req, res) => {
 
     try {
       const connection = await storage.getTenantConnection(existing.tenantConnectionId);
-      if (connection) {
-        const clientId = process.env.AZURE_CLIENT_ID!;
-        const clientSecret = process.env.AZURE_CLIENT_SECRET!;
-        const appToken = await getAppToken(connection.tenantId, clientId, clientSecret);
-
-        const { groupId, error: groupError } = await getGroupIdForSite(appToken, existing.m365ObjectId);
-
-        if (groupId) {
-          const delegatedToken = await getDelegatedTokenForRetention(req.session?.userId, connection.organizationId);
-          if (!delegatedToken) {
-            return res.status(401).json({ message: "No delegated token available. Please sign out and sign back in with SSO to enable label write-back. Microsoft requires a user-delegated token for sensitivity label operations." });
-          }
-
-          if (req.body.sensitivityLabelId) {
-            const result = await applySensitivityLabelToGroup(delegatedToken, groupId, req.body.sensitivityLabelId);
-            labelSyncResult = { pushed: result.success, error: result.error };
-            if (result.success) {
-              console.log(`[label-push] Applied sensitivity label ${req.body.sensitivityLabelId} to group ${groupId} for workspace ${existing.displayName}`);
-            } else {
-              console.error(`[label-push] Failed to apply label to group ${groupId}: ${result.error}`);
-              return res.status(502).json({ message: `Failed to apply label in M365: ${result.error}`, labelSyncResult });
-            }
+      if (connection && existing.siteUrl) {
+        const spoHost = connection.domain.includes('.sharepoint.com') ? connection.domain : `${connection.domain.replace(/\..*$/, '')}.sharepoint.com`;
+        const spoToken = await getDelegatedSpoTokenForOrg(spoHost, req.session?.userId, connection.organizationId);
+        if (!spoToken) {
+          labelSyncResult = { pushed: false, error: "No delegated SPO token available. Please sign out and sign back in with SSO." };
+          console.warn(`[label-push] No delegated SPO token for ${existing.displayName}. Label saved locally.`);
+        } else if (req.body.sensitivityLabelId) {
+          const result = await applySensitivityLabelToSite(spoToken, existing.siteUrl, req.body.sensitivityLabelId);
+          labelSyncResult = { pushed: result.success, error: result.error };
+          if (result.success) {
+            console.log(`[label-push] Applied sensitivity label ${req.body.sensitivityLabelId} to ${existing.siteUrl} via CSOM for workspace ${existing.displayName}`);
           } else {
-            const result = await removeSensitivityLabelFromGroup(delegatedToken, groupId);
-            labelSyncResult = { pushed: result.success, error: result.error };
-            if (result.success) {
-              console.log(`[label-push] Removed sensitivity label from group ${groupId} for workspace ${existing.displayName}`);
-            } else {
-              console.error(`[label-push] Failed to remove label from group ${groupId}: ${result.error}`);
-              return res.status(502).json({ message: `Failed to remove label in M365: ${result.error}`, labelSyncResult });
-            }
-          }
-        } else if (existing.siteUrl) {
-          console.log(`[label-push] No M365 group for ${existing.displayName} (${groupError || 'not group-connected'}), using CSOM site-level label push`);
-          const spoHost = connection.domain.includes('.sharepoint.com') ? connection.domain : `${connection.domain.replace(/\..*$/, '')}.sharepoint.com`;
-          const spoToken = await getDelegatedSpoTokenForOrg(spoHost, req.session?.userId, connection.organizationId);
-          if (!spoToken) {
-            labelSyncResult = { pushed: false, error: "No delegated SPO token available. Please sign out and sign back in with SSO." };
-            console.warn(`[label-push] No delegated SPO token for non-group site ${existing.displayName}. Label saved locally.`);
-          } else if (req.body.sensitivityLabelId) {
-            const result = await applySensitivityLabelToSite(spoToken, existing.siteUrl, req.body.sensitivityLabelId);
-            labelSyncResult = { pushed: result.success, error: result.error };
-            if (result.success) {
-              console.log(`[label-push] Applied sensitivity label ${req.body.sensitivityLabelId} to site ${existing.siteUrl} via CSOM for workspace ${existing.displayName}`);
-            } else {
-              console.error(`[label-push] Failed to apply label to site ${existing.siteUrl}: ${result.error}`);
-              return res.status(502).json({ message: `Failed to apply label to site: ${result.error}`, labelSyncResult });
-            }
-          } else {
-            const result = await removeSensitivityLabelFromSite(spoToken, existing.siteUrl);
-            labelSyncResult = { pushed: result.success, error: result.error };
-            if (result.success) {
-              console.log(`[label-push] Removed sensitivity label from site ${existing.siteUrl} via CSOM for workspace ${existing.displayName}`);
-            } else {
-              console.error(`[label-push] Failed to remove label from site ${existing.siteUrl}: ${result.error}`);
-              return res.status(502).json({ message: `Failed to remove label from site: ${result.error}`, labelSyncResult });
-            }
+            console.error(`[label-push] Failed to apply label to ${existing.siteUrl}: ${result.error}`);
+            return res.status(502).json({ message: `Failed to apply label to site: ${result.error}`, labelSyncResult });
           }
         } else {
-          labelSyncResult = { pushed: false, error: "No group or site URL available for label push." };
-          console.warn(`[label-push] No group or siteUrl for workspace ${existing.displayName}. Label saved locally.`);
+          const result = await removeSensitivityLabelFromSite(spoToken, existing.siteUrl);
+          labelSyncResult = { pushed: result.success, error: result.error };
+          if (result.success) {
+            console.log(`[label-push] Removed sensitivity label from ${existing.siteUrl} via CSOM for workspace ${existing.displayName}`);
+          } else {
+            console.error(`[label-push] Failed to remove label from ${existing.siteUrl}: ${result.error}`);
+            return res.status(502).json({ message: `Failed to remove label from site: ${result.error}`, labelSyncResult });
+          }
         }
+      } else if (connection && !existing.siteUrl) {
+        labelSyncResult = { pushed: false, error: "No site URL available for label push." };
+        console.warn(`[label-push] No siteUrl for workspace ${existing.displayName}. Label saved locally.`);
       }
     } catch (err: any) {
       labelSyncResult = { pushed: false, error: err.message };
