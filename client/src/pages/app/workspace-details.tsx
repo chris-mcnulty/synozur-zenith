@@ -108,6 +108,9 @@ export default function WorkspaceDetailsPage() {
   const deptOptions = dictEntries.filter(e => e.category === "department");
   const costCenterOptions = dictEntries.filter(e => e.category === "cost_center");
   const projectCodeOptions = dictEntries.filter(e => e.category === "project_code");
+  const requiredMetadataKeys = dictEntries
+    .filter(e => e.category === "required_metadata_field")
+    .map(e => e.value);
 
   const [editMode, setEditMode] = useState(false);
   const [form, setForm] = useState({
@@ -321,9 +324,9 @@ export default function WorkspaceDetailsPage() {
     : "??";
 
   const metadataFields = [
-    { key: "department", label: "Department", required: true },
-    { key: "costCenter", label: "Cost Center", required: true },
-    { key: "projectCode", label: "Project Code", required: false },
+    { key: "department", label: "Department", required: requiredMetadataKeys.includes("department") },
+    { key: "costCenter", label: "Cost Center", required: requiredMetadataKeys.includes("costCenter") },
+    { key: "projectCode", label: "Project Code", required: requiredMetadataKeys.includes("projectCode") },
   ];
 
   const missingRequired = metadataFields.filter(f => f.required && !form[f.key as keyof typeof form]);
@@ -771,8 +774,8 @@ export default function WorkspaceDetailsPage() {
                       <CardDescription>Required and optional metadata fields for governance compliance.</CardDescription>
                     </div>
                     <div className="flex flex-wrap items-center gap-2">
-                      <Badge variant={workspace.metadataStatus === "COMPLETE" ? "default" : "destructive"} className={workspace.metadataStatus === "COMPLETE" ? "bg-emerald-500/10 text-emerald-600 border-emerald-500/20" : "bg-destructive/10 text-destructive border-destructive/20"}>
-                        {workspace.metadataStatus === "COMPLETE" ? "Complete" : "Missing Required"}
+                      <Badge variant={missingRequired.length === 0 ? "default" : "destructive"} className={missingRequired.length === 0 ? "bg-emerald-500/10 text-emerald-600 border-emerald-500/20" : "bg-destructive/10 text-destructive border-destructive/20"}>
+                        {missingRequired.length === 0 ? "Complete" : "Missing Required"}
                       </Badge>
                       {!editMode && (workspace.department || workspace.costCenter || workspace.projectCode) && (
                         <Button
@@ -813,12 +816,12 @@ export default function WorkspaceDetailsPage() {
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-5">
                     <div className="space-y-2">
                       <Label htmlFor="dept" className="flex justify-between">
-                        Department <span className="text-destructive text-xs">Required</span>
+                        Department {requiredMetadataKeys.includes("department") ? <span className="text-destructive text-xs">Required</span> : <span className="text-muted-foreground text-xs">(Optional)</span>}
                       </Label>
                       {editMode ? (
                         deptOptions.length > 0 ? (
                           <Select value={form.department || "__none__"} onValueChange={(v) => setForm({...form, department: v === "__none__" ? "" : v})}>
-                            <SelectTrigger className={`bg-background/50 ${!form.department ? 'border-amber-500/50 focus-visible:ring-amber-500' : ''}`} data-testid="select-department">
+                            <SelectTrigger className={`bg-background/50 ${!form.department && requiredMetadataKeys.includes("department") ? 'border-amber-500/50 focus-visible:ring-amber-500' : ''}`} data-testid="select-department">
                               <SelectValue placeholder="Select department..." />
                             </SelectTrigger>
                             <SelectContent>
@@ -833,25 +836,25 @@ export default function WorkspaceDetailsPage() {
                             id="dept" 
                             value={form.department} 
                             onChange={(e) => setForm({...form, department: e.target.value})}
-                            className={`bg-background/50 ${!form.department ? 'border-amber-500/50 focus-visible:ring-amber-500' : ''}`}
+                            className={`bg-background/50 ${!form.department && requiredMetadataKeys.includes("department") ? 'border-amber-500/50 focus-visible:ring-amber-500' : ''}`}
                             placeholder="Enter department (define options in Data Dictionaries)..."
                             data-testid="input-department"
                           />
                         )
                       ) : (
-                        <div className={`h-10 flex items-center px-3 rounded-md bg-muted/50 text-sm ${!workspace.department ? 'border border-amber-500/30 text-amber-500' : ''}`}>
-                          {workspace.department || <span className="italic flex items-center gap-1"><AlertTriangle className="w-3 h-3" /> Missing — required by policy</span>}
+                        <div className={`h-10 flex items-center px-3 rounded-md bg-muted/50 text-sm ${!workspace.department && requiredMetadataKeys.includes("department") ? 'border border-amber-500/30 text-amber-500' : ''}`}>
+                          {workspace.department || (requiredMetadataKeys.includes("department") ? <span className="italic flex items-center gap-1"><AlertTriangle className="w-3 h-3" /> Missing — required by policy</span> : <span className="text-muted-foreground">—</span>)}
                         </div>
                       )}
                     </div>
                     <div className="space-y-2">
                       <Label htmlFor="cc" className="flex justify-between">
-                        Cost Center <span className="text-destructive text-xs">Required</span>
+                        Cost Center {requiredMetadataKeys.includes("costCenter") ? <span className="text-destructive text-xs">Required</span> : <span className="text-muted-foreground text-xs">(Optional)</span>}
                       </Label>
                       {editMode ? (
                         costCenterOptions.length > 0 ? (
                           <Select value={form.costCenter || "__none__"} onValueChange={(v) => setForm({...form, costCenter: v === "__none__" ? "" : v})}>
-                            <SelectTrigger className={`bg-background/50 ${!form.costCenter ? 'border-amber-500/50 focus-visible:ring-amber-500' : ''}`} data-testid="select-cost-center">
+                            <SelectTrigger className={`bg-background/50 ${!form.costCenter && requiredMetadataKeys.includes("costCenter") ? 'border-amber-500/50 focus-visible:ring-amber-500' : ''}`} data-testid="select-cost-center">
                               <SelectValue placeholder="Select cost center..." />
                             </SelectTrigger>
                             <SelectContent>
@@ -867,18 +870,18 @@ export default function WorkspaceDetailsPage() {
                             placeholder="e.g., CC-4100 (define options in Data Dictionaries)"
                             value={form.costCenter} 
                             onChange={(e) => setForm({...form, costCenter: e.target.value})}
-                            className={`bg-background/50 ${!form.costCenter ? 'border-amber-500/50 focus-visible:ring-amber-500' : ''}`}
+                            className={`bg-background/50 ${!form.costCenter && requiredMetadataKeys.includes("costCenter") ? 'border-amber-500/50 focus-visible:ring-amber-500' : ''}`}
                             data-testid="input-cost-center"
                           />
                         )
                       ) : (
-                        <div className={`h-10 flex items-center px-3 rounded-md bg-muted/50 text-sm ${!workspace.costCenter ? 'border border-amber-500/30 text-amber-500' : ''}`}>
-                          {workspace.costCenter || <span className="italic flex items-center gap-1"><AlertTriangle className="w-3 h-3" /> Missing — required by policy</span>}
+                        <div className={`h-10 flex items-center px-3 rounded-md bg-muted/50 text-sm ${!workspace.costCenter && requiredMetadataKeys.includes("costCenter") ? 'border border-amber-500/30 text-amber-500' : ''}`}>
+                          {workspace.costCenter || (requiredMetadataKeys.includes("costCenter") ? <span className="italic flex items-center gap-1"><AlertTriangle className="w-3 h-3" /> Missing — required by policy</span> : <span className="text-muted-foreground">—</span>)}
                         </div>
                       )}
                     </div>
                     <div className="space-y-2">
-                      <Label>Project Code <span className="text-muted-foreground text-xs">(Optional)</span></Label>
+                      <Label className="flex justify-between">Project Code {requiredMetadataKeys.includes("projectCode") ? <span className="text-destructive text-xs">Required</span> : <span className="text-muted-foreground text-xs">(Optional)</span>}</Label>
                       {editMode ? (
                         projectCodeOptions.length > 0 ? (
                           <Select value={form.projectCode || "__none__"} onValueChange={(v) => setForm({...form, projectCode: v === "__none__" ? "" : v})}>
@@ -906,30 +909,6 @@ export default function WorkspaceDetailsPage() {
                           {workspace.projectCode || "—"}
                         </div>
                       )}
-                    </div>
-                    <div className="space-y-2">
-                      <Label>Data Classification</Label>
-                      <div className="h-10 flex items-center px-3 rounded-md bg-muted/30 text-sm text-muted-foreground">
-                        <Badge variant={sensitivityVariant} className={`${sensitivityVariant === "destructive" ? "bg-destructive/10 text-destructive border-destructive/20" : ""}`}>{sensitivityLabel}</Badge>
-                        <span className="text-[10px] text-muted-foreground ml-2">Derived from sensitivity label</span>
-                      </div>
-                    </div>
-                    <div className="space-y-2">
-                      <Label>Retention Label (Purview)</Label>
-                      <div className="h-10 flex items-center px-3 rounded-md bg-muted/30 text-sm text-muted-foreground gap-2" data-testid="text-retention-label-metadata">
-                        {resolvedRetentionLabel ? (
-                          <>
-                            <span className="text-foreground">{resolvedRetentionLabel.name}</span>
-                            {resolvedRetentionLabel.retentionDuration && (
-                              <span className="text-[10px] text-muted-foreground">({resolvedRetentionLabel.retentionDuration})</span>
-                            )}
-                          </>
-                        ) : workspace.retentionLabelId ? (
-                          <span className="italic text-xs">ID: {workspace.retentionLabelId.substring(0, 8)}… (sync to resolve)</span>
-                        ) : (
-                          <span className="italic">No retention label assigned</span>
-                        )}
-                      </div>
                     </div>
                   </div>
 
