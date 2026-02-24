@@ -916,41 +916,11 @@ export async function fetchSitePropertyBag(
     const data = await res.json();
     const props: Record<string, string> = {};
 
-    const keepVtiKeys = new Set([
-      'vti_extenderversion',
-      'vti_defaultlanguage',
-      'vti_siteusagedata',
-    ]);
-
-    const skipPrefixes = [
-      'vti_x005f_',
-      '__',
-      'odata.',
-      'dlc_',
-      'ecm_',
-      'clientformcustomformatter',
-    ];
-    const skipKeys = new Set([
-      'allowinfodb',
-      'profileschemaversion',
-      'siteclassification',
-      'taxonomyhiddenlist',
-    ]);
-
     for (const [key, value] of Object.entries(data)) {
+      if (key.startsWith('odata.')) continue;
       if (value === null || value === undefined) continue;
       const strVal = String(value);
-      if (strVal === '' || strVal === 'null' || strVal === 'undefined') continue;
-      const lk = key.toLowerCase();
-      if (keepVtiKeys.has(lk)) {
-        props[key] = strVal;
-        continue;
-      }
-      if (lk.startsWith('vti_')) continue;
-      if (skipKeys.has(lk)) continue;
-      if (skipPrefixes.some(p => lk.startsWith(p))) continue;
-      const guidOnly = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-      if (guidOnly.test(key)) continue;
+      if (strVal === '') continue;
       props[key] = strVal;
     }
 
