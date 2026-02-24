@@ -136,9 +136,8 @@ router.patch("/api/workspaces/:id", async (req, res) => {
             }
           }
         } else {
-          labelSyncResult = { pushed: false, error: groupError || "No M365 Group found for this site" };
-          console.warn(`[label-push] Cannot apply label: ${groupError}`);
-          return res.status(400).json({ message: `Cannot apply label: ${groupError || "No M365 Group found for this site. Sensitivity labels can only be applied to group-connected team sites."}`, labelSyncResult });
+          labelSyncResult = { pushed: false, error: groupError || "No M365 Group found for this site. Label saved locally but not applied to SharePoint." };
+          console.warn(`[label-push] Cannot apply label (no group): ${groupError}. Saving metadata locally.`);
         }
       }
     } catch (err: any) {
