@@ -2,6 +2,8 @@ import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Shield, Lock, Layers, Zap, ArrowRight, CheckCircle2, ShieldCheck, Cloud, BrainCircuit, Users } from "lucide-react";
 import heroBg from "@assets/AdobeStock_382432785_1771938099802.jpeg";
+import synozurLogoWhite from "@assets/IMG_4884_1771940714696.png";
+import synozurMark from "@assets/SynozurMark_color1400_1771940714696.png";
 
 export default function SplashPage() {
   return (
@@ -201,12 +203,13 @@ export default function SplashPage() {
                 </div>
                 <span className="font-bold text-xl tracking-tight">Zenith</span>
               </div>
-              <p className="text-sm text-muted-foreground leading-relaxed mb-4">
+              <p className="text-sm text-muted-foreground leading-relaxed mb-5">
                 Enterprise governance for Microsoft 365. Part of the Synozur application portfolio.
               </p>
-              <div className="flex items-center gap-1">
-                <span className="text-xs text-muted-foreground/60">Powered by</span>
-                <span className="text-xs font-semibold text-muted-foreground">The Synozur Alliance</span>
+              <div className="flex items-center gap-2">
+                <img src={synozurMark} alt="Synozur" className="w-5 h-5" />
+                <span className="text-xs text-muted-foreground/70">Powered by</span>
+                <img src={synozurLogoWhite} alt="Synozur Alliance" className="h-5 opacity-70" />
               </div>
             </div>
 
