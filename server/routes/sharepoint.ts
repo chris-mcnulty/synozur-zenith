@@ -1,9 +1,9 @@
 import { Router } from "express";
 import { storage } from "../storage";
 import { insertWorkspaceSchema, insertProvisioningRequestSchema, type ServicePlanTier } from "@shared/schema";
-import { fetchSharePointSites, fetchSiteUsageReport, fetchSiteDriveOwner, fetchSiteAnalytics, fetchSiteGroupOwners, getAppToken, writeSitePropertyBag, fetchSensitivityLabels, fetchRetentionLabels, getSpoToken, fetchHubSites, fetchSiteHubAssociation, fetchHubSitesViaSearch, getGroupIdForSite, applySensitivityLabelToGroup, removeSensitivityLabelFromGroup, applySensitivityLabelToSite, removeSensitivityLabelFromSite, joinHubSite, leaveHubSite, fetchSiteLockState } from "../services/graph";
+import { fetchSharePointSites, fetchSiteUsageReport, fetchSiteDriveOwner, fetchSiteAnalytics, fetchSiteGroupOwners, getAppToken, writeSitePropertyBag, fetchSensitivityLabels, fetchRetentionLabels, fetchHubSites, fetchSiteHubAssociation, fetchHubSitesViaSearch, getGroupIdForSite, applySensitivityLabelToGroup, removeSensitivityLabelFromGroup, applySensitivityLabelToSite, removeSensitivityLabelFromSite, joinHubSite, leaveHubSite, fetchSiteLockState } from "../services/graph";
 import { getPlanFeatures } from "../services/feature-gate";
-import { refreshDelegatedToken } from "../routes-entra";
+import { refreshDelegatedToken, getDelegatedSpoToken } from "../routes-entra";
 
 const router = Router();
 
@@ -41,6 +41,28 @@ async function getDelegatedTokenForRetention(currentUserId?: string, organizatio
     }
   }
 
+  return null;
+}
+
+async function getDelegatedSpoTokenForOrg(spoHost: string, currentUserId?: string, organizationId?: string): Promise<string | null> {
+  if (currentUserId) {
+    const token = await getDelegatedSpoToken(currentUserId, spoHost);
+    if (token) return token;
+  }
+  if (organizationId) {
+    const { db } = await import("../db");
+    const { graphTokens } = await import("@shared/schema");
+    const { eq, and } = await import("drizzle-orm");
+    const orgTokens = await db.select().from(graphTokens)
+      .where(and(eq(graphTokens.organizationId, organizationId), eq(graphTokens.service, "graph")))
+      .limit(5);
+    for (const t of orgTokens) {
+      if (t.refreshToken) {
+        const token = await getDelegatedSpoToken(t.userId, spoHost);
+        if (token) return token;
+      }
+    }
+  }
   return null;
 }
 
@@ -137,8 +159,12 @@ router.patch("/api/workspaces/:id", async (req, res) => {
           }
         } else if (existing.siteUrl) {
           console.log(`[label-push] No M365 group for ${existing.displayName} (${groupError || 'not group-connected'}), using CSOM site-level label push`);
-          const spoToken = await getSpoToken(connection.tenantId, clientId, clientSecret, connection.domain);
-          if (req.body.sensitivityLabelId) {
+          const spoHost = connection.domain.includes('.sharepoint.com') ? connection.domain : `${connection.domain.replace(/\..*$/, '')}.sharepoint.com`;
+          const spoToken = await getDelegatedSpoTokenForOrg(spoHost, req.session?.userId, connection.organizationId);
+          if (!spoToken) {
+            labelSyncResult = { pushed: false, error: "No delegated SPO token available. Please sign out and sign back in with SSO." };
+            console.warn(`[label-push] No delegated SPO token for non-group site ${existing.displayName}. Label saved locally.`);
+          } else if (req.body.sensitivityLabelId) {
             const result = await applySensitivityLabelToSite(spoToken, existing.siteUrl, req.body.sensitivityLabelId);
             labelSyncResult = { pushed: result.success, error: result.error };
             if (result.success) {
@@ -238,7 +264,8 @@ router.post("/api/workspaces/:id/sync", async (req, res) => {
 
     let spoToken: string | null = null;
     if (domain) {
-      try { spoToken = await getSpoToken(connection.tenantId, clientId, clientSecret, domain); } catch {}
+      const spoHost = domain.includes('.sharepoint.com') ? domain : `${domain.replace(/\..*$/, '')}.sharepoint.com`;
+      try { spoToken = await getDelegatedSpoTokenForOrg(spoHost, req.session?.userId, connection.organizationId); } catch {}
     }
 
     const [driveResult, analyticsResult, groupOwnersResult, lockStateResult] = await Promise.allSettled([
@@ -364,7 +391,12 @@ router.patch("/api/workspaces/bulk/hub-assignment", async (req, res) => {
         continue;
       }
 
-      const spoToken = await getSpoToken(connection.tenantId, clientId, clientSecret, domain);
+      const spoHost = domain.includes('.sharepoint.com') ? domain : `${domain.replace(/\..*$/, '')}.sharepoint.com`;
+      const spoToken = await getDelegatedSpoTokenForOrg(spoHost, req.session?.userId, connection.organizationId);
+      if (!spoToken) {
+        spoSyncResults.push({ workspaceId: ws.id, displayName: ws.displayName, success: false, error: "No delegated SPO token available. Please sign out and sign back in with SSO." });
+        continue;
+      }
 
       let result;
       if (hubSiteId) {
@@ -508,11 +540,12 @@ router.post("/api/admin/tenants/:id/sync", async (req, res) => {
     const getSpoTokenForDomain = async (domain: string): Promise<string | null> => {
       if (spoTokenCache.has(domain)) return spoTokenCache.get(domain)!;
       try {
-        const t = await getSpoToken(connection.tenantId, clientId, clientSecret, domain);
+        const spoHost = domain.includes('.sharepoint.com') ? domain : `${domain.replace(/\..*$/, '')}.sharepoint.com`;
+        const t = await getDelegatedSpoTokenForOrg(spoHost, req.session?.userId, connection.organizationId);
         spoTokenCache.set(domain, t);
         return t;
       } catch (err: any) {
-        console.warn(`[sync] SPO token failed for ${domain}: ${err.message}`);
+        console.warn(`[sync] Delegated SPO token failed for ${domain}: ${err.message}`);
         spoTokenCache.set(domain, null);
         return null;
       }
@@ -839,7 +872,12 @@ router.post("/api/admin/tenants/:id/sync", async (req, res) => {
         const spoHostDomain = spoHostFromSites || connection.domain;
 
         try {
-          const spoToken = await getSpoToken(connection.tenantId, clientId, clientSecret, spoHostDomain);
+          const spoHostForHub = spoHostDomain.includes('.sharepoint.com') ? spoHostDomain : `${spoHostDomain.replace(/\..*$/, '')}.sharepoint.com`;
+          const spoToken = await getDelegatedSpoTokenForOrg(spoHostForHub, req.session?.userId, connection.organizationId);
+          if (!spoToken) {
+            hubSyncResult.error = "No delegated SPO token available for hub site detection. Please sign out and sign back in with SSO.";
+            throw new Error(hubSyncResult.error);
+          }
           const hubResult = await fetchHubSites(spoToken, spoHostDomain);
           hubSyncResult.method = "spo-rest";
 
@@ -1028,7 +1066,12 @@ async function handleMetadataWriteback(req: any, res: any) {
     }
 
     try {
-      const spoToken = await getSpoToken(conn.tenantId, clientId, clientSecret, conn.domain);
+      const spoHost = conn.domain.includes('.sharepoint.com') ? conn.domain : `${conn.domain.replace(/\..*$/, '')}.sharepoint.com`;
+      const spoToken = await getDelegatedSpoTokenForOrg(spoHost, req.session?.userId, conn.organizationId);
+      if (!spoToken) {
+        results.push({ workspaceId: wsId, displayName: workspace.displayName, success: false, error: "No delegated SPO token available. Please sign out and sign back in with SSO." });
+        continue;
+      }
       const result = await writeSitePropertyBag(spoToken, workspace.siteUrl, properties);
       results.push({ workspaceId: wsId, displayName: workspace.displayName, fieldsSynced, ...result });
     } catch (err: any) {
@@ -1050,15 +1093,18 @@ router.get("/api/debug/spo-test/:workspaceId", async (req, res) => {
   if (!workspace.tenantConnectionId || !workspace.siteUrl) return res.status(400).json({ error: "No tenant or site URL" });
   const conn = await storage.getTenantConnection(workspace.tenantConnectionId);
   if (!conn) return res.status(400).json({ error: "No connection" });
-  const clientId = process.env.AZURE_CLIENT_ID!;
-  const clientSecret = process.env.AZURE_CLIENT_SECRET!;
-  const spoToken = await getSpoToken(conn.tenantId, clientId, clientSecret, conn.domain);
+  const spoHost = conn.domain.includes('.sharepoint.com') ? conn.domain : `${conn.domain.replace(/\..*$/, '')}.sharepoint.com`;
+  const spoToken = await getDelegatedSpoTokenForOrg(spoHost, req.session?.userId, conn.organizationId);
+  if (!spoToken) {
+    return res.status(401).json({ error: "No delegated SPO token available. Please sign out and sign back in with SSO." });
+  }
   const tokenPayload = JSON.parse(Buffer.from(spoToken.split('.')[1], 'base64').toString());
   const results: Record<string, any> = {
     siteUrl: workspace.siteUrl,
+    tokenType: "delegated",
     tokenAudience: tokenPayload.aud,
-    tokenRoles: tokenPayload.roles,
-    tokenAppId: tokenPayload.appid,
+    tokenScopes: tokenPayload.scp,
+    tokenUpn: tokenPayload.upn,
   };
 
   const endpoints = [

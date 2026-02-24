@@ -86,6 +86,45 @@ export async function refreshDelegatedToken(userId: string): Promise<string | nu
   return null;
 }
 
+export async function getDelegatedSpoToken(userId: string, spoHost: string): Promise<string | null> {
+  const client = getMsalClient();
+  if (!client) return null;
+
+  const tokenRecord = await storage.getGraphToken(userId, 'graph');
+  if (!tokenRecord?.refreshToken) return null;
+
+  try {
+    const { decryptToken } = await import('./utils/encryption');
+    const refreshToken = decryptToken(tokenRecord.refreshToken);
+
+    const result = await (client as any).acquireTokenByRefreshToken({
+      refreshToken,
+      scopes: [`https://${spoHost}/AllSites.FullControl`],
+    });
+
+    if (result?.accessToken) {
+      if ((result as any).refreshToken) {
+        const refreshTokenToStore = encryptToken((result as any).refreshToken);
+        await storage.upsertGraphToken({
+          userId,
+          organizationId: tokenRecord.organizationId,
+          service: 'graph',
+          accessToken: tokenRecord.accessToken,
+          refreshToken: refreshTokenToStore,
+          expiresAt: tokenRecord.expiresAt,
+          scopes: tokenRecord.scopes || SCOPES,
+        });
+      }
+      console.log(`[Entra] Acquired delegated SPO token for user ${userId} on ${spoHost}`);
+      return result.accessToken;
+    }
+  } catch (err: any) {
+    console.warn(`[Entra] SPO token acquisition failed for user ${userId}: ${err.message}`);
+  }
+
+  return null;
+}
+
 router.get('/status', (_req: Request, res: Response) => {
   const configured = !!(process.env.AZURE_CLIENT_ID && process.env.AZURE_CLIENT_SECRET);
   return res.json({
