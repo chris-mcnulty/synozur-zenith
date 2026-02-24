@@ -918,6 +918,7 @@ export async function fetchSitePropertyBag(
 
     for (const [key, value] of Object.entries(data)) {
       if (key.startsWith('odata.')) continue;
+      if (key.toLowerCase().startsWith('vti_')) continue;
       if (value === null || value === undefined) continue;
       const strVal = String(value);
       if (strVal === '') continue;
