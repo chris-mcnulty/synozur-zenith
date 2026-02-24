@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
-import { Shield, LogIn, UserPlus, AlertCircle, Loader2 } from "lucide-react";
+import { LogIn, UserPlus, AlertCircle, Loader2 } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import heroBg from "@assets/AdobeStock_382432785_1771938099802.jpeg";
@@ -78,9 +78,7 @@ export default function LoginPage() {
       <div className="absolute inset-0 z-0 pointer-events-none bg-gradient-to-t from-background/80 via-background/60 to-background/50" />
       <div className="mb-8 text-center relative z-10">
         <div className="flex items-center justify-center gap-2 mb-2">
-          <div className="w-10 h-10 rounded-lg bg-primary flex items-center justify-center text-primary-foreground shadow-lg shadow-primary/20">
-            <Shield className="w-6 h-6" />
-          </div>
+          <img src="/images/brand/synozur-mark-color.png" alt="Zenith" className="w-10 h-10" />
           <span className="font-bold text-2xl tracking-tight">Zenith</span>
         </div>
         <p className="text-muted-foreground text-sm">Microsoft 365 Governance Platform</p>

@@ -2,8 +2,6 @@ import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Shield, Lock, Layers, Zap, ArrowRight, CheckCircle2, ShieldCheck, Cloud, BrainCircuit, Users } from "lucide-react";
 import heroBg from "@assets/AdobeStock_382432785_1771938099802.jpeg";
-import synozurLogoWhite from "@assets/IMG_4884_1771940714696.png";
-import synozurMark from "@assets/SynozurMark_color1400_1771940714696.png";
 
 export default function SplashPage() {
   return (
@@ -18,9 +16,7 @@ export default function SplashPage() {
       <nav className="relative z-10 w-full border-b border-border/40 bg-background/50 backdrop-blur-md sticky top-0">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <div className="w-8 h-8 rounded-lg bg-primary flex items-center justify-center text-primary-foreground shadow-lg shadow-primary/20">
-              <Shield className="w-5 h-5" />
-            </div>
+            <img src="/images/brand/synozur-mark-color.png" alt="Zenith" className="w-8 h-8" />
             <span className="font-bold text-xl tracking-tight">Zenith</span>
           </div>
           <div className="hidden md:flex items-center space-x-8 text-sm font-medium text-muted-foreground">
@@ -198,18 +194,16 @@ export default function SplashPage() {
           <div className="grid grid-cols-2 md:grid-cols-4 gap-8 lg:gap-12">
             <div className="col-span-2 md:col-span-1">
               <div className="flex items-center gap-2 mb-4">
-                <div className="w-8 h-8 rounded-lg bg-primary flex items-center justify-center text-primary-foreground shadow-md shadow-primary/20">
-                  <Shield className="w-5 h-5" />
-                </div>
+                <img src="/images/brand/synozur-mark-color.png" alt="Zenith" className="w-8 h-8" />
                 <span className="font-bold text-xl tracking-tight">Zenith</span>
               </div>
               <p className="text-sm text-muted-foreground leading-relaxed mb-5">
                 Enterprise governance for Microsoft 365. Part of the Synozur application portfolio.
               </p>
               <div className="flex items-center gap-2">
-                <img src={synozurMark} alt="Synozur" className="w-5 h-5" />
+                <img src="/images/brand/synozur-mark-color.png" alt="Synozur" className="w-5 h-5" />
                 <span className="text-xs text-muted-foreground/70">Powered by</span>
-                <img src={synozurLogoWhite} alt="Synozur Alliance" className="h-5 opacity-70" />
+                <img src="/images/brand/synozur-logo-white.png" alt="Synozur Alliance" className="h-5 opacity-70" />
               </div>
             </div>
 

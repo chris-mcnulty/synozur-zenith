@@ -279,9 +279,7 @@ export default function AppShell({ children }: AppShellProps) {
       <aside className="hidden lg:flex w-72 flex-col border-r border-border/40 bg-card/40 backdrop-blur-xl">
         <div className="h-16 flex items-center px-6 border-b border-border/40">
           <Link href="/app/dashboard" className="flex items-center gap-2 cursor-pointer group">
-            <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-primary to-secondary flex items-center justify-center text-primary-foreground shadow-md shadow-primary/20 transition-transform group-hover:scale-105">
-              <ShieldCheck className="w-5 h-5" />
-            </div>
+            <img src="/images/brand/synozur-mark-color.png" alt="Zenith" className="w-8 h-8 transition-transform group-hover:scale-105" />
             <span className="font-bold text-xl tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-foreground to-foreground/80">Zenith</span>
           </Link>
         </div>
@@ -317,9 +315,7 @@ export default function AppShell({ children }: AppShellProps) {
               <SheetContent side="left" className="w-72 p-0 border-r-border/40 bg-card/95 backdrop-blur-xl">
                 <div className="h-16 flex items-center px-6 border-b border-border/40">
                   <div className="flex items-center gap-2">
-                    <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-primary to-secondary flex items-center justify-center text-primary-foreground shadow-md shadow-primary/20">
-                      <ShieldCheck className="w-5 h-5" />
-                    </div>
+                    <img src="/images/brand/synozur-mark-color.png" alt="Zenith" className="w-8 h-8" />
                     <span className="font-bold text-xl tracking-tight">Zenith</span>
                   </div>
                 </div>
