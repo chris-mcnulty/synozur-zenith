@@ -779,6 +779,40 @@ export async function fetchSiteAnalytics(token: string, graphSiteId: string): Pr
   }
 }
 
+async function getFormDigest(
+  spoToken: string,
+  siteUrl: string
+): Promise<{ digest: string; error?: string }> {
+  const normalizedUrl = siteUrl.replace(/\/$/, '');
+  const contextUrl = `${normalizedUrl}/_api/contextinfo`;
+  console.log(`[csom] Requesting form digest from: ${contextUrl}`);
+  try {
+    const res = await fetch(contextUrl, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${spoToken}`,
+        Accept: 'application/json;odata=nometadata',
+        'Content-Length': '0',
+      },
+    });
+    if (!res.ok) {
+      const errText = await res.text();
+      console.error(`[csom] ContextInfo failed ${res.status}: headers=${JSON.stringify(Object.fromEntries(res.headers.entries()))}, body=${errText.slice(0, 500)}`);
+      return { digest: '', error: `ContextInfo ${res.status}: ${errText}` };
+    }
+    const data = await res.json();
+    const digest = data.FormDigestValue || data.d?.GetContextWebInformation?.FormDigestValue;
+    if (!digest) {
+      console.error(`[csom] No FormDigestValue in response: ${JSON.stringify(data).slice(0, 500)}`);
+      return { digest: '', error: `No FormDigestValue in response: ${JSON.stringify(data).slice(0, 200)}` };
+    }
+    console.log(`[csom] Got form digest successfully (length: ${digest.length})`);
+    return { digest };
+  } catch (e: any) {
+    return { digest: '', error: e.message };
+  }
+}
+
 async function executeCsomQuery(
   spoToken: string,
   siteUrl: string,
@@ -786,13 +820,18 @@ async function executeCsomQuery(
 ): Promise<{ success: boolean; error?: string }> {
   const normalizedUrl = siteUrl.replace(/\/$/, '');
   try {
+    const { digest, error: digestError } = await getFormDigest(spoToken, normalizedUrl);
+    if (digestError) {
+      console.warn(`[csom] Form digest failed (${digestError}), trying X-RequestDigest: 0`);
+    }
+
     const res = await fetch(`${normalizedUrl}/_vti_bin/client.svc/ProcessQuery`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${spoToken}`,
         'Content-Type': 'text/xml',
         Accept: 'application/json;odata=nometadata',
-        'X-RequestDigest': '0',
+        'X-RequestDigest': digest || '0',
       },
       body: csomXml,
     });

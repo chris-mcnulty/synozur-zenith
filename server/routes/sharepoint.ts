@@ -1044,6 +1044,46 @@ async function handleMetadataWriteback(req: any, res: any) {
 router.post("/api/workspaces/writeback/department", handleMetadataWriteback);
 router.post("/api/workspaces/writeback/metadata", handleMetadataWriteback);
 
+router.get("/api/debug/spo-test/:workspaceId", async (req, res) => {
+  const workspace = await storage.getWorkspace(req.params.workspaceId);
+  if (!workspace) return res.status(404).json({ error: "Not found" });
+  if (!workspace.tenantConnectionId || !workspace.siteUrl) return res.status(400).json({ error: "No tenant or site URL" });
+  const conn = await storage.getTenantConnection(workspace.tenantConnectionId);
+  if (!conn) return res.status(400).json({ error: "No connection" });
+  const clientId = process.env.AZURE_CLIENT_ID!;
+  const clientSecret = process.env.AZURE_CLIENT_SECRET!;
+  const spoToken = await getSpoToken(conn.tenantId, clientId, clientSecret, conn.domain);
+  const tokenPayload = JSON.parse(Buffer.from(spoToken.split('.')[1], 'base64').toString());
+  const results: Record<string, any> = {
+    siteUrl: workspace.siteUrl,
+    tokenAudience: tokenPayload.aud,
+    tokenRoles: tokenPayload.roles,
+    tokenAppId: tokenPayload.appid,
+  };
+
+  const endpoints = [
+    { name: 'GET _api/web', url: `${workspace.siteUrl}/_api/web?$select=Title`, method: 'GET' },
+    { name: 'POST _api/contextinfo', url: `${workspace.siteUrl}/_api/contextinfo`, method: 'POST' },
+  ];
+
+  for (const ep of endpoints) {
+    try {
+      const headers: Record<string, string> = {
+        Authorization: `Bearer ${spoToken}`,
+        Accept: 'application/json;odata=nometadata',
+      };
+      if (ep.method === 'POST') headers['Content-Length'] = '0';
+      const r = await fetch(ep.url, { method: ep.method, headers });
+      const text = await r.text();
+      results[ep.name] = { status: r.status, body: text.slice(0, 300) };
+    } catch (e: any) {
+      results[ep.name] = { error: e.message };
+    }
+  }
+
+  res.json(results);
+});
+
 router.get("/api/structures", async (req, res) => {
   const tenantConnectionId = req.query.tenantConnectionId as string | undefined;
   const workspaces = await storage.getWorkspaces(undefined, tenantConnectionId);
