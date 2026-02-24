@@ -1,7 +1,13 @@
 # Zenith - Microsoft 365 Governance Platform
 
 ## Overview
-Zenith is an MVP Microsoft 365 governance platform designed for The Synozur Alliance. Its primary purpose is to provide governed SharePoint site provisioning, incorporating Deal and Portfolio Company context. Key capabilities include site inventory tracking, sensitivity label enforcement, and explainability for Copilot eligibility. All managed workspaces are SharePoint sites (TEAM_SITE, COMMUNICATION_SITE, HUB_SITE) with optional Microsoft Teams connectivity. The business vision is to streamline M365 governance, enhance security, and improve operational efficiency for organizations managing multiple M365 tenants. Zenith is part of the Synozur application portfolio, sharing common UI/UX and multitenant architecture patterns with sibling apps like Constellation and Orbit.
+Zenith is an MVP Microsoft 365 governance platform designed for The Synozur Alliance. Its primary purpose is to provide governed SharePoint site provisioning, incorporating Deal and Portfolio Company context. Key capabilities include site inventory tracking, sensitivity label enforcement, and explainability for Copilot eligibility. All managed workspaces are SharePoint sites (TEAM_SITE, COMMUNICATION_SITE, HUB_SITE) with optional Microsoft Teams connectivity. The business vision is to streamline M365 governance, enhance security, and improve operational efficiency for organizations managing multiple M365 tenants. Zenith is part of the Synozur application portfolio, sharing common UI/UX and multitenant architecture patterns with sibling apps like Constellation, Orbit, and Vega.
+
+### Synozur Application Portfolio
+- **Zenith**: Microsoft 365 governance platform (this app)
+- **Constellation**: Sibling app (shared design language and multitenant architecture)
+- **Orbit**: Sibling app (shared design language and multitenant architecture)
+- **Vega**: Strategy and OKRs app. Codebase: https://github.com/chris-mcnulty/synozur-vega
 
 ## User Preferences
 I prefer clear and direct communication. When making changes, please explain the reasoning and impact before proceeding. I value iterative development and would like to be involved in key decision points. Do not make changes to the `shared/schema.ts` file without explicit approval. Always keep the Entra App Registration permissions documented in this file — this is a permanent rule so the app can be maintained alongside the codebase.
