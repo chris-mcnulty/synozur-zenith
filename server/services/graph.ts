@@ -886,7 +886,7 @@ export async function applySensitivityLabelToSite(
   siteUrl: string,
   sensitivityLabelId: string
 ): Promise<{ success: boolean; error?: string }> {
-  const csomXml = `<Request SchemaVersion="15.0.0.0" LibraryVersion="16.0.0.0" ApplicationName="Zenith" xmlns="http://schemas.microsoft.com/sharepoint/clientquery/2009"><Actions><ObjectPath Id="2" ObjectPathId="1" /><SetProperty Id="3" ObjectPathId="1" Name="SensitivityLabelId"><Parameter Type="Guid">{${sensitivityLabelId}}</Parameter></SetProperty><Method Name="Update" Id="4" ObjectPathId="1" /></Actions><ObjectPaths><Property Id="1" ParentId="0" Name="Site" /><StaticProperty Id="0" TypeId="{3747adcd-a3c3-41b9-bfab-4a64dd2f1e0a}" Name="Current" /></ObjectPaths></Request>`;
+  const csomXml = `<Request SchemaVersion="15.0.0.0" LibraryVersion="16.0.0.0" ApplicationName="Zenith" xmlns="http://schemas.microsoft.com/sharepoint/clientquery/2009"><Actions><ObjectPath Id="2" ObjectPathId="1" /><SetProperty Id="3" ObjectPathId="1" Name="SensitivityLabelId"><Parameter Type="Guid">{${sensitivityLabelId}}</Parameter></SetProperty></Actions><ObjectPaths><Property Id="1" ParentId="0" Name="Site" /><StaticProperty Id="0" TypeId="{3747adcd-a3c3-41b9-bfab-4a64dd2f1e0a}" Name="Current" /></ObjectPaths></Request>`;
 
   return executeCsomQuery(spoToken, siteUrl, csomXml);
 }
@@ -895,7 +895,7 @@ export async function removeSensitivityLabelFromSite(
   spoToken: string,
   siteUrl: string
 ): Promise<{ success: boolean; error?: string }> {
-  const csomXml = `<Request SchemaVersion="15.0.0.0" LibraryVersion="16.0.0.0" ApplicationName="Zenith" xmlns="http://schemas.microsoft.com/sharepoint/clientquery/2009"><Actions><ObjectPath Id="2" ObjectPathId="1" /><SetProperty Id="3" ObjectPathId="1" Name="SensitivityLabelId"><Parameter Type="Guid">{00000000-0000-0000-0000-000000000000}</Parameter></SetProperty><Method Name="Update" Id="4" ObjectPathId="1" /></Actions><ObjectPaths><Property Id="1" ParentId="0" Name="Site" /><StaticProperty Id="0" TypeId="{3747adcd-a3c3-41b9-bfab-4a64dd2f1e0a}" Name="Current" /></ObjectPaths></Request>`;
+  const csomXml = `<Request SchemaVersion="15.0.0.0" LibraryVersion="16.0.0.0" ApplicationName="Zenith" xmlns="http://schemas.microsoft.com/sharepoint/clientquery/2009"><Actions><ObjectPath Id="2" ObjectPathId="1" /><SetProperty Id="3" ObjectPathId="1" Name="SensitivityLabelId"><Parameter Type="Guid">{00000000-0000-0000-0000-000000000000}</Parameter></SetProperty></Actions><ObjectPaths><Property Id="1" ParentId="0" Name="Site" /><StaticProperty Id="0" TypeId="{3747adcd-a3c3-41b9-bfab-4a64dd2f1e0a}" Name="Current" /></ObjectPaths></Request>`;
 
   return executeCsomQuery(spoToken, siteUrl, csomXml);
 }
