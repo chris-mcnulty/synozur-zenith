@@ -371,11 +371,11 @@ export async function fetchSiteLockState(spoToken: string, siteUrl: string): Pro
     });
 
     if (res.status === 403 || res.status === 401) {
-      return { lockState: "Unlock", isArchived: false, error: `Permission denied (${res.status}) — cannot determine lock state` };
+      return { lockState: "Unknown", isArchived: false, error: `Permission denied (${res.status}) — site may be archived or inaccessible` };
     }
 
     if (!res.ok) {
-      return { lockState: "Unlock", isArchived: false, error: `API ${res.status}` };
+      return { lockState: "Unknown", isArchived: false, error: `API ${res.status}` };
     }
 
     const data = await res.json();
@@ -395,7 +395,7 @@ export async function fetchSiteLockState(spoToken: string, siteUrl: string): Pro
     }
     return { lockState: "Unlock", isArchived: false };
   } catch (err: any) {
-    return { lockState: "Unlock", isArchived: false, error: err.message };
+    return { lockState: "Unknown", isArchived: false, error: err.message };
   }
 }
 

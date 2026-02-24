@@ -239,14 +239,14 @@ router.post("/api/workspaces/:id/sync", requireRole(ZENITH_ROLES.OPERATOR, ZENIT
       fetchSiteDriveOwner(token, graphSiteId),
       fetchSiteAnalytics(token, graphSiteId),
       fetchSiteGroupOwners(token, graphSiteId),
-      spoToken && siteUrl ? fetchSiteLockState(spoToken, siteUrl) : Promise.resolve({ lockState: "Unlock", isArchived: false }),
+      spoToken && siteUrl ? fetchSiteLockState(spoToken, siteUrl) : Promise.resolve({ lockState: "Unknown", isArchived: false }),
     ]);
 
     const warnings: string[] = [];
     const driveOwner = driveResult.status === 'fulfilled' ? driveResult.value : {} as any;
     const siteAnalytics = analyticsResult.status === 'fulfilled' ? analyticsResult.value : {} as any;
     const groupOwners = groupOwnersResult.status === 'fulfilled' ? groupOwnersResult.value : { owners: [] } as any;
-    const lockStateData = lockStateResult.status === 'fulfilled' ? lockStateResult.value as any : { lockState: "Unlock", isArchived: false };
+    const lockStateData = lockStateResult.status === 'fulfilled' ? lockStateResult.value as any : { lockState: "Unknown", isArchived: false };
     const lockState = lockStateData.lockState;
     const isArchived = lockStateData.isArchived === true;
 
@@ -275,8 +275,40 @@ router.post("/api/workspaces/:id/sync", requireRole(ZENITH_ROLES.OPERATOR, ZENIT
     const activityDate = siteAnalytics.lastActivityDate || workspace.lastActivityDate || null;
     updates.lastActivityDate = activityDate;
 
-    updates.lockState = lockState;
-    updates.isArchived = isArchived;
+    if (lockState !== "Unknown") {
+      updates.lockState = lockState;
+      updates.isArchived = isArchived;
+    } else {
+      let usageFallbackApplied = false;
+      try {
+        const usageReport = await fetchSiteUsageReport(connection.tenantId, clientId, clientSecret);
+        if (usageReport.report.length > 0) {
+          const graphSiteIdParts = graphSiteId.split(',');
+          const siteGuid = graphSiteIdParts.length >= 2 ? graphSiteIdParts[1].trim().toLowerCase() : graphSiteId.trim().toLowerCase();
+          const normalizedSiteUrl = siteUrl.replace(/\/+$/, '').toLowerCase();
+          const usageRow = usageReport.report.find(r =>
+            r.siteId.toLowerCase() === siteGuid ||
+            r.siteUrl.replace(/\/+$/, '').toLowerCase() === normalizedSiteUrl
+          );
+          if (usageRow) {
+            updates.lockState = usageRow.lockState;
+            updates.isArchived = usageRow.lockState === "Locked" || usageRow.lockState === "ReadOnly";
+            usageFallbackApplied = true;
+            console.log(`[sync] Archive status for ${siteUrl} inferred from usage report: lockState=${usageRow.lockState}, isArchived=${updates.isArchived}`);
+            if (!warnings.some(w => w.includes("archive"))) {
+              warnings.push(`Lock/archive state determined from usage report (SPO REST API inaccessible — site may be archived).`);
+            }
+          }
+        }
+      } catch (e: any) {
+        console.warn(`[sync] Failed to fetch usage report for archive fallback: ${e.message}`);
+      }
+      if (!usageFallbackApplied) {
+        updates.lockState = workspace.lockState || "Unknown";
+        updates.isArchived = workspace.isArchived || false;
+        warnings.push("Could not determine lock/archive state — SPO REST API returned an error and usage report fallback unavailable.");
+      }
+    }
     updates.isDeleted = false;
 
     if (storageUsed != null) {
@@ -558,9 +590,9 @@ router.post("/api/admin/tenants/:id/sync", requireRole(ZENITH_ROLES.TENANT_ADMIN
               fetchSiteDriveOwner(token!, site.id),
               fetchSiteAnalytics(token!, site.id),
               fetchSiteGroupOwners(token!, site.id),
-              spoToken && siteUrl ? fetchSiteLockState(spoToken, siteUrl) : Promise.resolve({ lockState: "Unlock", isArchived: false }),
+              spoToken && siteUrl ? fetchSiteLockState(spoToken, siteUrl) : Promise.resolve({ lockState: "Unknown", isArchived: false }),
             ]);
-            const lockData = lockStateResult.status === 'fulfilled' ? lockStateResult.value : { lockState: "Unlock", isArchived: false };
+            const lockData = lockStateResult.status === 'fulfilled' ? lockStateResult.value : { lockState: "Unknown", isArchived: false };
             return {
               siteId: site.id,
               driveOwner: driveResult.status === 'fulfilled' ? driveResult.value : {},
@@ -653,8 +685,21 @@ router.post("/api/admin/tenants/:id/sync", requireRole(ZENITH_ROLES.TENANT_ADMIN
         workspaceData.sharingCapability = usage.externalSharing || null;
       }
 
-      workspaceData.lockState = enriched.lockState || "Unlock";
-      workspaceData.isArchived = enriched.isArchived === true;
+      const spoLockState = enriched.lockState;
+      const usageLockState = usage?.lockState;
+      if (spoLockState && spoLockState !== "Unknown") {
+        workspaceData.lockState = spoLockState;
+        workspaceData.isArchived = enriched.isArchived === true;
+      } else if (usageLockState) {
+        workspaceData.lockState = usageLockState;
+        workspaceData.isArchived = usageLockState === "Locked" || usageLockState === "ReadOnly";
+        if (workspaceData.isArchived) {
+          console.log(`[bulk-sync] Archive status for ${site.webUrl} inferred from usage report: lockState=${usageLockState}`);
+        }
+      } else {
+        workspaceData.lockState = spoLockState === "Unknown" ? "Unknown" : "Unlock";
+        workspaceData.isArchived = false;
+      }
 
       if (storageUsed != null) {
         const usedMB = Math.round(storageUsed / (1024 * 1024));
