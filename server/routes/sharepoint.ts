@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { storage } from "../storage";
 import { insertWorkspaceSchema, insertProvisioningRequestSchema, type ServicePlanTier, ZENITH_ROLES } from "@shared/schema";
-import { fetchSharePointSites, fetchSiteUsageReport, fetchSiteDriveOwner, fetchSiteAnalytics, fetchSiteGroupOwners, getAppToken, writeSitePropertyBag, fetchSensitivityLabels, fetchRetentionLabels, fetchHubSites, fetchSiteHubAssociation, fetchHubSitesViaSearch, applySensitivityLabelToSite, removeSensitivityLabelFromSite, joinHubSite, leaveHubSite, fetchSiteLockState, fetchSiteArchiveStatus } from "../services/graph";
+import { fetchSharePointSites, fetchSiteUsageReport, fetchSiteDriveOwner, fetchSiteAnalytics, fetchSiteGroupOwners, getAppToken, writeSitePropertyBag, fetchSitePropertyBag, fetchSensitivityLabels, fetchRetentionLabels, fetchHubSites, fetchSiteHubAssociation, fetchHubSitesViaSearch, applySensitivityLabelToSite, removeSensitivityLabelFromSite, joinHubSite, leaveHubSite, fetchSiteLockState, fetchSiteArchiveStatus } from "../services/graph";
 import { getPlanFeatures } from "../services/feature-gate";
 import { refreshDelegatedToken, getDelegatedSpoToken } from "../routes-entra";
 import { requireRole, type AuthenticatedRequest } from "../middleware/rbac";
@@ -235,12 +235,13 @@ router.post("/api/workspaces/:id/sync", requireRole(ZENITH_ROLES.OPERATOR, ZENIT
       try { spoToken = await getDelegatedSpoTokenForOrg(spoHost, req.session?.userId, connection.organizationId); } catch {}
     }
 
-    const [driveResult, analyticsResult, groupOwnersResult, lockStateResult, archiveResult] = await Promise.allSettled([
+    const [driveResult, analyticsResult, groupOwnersResult, lockStateResult, archiveResult, propertyBagResult] = await Promise.allSettled([
       fetchSiteDriveOwner(token, graphSiteId),
       fetchSiteAnalytics(token, graphSiteId),
       fetchSiteGroupOwners(token, graphSiteId),
       spoToken && siteUrl ? fetchSiteLockState(spoToken, siteUrl) : Promise.resolve({ lockState: "Unknown", isArchived: false }),
       fetchSiteArchiveStatus(token, graphSiteId),
+      spoToken && siteUrl ? fetchSitePropertyBag(spoToken, siteUrl) : Promise.resolve({ properties: {} }),
     ]);
 
     const warnings: string[] = [];
@@ -250,11 +251,14 @@ router.post("/api/workspaces/:id/sync", requireRole(ZENITH_ROLES.OPERATOR, ZENIT
     const lockStateData = lockStateResult.status === 'fulfilled' ? lockStateResult.value as any : { lockState: "Unknown", isArchived: false };
     const lockState = lockStateData.lockState;
     const archiveData = archiveResult.status === 'fulfilled' ? archiveResult.value : { isArchived: false, archiveStatus: null };
+    const propertyBagData = propertyBagResult.status === 'fulfilled' ? propertyBagResult.value : { properties: {} };
 
     if (driveResult.status === 'rejected') warnings.push("Storage/drive data unavailable — your account may lack read permissions for this site.");
     if (analyticsResult.status === 'rejected') warnings.push("Analytics data unavailable — Reports.Read.All permission may be missing or your account may lack access.");
     if (groupOwnersResult.status === 'rejected') warnings.push("Group owners data unavailable — Group.Read.All permission may be missing.");
     if (lockStateResult.status === 'rejected') warnings.push("Lock state unavailable — SharePoint admin permissions required to read site lock state.");
+    if (propertyBagResult.status === 'rejected') warnings.push("Property bag unavailable — SharePoint permissions may be insufficient.");
+    else if (propertyBagData.error) warnings.push(`Property bag partially unavailable — ${propertyBagData.error}`);
     if (!spoToken) warnings.push("No SharePoint delegated token available — some data (lock state, property bags) could not be synced. Sign out and sign back in with SSO.");
 
     updates.ownerDisplayName = driveOwner.ownerDisplayName || workspace.ownerDisplayName || null;
@@ -308,6 +312,11 @@ router.post("/api/workspaces/:id/sync", requireRole(ZENITH_ROLES.OPERATOR, ZENIT
 
     const siteType = inferSiteType(workspace.rootWebTemplate as string | undefined, siteData?.siteCollection?.root);
     updates.type = siteType;
+
+    if (Object.keys(propertyBagData.properties).length > 0) {
+      updates.propertyBag = propertyBagData.properties;
+      console.log(`[single-sync] ${siteUrl} → captured ${Object.keys(propertyBagData.properties).length} property bag entries`);
+    }
 
     const updated = await storage.updateWorkspace(workspace.id, updates);
     res.json({ success: true, workspace: updated, warnings: warnings.length > 0 ? warnings : undefined });
@@ -554,7 +563,7 @@ router.post("/api/admin/tenants/:id/sync", requireRole(ZENITH_ROLES.TENANT_ADMIN
     }
 
     const BATCH_SIZE = 5;
-    const enrichCache = new Map<string, { driveOwner: any; analytics: any; groupOwners: any; lockState?: string; isArchived?: boolean }>();
+    const enrichCache = new Map<string, { driveOwner: any; analytics: any; groupOwners: any; lockState?: string; isArchived?: boolean; propertyBag?: Record<string, string> }>();
 
     if (token) {
       for (let i = 0; i < siteResult.sites.length; i += BATCH_SIZE) {
@@ -565,13 +574,15 @@ router.post("/api/admin/tenants/:id/sync", requireRole(ZENITH_ROLES.TENANT_ADMIN
             const domain = siteUrl.match(/https?:\/\/([^/]+)/)?.[1] || "";
             const spoToken = domain ? await getSpoTokenForDomain(domain) : null;
 
-            const [driveResult, analyticsResult, groupOwnersResult, lockStateResult] = await Promise.allSettled([
+            const [driveResult, analyticsResult, groupOwnersResult, lockStateResult, propBagResult] = await Promise.allSettled([
               fetchSiteDriveOwner(token!, site.id),
               fetchSiteAnalytics(token!, site.id),
               fetchSiteGroupOwners(token!, site.id),
               spoToken && siteUrl ? fetchSiteLockState(spoToken, siteUrl) : Promise.resolve({ lockState: "Unknown", isArchived: false }),
+              spoToken && siteUrl ? fetchSitePropertyBag(spoToken, siteUrl) : Promise.resolve({ properties: {} }),
             ]);
             const lockData = lockStateResult.status === 'fulfilled' ? lockStateResult.value : { lockState: "Unknown", isArchived: false };
+            const propBagData = propBagResult.status === 'fulfilled' ? propBagResult.value : { properties: {} };
             return {
               siteId: site.id,
               driveOwner: driveResult.status === 'fulfilled' ? driveResult.value : {},
@@ -579,12 +590,13 @@ router.post("/api/admin/tenants/:id/sync", requireRole(ZENITH_ROLES.TENANT_ADMIN
               groupOwners: groupOwnersResult.status === 'fulfilled' ? groupOwnersResult.value : { owners: [] },
               lockState: lockData.lockState,
               isArchived: lockData.isArchived === true,
+              propertyBag: Object.keys(propBagData.properties).length > 0 ? propBagData.properties : undefined,
             };
           })
         );
         for (const r of results) {
           if (r.status === 'fulfilled') {
-            enrichCache.set(r.value.siteId, { driveOwner: r.value.driveOwner, analytics: r.value.analytics, groupOwners: r.value.groupOwners, lockState: r.value.lockState, isArchived: r.value.isArchived });
+            enrichCache.set(r.value.siteId, { driveOwner: r.value.driveOwner, analytics: r.value.analytics, groupOwners: r.value.groupOwners, lockState: r.value.lockState, isArchived: r.value.isArchived, propertyBag: r.value.propertyBag });
           }
         }
       }
@@ -704,6 +716,10 @@ router.post("/api/admin/tenants/:id/sync", requireRole(ZENITH_ROLES.TENANT_ADMIN
         else if (usage.pageViewCount > 20) workspaceData.usage = "High";
         else if (usage.pageViewCount > 5) workspaceData.usage = "Medium";
         else workspaceData.usage = "Low";
+      }
+
+      if (enriched.propertyBag && Object.keys(enriched.propertyBag).length > 0) {
+        workspaceData.propertyBag = enriched.propertyBag;
       }
 
       const existing = await storage.getWorkspaceByM365ObjectId(site.id);

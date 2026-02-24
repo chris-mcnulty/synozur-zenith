@@ -896,6 +896,64 @@ async function executeCsomQuery(
   }
 }
 
+export async function fetchSitePropertyBag(
+  spoToken: string,
+  siteUrl: string
+): Promise<{ properties: Record<string, string>; error?: string }> {
+  const url = `${siteUrl.replace(/\/+$/, '')}/_api/web/AllProperties`;
+  try {
+    const res = await fetch(url, {
+      headers: {
+        Authorization: `Bearer ${spoToken}`,
+        Accept: "application/json;odata=nometadata",
+      },
+    });
+
+    if (!res.ok) {
+      return { properties: {}, error: `API ${res.status}: ${res.statusText}` };
+    }
+
+    const data = await res.json();
+    const props: Record<string, string> = {};
+
+    const skipPrefixes = [
+      'vti_',
+      '__',
+      'odata.',
+      'dlc_',
+      'ecm_',
+      'taxonomy',
+      'clientformcustomformatter',
+    ];
+    const skipSuffixes = [
+      'vti',
+    ];
+    const skipKeys = new Set([
+      'allowinfodb',
+      'profileschemaversion',
+      'siteclassification',
+    ]);
+
+    for (const [key, value] of Object.entries(data)) {
+      if (value === null || value === undefined) continue;
+      const strVal = String(value);
+      if (strVal === '' || strVal === 'null' || strVal === 'undefined') continue;
+      const lk = key.toLowerCase();
+      if (skipKeys.has(lk)) continue;
+      if (skipPrefixes.some(p => lk.startsWith(p))) continue;
+      if (skipSuffixes.some(s => lk.endsWith(s))) continue;
+      const guidOnly = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      if (guidOnly.test(key)) continue;
+      if (guidOnly.test(strVal) && !lk.includes('label') && !lk.includes('group') && !lk.includes('hub')) continue;
+      props[key] = strVal;
+    }
+
+    return { properties: props };
+  } catch (err: any) {
+    return { properties: {}, error: err.message };
+  }
+}
+
 export async function writeSitePropertyBag(
   spoToken: string,
   siteUrl: string,

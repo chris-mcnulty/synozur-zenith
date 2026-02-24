@@ -50,6 +50,7 @@ export const workspaces = pgTable("workspaces", {
   isDeleted: boolean("is_deleted").default(false),
   siteCreatedDate: text("site_created_date"),
   reportRefreshDate: text("report_refresh_date"),
+  propertyBag: jsonb("property_bag").$type<Record<string, string>>(),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
