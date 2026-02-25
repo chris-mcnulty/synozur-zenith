@@ -92,7 +92,7 @@ router.patch("/api/workspaces/:id", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, Z
   const existing = await storage.getWorkspace(req.params.id);
   if (!existing) return res.status(404).json({ message: "Workspace not found" });
 
-  const sensitivityLabelChanged = req.body.sensitivityLabelId !== undefined &&
+  const sensitivityLabelChanged = 'sensitivityLabelId' in req.body &&
     req.body.sensitivityLabelId !== existing.sensitivityLabelId;
 
   let labelSyncResult: { pushed: boolean; error?: string } | undefined;
@@ -141,7 +141,7 @@ router.patch("/api/workspaces/:id", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, Z
             console.error(`[label-push] Failed to apply label to ${existing.siteUrl}: ${result.error}`);
             return res.status(502).json({ message: `Failed to apply label to site: ${result.error}`, labelSyncResult });
           }
-        } else {
+        } else if (existing.sensitivityLabelId) {
           const result = await removeSensitivityLabelFromSite(spoToken, existing.siteUrl);
           labelSyncResult = { pushed: result.success, error: result.error };
           if (result.success) {
@@ -150,6 +150,9 @@ router.patch("/api/workspaces/:id", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, Z
             console.error(`[label-push] Failed to remove label from ${existing.siteUrl}: ${result.error}`);
             return res.status(502).json({ message: `Failed to remove label from site: ${result.error}`, labelSyncResult });
           }
+        } else {
+          labelSyncResult = { pushed: true };
+          console.log(`[label-push] No existing label to remove from ${existing.siteUrl}, skipping CSOM call`);
         }
       } else if (connection && !existing.siteUrl) {
         labelSyncResult = { pushed: false, error: "No site URL available for label push." };
