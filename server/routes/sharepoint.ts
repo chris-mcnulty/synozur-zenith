@@ -624,9 +624,15 @@ router.post("/api/admin/tenants/:id/sync", requireRole(ZENITH_ROLES.TENANT_ADMIN
             let siteAdmins: { id?: string; displayName: string; mail?: string; userPrincipalName?: string }[] | undefined;
             if (spoToken && siteUrl) {
               const adminsResult = await fetchSiteCollectionAdmins(spoToken, siteUrl);
+              if (adminsResult.error) {
+                console.log(`[site-owners] Error fetching admins for ${siteUrl}: ${adminsResult.error}`);
+              }
               if (adminsResult.admins.length > 0) {
                 siteAdmins = adminsResult.admins;
+                console.log(`[site-owners] ${siteUrl}: found ${adminsResult.admins.length} admin(s): ${adminsResult.admins.map(a => a.displayName).join(', ')}`);
               }
+            } else {
+              console.log(`[site-owners] No SPO token for ${siteUrl}, skipping admin/owner group fetch`);
             }
 
             return {
@@ -723,6 +729,7 @@ router.post("/api/admin/tenants/:id/sync", requireRole(ZENITH_ROLES.TENANT_ADMIN
           workspaceData.siteOwners = mergedOwners;
           workspaceData.owners = mergedOwners.length;
         }
+        console.log(`[site-owners] ${site.webUrl}: groupOwners=${groupOwners.owners?.length || 0}, siteAdmins=${enriched.siteAdmins?.length || 0}, merged=${mergedOwners.length} => ${mergedOwners.map(o => o.displayName).join(', ')}`);
       }
 
       const storageUsed = usage?.storageUsedBytes ?? driveOwner.storageUsedBytes ?? null;
