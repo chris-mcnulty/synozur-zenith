@@ -215,8 +215,20 @@ router.patch("/api/workspaces/:id", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, Z
           const evaluation = evaluatePolicy(workspace, policy, context);
           const ruleRecords = evaluationResultsToCopilotRules(workspace.id, evaluation);
           await storage.setCopilotRules(workspace.id, ruleRecords);
+          const evalUpdates: Record<string, any> = {};
           if (workspace.copilotReady !== evaluation.overallPass) {
-            await storage.updateWorkspace(workspace.id, { copilotReady: evaluation.overallPass });
+            evalUpdates.copilotReady = evaluation.overallPass;
+          }
+          if (policy.propertyBagKey) {
+            const bagValue = formatPolicyBagValue(evaluation, policy.propertyBagValueFormat);
+            const existingBag = (workspace.propertyBag as Record<string, string>) || {};
+            if (existingBag[policy.propertyBagKey] !== bagValue) {
+              evalUpdates.propertyBag = { ...existingBag, [policy.propertyBagKey]: bagValue };
+              console.log(`[workspace-update] ${workspace.displayName}: ${policy.propertyBagKey}=${bagValue}`);
+            }
+          }
+          if (Object.keys(evalUpdates).length > 0) {
+            await storage.updateWorkspace(workspace.id, evalUpdates);
           }
         }
       }
@@ -476,8 +488,19 @@ router.patch("/api/workspaces/bulk/update", requireRole(ZENITH_ROLES.GOVERNANCE_
       const evaluation = evaluatePolicy(ws, policy, context);
       const ruleRecords = evaluationResultsToCopilotRules(ws.id, evaluation);
       await storage.setCopilotRules(ws.id, ruleRecords);
+      const evalUpdates: Record<string, any> = {};
       if (ws.copilotReady !== evaluation.overallPass) {
-        await storage.updateWorkspace(ws.id, { copilotReady: evaluation.overallPass });
+        evalUpdates.copilotReady = evaluation.overallPass;
+      }
+      if (policy.propertyBagKey) {
+        const bagValue = formatPolicyBagValue(evaluation, policy.propertyBagValueFormat);
+        const existingBag = (ws.propertyBag as Record<string, string>) || {};
+        if (existingBag[policy.propertyBagKey] !== bagValue) {
+          evalUpdates.propertyBag = { ...existingBag, [policy.propertyBagKey]: bagValue };
+        }
+      }
+      if (Object.keys(evalUpdates).length > 0) {
+        await storage.updateWorkspace(ws.id, evalUpdates);
       }
       policyEvalCount++;
     }
