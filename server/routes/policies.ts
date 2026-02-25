@@ -90,6 +90,41 @@ router.post("/api/policies/:id/evaluate", async (req, res) => {
   res.json({ evaluated: results.length, results });
 });
 
+router.post("/api/admin/tenants/:id/evaluate-policies", async (req, res) => {
+  try {
+    const connection = await storage.getTenantConnection(req.params.id);
+    if (!connection) return res.status(404).json({ message: "Tenant connection not found" });
+
+    const orgId = connection.organizationId;
+    if (!orgId) return res.status(400).json({ message: "No organization linked to this tenant" });
+
+    const policy = await storage.getGovernancePolicyByType(orgId, "COPILOT_READINESS");
+    if (!policy) return res.json({ message: "No COPILOT_READINESS policy found", evaluated: 0 });
+
+    const metaEntries = await storage.getDataDictionary(connection.tenantId, "required_metadata_field");
+    const context: EvaluationContext = { requiredMetadataFields: metaEntries.map(e => e.value) };
+
+    const workspaces = await storage.getWorkspaces(undefined, req.params.id);
+    let evaluated = 0;
+    let changed = 0;
+
+    for (const ws of workspaces) {
+      const evaluation = evaluatePolicy(ws, policy, context);
+      const ruleRecords = evaluationResultsToCopilotRules(ws.id, evaluation);
+      await storage.setCopilotRules(ws.id, ruleRecords);
+      if (ws.copilotReady !== evaluation.overallPass) {
+        await storage.updateWorkspace(ws.id, { copilotReady: evaluation.overallPass });
+        changed++;
+      }
+      evaluated++;
+    }
+
+    res.json({ evaluated, changed, policyName: policy.name });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.get("/api/workspaces/:id/policy-results", async (req, res) => {
   const workspace = await storage.getWorkspace(req.params.id);
   if (!workspace) return res.status(404).json({ message: "Workspace not found" });
