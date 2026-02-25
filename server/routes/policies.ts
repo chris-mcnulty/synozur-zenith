@@ -36,6 +36,8 @@ router.patch("/api/policies/:id", async (req, res) => {
   if (req.body.description !== undefined) updates.description = req.body.description;
   if (req.body.status !== undefined) updates.status = req.body.status;
   if (req.body.rules !== undefined) updates.rules = req.body.rules;
+  if (req.body.propertyBagKey !== undefined) updates.propertyBagKey = req.body.propertyBagKey;
+  if (req.body.propertyBagValueFormat !== undefined) updates.propertyBagValueFormat = req.body.propertyBagValueFormat;
 
   const updated = await storage.updateGovernancePolicy(req.params.id, updates as any);
   res.json(updated);

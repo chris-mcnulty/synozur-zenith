@@ -186,6 +186,24 @@ export function evaluationResultsToCopilotRules(
   }));
 }
 
+export function formatPolicyBagValue(
+  evaluation: PolicyEvaluationResult,
+  format: string | null | undefined
+): string {
+  const fmt = format || "PASS_FAIL";
+  switch (fmt) {
+    case "READY_NOTREADY":
+      return evaluation.overallPass ? "Ready" : "Not Ready";
+    case "SCORE_DATE": {
+      const date = new Date().toISOString().split("T")[0];
+      return `${evaluation.overallPass ? "PASS" : "FAIL"}|${evaluation.passCount}/${evaluation.passCount + evaluation.failCount}|${date}`;
+    }
+    case "PASS_FAIL":
+    default:
+      return evaluation.overallPass ? "PASS" : "FAIL";
+  }
+}
+
 export const DEFAULT_COPILOT_READINESS_RULES: PolicyRuleDefinition[] = [
   {
     ruleType: "SENSITIVITY_LABEL_REQUIRED",

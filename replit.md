@@ -42,6 +42,8 @@ The frontend is built with React, Vite, TanStack Query, shadcn/ui for components
 - **Hash utility**: `server/services/writeback-hash.ts` — deterministic SHA-256 over sorted key-value pairs.
 - **Scale optimization**: At 2000 sites, only the delta (e.g., 30-50 dirty sites) requires CSOM writeback. NoScript toggle is batched once for all dirty sites instead of per-site.
 - **Sensitivity label push via admin API**: For non-group sites where `Site.SensitivityLabelId` CSOM fails, Zenith falls back to the SPO admin API (`GetSitePropertiesByUrl` + `SensitivityLabel` property), the same approach as `Set-SPOSite -SensitivityLabel`.
+- **Policy status writeback**: Each governance policy can optionally have a `propertyBagKey` (e.g., `ZenithCopilotReady`) and `propertyBagValueFormat` (`PASS_FAIL`, `READY_NOTREADY`, `SCORE_DATE`). During metadata writeback (single or bulk), the policy is evaluated against the workspace and the result is written to the SharePoint property bag alongside other metadata. Configurable via the Policy Builder UI.
+- **Sync-safe governance fields**: During full tenant sync, Zenith preserves locally-set governance fields (`sensitivityLabelId`, `department`, `costCenter`, `projectCode`, `projectType`, `sensitivity`, `retentionPolicy`) when the incoming sync value is empty but Zenith already has a value. This prevents stale usage reports (24-48h delay) from overwriting labels and metadata applied through Zenith.
 
 ### Key Design Decisions
 - All managed workspaces are SharePoint sites (TEAM_SITE, COMMUNICATION_SITE, HUB_SITE) with optional Teams connectivity.

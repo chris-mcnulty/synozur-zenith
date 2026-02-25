@@ -6,7 +6,7 @@ import { getPlanFeatures } from "../services/feature-gate";
 import { refreshDelegatedToken, getDelegatedSpoToken } from "../routes-entra";
 import { requireRole, type AuthenticatedRequest } from "../middleware/rbac";
 import { computeWritebackHash, computeSpoSyncHash } from "../services/writeback-hash";
-import { evaluatePolicy, evaluationResultsToCopilotRules, DEFAULT_COPILOT_READINESS_RULES, type EvaluationContext } from "../services/policy-engine";
+import { evaluatePolicy, evaluationResultsToCopilotRules, formatPolicyBagValue, DEFAULT_COPILOT_READINESS_RULES, type EvaluationContext } from "../services/policy-engine";
 
 const router = Router();
 
@@ -1299,6 +1299,22 @@ async function handleMetadataWriteback(req: any, res: any) {
     if (workspace.costCenter) { properties["CostCenter"] = workspace.costCenter; fieldsSynced.push("CostCenter"); }
     if (workspace.projectCode) { properties["ProjectCode"] = workspace.projectCode; fieldsSynced.push("ProjectCode"); }
 
+    if (workspace.tenantConnectionId) {
+      const conn2 = await storage.getTenantConnection(workspace.tenantConnectionId);
+      if (conn2?.organizationId) {
+        const policies = await storage.getGovernancePolicies(conn2.organizationId);
+        for (const pol of policies) {
+          if (pol.propertyBagKey && pol.status === "ACTIVE") {
+            const metaEntries = await storage.getDataDictionary(conn2.tenantId, "required_metadata_field");
+            const ctx: EvaluationContext = { requiredMetadataFields: metaEntries.map(e => e.value) };
+            const evaluation = evaluatePolicy(workspace, pol, ctx);
+            properties[pol.propertyBagKey] = formatPolicyBagValue(evaluation, pol.propertyBagValueFormat);
+            fieldsSynced.push(pol.propertyBagKey);
+          }
+        }
+      }
+    }
+
     if (Object.keys(properties).length === 0) {
       results.push({ workspaceId: wsId, displayName: workspace.displayName, success: false, error: "No metadata fields set to sync" });
       continue;
@@ -1416,6 +1432,18 @@ router.post("/api/admin/tenants/:id/writeback", requireRole(ZENITH_ROLES.TENANT_
       if (workspace.department) properties["Department"] = workspace.department;
       if (workspace.costCenter) properties["CostCenter"] = workspace.costCenter;
       if (workspace.projectCode) properties["ProjectCode"] = workspace.projectCode;
+
+      if (connection.organizationId) {
+        const policies = await storage.getGovernancePolicies(connection.organizationId);
+        for (const pol of policies) {
+          if (pol.propertyBagKey && pol.status === "ACTIVE") {
+            const metaEntries = await storage.getDataDictionary(connection.tenantId, "required_metadata_field");
+            const ctx: EvaluationContext = { requiredMetadataFields: metaEntries.map(e => e.value) };
+            const evaluation = evaluatePolicy(workspace, pol, ctx);
+            properties[pol.propertyBagKey] = formatPolicyBagValue(evaluation, pol.propertyBagValueFormat);
+          }
+        }
+      }
 
       if (Object.keys(properties).length === 0) {
         return { workspaceId: workspace.id, displayName: workspace.displayName, success: false, error: "No writeback properties set" };

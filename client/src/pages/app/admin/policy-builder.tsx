@@ -47,6 +47,8 @@ interface GovernancePolicy {
   policyType: string;
   status: string;
   rules: PolicyRule[];
+  propertyBagKey: string | null;
+  propertyBagValueFormat: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -69,6 +71,8 @@ export default function PolicyBuilderPage() {
   const [editDescription, setEditDescription] = useState("");
   const [editStatus, setEditStatus] = useState("ACTIVE");
   const [editRules, setEditRules] = useState<PolicyRule[]>([]);
+  const [editPropertyBagKey, setEditPropertyBagKey] = useState("");
+  const [editPropertyBagValueFormat, setEditPropertyBagValueFormat] = useState("PASS_FAIL");
   const [hasChanges, setHasChanges] = useState(false);
   const [showAddRule, setShowAddRule] = useState(false);
 
@@ -86,12 +90,19 @@ export default function PolicyBuilderPage() {
   });
 
   const saveMutation = useMutation({
-    mutationFn: async (data: { id: string; name: string; description: string; status: string; rules: PolicyRule[] }) => {
+    mutationFn: async (data: { id: string; name: string; description: string; status: string; rules: PolicyRule[]; propertyBagKey: string; propertyBagValueFormat: string }) => {
       const res = await fetch(`/api/policies/${data.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ name: data.name, description: data.description, status: data.status, rules: data.rules }),
+        body: JSON.stringify({
+          name: data.name,
+          description: data.description,
+          status: data.status,
+          rules: data.rules,
+          propertyBagKey: data.propertyBagKey || null,
+          propertyBagValueFormat: data.propertyBagValueFormat,
+        }),
       });
       if (!res.ok) throw new Error(await res.text());
       return res.json();
@@ -146,6 +157,8 @@ export default function PolicyBuilderPage() {
     setEditDescription(policy.description || "");
     setEditStatus(policy.status);
     setEditRules(JSON.parse(JSON.stringify(policy.rules || [])));
+    setEditPropertyBagKey(policy.propertyBagKey || "");
+    setEditPropertyBagValueFormat(policy.propertyBagValueFormat || "PASS_FAIL");
     setHasChanges(false);
     setShowAddRule(false);
   }
@@ -186,7 +199,7 @@ export default function PolicyBuilderPage() {
 
   function handleSave() {
     if (!selectedPolicyId) return;
-    saveMutation.mutate({ id: selectedPolicyId, name: editName, description: editDescription, status: editStatus, rules: editRules });
+    saveMutation.mutate({ id: selectedPolicyId, name: editName, description: editDescription, status: editStatus, rules: editRules, propertyBagKey: editPropertyBagKey, propertyBagValueFormat: editPropertyBagValueFormat });
   }
 
   function handleCreateNew() {
@@ -345,6 +358,52 @@ export default function PolicyBuilderPage() {
                   </CardContent>
                 </Card>
 
+                {/* Property Bag Writeback */}
+                <Card className="glass-panel border-border/50 shadow-sm">
+                  <CardHeader className="pb-3">
+                    <CardTitle className="text-sm flex items-center gap-2">
+                      <Settings2 className="w-4 h-4 text-primary" />
+                      Property Bag Writeback
+                    </CardTitle>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      When configured, the policy evaluation result will be written to the SharePoint property bag during writeback operations.
+                    </p>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div className="space-y-2">
+                        <Label className="text-xs font-semibold uppercase text-muted-foreground">Property Bag Key</Label>
+                        <Input
+                          value={editPropertyBagKey}
+                          onChange={(e) => { setEditPropertyBagKey(e.target.value); markChanged(); }}
+                          placeholder="e.g. ZenithCopilotReady"
+                          className="h-9 bg-background/50 font-mono text-sm"
+                          data-testid="input-property-bag-key"
+                        />
+                        <p className="text-[11px] text-muted-foreground">Leave empty to skip writing policy results to the property bag.</p>
+                      </div>
+                      <div className="space-y-2">
+                        <Label className="text-xs font-semibold uppercase text-muted-foreground">Value Format</Label>
+                        <Select value={editPropertyBagValueFormat} onValueChange={(v) => { setEditPropertyBagValueFormat(v); markChanged(); }}>
+                          <SelectTrigger className="h-9 bg-background/50" data-testid="select-property-bag-format">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="PASS_FAIL">PASS / FAIL</SelectItem>
+                            <SelectItem value="READY_NOTREADY">Ready / Not Ready</SelectItem>
+                            <SelectItem value="SCORE_DATE">PASS|5/5|2026-02-25 (with score and date)</SelectItem>
+                          </SelectContent>
+                        </Select>
+                        <p className="text-[11px] text-muted-foreground">
+                          {editPropertyBagKey ? (
+                            <>Preview: <code className="bg-muted px-1 py-0.5 rounded text-[10px]">{editPropertyBagKey}</code> = <code className="bg-muted px-1 py-0.5 rounded text-[10px]">{editPropertyBagValueFormat === "READY_NOTREADY" ? "Ready" : editPropertyBagValueFormat === "SCORE_DATE" ? `PASS|${editRules.filter(r => r.enabled).length}/${editRules.filter(r => r.enabled).length}|${new Date().toISOString().split("T")[0]}` : "PASS"}</code></>
+                          ) : "No property bag key configured — results will only be stored in Zenith."}
+                        </p>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+
                 {/* Rules List */}
                 <Card className="glass-panel border-border/50 shadow-sm">
                   <CardHeader className="pb-3">
@@ -469,6 +528,8 @@ export default function PolicyBuilderPage() {
                         name: editName,
                         policyType: selectedPolicy.policyType,
                         status: editStatus,
+                        propertyBagKey: editPropertyBagKey || null,
+                        propertyBagValueFormat: editPropertyBagValueFormat,
                         rules: editRules,
                       }, null, 2)}
                     </pre>

@@ -98,6 +98,8 @@ export const governancePolicies = pgTable("governance_policies", {
   policyType: text("policy_type").notNull(), // COPILOT_READINESS, PROVISIONING_GATE, etc.
   status: text("status").notNull().default("ACTIVE"), // DRAFT, ACTIVE, DISABLED
   rules: jsonb("rules").notNull().default(sql`'[]'::jsonb`), // Array of rule definitions
+  propertyBagKey: text("property_bag_key"), // e.g. "ZenithCopilotReady" — key to write result into SPO property bag
+  propertyBagValueFormat: text("property_bag_value_format").default("PASS_FAIL"), // PASS_FAIL, READY_NOTREADY, SCORE_DATE, CUSTOM
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
