@@ -192,6 +192,7 @@ export default function WorkspaceDetailsPage() {
     mutationFn: () =>
       apiRequest("POST", "/api/workspaces/writeback/metadata", { workspaceIds: [id] }).then(r => r.json()),
     onSuccess: (data: any) => {
+      queryClient.invalidateQueries({ queryKey: [`/api/workspaces/${id}`] });
       if (data.succeeded > 0) {
         const fields = data.results?.[0]?.fieldsSynced?.join(", ") || "metadata";
         toast({ title: "Synced to SharePoint", description: `Successfully wrote ${fields} to the site property bag.` });
