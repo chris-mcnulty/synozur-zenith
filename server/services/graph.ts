@@ -945,21 +945,19 @@ export async function writeSitePropertyBag(
 ): Promise<{ success: boolean; error?: string }> {
   console.log(`[property-bag] Attempting to write ${Object.keys(properties).length} properties to ${siteUrl}`);
 
-  const result1 = await writeSitePropertyBagViaRest(spoToken, siteUrl, properties);
+  const result1 = await writeSitePropertyBagViaCsom(spoToken, siteUrl, properties);
   if (result1.success) return result1;
-  console.warn(`[property-bag] REST approach failed: ${result1.error}`);
-
-  const result2 = await writeSitePropertyBagViaCsom(spoToken, siteUrl, properties);
-  if (result2.success) return result2;
-  console.warn(`[property-bag] Direct CSOM failed: ${result2.error}`);
+  console.warn(`[property-bag] Direct CSOM failed: ${result1.error}`);
 
   if (userId) {
-    const result3 = await writeSitePropertyBagWithNoScriptToggle(spoToken, siteUrl, properties, userId);
-    if (result3.success) return result3;
-    console.warn(`[property-bag] Admin NoScript toggle failed: ${result3.error}`);
+    console.log(`[property-bag] Trying admin NoScript toggle approach (disable NoScript → write → re-enable)`);
+    const result2 = await writeSitePropertyBagWithNoScriptToggle(spoToken, siteUrl, properties, userId);
+    if (result2.success) return result2;
+    console.warn(`[property-bag] Admin NoScript toggle failed: ${result2.error}`);
+    return { success: false, error: result2.error };
   }
 
-  return { success: false, error: `All property bag write methods failed. Last error: ${result2.error}` };
+  return { success: false, error: result1.error };
 }
 
 async function writeSitePropertyBagViaRest(
@@ -1052,9 +1050,9 @@ async function writeSitePropertyBagWithNoScriptToggle(
   }
 
   const siteRelativeUrl = urlObj.pathname;
-  const disableNoScriptXml = `<Request SchemaVersion="15.0.0.0" LibraryVersion="16.0.0.0" ApplicationName="Zenith" xmlns="http://schemas.microsoft.com/sharepoint/clientquery/2009"><Actions><ObjectPath Id="2" ObjectPathId="1" /><ObjectPath Id="4" ObjectPathId="3" /><SetProperty Id="5" ObjectPathId="3" Name="DenyAddAndCustomizePages"><Parameter Type="Enum">0</Parameter></SetProperty><Method Name="Update" Id="6" ObjectPathId="3" /></Actions><ObjectPaths><Constructor Id="1" TypeId="{268004ae-ef6b-4e9b-8425-127220d84719}" /><Method Id="3" ParentId="1" Name="GetSitePropertiesByUrl"><Parameters><Parameter Type="String">${siteUrl}</Parameter><Parameter Type="Boolean">false</Parameter></Parameters></Method></ObjectPaths></Request>`;
+  const disableNoScriptXml = `<Request SchemaVersion="15.0.0.0" LibraryVersion="16.0.0.0" ApplicationName="Zenith" xmlns="http://schemas.microsoft.com/sharepoint/clientquery/2009"><Actions><ObjectPath Id="2" ObjectPathId="1" /><ObjectPath Id="4" ObjectPathId="3" /><SetProperty Id="5" ObjectPathId="3" Name="DenyAddAndCustomizePages"><Parameter Type="Enum">1</Parameter></SetProperty><Method Name="Update" Id="6" ObjectPathId="3" /></Actions><ObjectPaths><Constructor Id="1" TypeId="{268004ae-ef6b-4e9b-8425-127220d84719}" /><Method Id="3" ParentId="1" Name="GetSitePropertiesByUrl"><Parameters><Parameter Type="String">${siteUrl}</Parameter><Parameter Type="Boolean">false</Parameter></Parameters></Method></ObjectPaths></Request>`;
 
-  const enableNoScriptXml = `<Request SchemaVersion="15.0.0.0" LibraryVersion="16.0.0.0" ApplicationName="Zenith" xmlns="http://schemas.microsoft.com/sharepoint/clientquery/2009"><Actions><ObjectPath Id="2" ObjectPathId="1" /><ObjectPath Id="4" ObjectPathId="3" /><SetProperty Id="5" ObjectPathId="3" Name="DenyAddAndCustomizePages"><Parameter Type="Enum">1</Parameter></SetProperty><Method Name="Update" Id="6" ObjectPathId="3" /></Actions><ObjectPaths><Constructor Id="1" TypeId="{268004ae-ef6b-4e9b-8425-127220d84719}" /><Method Id="3" ParentId="1" Name="GetSitePropertiesByUrl"><Parameters><Parameter Type="String">${siteUrl}</Parameter><Parameter Type="Boolean">false</Parameter></Parameters></Method></ObjectPaths></Request>`;
+  const enableNoScriptXml = `<Request SchemaVersion="15.0.0.0" LibraryVersion="16.0.0.0" ApplicationName="Zenith" xmlns="http://schemas.microsoft.com/sharepoint/clientquery/2009"><Actions><ObjectPath Id="2" ObjectPathId="1" /><ObjectPath Id="4" ObjectPathId="3" /><SetProperty Id="5" ObjectPathId="3" Name="DenyAddAndCustomizePages"><Parameter Type="Enum">2</Parameter></SetProperty><Method Name="Update" Id="6" ObjectPathId="3" /></Actions><ObjectPaths><Constructor Id="1" TypeId="{268004ae-ef6b-4e9b-8425-127220d84719}" /><Method Id="3" ParentId="1" Name="GetSitePropertiesByUrl"><Parameters><Parameter Type="String">${siteUrl}</Parameter><Parameter Type="Boolean">false</Parameter></Parameters></Method></ObjectPaths></Request>`;
 
   const adminUrl = `https://${adminHost}`;
   console.log(`[property-bag] Disabling NoScript on ${siteUrl} via admin API`);
