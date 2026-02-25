@@ -34,6 +34,15 @@ The frontend is built with React, Vite, TanStack Query, shadcn/ui for components
 - **RBAC**: Robust Role-Based Access Control system (Platform Owner, Tenant Admin, Governance Admin, Operator, Viewer, Read-Only Auditor) with visibility-scoped access. **Write operations** (label push, property bag writeback, hub assignment, metadata writeback, copilot rules) are gated by Zenith RBAC middleware — Governance Admin or higher required. **Provisioning requests** require Operator or higher; **provisioning approval** and **tenant sync** require Tenant Admin or higher. **Read operations** (inventory sync) are best-effort with the current user's delegated token; warnings are surfaced when data is incomplete due to insufficient SharePoint permissions. Users performing SPO write-back must be SharePoint administrators in the tenant — Zenith does not escalate privileges or use another user's token for write operations.
 - **Service Plan Gating**: Features are gated by service plans (TRIAL, STANDARD, PROFESSIONAL, ENTERPRISE), enforced server-side and client-side.
 
+### Hash-Based Writeback Dirty Checking
+- **`spoSyncHash`** (text): SHA-256 of writeback-eligible properties as read from SharePoint during last sync. Computed by `computeSpoSyncHash()` from `sensitivityLabelId` + property bag keys (Department, CostCenter, ProjectCode, ZenithAI).
+- **`localHash`** (text): SHA-256 of the same properties as stored in Zenith after local edits. Computed by `computeWritebackHash()`.
+- **Comparison**: When `localHash !== spoSyncHash`, the workspace is "dirty" and needs writeback. After successful writeback, `spoSyncHash` is set to match `localHash`.
+- **Bulk writeback** (`POST /api/admin/tenants/:id/writeback`): Finds all dirty workspaces, batches NoScript disable → writes → NoScript re-enable. Processes 5 sites concurrently. Only writes to sites that actually changed.
+- **Hash utility**: `server/services/writeback-hash.ts` — deterministic SHA-256 over sorted key-value pairs.
+- **Scale optimization**: At 2000 sites, only the delta (e.g., 30-50 dirty sites) requires CSOM writeback. NoScript toggle is batched once for all dirty sites instead of per-site.
+- **Sensitivity label push via admin API**: For non-group sites where `Site.SensitivityLabelId` CSOM fails, Zenith falls back to the SPO admin API (`GetSitePropertiesByUrl` + `SensitivityLabel` property), the same approach as `Set-SPOSite -SensitivityLabel`.
+
 ### Key Design Decisions
 - All managed workspaces are SharePoint sites (TEAM_SITE, COMMUNICATION_SITE, HUB_SITE) with optional Teams connectivity.
 - Automated `DEAL-` and `PORTCO-` prefixes for site naming conventions.

@@ -1,10 +1,11 @@
 import { Router } from "express";
 import { storage } from "../storage";
 import { insertWorkspaceSchema, insertProvisioningRequestSchema, type ServicePlanTier, ZENITH_ROLES } from "@shared/schema";
-import { fetchSharePointSites, fetchSiteUsageReport, fetchSiteDriveOwner, fetchSiteAnalytics, fetchSiteGroupOwners, getAppToken, writeSitePropertyBag, fetchSitePropertyBag, fetchSensitivityLabels, fetchRetentionLabels, fetchHubSites, fetchSiteHubAssociation, fetchHubSitesViaSearch, applySensitivityLabelToSite, removeSensitivityLabelFromSite, joinHubSite, leaveHubSite, fetchSiteLockState, fetchSiteArchiveStatus } from "../services/graph";
+import { fetchSharePointSites, fetchSiteUsageReport, fetchSiteDriveOwner, fetchSiteAnalytics, fetchSiteGroupOwners, getAppToken, writeSitePropertyBag, fetchSitePropertyBag, fetchSensitivityLabels, fetchRetentionLabels, fetchHubSites, fetchSiteHubAssociation, fetchHubSitesViaSearch, applySensitivityLabelToSite, removeSensitivityLabelFromSite, joinHubSite, leaveHubSite, fetchSiteLockState, fetchSiteArchiveStatus, batchToggleNoScript } from "../services/graph";
 import { getPlanFeatures } from "../services/feature-gate";
 import { refreshDelegatedToken, getDelegatedSpoToken } from "../routes-entra";
 import { requireRole, type AuthenticatedRequest } from "../middleware/rbac";
+import { computeWritebackHash, computeSpoSyncHash } from "../services/writeback-hash";
 
 const router = Router();
 
@@ -165,7 +166,38 @@ router.patch("/api/workspaces/:id", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, Z
     }
   }
 
-  const workspace = await storage.updateWorkspace(req.params.id, req.body);
+  const writebackFields = ['sensitivityLabelId', 'department', 'costCenter', 'projectCode'];
+  const hasWritebackChange = writebackFields.some(f => f in req.body);
+
+  const updates = { ...req.body };
+  if (hasWritebackChange) {
+    const merged = { ...existing, ...req.body };
+    updates.localHash = computeWritebackHash({
+      sensitivityLabelId: merged.sensitivityLabelId,
+      department: merged.department,
+      costCenter: merged.costCenter,
+      projectCode: merged.projectCode,
+      propertyBag: merged.propertyBag,
+    });
+  }
+
+  if (labelSyncResult?.pushed) {
+    const propertyBagFields = ['department', 'costCenter', 'projectCode'];
+    const hasPropertyBagChange = propertyBagFields.some(f => f in req.body && req.body[f] !== existing[f as keyof typeof existing]);
+    if (hasPropertyBagChange) {
+      updates.spoSyncHash = computeWritebackHash({
+        sensitivityLabelId: req.body.sensitivityLabelId ?? existing.sensitivityLabelId,
+        department: existing.department,
+        costCenter: existing.costCenter,
+        projectCode: existing.projectCode,
+        propertyBag: existing.propertyBag,
+      });
+    } else {
+      updates.spoSyncHash = updates.localHash || existing.spoSyncHash;
+    }
+  }
+
+  const workspace = await storage.updateWorkspace(req.params.id, updates);
   if (!workspace) return res.status(404).json({ message: "Workspace not found" });
 
   res.json({ ...workspace, labelSyncResult });
@@ -725,6 +757,11 @@ router.post("/api/admin/tenants/:id/sync", requireRole(ZENITH_ROLES.TENANT_ADMIN
         workspaceData.propertyBag = enriched.propertyBag;
       }
 
+      workspaceData.spoSyncHash = computeSpoSyncHash({
+        sensitivityLabelId: workspaceData.sensitivityLabelId || null,
+        propertyBag: workspaceData.propertyBag || null,
+      });
+
       const existing = await storage.getWorkspaceByM365ObjectId(site.id);
       if (existing) {
         await storage.updateWorkspace(existing.id, workspaceData);
@@ -1102,7 +1139,14 @@ async function handleMetadataWriteback(req: any, res: any) {
       if (result.success) {
         const existingBag = (workspace.propertyBag as Record<string, string>) || {};
         const mergedBag = { ...existingBag, ...properties };
-        await storage.updateWorkspace(wsId, { propertyBag: mergedBag } as any);
+        const updatedHash = computeWritebackHash({
+          sensitivityLabelId: workspace.sensitivityLabelId,
+          department: workspace.department,
+          costCenter: workspace.costCenter,
+          projectCode: workspace.projectCode,
+          propertyBag: mergedBag,
+        });
+        await storage.updateWorkspace(wsId, { propertyBag: mergedBag, spoSyncHash: updatedHash, localHash: updatedHash } as any);
       }
       if (!result.success && result.error?.toLowerCase().includes('access')) {
         results.push({ workspaceId: wsId, displayName: workspace.displayName, fieldsSynced, success: false, error: "Access denied — you must be a Site Collection Administrator or Site Owner to write property bag values. Your metadata was saved in Zenith but not pushed to SharePoint." });
@@ -1121,6 +1165,95 @@ async function handleMetadataWriteback(req: any, res: any) {
 
 router.post("/api/workspaces/writeback/department", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN), handleMetadataWriteback);
 router.post("/api/workspaces/writeback/metadata", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN), handleMetadataWriteback);
+
+router.post("/api/admin/tenants/:id/writeback", requireRole(ZENITH_ROLES.TENANT_ADMIN), async (req, res) => {
+  const org = await storage.getOrganization();
+  const plan = (org?.servicePlan || "TRIAL") as ServicePlanTier;
+  const features = getPlanFeatures(plan);
+  if (!features.m365WriteBack) {
+    return res.status(403).json({
+      error: "FEATURE_GATED",
+      message: `Bulk writeback is not available on the ${features.label} plan.`,
+    });
+  }
+
+  const connection = await storage.getTenantConnection(req.params.id);
+  if (!connection) return res.status(404).json({ error: "Tenant connection not found" });
+
+  const allWorkspaces = await storage.getWorkspaces(undefined, req.params.id);
+  const dirty = allWorkspaces.filter(w =>
+    w.localHash && w.spoSyncHash && w.localHash !== w.spoSyncHash && w.siteUrl
+  );
+
+  if (dirty.length === 0) {
+    return res.json({ total: allWorkspaces.length, dirty: 0, written: 0, failed: 0, results: [] });
+  }
+
+  const spoHost = connection.domain.includes('.sharepoint.com') ? connection.domain : `${connection.domain.replace(/\..*$/, '')}.sharepoint.com`;
+  const userId = req.session?.userId || req.user?.id;
+  if (!userId) return res.status(401).json({ error: "No user session" });
+
+  const spoToken = await getDelegatedSpoToken(userId, spoHost);
+  if (!spoToken) {
+    return res.status(401).json({ error: "No SharePoint token available. Please sign in via SSO." });
+  }
+
+  const dirtySiteUrls = dirty.map(w => w.siteUrl!);
+  console.log(`[bulk-writeback] ${dirty.length} dirty sites out of ${allWorkspaces.length} total`);
+
+  console.log(`[bulk-writeback] Phase 1: Disabling NoScript on ${dirty.length} sites`);
+  const disableResults = await batchToggleNoScript(dirtySiteUrls, userId, false);
+
+  await new Promise(r => setTimeout(r, 2000));
+
+  console.log(`[bulk-writeback] Phase 2: Writing property bags`);
+  const WRITE_BATCH = 5;
+  const results: { workspaceId: string; displayName: string; success: boolean; error?: string }[] = [];
+
+  for (let i = 0; i < dirty.length; i += WRITE_BATCH) {
+    const batch = dirty.slice(i, i + WRITE_BATCH);
+    const promises = batch.map(async (workspace) => {
+      const disableOk = disableResults.get(workspace.siteUrl!);
+      if (disableOk && !disableOk.success) {
+        return { workspaceId: workspace.id, displayName: workspace.displayName, success: false, error: `NoScript disable failed: ${disableOk.error}` };
+      }
+
+      const properties: Record<string, string> = {};
+      if (workspace.department) properties["Department"] = workspace.department;
+      if (workspace.costCenter) properties["CostCenter"] = workspace.costCenter;
+      if (workspace.projectCode) properties["ProjectCode"] = workspace.projectCode;
+
+      if (Object.keys(properties).length === 0) {
+        return { workspaceId: workspace.id, displayName: workspace.displayName, success: false, error: "No writeback properties set" };
+      }
+
+      try {
+        const result = await writeSitePropertyBag(spoToken, workspace.siteUrl!, properties, userId);
+        if (result.success) {
+          const existingBag = (workspace.propertyBag as Record<string, string>) || {};
+          const mergedBag = { ...existingBag, ...properties };
+          await storage.updateWorkspace(workspace.id, {
+            propertyBag: mergedBag,
+            spoSyncHash: workspace.localHash,
+          } as any);
+        }
+        return { workspaceId: workspace.id, displayName: workspace.displayName, ...result };
+      } catch (err: any) {
+        return { workspaceId: workspace.id, displayName: workspace.displayName, success: false, error: err.message };
+      }
+    });
+    const batchResults = await Promise.all(promises);
+    results.push(...batchResults);
+  }
+
+  console.log(`[bulk-writeback] Phase 3: Re-enabling NoScript on ${dirty.length} sites`);
+  await batchToggleNoScript(dirtySiteUrls, userId, true);
+
+  const written = results.filter(r => r.success).length;
+  const failed = results.filter(r => !r.success).length;
+  console.log(`[bulk-writeback] Complete: ${written} written, ${failed} failed out of ${dirty.length} dirty`);
+  res.json({ total: allWorkspaces.length, dirty: dirty.length, written, failed, results });
+});
 
 router.get("/api/debug/spo-test/:workspaceId", async (req, res) => {
   const workspace = await storage.getWorkspace(req.params.workspaceId);

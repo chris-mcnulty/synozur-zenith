@@ -1160,6 +1160,50 @@ async function executeCsomWithNoScriptToggle(
   return writeResult;
 }
 
+export async function batchToggleNoScript(
+  siteUrls: string[],
+  userId: string,
+  enable: boolean
+): Promise<Map<string, { success: boolean; error?: string }>> {
+  if (siteUrls.length === 0) return new Map();
+
+  const urlObj = new URL(siteUrls[0]);
+  const tenantPrefix = urlObj.hostname.split('.')[0];
+  const adminHost = `${tenantPrefix}-admin.sharepoint.com`;
+  const adminUrl = `https://${adminHost}`;
+
+  const { getDelegatedSpoToken } = await import('../routes-entra');
+  const adminToken = await getDelegatedSpoToken(userId, adminHost);
+  if (!adminToken) {
+    const results = new Map<string, { success: boolean; error?: string }>();
+    for (const url of siteUrls) {
+      results.set(url, { success: false, error: 'Could not acquire SharePoint Admin token' });
+    }
+    return results;
+  }
+
+  const enumValue = enable ? '2' : '1';
+  const action = enable ? 'Enabling' : 'Disabling';
+  const results = new Map<string, { success: boolean; error?: string }>();
+  const BATCH_SIZE = 5;
+
+  for (let i = 0; i < siteUrls.length; i += BATCH_SIZE) {
+    const batch = siteUrls.slice(i, i + BATCH_SIZE);
+    const promises = batch.map(async (siteUrl) => {
+      const xml = `<Request SchemaVersion="15.0.0.0" LibraryVersion="16.0.0.0" ApplicationName="Zenith" xmlns="http://schemas.microsoft.com/sharepoint/clientquery/2009"><Actions><ObjectPath Id="2" ObjectPathId="1" /><ObjectPath Id="4" ObjectPathId="3" /><SetProperty Id="5" ObjectPathId="3" Name="DenyAddAndCustomizePages"><Parameter Type="Enum">${enumValue}</Parameter></SetProperty><Method Name="Update" Id="6" ObjectPathId="3" /></Actions><ObjectPaths><Constructor Id="1" TypeId="{268004ae-ef6b-4e9b-8425-127220d84719}" /><Method Id="3" ParentId="1" Name="GetSitePropertiesByUrl"><Parameters><Parameter Type="String">${siteUrl}</Parameter><Parameter Type="Boolean">false</Parameter></Parameters></Method></ObjectPaths></Request>`;
+      const result = await executeCsomQuery(adminToken, adminUrl, xml);
+      console.log(`[bulk-noscript] ${action} NoScript on ${siteUrl}: ${result.success ? 'OK' : result.error}`);
+      return { siteUrl, result };
+    });
+    const batchResults = await Promise.all(promises);
+    for (const { siteUrl, result } of batchResults) {
+      results.set(siteUrl, result);
+    }
+  }
+
+  return results;
+}
+
 export async function fetchSensitivityLabels(token: string): Promise<{
   labels: Array<{
     id: string;
