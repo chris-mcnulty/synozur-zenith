@@ -1032,11 +1032,66 @@ async function writeSitePropertyBagWithNoScriptToggle(
   properties: Record<string, string>,
   userId: string
 ): Promise<{ success: boolean; error?: string }> {
+  let actionId = 5;
+  let actionsXml = '';
+  actionsXml += '<ObjectPath Id="2" ObjectPathId="1" />';
+  actionsXml += '<ObjectPath Id="4" ObjectPathId="3" />';
+  for (const [key, value] of Object.entries(properties)) {
+    const safeKey = key.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const safeVal = value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    actionsXml += `<Method Name="SetFieldValue" Id="${actionId}" ObjectPathId="3"><Parameters><Parameter Type="String">${safeKey}</Parameter><Parameter Type="String">${safeVal}</Parameter></Parameters></Method>`;
+    actionId++;
+  }
+  actionsXml += `<Method Name="Update" Id="${actionId}" ObjectPathId="1" />`;
+  const csomXml = `<Request AddExpandoFieldTypeSuffix="true" SchemaVersion="15.0.0.0" LibraryVersion="16.0.0.0" ApplicationName="Zenith" xmlns="http://schemas.microsoft.com/sharepoint/clientquery/2009"><Actions>${actionsXml}</Actions><ObjectPaths><Property Id="1" ParentId="0" Name="Web" /><Property Id="3" ParentId="1" Name="AllProperties" /><StaticProperty Id="0" TypeId="{3747adcd-a3c3-41b9-bfab-4a64dd2f1e0a}" Name="Current" /></ObjectPaths></Request>`;
+
+  return executeCsomWithNoScriptToggle(spoToken, siteUrl, csomXml, userId);
+}
+
+export async function applySensitivityLabelToSite(
+  spoToken: string,
+  siteUrl: string,
+  sensitivityLabelId: string,
+  userId?: string
+): Promise<{ success: boolean; error?: string }> {
+  const csomXml = `<Request SchemaVersion="15.0.0.0" LibraryVersion="16.0.0.0" ApplicationName="Zenith" xmlns="http://schemas.microsoft.com/sharepoint/clientquery/2009"><Actions><ObjectPath Id="2" ObjectPathId="1" /><SetProperty Id="3" ObjectPathId="1" Name="SensitivityLabelId"><Parameter Type="Guid">{${sensitivityLabelId}}</Parameter></SetProperty></Actions><ObjectPaths><Property Id="1" ParentId="0" Name="Site" /><StaticProperty Id="0" TypeId="{3747adcd-a3c3-41b9-bfab-4a64dd2f1e0a}" Name="Current" /></ObjectPaths></Request>`;
+
+  const result = await executeCsomQuery(spoToken, siteUrl, csomXml);
+  if (result.success) return result;
+
+  if (userId) {
+    console.warn(`[label-push] Direct CSOM failed: ${result.error}, trying with admin NoScript toggle`);
+    return executeCsomWithNoScriptToggle(spoToken, siteUrl, csomXml, userId);
+  }
+  return result;
+}
+
+export async function removeSensitivityLabelFromSite(
+  spoToken: string,
+  siteUrl: string,
+  userId?: string
+): Promise<{ success: boolean; error?: string }> {
+  const csomXml = `<Request SchemaVersion="15.0.0.0" LibraryVersion="16.0.0.0" ApplicationName="Zenith" xmlns="http://schemas.microsoft.com/sharepoint/clientquery/2009"><Actions><ObjectPath Id="2" ObjectPathId="1" /><SetProperty Id="3" ObjectPathId="1" Name="SensitivityLabelId"><Parameter Type="Guid">{00000000-0000-0000-0000-000000000000}</Parameter></SetProperty></Actions><ObjectPaths><Property Id="1" ParentId="0" Name="Site" /><StaticProperty Id="0" TypeId="{3747adcd-a3c3-41b9-bfab-4a64dd2f1e0a}" Name="Current" /></ObjectPaths></Request>`;
+
+  const result = await executeCsomQuery(spoToken, siteUrl, csomXml);
+  if (result.success) return result;
+
+  if (userId) {
+    console.warn(`[label-push] Direct CSOM remove failed: ${result.error}, trying with admin NoScript toggle`);
+    return executeCsomWithNoScriptToggle(spoToken, siteUrl, csomXml, userId);
+  }
+  return result;
+}
+
+async function executeCsomWithNoScriptToggle(
+  spoToken: string,
+  siteUrl: string,
+  csomXml: string,
+  userId: string
+): Promise<{ success: boolean; error?: string }> {
   const urlObj = new URL(siteUrl);
   const tenantPrefix = urlObj.hostname.split('.')[0];
   const adminHost = `${tenantPrefix}-admin.sharepoint.com`;
-
-  console.log(`[property-bag] Trying admin NoScript toggle via ${adminHost}`);
 
   const { getDelegatedSpoToken } = await import('../routes-entra');
   let adminToken: string | null = null;
@@ -1049,48 +1104,27 @@ async function writeSitePropertyBagWithNoScriptToggle(
     return { success: false, error: 'Could not acquire SharePoint Admin token' };
   }
 
-  const siteRelativeUrl = urlObj.pathname;
-  const disableNoScriptXml = `<Request SchemaVersion="15.0.0.0" LibraryVersion="16.0.0.0" ApplicationName="Zenith" xmlns="http://schemas.microsoft.com/sharepoint/clientquery/2009"><Actions><ObjectPath Id="2" ObjectPathId="1" /><ObjectPath Id="4" ObjectPathId="3" /><SetProperty Id="5" ObjectPathId="3" Name="DenyAddAndCustomizePages"><Parameter Type="Enum">1</Parameter></SetProperty><Method Name="Update" Id="6" ObjectPathId="3" /></Actions><ObjectPaths><Constructor Id="1" TypeId="{268004ae-ef6b-4e9b-8425-127220d84719}" /><Method Id="3" ParentId="1" Name="GetSitePropertiesByUrl"><Parameters><Parameter Type="String">${siteUrl}</Parameter><Parameter Type="Boolean">false</Parameter></Parameters></Method></ObjectPaths></Request>`;
-
-  const enableNoScriptXml = `<Request SchemaVersion="15.0.0.0" LibraryVersion="16.0.0.0" ApplicationName="Zenith" xmlns="http://schemas.microsoft.com/sharepoint/clientquery/2009"><Actions><ObjectPath Id="2" ObjectPathId="1" /><ObjectPath Id="4" ObjectPathId="3" /><SetProperty Id="5" ObjectPathId="3" Name="DenyAddAndCustomizePages"><Parameter Type="Enum">2</Parameter></SetProperty><Method Name="Update" Id="6" ObjectPathId="3" /></Actions><ObjectPaths><Constructor Id="1" TypeId="{268004ae-ef6b-4e9b-8425-127220d84719}" /><Method Id="3" ParentId="1" Name="GetSitePropertiesByUrl"><Parameters><Parameter Type="String">${siteUrl}</Parameter><Parameter Type="Boolean">false</Parameter></Parameters></Method></ObjectPaths></Request>`;
-
   const adminUrl = `https://${adminHost}`;
-  console.log(`[property-bag] Disabling NoScript on ${siteUrl} via admin API`);
-  const disableResult = await executeCsomQuery(adminToken, adminUrl, disableNoScriptXml);
+  const disableXml = `<Request SchemaVersion="15.0.0.0" LibraryVersion="16.0.0.0" ApplicationName="Zenith" xmlns="http://schemas.microsoft.com/sharepoint/clientquery/2009"><Actions><ObjectPath Id="2" ObjectPathId="1" /><ObjectPath Id="4" ObjectPathId="3" /><SetProperty Id="5" ObjectPathId="3" Name="DenyAddAndCustomizePages"><Parameter Type="Enum">1</Parameter></SetProperty><Method Name="Update" Id="6" ObjectPathId="3" /></Actions><ObjectPaths><Constructor Id="1" TypeId="{268004ae-ef6b-4e9b-8425-127220d84719}" /><Method Id="3" ParentId="1" Name="GetSitePropertiesByUrl"><Parameters><Parameter Type="String">${siteUrl}</Parameter><Parameter Type="Boolean">false</Parameter></Parameters></Method></ObjectPaths></Request>`;
+  const enableXml = `<Request SchemaVersion="15.0.0.0" LibraryVersion="16.0.0.0" ApplicationName="Zenith" xmlns="http://schemas.microsoft.com/sharepoint/clientquery/2009"><Actions><ObjectPath Id="2" ObjectPathId="1" /><ObjectPath Id="4" ObjectPathId="3" /><SetProperty Id="5" ObjectPathId="3" Name="DenyAddAndCustomizePages"><Parameter Type="Enum">2</Parameter></SetProperty><Method Name="Update" Id="6" ObjectPathId="3" /></Actions><ObjectPaths><Constructor Id="1" TypeId="{268004ae-ef6b-4e9b-8425-127220d84719}" /><Method Id="3" ParentId="1" Name="GetSitePropertiesByUrl"><Parameters><Parameter Type="String">${siteUrl}</Parameter><Parameter Type="Boolean">false</Parameter></Parameters></Method></ObjectPaths></Request>`;
+
+  console.log(`[csom-noscript] Disabling NoScript on ${siteUrl}`);
+  const disableResult = await executeCsomQuery(adminToken, adminUrl, disableXml);
   if (!disableResult.success) {
     return { success: false, error: `Failed to disable NoScript: ${disableResult.error}` };
   }
 
   await new Promise(r => setTimeout(r, 1000));
 
-  const writeResult = await writeSitePropertyBagViaCsom(spoToken, siteUrl, properties);
+  const writeResult = await executeCsomQuery(spoToken, siteUrl, csomXml);
 
-  console.log(`[property-bag] Re-enabling NoScript on ${siteUrl}`);
-  const enableResult = await executeCsomQuery(adminToken, adminUrl, enableNoScriptXml);
+  console.log(`[csom-noscript] Re-enabling NoScript on ${siteUrl}`);
+  const enableResult = await executeCsomQuery(adminToken, adminUrl, enableXml);
   if (!enableResult.success) {
-    console.error(`[property-bag] WARNING: Failed to re-enable NoScript: ${enableResult.error}`);
+    console.error(`[csom-noscript] WARNING: Failed to re-enable NoScript: ${enableResult.error}`);
   }
 
   return writeResult;
-}
-
-export async function applySensitivityLabelToSite(
-  spoToken: string,
-  siteUrl: string,
-  sensitivityLabelId: string
-): Promise<{ success: boolean; error?: string }> {
-  const csomXml = `<Request SchemaVersion="15.0.0.0" LibraryVersion="16.0.0.0" ApplicationName="Zenith" xmlns="http://schemas.microsoft.com/sharepoint/clientquery/2009"><Actions><ObjectPath Id="2" ObjectPathId="1" /><SetProperty Id="3" ObjectPathId="1" Name="SensitivityLabelId"><Parameter Type="Guid">{${sensitivityLabelId}}</Parameter></SetProperty></Actions><ObjectPaths><Property Id="1" ParentId="0" Name="Site" /><StaticProperty Id="0" TypeId="{3747adcd-a3c3-41b9-bfab-4a64dd2f1e0a}" Name="Current" /></ObjectPaths></Request>`;
-
-  return executeCsomQuery(spoToken, siteUrl, csomXml);
-}
-
-export async function removeSensitivityLabelFromSite(
-  spoToken: string,
-  siteUrl: string
-): Promise<{ success: boolean; error?: string }> {
-  const csomXml = `<Request SchemaVersion="15.0.0.0" LibraryVersion="16.0.0.0" ApplicationName="Zenith" xmlns="http://schemas.microsoft.com/sharepoint/clientquery/2009"><Actions><ObjectPath Id="2" ObjectPathId="1" /><SetProperty Id="3" ObjectPathId="1" Name="SensitivityLabelId"><Parameter Type="Guid">{00000000-0000-0000-0000-000000000000}</Parameter></SetProperty></Actions><ObjectPaths><Property Id="1" ParentId="0" Name="Site" /><StaticProperty Id="0" TypeId="{3747adcd-a3c3-41b9-bfab-4a64dd2f1e0a}" Name="Current" /></ObjectPaths></Request>`;
-
-  return executeCsomQuery(spoToken, siteUrl, csomXml);
 }
 
 export async function fetchSensitivityLabels(token: string): Promise<{

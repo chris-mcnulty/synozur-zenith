@@ -133,7 +133,7 @@ router.patch("/api/workspaces/:id", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, Z
           labelSyncResult = { pushed: false, error: "Could not acquire a SharePoint token for your account. Please sign out and sign back in with SSO. You must be a SharePoint administrator in the tenant to apply labels." };
           console.warn(`[label-push] No delegated SPO token for user ${req.user!.email} on ${existing.displayName}. Label saved locally.`);
         } else if (req.body.sensitivityLabelId) {
-          const result = await applySensitivityLabelToSite(spoToken, existing.siteUrl, req.body.sensitivityLabelId);
+          const result = await applySensitivityLabelToSite(spoToken, existing.siteUrl, req.body.sensitivityLabelId, req.user!.id);
           labelSyncResult = { pushed: result.success, error: result.error };
           if (result.success) {
             console.log(`[label-push] Applied sensitivity label ${req.body.sensitivityLabelId} to ${existing.siteUrl} via CSOM for workspace ${existing.displayName}`);
@@ -142,7 +142,7 @@ router.patch("/api/workspaces/:id", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, Z
             return res.status(502).json({ message: `Failed to apply label to site: ${result.error}`, labelSyncResult });
           }
         } else if (existing.sensitivityLabelId) {
-          const result = await removeSensitivityLabelFromSite(spoToken, existing.siteUrl);
+          const result = await removeSensitivityLabelFromSite(spoToken, existing.siteUrl, req.user!.id);
           labelSyncResult = { pushed: result.success, error: result.error };
           if (result.success) {
             console.log(`[label-push] Removed sensitivity label from ${existing.siteUrl} via CSOM for workspace ${existing.displayName}`);
