@@ -1108,58 +1108,6 @@ export default function WorkspaceDetailsPage() {
           <Card className="glass-panel border-border/50">
             <CardHeader className="pb-3">
               <CardTitle className="text-base flex items-center gap-2">
-                <Users className="w-4 h-4 text-muted-foreground" />
-                Ownership
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              {(workspace as any).siteOwners && (workspace as any).siteOwners.length > 0 ? (
-                ((workspace as any).siteOwners as Array<{ id?: string; displayName: string; mail?: string }>).map((owner, idx) => {
-                  const initials = owner.displayName ? owner.displayName.split(" ").map((w: string) => w[0]).join("").toUpperCase().slice(0, 2) : "?";
-                  return (
-                    <div key={owner.id || idx} className="flex items-center gap-3 p-3 rounded-lg bg-muted/30" data-testid={`text-sidebar-owner-${idx}`}>
-                      <div className="w-10 h-10 rounded-full bg-primary/20 flex items-center justify-center text-primary font-bold text-sm">
-                        {initials}
-                      </div>
-                      <div className="min-w-0">
-                        <p className="text-sm font-medium truncate">{owner.displayName}</p>
-                        {owner.mail && <p className="text-[10px] text-muted-foreground truncate">{owner.mail}</p>}
-                      </div>
-                    </div>
-                  );
-                })
-              ) : workspace.ownerDisplayName ? (
-                <div className="flex items-center gap-3 p-3 rounded-lg bg-muted/30">
-                  <div className="w-10 h-10 rounded-full bg-primary/20 flex items-center justify-center text-primary font-bold text-sm">
-                    {workspace.ownerDisplayName.split(" ").map(w => w[0]).join("").toUpperCase().slice(0, 2)}
-                  </div>
-                  <div>
-                    <p className="text-sm font-medium">{workspace.ownerDisplayName}</p>
-                    <p className="text-[10px] text-muted-foreground">{workspace.ownerPrincipalName}</p>
-                  </div>
-                </div>
-              ) : (
-                <p className="text-sm text-muted-foreground italic">No owner data. Run a sync to populate.</p>
-              )}
-              {workspace.owners < 2 && (
-                <div className="p-3 rounded-lg bg-destructive/10 border border-destructive/20 flex items-start gap-3" data-testid="alert-ownership-violation">
-                  <ShieldAlert className="w-4 h-4 text-destructive shrink-0 mt-0.5" />
-                  <div className="text-xs text-destructive">
-                    <span className="font-semibold block mb-0.5">Fewer than 2 owners</span>
-                    Add owners in SharePoint to meet dual ownership requirements.
-                  </div>
-                </div>
-              )}
-              <div className="flex items-center justify-between text-xs text-muted-foreground pt-2 border-t border-border/30">
-                <span>Total Owners</span>
-                <span className="font-semibold text-foreground">{workspace.owners}</span>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card className="glass-panel border-border/50">
-            <CardHeader className="pb-3">
-              <CardTitle className="text-base flex items-center gap-2">
                 <Globe className={`w-4 h-4 ${getSiteTypeColor(workspace.type)}`} />
                 Site Info
               </CardTitle>

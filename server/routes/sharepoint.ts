@@ -384,7 +384,33 @@ router.post("/api/workspaces/:id/sync", requireRole(ZENITH_ROLES.OPERATOR, ZENIT
     }
 
     const updated = await storage.updateWorkspace(workspace.id, updates);
-    res.json({ success: true, workspace: updated, warnings: warnings.length > 0 ? warnings : undefined });
+
+    try {
+      const connection2 = await storage.getTenantConnection(workspace.tenantConnectionId!);
+      const orgId = connection2?.organizationId;
+      if (orgId) {
+        const policy = await storage.getGovernancePolicyByType(orgId, "COPILOT_READINESS");
+        if (policy) {
+          let requiredMetadataFields: string[] = [];
+          const metaEntries = await storage.getDataDictionary(connection2!.tenantId, "required_metadata_field");
+          requiredMetadataFields = metaEntries.map(e => e.value);
+          const context: EvaluationContext = { requiredMetadataFields };
+
+          const evaluation = evaluatePolicy(updated, policy, context);
+          const ruleRecords = evaluationResultsToCopilotRules(updated.id, evaluation);
+          await storage.setCopilotRules(updated.id, ruleRecords);
+          if (updated.copilotReady !== evaluation.overallPass) {
+            await storage.updateWorkspace(updated.id, { copilotReady: evaluation.overallPass });
+          }
+          console.log(`[single-sync] Policy "${policy.name}" evaluated: ${evaluation.overallPass ? "PASS" : "FAIL"} (${evaluation.results.filter(r => r.ruleResult === "PASS").length}/${evaluation.results.length})`);
+        }
+      }
+    } catch (evalErr: any) {
+      console.error(`[single-sync] Policy evaluation error: ${evalErr.message}`);
+    }
+
+    const finalWorkspace = await storage.getWorkspace(workspace.id);
+    res.json({ success: true, workspace: finalWorkspace, warnings: warnings.length > 0 ? warnings : undefined });
   } catch (err: any) {
     console.error("[single-site-sync] Error:", err);
     res.status(500).json({ success: false, error: err.message || "Sync failed" });
