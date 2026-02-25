@@ -940,41 +940,71 @@ export async function fetchSitePropertyBag(
 export async function writeSitePropertyBag(
   spoToken: string,
   siteUrl: string,
-  properties: Record<string, string>
+  properties: Record<string, string>,
+  userId?: string
 ): Promise<{ success: boolean; error?: string }> {
-  const result = await writeSitePropertyBagViaRootFolder(spoToken, siteUrl, properties);
-  if (result.success) return result;
+  console.log(`[property-bag] Attempting to write ${Object.keys(properties).length} properties to ${siteUrl}`);
 
-  console.warn(`[property-bag] RootFolder approach failed: ${result.error}, falling back to Web.AllProperties`);
-  return writeSitePropertyBagViaWeb(spoToken, siteUrl, properties);
+  const result1 = await writeSitePropertyBagViaRest(spoToken, siteUrl, properties);
+  if (result1.success) return result1;
+  console.warn(`[property-bag] REST approach failed: ${result1.error}`);
+
+  const result2 = await writeSitePropertyBagViaCsom(spoToken, siteUrl, properties);
+  if (result2.success) return result2;
+  console.warn(`[property-bag] Direct CSOM failed: ${result2.error}`);
+
+  if (userId) {
+    const result3 = await writeSitePropertyBagWithNoScriptToggle(spoToken, siteUrl, properties, userId);
+    if (result3.success) return result3;
+    console.warn(`[property-bag] Admin NoScript toggle failed: ${result3.error}`);
+  }
+
+  return { success: false, error: `All property bag write methods failed. Last error: ${result2.error}` };
 }
 
-async function writeSitePropertyBagViaRootFolder(
+async function writeSitePropertyBagViaRest(
   spoToken: string,
   siteUrl: string,
   properties: Record<string, string>
 ): Promise<{ success: boolean; error?: string }> {
-  let actionId = 7;
-  let actionsXml = '';
-  actionsXml += '<ObjectPath Id="2" ObjectPathId="1" />';
-  actionsXml += '<ObjectPath Id="4" ObjectPathId="3" />';
-  actionsXml += '<ObjectPath Id="6" ObjectPathId="5" />';
+  const normalizedUrl = siteUrl.replace(/\/$/, '');
+  try {
+    const { digest, error: digestError } = await getFormDigest(spoToken, normalizedUrl);
+    if (digestError && !digest) {
+      return { success: false, error: `Form digest failed: ${digestError}` };
+    }
 
-  for (const [key, value] of Object.entries(properties)) {
-    const safeKey = key.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    const safeVal = value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    actionsXml += `<Method Name="SetFieldValue" Id="${actionId}" ObjectPathId="5"><Parameters><Parameter Type="String">${safeKey}</Parameter><Parameter Type="String">${safeVal}</Parameter></Parameters></Method>`;
-    actionId++;
+    const body: Record<string, any> = {
+      "__metadata": { "type": "SP.PropertyValues" },
+      ...properties,
+    };
+
+    console.log(`[property-bag] Trying REST MERGE on /_api/web/AllProperties`);
+    const res = await fetch(`${normalizedUrl}/_api/web/AllProperties`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${spoToken}`,
+        'Content-Type': 'application/json;odata=verbose',
+        'X-HTTP-Method': 'MERGE',
+        'X-RequestDigest': digest || '0',
+        'If-Match': '*',
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!res.ok) {
+      const errText = await res.text();
+      return { success: false, error: `REST MERGE ${res.status}: ${errText.substring(0, 200)}` };
+    }
+
+    console.log(`[property-bag] REST MERGE succeeded`);
+    return { success: true };
+  } catch (e: any) {
+    return { success: false, error: e.message };
   }
-  actionsXml += `<Method Name="Update" Id="${actionId}" ObjectPathId="3" />`;
-
-  const csomXml = `<Request AddExpandoFieldTypeSuffix="true" SchemaVersion="15.0.0.0" LibraryVersion="16.0.0.0" ApplicationName="Zenith" xmlns="http://schemas.microsoft.com/sharepoint/clientquery/2009"><Actions>${actionsXml}</Actions><ObjectPaths><Property Id="1" ParentId="0" Name="Web" /><Property Id="3" ParentId="1" Name="RootFolder" /><Property Id="5" ParentId="3" Name="Properties" /><StaticProperty Id="0" TypeId="{3747adcd-a3c3-41b9-bfab-4a64dd2f1e0a}" Name="Current" /></ObjectPaths></Request>`;
-
-  console.log(`[property-bag] Writing ${Object.keys(properties).length} properties via RootFolder.Properties approach`);
-  return executeCsomQuery(spoToken, siteUrl, csomXml);
 }
 
-async function writeSitePropertyBagViaWeb(
+async function writeSitePropertyBagViaCsom(
   spoToken: string,
   siteUrl: string,
   properties: Record<string, string>
@@ -994,7 +1024,56 @@ async function writeSitePropertyBagViaWeb(
 
   const csomXml = `<Request AddExpandoFieldTypeSuffix="true" SchemaVersion="15.0.0.0" LibraryVersion="16.0.0.0" ApplicationName="Zenith" xmlns="http://schemas.microsoft.com/sharepoint/clientquery/2009"><Actions>${actionsXml}</Actions><ObjectPaths><Property Id="1" ParentId="0" Name="Web" /><Property Id="3" ParentId="1" Name="AllProperties" /><StaticProperty Id="0" TypeId="{3747adcd-a3c3-41b9-bfab-4a64dd2f1e0a}" Name="Current" /></ObjectPaths></Request>`;
 
+  console.log(`[property-bag] Trying CSOM Web.AllProperties approach`);
   return executeCsomQuery(spoToken, siteUrl, csomXml);
+}
+
+async function writeSitePropertyBagWithNoScriptToggle(
+  spoToken: string,
+  siteUrl: string,
+  properties: Record<string, string>,
+  userId: string
+): Promise<{ success: boolean; error?: string }> {
+  const urlObj = new URL(siteUrl);
+  const tenantPrefix = urlObj.hostname.split('.')[0];
+  const adminHost = `${tenantPrefix}-admin.sharepoint.com`;
+
+  console.log(`[property-bag] Trying admin NoScript toggle via ${adminHost}`);
+
+  const { getDelegatedSpoToken } = await import('../routes-entra');
+  let adminToken: string | null = null;
+  try {
+    adminToken = await getDelegatedSpoToken(userId, adminHost);
+  } catch (err: any) {
+    return { success: false, error: `Failed to get admin SPO token: ${err.message}` };
+  }
+  if (!adminToken) {
+    return { success: false, error: 'Could not acquire SharePoint Admin token' };
+  }
+
+  const siteRelativeUrl = urlObj.pathname;
+  const disableNoScriptXml = `<Request SchemaVersion="15.0.0.0" LibraryVersion="16.0.0.0" ApplicationName="Zenith" xmlns="http://schemas.microsoft.com/sharepoint/clientquery/2009"><Actions><ObjectPath Id="2" ObjectPathId="1" /><ObjectPath Id="4" ObjectPathId="3" /><SetProperty Id="5" ObjectPathId="3" Name="DenyAddAndCustomizePages"><Parameter Type="Enum">0</Parameter></SetProperty><Method Name="Update" Id="6" ObjectPathId="3" /></Actions><ObjectPaths><Constructor Id="1" TypeId="{268004ae-ef6b-4e9b-8425-127220d84719}" /><Method Id="3" ParentId="1" Name="GetSitePropertiesByUrl"><Parameters><Parameter Type="String">${siteUrl}</Parameter><Parameter Type="Boolean">false</Parameter></Parameters></Method></ObjectPaths></Request>`;
+
+  const enableNoScriptXml = `<Request SchemaVersion="15.0.0.0" LibraryVersion="16.0.0.0" ApplicationName="Zenith" xmlns="http://schemas.microsoft.com/sharepoint/clientquery/2009"><Actions><ObjectPath Id="2" ObjectPathId="1" /><ObjectPath Id="4" ObjectPathId="3" /><SetProperty Id="5" ObjectPathId="3" Name="DenyAddAndCustomizePages"><Parameter Type="Enum">1</Parameter></SetProperty><Method Name="Update" Id="6" ObjectPathId="3" /></Actions><ObjectPaths><Constructor Id="1" TypeId="{268004ae-ef6b-4e9b-8425-127220d84719}" /><Method Id="3" ParentId="1" Name="GetSitePropertiesByUrl"><Parameters><Parameter Type="String">${siteUrl}</Parameter><Parameter Type="Boolean">false</Parameter></Parameters></Method></ObjectPaths></Request>`;
+
+  const adminUrl = `https://${adminHost}`;
+  console.log(`[property-bag] Disabling NoScript on ${siteUrl} via admin API`);
+  const disableResult = await executeCsomQuery(adminToken, adminUrl, disableNoScriptXml);
+  if (!disableResult.success) {
+    return { success: false, error: `Failed to disable NoScript: ${disableResult.error}` };
+  }
+
+  await new Promise(r => setTimeout(r, 1000));
+
+  const writeResult = await writeSitePropertyBagViaCsom(spoToken, siteUrl, properties);
+
+  console.log(`[property-bag] Re-enabling NoScript on ${siteUrl}`);
+  const enableResult = await executeCsomQuery(adminToken, adminUrl, enableNoScriptXml);
+  if (!enableResult.success) {
+    console.error(`[property-bag] WARNING: Failed to re-enable NoScript: ${enableResult.error}`);
+  }
+
+  return writeResult;
 }
 
 export async function applySensitivityLabelToSite(

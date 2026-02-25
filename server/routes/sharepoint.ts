@@ -1098,8 +1098,8 @@ async function handleMetadataWriteback(req: any, res: any) {
         results.push({ workspaceId: wsId, displayName: workspace.displayName, success: false, error: "No SharePoint token available for your account. You must be a SharePoint administrator and sign in via SSO." });
         continue;
       }
-      const result = await writeSitePropertyBag(spoToken, workspace.siteUrl, properties);
-      if (!result.success && result.error?.includes('Access is denied')) {
+      const result = await writeSitePropertyBag(spoToken, workspace.siteUrl, properties, req.session?.userId);
+      if (!result.success && result.error?.toLowerCase().includes('access')) {
         results.push({ workspaceId: wsId, displayName: workspace.displayName, fieldsSynced, success: false, error: "Access denied — you must be a Site Collection Administrator or Site Owner to write property bag values. Your metadata was saved in Zenith but not pushed to SharePoint." });
       } else {
         results.push({ workspaceId: wsId, displayName: workspace.displayName, fieldsSynced, ...result });
