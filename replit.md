@@ -49,6 +49,7 @@ The frontend is built with React, Vite, TanStack Query, shadcn/ui for components
 - Enforcement of "Highly Confidential" sensitivity labels to block external sharing and Copilot indexing by default.
 - Ownership tracked as `siteOwners` jsonb array on each workspace — group-connected sites use `/groups/{groupId}/owners`, non-group sites use `/_api/web/siteusers?$filter=IsSiteAdmin eq true`. Owners are read-only in the UI (sourced from SharePoint, not manually editable in Zenith). Dual ownership (>= 2 owners) required by governance policy.
 - `fetchSiteCollectionAdmins()` in `server/services/graph.ts` queries SharePoint REST API for actual site collection admins when no M365 group owners are available.
+- **Owner merging**: For all sites, both Graph group owners AND SharePoint site collection admins are fetched and merged with email-based deduplication. This ensures users added as site collection admins (but not group owners) appear in the owner count.
 - Post-sync auto-evaluation: After sync completes, the COPILOT_READINESS governance policy is automatically evaluated for all workspaces, updating `copilotReady` and `copilot_rules`.
 - Clear display of Copilot eligibility criteria.
 - Hub site hierarchy detection via SharePoint REST API (`SP.HubSites` + per-site `IsHubSite`/`HubSiteId`), supporting nested hubs.

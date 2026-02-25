@@ -622,7 +622,7 @@ router.post("/api/admin/tenants/:id/sync", requireRole(ZENITH_ROLES.TENANT_ADMIN
             const groupOwners = groupOwnersResult.status === 'fulfilled' ? groupOwnersResult.value : { owners: [] };
 
             let siteAdmins: { id?: string; displayName: string; mail?: string; userPrincipalName?: string }[] | undefined;
-            if (groupOwners.owners.length === 0 && spoToken && siteUrl) {
+            if (spoToken && siteUrl) {
               const adminsResult = await fetchSiteCollectionAdmins(spoToken, siteUrl);
               if (adminsResult.admins.length > 0) {
                 siteAdmins = adminsResult.admins;
@@ -695,17 +695,34 @@ router.post("/api/admin/tenants/:id/sync", requireRole(ZENITH_ROLES.TENANT_ADMIN
       workspaceData.ownerDisplayName = usage?.ownerDisplayName || driveOwner.ownerDisplayName || null;
       workspaceData.ownerPrincipalName = usage?.ownerPrincipalName || driveOwner.ownerEmail || null;
 
-      if (groupOwners.owners && groupOwners.owners.length > 0) {
-        workspaceData.siteOwners = groupOwners.owners.map((o: any) => ({
-          id: o.id,
-          displayName: o.displayName || '',
-          mail: o.mail,
-          userPrincipalName: o.userPrincipalName,
-        }));
-        workspaceData.owners = groupOwners.owners.length;
-      } else if (enriched.siteAdmins && enriched.siteAdmins.length > 0) {
-        workspaceData.siteOwners = enriched.siteAdmins;
-        workspaceData.owners = enriched.siteAdmins.length;
+      {
+        const mergedOwners: Array<{ id?: string; displayName: string; mail?: string; userPrincipalName?: string }> = [];
+        const seenEmails = new Set<string>();
+
+        if (groupOwners.owners && groupOwners.owners.length > 0) {
+          for (const o of groupOwners.owners) {
+            const key = (o.mail || o.userPrincipalName || '').toLowerCase();
+            if (key && !seenEmails.has(key)) {
+              seenEmails.add(key);
+              mergedOwners.push({ id: o.id, displayName: o.displayName || '', mail: o.mail, userPrincipalName: o.userPrincipalName });
+            }
+          }
+        }
+
+        if (enriched.siteAdmins && enriched.siteAdmins.length > 0) {
+          for (const a of enriched.siteAdmins) {
+            const key = (a.mail || a.userPrincipalName || '').toLowerCase();
+            if (key && !seenEmails.has(key)) {
+              seenEmails.add(key);
+              mergedOwners.push(a);
+            }
+          }
+        }
+
+        if (mergedOwners.length > 0) {
+          workspaceData.siteOwners = mergedOwners;
+          workspaceData.owners = mergedOwners.length;
+        }
       }
 
       const storageUsed = usage?.storageUsedBytes ?? driveOwner.storageUsedBytes ?? null;
