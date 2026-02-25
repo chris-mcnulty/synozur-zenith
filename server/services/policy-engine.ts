@@ -32,12 +32,16 @@ const BUILT_IN_EVALUATORS: Record<string, (workspace: Workspace, config?: Record
     ruleDescription: "Workspace must have a department assigned.",
   }),
 
-  DUAL_OWNERSHIP: (workspace, _config) => ({
-    ruleType: "DUAL_OWNERSHIP",
-    ruleName: "Dual Ownership",
-    ruleResult: workspace.owners >= 2 ? "PASS" : "FAIL",
-    ruleDescription: "Workspace must have at least two active owners.",
-  }),
+  DUAL_OWNERSHIP: (workspace, _config) => {
+    const siteOwnersArr = (workspace as any).siteOwners as Array<unknown> | null | undefined;
+    const ownerCount = siteOwnersArr && siteOwnersArr.length > 0 ? siteOwnersArr.length : workspace.owners;
+    return {
+      ruleType: "DUAL_OWNERSHIP",
+      ruleName: "Dual Ownership",
+      ruleResult: ownerCount >= 2 ? "PASS" : "FAIL",
+      ruleDescription: "Workspace must have at least two active owners.",
+    };
+  },
 
   METADATA_COMPLETE: (workspace, config) => {
     const requiredFields = (config?.requiredFields as string[]) || [];

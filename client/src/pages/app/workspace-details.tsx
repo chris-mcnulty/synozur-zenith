@@ -304,7 +304,7 @@ export default function WorkspaceDetailsPage() {
     : [
         { ruleName: "Sensitivity Label", ruleResult: workspace.sensitivityLabelId ? "PASS" : "FAIL", ruleDescription: "Workspace must have a Purview sensitivity label applied." },
         { ruleName: "Department Assigned", ruleResult: workspace.department ? "PASS" : "FAIL", ruleDescription: "Workspace must have a department assigned." },
-        { ruleName: "Dual Ownership", ruleResult: workspace.owners >= 2 ? "PASS" : "FAIL", ruleDescription: "Workspace must have at least two active owners." },
+        { ruleName: "Dual Ownership", ruleResult: ((workspace as any).siteOwners?.length || workspace.owners) >= 2 ? "PASS" : "FAIL", ruleDescription: "Workspace must have at least two active owners." },
         { ruleName: "Metadata Complete", ruleResult: workspace.metadataStatus === "COMPLETE" ? "PASS" : "FAIL", ruleDescription: "All required governance metadata fields must be populated." },
         { ruleName: "Sharing Policy", ruleResult: (!workspace.externalSharing || workspace.sensitivity !== "HIGHLY_CONFIDENTIAL") ? "PASS" : "FAIL", ruleDescription: "External sharing policy must align with sensitivity classification." },
       ];
