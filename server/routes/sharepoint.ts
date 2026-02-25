@@ -912,6 +912,21 @@ router.post("/api/admin/tenants/:id/sync", requireRole(ZENITH_ROLES.TENANT_ADMIN
 
       const existing = await storage.getWorkspaceByM365ObjectId(site.id);
       if (existing) {
+        const governedFields: (keyof typeof workspaceData)[] = [
+          'sensitivityLabelId', 'department', 'costCenter', 'projectCode',
+          'projectType', 'sensitivity', 'retentionPolicy',
+        ];
+        for (const field of governedFields) {
+          const incoming = workspaceData[field];
+          const current = (existing as any)[field];
+          if ((!incoming || incoming === '') && current) {
+            console.log(`[sync-preserve] ${existing.displayName}: preserving ${field}="${current}" (sync value was empty)`);
+            delete workspaceData[field];
+          }
+        }
+        if (existing.localHash) {
+          workspaceData.localHash = existing.localHash;
+        }
         await storage.updateWorkspace(existing.id, workspaceData);
       } else {
         await storage.createWorkspace(workspaceData as any);
