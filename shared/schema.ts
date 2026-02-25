@@ -51,6 +51,7 @@ export const workspaces = pgTable("workspaces", {
   siteCreatedDate: text("site_created_date"),
   reportRefreshDate: text("report_refresh_date"),
   propertyBag: jsonb("property_bag").$type<Record<string, string>>(),
+  siteOwners: jsonb("site_owners").$type<Array<{ id?: string; displayName: string; mail?: string; userPrincipalName?: string }>>(),
   spoSyncHash: text("spo_sync_hash"),
   localHash: text("local_hash"),
   createdAt: timestamp("created_at").defaultNow(),

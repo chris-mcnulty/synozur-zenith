@@ -122,8 +122,6 @@ export default function WorkspaceDetailsPage() {
     sensitivity: "",
     sensitivityLabelId: "",
     externalSharing: false,
-    primarySteward: "",
-    secondarySteward: "",
     teamsConnected: false,
     type: "",
     projectType: "",
@@ -140,8 +138,6 @@ export default function WorkspaceDetailsPage() {
         sensitivityLabelId: workspace.sensitivityLabelId || "",
 
         externalSharing: workspace.externalSharing,
-        primarySteward: workspace.primarySteward || "",
-        secondarySteward: workspace.secondarySteward || "",
         teamsConnected: workspace.teamsConnected,
         type: workspace.type || "",
         projectType: workspace.projectType || "",
@@ -244,8 +240,6 @@ export default function WorkspaceDetailsPage() {
         sensitivityLabelId: workspace.sensitivityLabelId || "",
 
         externalSharing: workspace.externalSharing,
-        primarySteward: workspace.primarySteward || "",
-        secondarySteward: workspace.secondarySteward || "",
         teamsConnected: workspace.teamsConnected,
         type: workspace.type || "",
         projectType: workspace.projectType || "",
@@ -320,10 +314,6 @@ export default function WorkspaceDetailsPage() {
   const rawJson = JSON.stringify(workspace, null, 2);
   const passCount = computedRules.filter(r => r.ruleResult === "PASS").length;
   const failCount = computedRules.filter(r => r.ruleResult === "FAIL").length;
-
-  const primaryInitials = workspace.primarySteward
-    ? workspace.primarySteward.split(" ").map(w => w[0]).join("").toUpperCase().slice(0, 2)
-    : "??";
 
   const metadataFields = [
     { key: "department", label: "Department", required: requiredMetadataKeys.includes("department") },
@@ -736,48 +726,36 @@ export default function WorkspaceDetailsPage() {
                   <div>
                     <h3 className="text-sm font-semibold mb-4 flex items-center gap-2">
                       <Users className="w-4 h-4 text-primary" />
-                      Ownership
+                      Ownership ({workspace.owners} {workspace.owners === 1 ? 'owner' : 'owners'})
                     </h3>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-5">
+                    {(workspace as any).siteOwners && (workspace as any).siteOwners.length > 0 ? (
                       <div className="space-y-2">
-                        <Label>Primary Owner <span className="text-destructive">*</span></Label>
-                        {editMode ? (
-                          <Input value={form.primarySteward} onChange={(e) => setForm({...form, primarySteward: e.target.value})} className="bg-background/50" data-testid="input-primary-steward" />
-                        ) : (
-                          <div className="h-10 flex items-center gap-3 px-3 rounded-md bg-muted/50 text-sm">
-                            <div className="w-6 h-6 rounded-full bg-primary/20 flex items-center justify-center text-primary text-[10px] font-bold shrink-0">
-                              {primaryInitials}
+                        {((workspace as any).siteOwners as Array<{ id?: string; displayName: string; mail?: string; userPrincipalName?: string }>).map((owner, idx) => {
+                          const initials = owner.displayName ? owner.displayName.split(" ").map((w: string) => w[0]).join("").toUpperCase().slice(0, 2) : "?";
+                          return (
+                            <div key={owner.id || idx} className="flex items-center gap-3 p-2 rounded-lg bg-muted/30" data-testid={`text-owner-${idx}`}>
+                              <div className="w-8 h-8 rounded-full bg-primary/20 flex items-center justify-center text-primary text-[10px] font-bold shrink-0">
+                                {initials}
+                              </div>
+                              <div className="min-w-0">
+                                <p className="text-sm font-medium truncate">{owner.displayName}</p>
+                                {owner.mail && <p className="text-[10px] text-muted-foreground truncate">{owner.mail}</p>}
+                              </div>
                             </div>
-                            {workspace.primarySteward || <span className="text-muted-foreground italic">Not assigned</span>}
-                          </div>
-                        )}
+                          );
+                        })}
                       </div>
-                      <div className="space-y-2">
-                        <Label>Secondary Owner <span className="text-destructive">*</span></Label>
-                        {editMode ? (
-                          <Input value={form.secondarySteward} onChange={(e) => setForm({...form, secondarySteward: e.target.value})} className="bg-background/50" data-testid="input-secondary-steward" />
-                        ) : (
-                          <div className="h-10 flex items-center gap-3 px-3 rounded-md bg-muted/50 text-sm">
-                            {workspace.secondarySteward ? (
-                              <>
-                                <div className="w-6 h-6 rounded-full bg-primary/20 flex items-center justify-center text-primary text-[10px] font-bold shrink-0">
-                                  {workspace.secondarySteward.split(" ").map(w => w[0]).join("").toUpperCase().slice(0, 2)}
-                                </div>
-                                {workspace.secondarySteward}
-                              </>
-                            ) : (
-                              <span className="text-destructive italic flex items-center gap-1"><ShieldAlert className="w-3 h-3" /> Not assigned — policy violation</span>
-                            )}
-                          </div>
-                        )}
+                    ) : (
+                      <div className="text-sm text-muted-foreground italic">
+                        {workspace.ownerDisplayName || "No owner data available. Run a sync to populate."}
                       </div>
-                    </div>
-                    {!workspace.secondarySteward && !editMode && (
+                    )}
+                    {workspace.owners < 2 && (
                       <div className="mt-3 p-3 rounded-lg bg-destructive/10 border border-destructive/20 flex items-start gap-3" data-testid="alert-policy-violation">
                         <ShieldAlert className="w-4 h-4 text-destructive shrink-0 mt-0.5" />
                         <div className="text-xs text-destructive">
                           <span className="font-semibold block mb-0.5">Dual Ownership Policy Violation</span>
-                          This site requires both a Primary Owner and Secondary Owner to prevent orphaned workspaces.
+                          This site has fewer than 2 owners. Add additional owners in SharePoint to meet governance requirements.
                         </div>
                       </div>
                     )}
@@ -1055,7 +1033,7 @@ export default function WorkspaceDetailsPage() {
                 <CardContent>
                   <div className="space-y-4">
                     {[
-                      { date: "Feb 21, 2026", action: "Workspace provisioned", by: workspace.primarySteward || "System", type: "created" },
+                      { date: "Feb 21, 2026", action: "Workspace provisioned", by: workspace.ownerDisplayName || "System", type: "created" },
                       { date: "Feb 21, 2026", action: "Sensitivity label applied: " + sensitivityLabel, by: "Governance Policy Engine", type: "security" },
                       { date: "Feb 21, 2026", action: "Copilot eligibility evaluated", by: "Zenith Compliance", type: workspace.copilotReady ? "pass" : "blocked" },
                       { date: "Feb 21, 2026", action: workspace.teamsConnected ? "Microsoft Teams connected" : "Teams connectivity skipped", by: "Provisioning Engine", type: "info" },
@@ -1135,33 +1113,40 @@ export default function WorkspaceDetailsPage() {
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
-              {workspace.primarySteward && (
-                <div className="flex items-center gap-3 p-3 rounded-lg bg-muted/30" data-testid="text-primary-steward">
+              {(workspace as any).siteOwners && (workspace as any).siteOwners.length > 0 ? (
+                ((workspace as any).siteOwners as Array<{ id?: string; displayName: string; mail?: string }>).map((owner, idx) => {
+                  const initials = owner.displayName ? owner.displayName.split(" ").map((w: string) => w[0]).join("").toUpperCase().slice(0, 2) : "?";
+                  return (
+                    <div key={owner.id || idx} className="flex items-center gap-3 p-3 rounded-lg bg-muted/30" data-testid={`text-sidebar-owner-${idx}`}>
+                      <div className="w-10 h-10 rounded-full bg-primary/20 flex items-center justify-center text-primary font-bold text-sm">
+                        {initials}
+                      </div>
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium truncate">{owner.displayName}</p>
+                        {owner.mail && <p className="text-[10px] text-muted-foreground truncate">{owner.mail}</p>}
+                      </div>
+                    </div>
+                  );
+                })
+              ) : workspace.ownerDisplayName ? (
+                <div className="flex items-center gap-3 p-3 rounded-lg bg-muted/30">
                   <div className="w-10 h-10 rounded-full bg-primary/20 flex items-center justify-center text-primary font-bold text-sm">
-                    {primaryInitials}
+                    {workspace.ownerDisplayName.split(" ").map(w => w[0]).join("").toUpperCase().slice(0, 2)}
                   </div>
                   <div>
-                    <p className="text-sm font-medium">{workspace.primarySteward}</p>
-                    <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-semibold">Primary Owner</p>
-                  </div>
-                </div>
-              )}
-              {workspace.secondarySteward ? (
-                <div className="flex items-center gap-3 p-3 rounded-lg bg-muted/30" data-testid="text-secondary-steward">
-                  <div className="w-10 h-10 rounded-full bg-primary/20 flex items-center justify-center text-primary font-bold text-sm">
-                    {workspace.secondarySteward.split(" ").map(w => w[0]).join("").toUpperCase().slice(0, 2)}
-                  </div>
-                  <div>
-                    <p className="text-sm font-medium">{workspace.secondarySteward}</p>
-                    <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-semibold">Secondary Owner</p>
+                    <p className="text-sm font-medium">{workspace.ownerDisplayName}</p>
+                    <p className="text-[10px] text-muted-foreground">{workspace.ownerPrincipalName}</p>
                   </div>
                 </div>
               ) : (
+                <p className="text-sm text-muted-foreground italic">No owner data. Run a sync to populate.</p>
+              )}
+              {workspace.owners < 2 && (
                 <div className="p-3 rounded-lg bg-destructive/10 border border-destructive/20 flex items-start gap-3" data-testid="alert-ownership-violation">
                   <ShieldAlert className="w-4 h-4 text-destructive shrink-0 mt-0.5" />
                   <div className="text-xs text-destructive">
-                    <span className="font-semibold block mb-0.5">No Secondary Owner</span>
-                    Assign a secondary owner to meet dual ownership requirements.
+                    <span className="font-semibold block mb-0.5">Fewer than 2 owners</span>
+                    Add owners in SharePoint to meet dual ownership requirements.
                   </div>
                 </div>
               )}

@@ -1,11 +1,12 @@
 import { Router } from "express";
 import { storage } from "../storage";
 import { insertWorkspaceSchema, insertProvisioningRequestSchema, type ServicePlanTier, ZENITH_ROLES } from "@shared/schema";
-import { fetchSharePointSites, fetchSiteUsageReport, fetchSiteDriveOwner, fetchSiteAnalytics, fetchSiteGroupOwners, getAppToken, writeSitePropertyBag, fetchSitePropertyBag, fetchSensitivityLabels, fetchRetentionLabels, fetchHubSites, fetchSiteHubAssociation, fetchHubSitesViaSearch, applySensitivityLabelToSite, removeSensitivityLabelFromSite, joinHubSite, leaveHubSite, fetchSiteLockState, fetchSiteArchiveStatus, batchToggleNoScript } from "../services/graph";
+import { fetchSharePointSites, fetchSiteUsageReport, fetchSiteDriveOwner, fetchSiteAnalytics, fetchSiteGroupOwners, fetchSiteCollectionAdmins, getAppToken, writeSitePropertyBag, fetchSitePropertyBag, fetchSensitivityLabels, fetchRetentionLabels, fetchHubSites, fetchSiteHubAssociation, fetchHubSitesViaSearch, applySensitivityLabelToSite, removeSensitivityLabelFromSite, joinHubSite, leaveHubSite, fetchSiteLockState, fetchSiteArchiveStatus, batchToggleNoScript } from "../services/graph";
 import { getPlanFeatures } from "../services/feature-gate";
 import { refreshDelegatedToken, getDelegatedSpoToken } from "../routes-entra";
 import { requireRole, type AuthenticatedRequest } from "../middleware/rbac";
 import { computeWritebackHash, computeSpoSyncHash } from "../services/writeback-hash";
+import { evaluatePolicy, evaluationResultsToCopilotRules, DEFAULT_COPILOT_READINESS_RULES, type EvaluationContext } from "../services/policy-engine";
 
 const router = Router();
 
@@ -598,7 +599,7 @@ router.post("/api/admin/tenants/:id/sync", requireRole(ZENITH_ROLES.TENANT_ADMIN
     }
 
     const BATCH_SIZE = 5;
-    const enrichCache = new Map<string, { driveOwner: any; analytics: any; groupOwners: any; lockState?: string; isArchived?: boolean; propertyBag?: Record<string, string> }>();
+    const enrichCache = new Map<string, { driveOwner: any; analytics: any; groupOwners: any; siteAdmins?: any[]; lockState?: string; isArchived?: boolean; propertyBag?: Record<string, string> }>();
 
     if (token) {
       for (let i = 0; i < siteResult.sites.length; i += BATCH_SIZE) {
@@ -618,11 +619,22 @@ router.post("/api/admin/tenants/:id/sync", requireRole(ZENITH_ROLES.TENANT_ADMIN
             ]);
             const lockData = lockStateResult.status === 'fulfilled' ? lockStateResult.value : { lockState: "Unknown", isArchived: false };
             const propBagData = propBagResult.status === 'fulfilled' ? propBagResult.value : { properties: {} };
+            const groupOwners = groupOwnersResult.status === 'fulfilled' ? groupOwnersResult.value : { owners: [] };
+
+            let siteAdmins: { id?: string; displayName: string; mail?: string; userPrincipalName?: string }[] | undefined;
+            if (groupOwners.owners.length === 0 && spoToken && siteUrl) {
+              const adminsResult = await fetchSiteCollectionAdmins(spoToken, siteUrl);
+              if (adminsResult.admins.length > 0) {
+                siteAdmins = adminsResult.admins;
+              }
+            }
+
             return {
               siteId: site.id,
               driveOwner: driveResult.status === 'fulfilled' ? driveResult.value : {},
               analytics: analyticsResult.status === 'fulfilled' ? analyticsResult.value : {},
-              groupOwners: groupOwnersResult.status === 'fulfilled' ? groupOwnersResult.value : { owners: [] },
+              groupOwners,
+              siteAdmins,
               lockState: lockData.lockState,
               isArchived: lockData.isArchived === true,
               propertyBag: Object.keys(propBagData.properties).length > 0 ? propBagData.properties : undefined,
@@ -631,7 +643,7 @@ router.post("/api/admin/tenants/:id/sync", requireRole(ZENITH_ROLES.TENANT_ADMIN
         );
         for (const r of results) {
           if (r.status === 'fulfilled') {
-            enrichCache.set(r.value.siteId, { driveOwner: r.value.driveOwner, analytics: r.value.analytics, groupOwners: r.value.groupOwners, lockState: r.value.lockState, isArchived: r.value.isArchived, propertyBag: r.value.propertyBag });
+            enrichCache.set(r.value.siteId, { driveOwner: r.value.driveOwner, analytics: r.value.analytics, groupOwners: r.value.groupOwners, siteAdmins: r.value.siteAdmins, lockState: r.value.lockState, isArchived: r.value.isArchived, propertyBag: r.value.propertyBag });
           }
         }
       }
@@ -662,7 +674,7 @@ router.post("/api/admin/tenants/:id/sync", requireRole(ZENITH_ROLES.TENANT_ADMIN
       }
       if (usage) usageMatched++;
 
-      const enriched = enrichCache.get(site.id) || { driveOwner: {}, analytics: {}, groupOwners: { owners: [] }, lockState: undefined, isArchived: false };
+      const enriched = enrichCache.get(site.id) || { driveOwner: {}, analytics: {}, groupOwners: { owners: [] }, siteAdmins: undefined, lockState: undefined, isArchived: false };
       const driveOwner = enriched.driveOwner;
       const siteAnalytics = enriched.analytics;
       const groupOwners = enriched.groupOwners;
@@ -684,11 +696,16 @@ router.post("/api/admin/tenants/:id/sync", requireRole(ZENITH_ROLES.TENANT_ADMIN
       workspaceData.ownerPrincipalName = usage?.ownerPrincipalName || driveOwner.ownerEmail || null;
 
       if (groupOwners.owners && groupOwners.owners.length > 0) {
+        workspaceData.siteOwners = groupOwners.owners.map((o: any) => ({
+          id: o.id,
+          displayName: o.displayName || '',
+          mail: o.mail,
+          userPrincipalName: o.userPrincipalName,
+        }));
         workspaceData.owners = groupOwners.owners.length;
-        workspaceData.primarySteward = groupOwners.owners[0]?.displayName || null;
-        if (groupOwners.owners.length >= 2) {
-          workspaceData.secondarySteward = groupOwners.owners[1]?.displayName || null;
-        }
+      } else if (enriched.siteAdmins && enriched.siteAdmins.length > 0) {
+        workspaceData.siteOwners = enriched.siteAdmins;
+        workspaceData.owners = enriched.siteAdmins.length;
       }
 
       const storageUsed = usage?.storageUsedBytes ?? driveOwner.storageUsedBytes ?? null;
@@ -1033,6 +1050,36 @@ router.post("/api/admin/tenants/:id/sync", requireRole(ZENITH_ROLES.TENANT_ADMIN
       });
     }
 
+    let policyEvalCount = 0;
+    try {
+      const allSyncedWorkspaces = await storage.getWorkspaces(undefined, req.params.id);
+      const policy = connection.organizationId
+        ? await storage.getGovernancePolicyByType(connection.organizationId, "COPILOT_READINESS")
+        : null;
+
+      if (policy) {
+        let requiredMetadataFields: string[] = [];
+        const metaEntries = await storage.getDataDictionary(connection.tenantId, "required_metadata_field");
+        requiredMetadataFields = metaEntries.map(e => e.value);
+        const context: EvaluationContext = { requiredMetadataFields };
+
+        for (const ws of allSyncedWorkspaces) {
+          const evaluation = evaluatePolicy(ws, policy, context);
+          const ruleRecords = evaluationResultsToCopilotRules(ws.id, evaluation);
+          await storage.setCopilotRules(ws.id, ruleRecords);
+          if (ws.copilotReady !== evaluation.overallPass) {
+            await storage.updateWorkspace(ws.id, { copilotReady: evaluation.overallPass });
+          }
+          policyEvalCount++;
+        }
+        console.log(`[policy-eval] Evaluated ${policyEvalCount} workspaces against "${policy.name}" policy`);
+      } else {
+        console.log(`[policy-eval] No COPILOT_READINESS policy found for org, skipping auto-evaluation`);
+      }
+    } catch (evalErr: any) {
+      console.error(`[policy-eval] Error during post-sync evaluation: ${evalErr.message}`);
+    }
+
     await storage.updateTenantConnection(req.params.id, {
       lastSyncAt: new Date(),
       lastSyncStatus: permissionWarnings.some(w => w.severity === "error") ? "SUCCESS_WITH_ERRORS" : permissionWarnings.length > 0 ? "SUCCESS_WITH_WARNINGS" : "SUCCESS",
@@ -1053,6 +1100,7 @@ router.post("/api/admin/tenants/:id/sync", requireRole(ZENITH_ROLES.TENANT_ADMIN
       sensitivityLabels: labelSyncResult,
       retentionLabels: retentionSyncResult,
       hubSites: hubSyncResult,
+      policyEvaluation: policyEvalCount > 0 ? { evaluated: policyEvalCount } : undefined,
       permissionWarnings: permissionWarnings.length > 0 ? permissionWarnings : undefined,
     });
   } catch (err: any) {

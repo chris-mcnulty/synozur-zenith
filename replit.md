@@ -47,7 +47,9 @@ The frontend is built with React, Vite, TanStack Query, shadcn/ui for components
 - All managed workspaces are SharePoint sites (TEAM_SITE, COMMUNICATION_SITE, HUB_SITE) with optional Teams connectivity.
 - Automated `DEAL-` and `PORTCO-` prefixes for site naming conventions.
 - Enforcement of "Highly Confidential" sensitivity labels to block external sharing and Copilot indexing by default.
-- Requirement of dual ownership (Primary Steward + Secondary Owner) for workspaces to prevent orphaned sites.
+- Ownership tracked as `siteOwners` jsonb array on each workspace — group-connected sites use `/groups/{groupId}/owners`, non-group sites use `/_api/web/siteusers?$filter=IsSiteAdmin eq true`. Owners are read-only in the UI (sourced from SharePoint, not manually editable in Zenith). Dual ownership (>= 2 owners) required by governance policy.
+- `fetchSiteCollectionAdmins()` in `server/services/graph.ts` queries SharePoint REST API for actual site collection admins when no M365 group owners are available.
+- Post-sync auto-evaluation: After sync completes, the COPILOT_READINESS governance policy is automatically evaluated for all workspaces, updating `copilotReady` and `copilot_rules`.
 - Clear display of Copilot eligibility criteria.
 - Hub site hierarchy detection via SharePoint REST API (`SP.HubSites` + per-site `IsHubSite`/`HubSiteId`), supporting nested hubs.
 

@@ -706,6 +706,40 @@ export async function fetchSiteGroupOwners(
   }
 }
 
+export async function fetchSiteCollectionAdmins(
+  spoToken: string,
+  siteUrl: string
+): Promise<{ admins: SiteGroupOwner[]; error?: string }> {
+  try {
+    const res = await fetch(
+      `${siteUrl}/_api/web/siteusers?$filter=IsSiteAdmin eq true&$select=Id,Title,Email,LoginName`,
+      {
+        headers: {
+          Authorization: `Bearer ${spoToken}`,
+          Accept: 'application/json;odata=nometadata',
+        },
+      }
+    );
+    if (!res.ok) {
+      const errText = await res.text();
+      return { admins: [], error: `Site admins API error ${res.status}: ${errText.slice(0, 200)}` };
+    }
+    const data = await res.json();
+    const admins: SiteGroupOwner[] = (data.value || [])
+      .filter((u: any) => !u.LoginName?.startsWith('i:0#.f|membership|') || !u.LoginName?.includes('spocrwl'))
+      .filter((u: any) => u.Email)
+      .map((u: any) => ({
+        id: String(u.Id),
+        displayName: u.Title || '',
+        mail: u.Email,
+        userPrincipalName: u.LoginName?.replace('i:0#.f|membership|', '') || u.Email,
+      }));
+    return { admins };
+  } catch (err: any) {
+    return { admins: [], error: err.message };
+  }
+}
+
 export async function getGroupIdForSite(
   token: string,
   graphSiteId: string
