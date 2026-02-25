@@ -314,6 +314,8 @@ export default function WorkspaceDetailsPage() {
   const rawJson = JSON.stringify(workspace, null, 2);
   const passCount = computedRules.filter(r => r.ruleResult === "PASS").length;
   const failCount = computedRules.filter(r => r.ruleResult === "FAIL").length;
+  const allRulesPass = computedRules.length > 0 && failCount === 0;
+  const copilotEligible = allRulesPass || workspace.copilotReady;
 
   const metadataFields = [
     { key: "department", label: "Department", required: requiredMetadataKeys.includes("department") },
@@ -1063,26 +1065,26 @@ export default function WorkspaceDetailsPage() {
         </div>
 
         <div className="space-y-6">
-          <Card className={`border-border/50 ${workspace.copilotReady ? 'bg-gradient-to-br from-emerald-500/5 to-card' : 'bg-gradient-to-br from-card to-card/50'}`}>
+          <Card className={`border-border/50 ${copilotEligible ? 'bg-gradient-to-br from-emerald-500/5 to-card' : 'bg-gradient-to-br from-card to-card/50'}`}>
             <CardHeader className="pb-2">
               <CardTitle className="text-base flex items-center justify-between">
                 Copilot Eligibility
-                <Badge variant={workspace.copilotReady ? "default" : "destructive"} className={workspace.copilotReady ? "bg-emerald-500/10 text-emerald-600 border-emerald-500/20" : "bg-destructive/10 text-destructive border-destructive/20"}>
+                <Badge variant={copilotEligible ? "default" : "destructive"} className={copilotEligible ? "bg-emerald-500/10 text-emerald-600 border-emerald-500/20" : "bg-destructive/10 text-destructive border-destructive/20"}>
                   {passCount}/{computedRules.length} Passed
                 </Badge>
               </CardTitle>
             </CardHeader>
             <CardContent>
               <div className="flex items-center gap-3 mb-4">
-                <div className={`w-12 h-12 rounded-full flex items-center justify-center shrink-0 ${workspace.copilotReady ? 'bg-emerald-500/10' : 'bg-muted'}`}>
-                  {workspace.copilotReady 
+                <div className={`w-12 h-12 rounded-full flex items-center justify-center shrink-0 ${copilotEligible ? 'bg-emerald-500/10' : 'bg-muted'}`}>
+                  {copilotEligible 
                     ? <ShieldCheck className="w-6 h-6 text-emerald-500" />
                     : <ShieldAlert className="w-6 h-6 text-muted-foreground" />
                   }
                 </div>
                 <div>
-                  <h4 className="font-semibold text-sm" data-testid="text-copilot-status">{workspace.copilotReady ? "Eligible for Copilot" : "Not Eligible"}</h4>
-                  <p className="text-xs text-muted-foreground">{workspace.copilotReady ? "All governance rules passed" : `${failCount} rule${failCount > 1 ? 's' : ''} failed — resolve to enable`}</p>
+                  <h4 className="font-semibold text-sm" data-testid="text-copilot-status">{copilotEligible ? "Eligible for Copilot" : "Not Eligible"}</h4>
+                  <p className="text-xs text-muted-foreground">{copilotEligible ? "All governance rules passed" : `${failCount} rule${failCount > 1 ? 's' : ''} failed — resolve to enable`}</p>
                 </div>
               </div>
               <div className="space-y-2">

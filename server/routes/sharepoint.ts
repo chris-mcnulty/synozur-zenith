@@ -201,7 +201,32 @@ router.patch("/api/workspaces/:id", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, Z
   const workspace = await storage.updateWorkspace(req.params.id, updates);
   if (!workspace) return res.status(404).json({ message: "Workspace not found" });
 
-  res.json({ ...workspace, labelSyncResult });
+  try {
+    if (existing.tenantConnectionId) {
+      const conn = await storage.getTenantConnection(existing.tenantConnectionId);
+      const orgId = conn?.organizationId;
+      if (orgId) {
+        const policy = await storage.getGovernancePolicyByType(orgId, "COPILOT_READINESS");
+        if (policy) {
+          let requiredMetadataFields: string[] = [];
+          const metaEntries = await storage.getDataDictionary(conn!.tenantId, "required_metadata_field");
+          requiredMetadataFields = metaEntries.map(e => e.value);
+          const context: EvaluationContext = { requiredMetadataFields };
+          const evaluation = evaluatePolicy(workspace, policy, context);
+          const ruleRecords = evaluationResultsToCopilotRules(workspace.id, evaluation);
+          await storage.setCopilotRules(workspace.id, ruleRecords);
+          if (workspace.copilotReady !== evaluation.overallPass) {
+            await storage.updateWorkspace(workspace.id, { copilotReady: evaluation.overallPass });
+          }
+        }
+      }
+    }
+  } catch (evalErr: any) {
+    console.error(`[workspace-update] Policy evaluation error: ${evalErr.message}`);
+  }
+
+  const finalWorkspace = await storage.getWorkspace(req.params.id);
+  res.json({ ...(finalWorkspace || workspace), labelSyncResult });
 });
 
 router.delete("/api/workspaces/:id", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN), async (req, res) => {
@@ -423,7 +448,34 @@ router.patch("/api/workspaces/bulk/update", requireRole(ZENITH_ROLES.GOVERNANCE_
     return res.status(400).json({ message: "ids array is required" });
   }
   await storage.bulkUpdateWorkspaces(ids, updates);
-  res.json({ message: "Bulk update complete", count: ids.length });
+
+  let policyEvalCount = 0;
+  try {
+    for (const wsId of ids) {
+      const ws = await storage.getWorkspace(wsId);
+      if (!ws?.tenantConnectionId) continue;
+      const conn = await storage.getTenantConnection(ws.tenantConnectionId);
+      const orgId = conn?.organizationId;
+      if (!orgId) continue;
+      const policy = await storage.getGovernancePolicyByType(orgId, "COPILOT_READINESS");
+      if (!policy) continue;
+      let requiredMetadataFields: string[] = [];
+      const metaEntries = await storage.getDataDictionary(conn!.tenantId, "required_metadata_field");
+      requiredMetadataFields = metaEntries.map(e => e.value);
+      const context: EvaluationContext = { requiredMetadataFields };
+      const evaluation = evaluatePolicy(ws, policy, context);
+      const ruleRecords = evaluationResultsToCopilotRules(ws.id, evaluation);
+      await storage.setCopilotRules(ws.id, ruleRecords);
+      if (ws.copilotReady !== evaluation.overallPass) {
+        await storage.updateWorkspace(ws.id, { copilotReady: evaluation.overallPass });
+      }
+      policyEvalCount++;
+    }
+  } catch (evalErr: any) {
+    console.error(`[bulk-update] Policy evaluation error: ${evalErr.message}`);
+  }
+
+  res.json({ message: "Bulk update complete", count: ids.length, policyEvaluation: policyEvalCount > 0 ? { evaluated: policyEvalCount } : undefined });
 });
 
 router.patch("/api/workspaces/bulk/hub-assignment", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN), async (req, res) => {
