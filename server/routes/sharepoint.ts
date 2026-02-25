@@ -300,12 +300,41 @@ router.post("/api/workspaces/:id/sync", requireRole(ZENITH_ROLES.OPERATOR, ZENIT
     updates.ownerDisplayName = driveOwner.ownerDisplayName || workspace.ownerDisplayName || null;
     updates.ownerPrincipalName = driveOwner.ownerEmail || workspace.ownerPrincipalName || null;
 
-    if (groupOwners.owners && groupOwners.owners.length > 0) {
-      updates.owners = groupOwners.owners.length;
-      updates.primarySteward = groupOwners.owners[0]?.displayName || null;
-      if (groupOwners.owners.length >= 2) {
-        updates.secondarySteward = groupOwners.owners[1]?.displayName || null;
+    {
+      const mergedOwners: Array<{ id?: string; displayName: string; mail?: string; userPrincipalName?: string }> = [];
+      const seenEmails = new Set<string>();
+
+      if (groupOwners.owners && groupOwners.owners.length > 0) {
+        for (const o of groupOwners.owners) {
+          const key = (o.mail || o.userPrincipalName || '').toLowerCase();
+          if (key && !seenEmails.has(key)) {
+            seenEmails.add(key);
+            mergedOwners.push({ id: o.id, displayName: o.displayName || '', mail: o.mail, userPrincipalName: o.userPrincipalName });
+          }
+        }
       }
+
+      if (spoToken && siteUrl) {
+        const adminsResult = await fetchSiteCollectionAdmins(spoToken, siteUrl);
+        if (adminsResult.admins.length > 0) {
+          for (const a of adminsResult.admins) {
+            const key = (a.mail || a.userPrincipalName || '').toLowerCase();
+            if (key && !seenEmails.has(key)) {
+              seenEmails.add(key);
+              mergedOwners.push(a);
+            }
+          }
+        }
+        if (adminsResult.error) {
+          warnings.push(`Site owners/admins partially unavailable: ${adminsResult.error}`);
+        }
+      }
+
+      if (mergedOwners.length > 0) {
+        updates.siteOwners = mergedOwners;
+        updates.owners = mergedOwners.length;
+      }
+      console.log(`[single-sync] ${siteUrl}: groupOwners=${groupOwners.owners?.length || 0}, siteAdmins merged, total=${mergedOwners.length} => ${mergedOwners.map(o => o.displayName).join(', ')}`);
     }
 
     const storageUsed = driveOwner.storageUsedBytes ?? workspace.storageUsedBytes ?? null;
