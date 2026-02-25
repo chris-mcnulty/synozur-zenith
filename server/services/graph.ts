@@ -858,6 +858,11 @@ async function executeCsomQuery(
 ): Promise<{ success: boolean; error?: string }> {
   const normalizedUrl = siteUrl.replace(/\/$/, '');
   try {
+    try {
+      const tokenPayload = JSON.parse(Buffer.from(spoToken.split('.')[1], 'base64').toString());
+      console.log(`[csom] Token audience: ${tokenPayload.aud}, roles/scp: ${tokenPayload.roles || tokenPayload.scp || 'none'}, upn: ${tokenPayload.upn || tokenPayload.unique_name || 'unknown'}`);
+    } catch {}
+
     const { digest, error: digestError } = await getFormDigest(spoToken, normalizedUrl);
     if (digestError) {
       console.warn(`[csom] Form digest failed (${digestError}), trying X-RequestDigest: 0`);
@@ -885,6 +890,7 @@ async function executeCsomQuery(
       if (Array.isArray(parsed)) {
         for (const item of parsed) {
           if (item?.ErrorInfo) {
+            console.error(`[csom] ErrorInfo:`, JSON.stringify(item.ErrorInfo));
             return { success: false, error: `CSOM error: ${item.ErrorInfo.ErrorMessage}` };
           }
         }
