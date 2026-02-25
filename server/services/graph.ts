@@ -942,6 +942,43 @@ export async function writeSitePropertyBag(
   siteUrl: string,
   properties: Record<string, string>
 ): Promise<{ success: boolean; error?: string }> {
+  const result = await writeSitePropertyBagViaRootFolder(spoToken, siteUrl, properties);
+  if (result.success) return result;
+
+  console.warn(`[property-bag] RootFolder approach failed: ${result.error}, falling back to Web.AllProperties`);
+  return writeSitePropertyBagViaWeb(spoToken, siteUrl, properties);
+}
+
+async function writeSitePropertyBagViaRootFolder(
+  spoToken: string,
+  siteUrl: string,
+  properties: Record<string, string>
+): Promise<{ success: boolean; error?: string }> {
+  let actionId = 7;
+  let actionsXml = '';
+  actionsXml += '<ObjectPath Id="2" ObjectPathId="1" />';
+  actionsXml += '<ObjectPath Id="4" ObjectPathId="3" />';
+  actionsXml += '<ObjectPath Id="6" ObjectPathId="5" />';
+
+  for (const [key, value] of Object.entries(properties)) {
+    const safeKey = key.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const safeVal = value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    actionsXml += `<Method Name="SetFieldValue" Id="${actionId}" ObjectPathId="5"><Parameters><Parameter Type="String">${safeKey}</Parameter><Parameter Type="String">${safeVal}</Parameter></Parameters></Method>`;
+    actionId++;
+  }
+  actionsXml += `<Method Name="Update" Id="${actionId}" ObjectPathId="3" />`;
+
+  const csomXml = `<Request AddExpandoFieldTypeSuffix="true" SchemaVersion="15.0.0.0" LibraryVersion="16.0.0.0" ApplicationName="Zenith" xmlns="http://schemas.microsoft.com/sharepoint/clientquery/2009"><Actions>${actionsXml}</Actions><ObjectPaths><Property Id="1" ParentId="0" Name="Web" /><Property Id="3" ParentId="1" Name="RootFolder" /><Property Id="5" ParentId="3" Name="Properties" /><StaticProperty Id="0" TypeId="{3747adcd-a3c3-41b9-bfab-4a64dd2f1e0a}" Name="Current" /></ObjectPaths></Request>`;
+
+  console.log(`[property-bag] Writing ${Object.keys(properties).length} properties via RootFolder.Properties approach`);
+  return executeCsomQuery(spoToken, siteUrl, csomXml);
+}
+
+async function writeSitePropertyBagViaWeb(
+  spoToken: string,
+  siteUrl: string,
+  properties: Record<string, string>
+): Promise<{ success: boolean; error?: string }> {
   let actionId = 5;
   let actionsXml = '';
   actionsXml += '<ObjectPath Id="2" ObjectPathId="1" />';
