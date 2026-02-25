@@ -424,8 +424,18 @@ router.post("/api/workspaces/:id/sync", requireRole(ZENITH_ROLES.OPERATOR, ZENIT
           const evaluation = evaluatePolicy(updated, policy, context);
           const ruleRecords = evaluationResultsToCopilotRules(updated.id, evaluation);
           await storage.setCopilotRules(updated.id, ruleRecords);
+          const evalUpdates: Record<string, any> = {};
           if (updated.copilotReady !== evaluation.overallPass) {
-            await storage.updateWorkspace(updated.id, { copilotReady: evaluation.overallPass });
+            evalUpdates.copilotReady = evaluation.overallPass;
+          }
+          if (policy.propertyBagKey) {
+            const bagValue = formatPolicyBagValue(evaluation, policy.propertyBagValueFormat);
+            const existingBag = (updated.propertyBag as Record<string, string>) || {};
+            evalUpdates.propertyBag = { ...existingBag, [policy.propertyBagKey]: bagValue };
+            console.log(`[single-sync] ${updated.displayName}: ${policy.propertyBagKey}=${bagValue}`);
+          }
+          if (Object.keys(evalUpdates).length > 0) {
+            await storage.updateWorkspace(updated.id, evalUpdates);
           }
           console.log(`[single-sync] Policy "${policy.name}" evaluated: ${evaluation.overallPass ? "PASS" : "FAIL"} (${evaluation.results.filter(r => r.ruleResult === "PASS").length}/${evaluation.results.length})`);
         }
@@ -1213,8 +1223,20 @@ router.post("/api/admin/tenants/:id/sync", requireRole(ZENITH_ROLES.TENANT_ADMIN
           const evaluation = evaluatePolicy(ws, policy, context);
           const ruleRecords = evaluationResultsToCopilotRules(ws.id, evaluation);
           await storage.setCopilotRules(ws.id, ruleRecords);
+          const updates: Record<string, any> = {};
           if (ws.copilotReady !== evaluation.overallPass) {
-            await storage.updateWorkspace(ws.id, { copilotReady: evaluation.overallPass });
+            updates.copilotReady = evaluation.overallPass;
+          }
+          if (policy.propertyBagKey) {
+            const bagValue = formatPolicyBagValue(evaluation, policy.propertyBagValueFormat);
+            const existingBag = (ws.propertyBag as Record<string, string>) || {};
+            if (existingBag[policy.propertyBagKey] !== bagValue) {
+              updates.propertyBag = { ...existingBag, [policy.propertyBagKey]: bagValue };
+              console.log(`[policy-eval] ${ws.displayName}: ${policy.propertyBagKey}=${bagValue}`);
+            }
+          }
+          if (Object.keys(updates).length > 0) {
+            await storage.updateWorkspace(ws.id, updates);
           }
           policyEvalCount++;
         }

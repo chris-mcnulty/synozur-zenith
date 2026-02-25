@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { storage } from "../storage";
 import { insertGovernancePolicySchema } from "@shared/schema";
-import { evaluatePolicy, evaluationResultsToCopilotRules, type EvaluationContext } from "../services/policy-engine";
+import { evaluatePolicy, evaluationResultsToCopilotRules, formatPolicyBagValue, type EvaluationContext } from "../services/policy-engine";
 
 const router = Router();
 
@@ -114,9 +114,20 @@ router.post("/api/admin/tenants/:id/evaluate-policies", async (req, res) => {
       const evaluation = evaluatePolicy(ws, policy, context);
       const ruleRecords = evaluationResultsToCopilotRules(ws.id, evaluation);
       await storage.setCopilotRules(ws.id, ruleRecords);
+      const updates: Record<string, any> = {};
       if (ws.copilotReady !== evaluation.overallPass) {
-        await storage.updateWorkspace(ws.id, { copilotReady: evaluation.overallPass });
+        updates.copilotReady = evaluation.overallPass;
         changed++;
+      }
+      if (policy.propertyBagKey) {
+        const bagValue = formatPolicyBagValue(evaluation, policy.propertyBagValueFormat);
+        const existingBag = (ws.propertyBag as Record<string, string>) || {};
+        if (existingBag[policy.propertyBagKey] !== bagValue) {
+          updates.propertyBag = { ...existingBag, [policy.propertyBagKey]: bagValue };
+        }
+      }
+      if (Object.keys(updates).length > 0) {
+        await storage.updateWorkspace(ws.id, updates);
       }
       evaluated++;
     }
@@ -164,8 +175,19 @@ router.get("/api/workspaces/:id/policy-results", async (req, res) => {
   await storage.setCopilotRules(req.params.id, ruleRecords);
 
   const copilotReady = evaluation.overallPass;
+  const evalUpdates: Record<string, any> = {};
   if (workspace.copilotReady !== copilotReady) {
-    await storage.updateWorkspace(req.params.id, { copilotReady });
+    evalUpdates.copilotReady = copilotReady;
+  }
+  if (policy.propertyBagKey) {
+    const bagValue = formatPolicyBagValue(evaluation, policy.propertyBagValueFormat);
+    const existingBag = (workspace.propertyBag as Record<string, string>) || {};
+    if (existingBag[policy.propertyBagKey] !== bagValue) {
+      evalUpdates.propertyBag = { ...existingBag, [policy.propertyBagKey]: bagValue };
+    }
+  }
+  if (Object.keys(evalUpdates).length > 0) {
+    await storage.updateWorkspace(req.params.id, evalUpdates);
   }
 
   res.json({
