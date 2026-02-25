@@ -711,30 +711,49 @@ export async function fetchSiteCollectionAdmins(
   siteUrl: string
 ): Promise<{ admins: SiteGroupOwner[]; error?: string }> {
   try {
-    const res = await fetch(
-      `${siteUrl}/_api/web/siteusers?$filter=IsSiteAdmin eq true&$select=Id,Title,Email,LoginName`,
-      {
-        headers: {
-          Authorization: `Bearer ${spoToken}`,
-          Accept: 'application/json;odata=nometadata',
-        },
+    const seenEmails = new Set<string>();
+    const allAdmins: SiteGroupOwner[] = [];
+
+    const parseUsers = (users: any[]) => {
+      for (const u of users) {
+        if (!u.Email) continue;
+        if (u.LoginName?.includes('spocrwl') || u.LoginName?.includes('app@sharepoint')) continue;
+        const key = u.Email.toLowerCase();
+        if (seenEmails.has(key)) continue;
+        seenEmails.add(key);
+        allAdmins.push({
+          id: String(u.Id),
+          displayName: u.Title || '',
+          mail: u.Email,
+          userPrincipalName: u.LoginName?.replace('i:0#.f|membership|', '') || u.Email,
+        });
       }
-    );
-    if (!res.ok) {
-      const errText = await res.text();
-      return { admins: [], error: `Site admins API error ${res.status}: ${errText.slice(0, 200)}` };
+    };
+
+    const [adminsRes, ownersGroupRes] = await Promise.allSettled([
+      fetch(
+        `${siteUrl}/_api/web/siteusers?$filter=IsSiteAdmin eq true&$select=Id,Title,Email,LoginName`,
+        { headers: { Authorization: `Bearer ${spoToken}`, Accept: 'application/json;odata=nometadata' } }
+      ),
+      fetch(
+        `${siteUrl}/_api/web/AssociatedOwnerGroup/Users?$select=Id,Title,Email,LoginName`,
+        { headers: { Authorization: `Bearer ${spoToken}`, Accept: 'application/json;odata=nometadata' } }
+      ),
+    ]);
+
+    if (adminsRes.status === 'fulfilled' && adminsRes.value.ok) {
+      const data = await adminsRes.value.json();
+      parseUsers(data.value || []);
     }
-    const data = await res.json();
-    const admins: SiteGroupOwner[] = (data.value || [])
-      .filter((u: any) => !u.LoginName?.startsWith('i:0#.f|membership|') || !u.LoginName?.includes('spocrwl'))
-      .filter((u: any) => u.Email)
-      .map((u: any) => ({
-        id: String(u.Id),
-        displayName: u.Title || '',
-        mail: u.Email,
-        userPrincipalName: u.LoginName?.replace('i:0#.f|membership|', '') || u.Email,
-      }));
-    return { admins };
+
+    if (ownersGroupRes.status === 'fulfilled' && ownersGroupRes.value.ok) {
+      const data = await ownersGroupRes.value.json();
+      parseUsers(data.value || []);
+    } else if (ownersGroupRes.status === 'fulfilled') {
+      console.log(`[site-owners] AssociatedOwnerGroup not available for ${siteUrl} (${ownersGroupRes.value.status})`);
+    }
+
+    return { admins: allAdmins };
   } catch (err: any) {
     return { admins: [], error: err.message };
   }
