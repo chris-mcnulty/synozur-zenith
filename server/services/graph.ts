@@ -1058,10 +1058,13 @@ export async function applySensitivityLabelToSite(
 
   const result = await executeCsomQuery(spoToken, siteUrl, csomXml);
   if (result.success) return result;
+  console.warn(`[label-push] Direct Site.SensitivityLabelId failed: ${result.error}`);
 
   if (userId) {
-    console.warn(`[label-push] Direct CSOM failed: ${result.error}, trying with admin NoScript toggle`);
-    return executeCsomWithNoScriptToggle(spoToken, siteUrl, csomXml, userId);
+    console.log(`[label-push] Trying admin API approach (SPO.Tenant.SetSiteProperties)`);
+    const adminResult = await applySensitivityLabelViaAdminApi(siteUrl, sensitivityLabelId, userId);
+    if (adminResult.success) return adminResult;
+    console.warn(`[label-push] Admin API approach failed: ${adminResult.error}`);
   }
   return result;
 }
@@ -1075,12 +1078,42 @@ export async function removeSensitivityLabelFromSite(
 
   const result = await executeCsomQuery(spoToken, siteUrl, csomXml);
   if (result.success) return result;
+  console.warn(`[label-push] Direct Site.SensitivityLabelId remove failed: ${result.error}`);
 
   if (userId) {
-    console.warn(`[label-push] Direct CSOM remove failed: ${result.error}, trying with admin NoScript toggle`);
-    return executeCsomWithNoScriptToggle(spoToken, siteUrl, csomXml, userId);
+    console.log(`[label-push] Trying admin API approach for label removal`);
+    const adminResult = await applySensitivityLabelViaAdminApi(siteUrl, '00000000-0000-0000-0000-000000000000', userId);
+    if (adminResult.success) return adminResult;
+    console.warn(`[label-push] Admin API remove failed: ${adminResult.error}`);
   }
   return result;
+}
+
+async function applySensitivityLabelViaAdminApi(
+  siteUrl: string,
+  sensitivityLabelId: string,
+  userId: string
+): Promise<{ success: boolean; error?: string }> {
+  const urlObj = new URL(siteUrl);
+  const tenantPrefix = urlObj.hostname.split('.')[0];
+  const adminHost = `${tenantPrefix}-admin.sharepoint.com`;
+  const adminUrl = `https://${adminHost}`;
+
+  const { getDelegatedSpoToken } = await import('../routes-entra');
+  let adminToken: string | null = null;
+  try {
+    adminToken = await getDelegatedSpoToken(userId, adminHost);
+  } catch (err: any) {
+    return { success: false, error: `Failed to get admin SPO token: ${err.message}` };
+  }
+  if (!adminToken) {
+    return { success: false, error: 'Could not acquire SharePoint Admin token' };
+  }
+
+  const csomXml = `<Request SchemaVersion="15.0.0.0" LibraryVersion="16.0.0.0" ApplicationName="Zenith" xmlns="http://schemas.microsoft.com/sharepoint/clientquery/2009"><Actions><ObjectPath Id="2" ObjectPathId="1" /><ObjectPath Id="4" ObjectPathId="3" /><SetProperty Id="5" ObjectPathId="3" Name="SensitivityLabel"><Parameter Type="String">${sensitivityLabelId}</Parameter></SetProperty><Method Name="Update" Id="6" ObjectPathId="3" /></Actions><ObjectPaths><Constructor Id="1" TypeId="{268004ae-ef6b-4e9b-8425-127220d84719}" /><Method Id="3" ParentId="1" Name="GetSitePropertiesByUrl"><Parameters><Parameter Type="String">${siteUrl}</Parameter><Parameter Type="Boolean">false</Parameter></Parameters></Method></ObjectPaths></Request>`;
+
+  console.log(`[label-push] Setting SensitivityLabel via SPO admin API for ${siteUrl}`);
+  return executeCsomQuery(adminToken, adminUrl, csomXml);
 }
 
 async function executeCsomWithNoScriptToggle(
