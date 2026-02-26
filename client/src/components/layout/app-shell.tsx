@@ -232,6 +232,16 @@ export default function AppShell({ children }: AppShellProps) {
               Data Dictionaries
             </div>
           </Link>
+          <Link href="/app/admin/custom-fields" className={`flex items-center justify-between px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
+            location.startsWith("/app/admin/custom-fields") 
+              ? "bg-primary/10 text-primary shadow-sm shadow-primary/5" 
+              : "text-muted-foreground hover:bg-muted/80 hover:text-foreground"
+          }`}>
+            <div className="flex items-center gap-3">
+              <Settings className={`w-5 h-5 ${location.startsWith("/app/admin/custom-fields") ? "text-primary" : "text-muted-foreground/70"}`} />
+              Custom Fields
+            </div>
+          </Link>
           <Link href="/app/admin/plans" className={`flex items-center justify-between px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
             location.startsWith("/app/admin/plans") 
               ? "bg-primary/10 text-primary shadow-sm shadow-primary/5" 

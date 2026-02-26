@@ -52,6 +52,7 @@ export const workspaces = pgTable("workspaces", {
   reportRefreshDate: text("report_refresh_date"),
   propertyBag: jsonb("property_bag").$type<Record<string, string>>(),
   siteOwners: jsonb("site_owners").$type<Array<{ id?: string; displayName: string; mail?: string; userPrincipalName?: string }>>(),
+  customFields: jsonb("custom_fields").$type<Record<string, any>>(),
   spoSyncHash: text("spo_sync_hash"),
   localHash: text("local_hash"),
   createdAt: timestamp("created_at").defaultNow(),
@@ -443,6 +444,29 @@ export const insertAuditLogSchema = createInsertSchema(auditLog).omit({
 
 export type InsertAuditLog = z.infer<typeof insertAuditLogSchema>;
 export type AuditLog = typeof auditLog.$inferSelect;
+
+export const customFieldDefinitions = pgTable("custom_field_definitions", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: text("tenant_id").notNull(),
+  fieldName: text("field_name").notNull(),
+  fieldLabel: text("field_label").notNull(),
+  fieldType: text("field_type").notNull(),
+  options: jsonb("options").$type<string[]>(),
+  required: boolean("required").notNull().default(false),
+  filterable: boolean("filterable").notNull().default(true),
+  sortOrder: integer("sort_order").notNull().default(0),
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => [
+  unique("uq_tenant_field_name").on(table.tenantId, table.fieldName),
+]);
+
+export const insertCustomFieldDefinitionSchema = createInsertSchema(customFieldDefinitions).omit({
+  id: true,
+  createdAt: true,
+});
+
+export type InsertCustomFieldDefinition = z.infer<typeof insertCustomFieldDefinitionSchema>;
+export type CustomFieldDefinition = typeof customFieldDefinitions.$inferSelect;
 
 export const domainBlocklist = pgTable("domain_blocklist", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),

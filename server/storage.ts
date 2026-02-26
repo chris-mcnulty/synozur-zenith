@@ -43,6 +43,9 @@ import {
   type InsertSensitivityLabel,
   type RetentionLabel,
   type InsertRetentionLabel,
+  customFieldDefinitions,
+  type CustomFieldDefinition,
+  type InsertCustomFieldDefinition,
   tenantDepartments,
 } from "@shared/schema";
 
@@ -116,6 +119,12 @@ export interface IStorage {
   deleteRetentionLabelsByTenantId(tenantId: string): Promise<void>;
 
   getWorkspaceLabelCoverage(tenantId: string): Promise<{ workspaceId: string; displayName: string; siteUrl: string | null; sensitivityLabelId: string | null; retentionLabelId: string | null; type: string }[]>;
+
+  getCustomFieldDefinitions(tenantId: string): Promise<CustomFieldDefinition[]>;
+  getCustomFieldDefinition(id: string): Promise<CustomFieldDefinition | undefined>;
+  createCustomFieldDefinition(def: InsertCustomFieldDefinition): Promise<CustomFieldDefinition>;
+  updateCustomFieldDefinition(id: string, updates: Partial<InsertCustomFieldDefinition>): Promise<CustomFieldDefinition | undefined>;
+  deleteCustomFieldDefinition(id: string): Promise<void>;
 
   getOrgMembership(userId: string, organizationId: string): Promise<OrganizationUser | undefined>;
   getOrgMemberships(userId: string): Promise<OrganizationUser[]>;
@@ -583,6 +592,33 @@ export class DatabaseStorage implements IStorage {
     const [updated] = await db.update(organizations).set(updates)
       .where(eq(organizations.id, id)).returning();
     return updated;
+  }
+
+  async getCustomFieldDefinitions(tenantId: string): Promise<CustomFieldDefinition[]> {
+    return db.select().from(customFieldDefinitions)
+      .where(eq(customFieldDefinitions.tenantId, tenantId))
+      .orderBy(customFieldDefinitions.sortOrder);
+  }
+
+  async getCustomFieldDefinition(id: string): Promise<CustomFieldDefinition | undefined> {
+    const [def] = await db.select().from(customFieldDefinitions)
+      .where(eq(customFieldDefinitions.id, id));
+    return def;
+  }
+
+  async createCustomFieldDefinition(def: InsertCustomFieldDefinition): Promise<CustomFieldDefinition> {
+    const [created] = await db.insert(customFieldDefinitions).values(def).returning();
+    return created;
+  }
+
+  async updateCustomFieldDefinition(id: string, updates: Partial<InsertCustomFieldDefinition>): Promise<CustomFieldDefinition | undefined> {
+    const [updated] = await db.update(customFieldDefinitions).set(updates)
+      .where(eq(customFieldDefinitions.id, id)).returning();
+    return updated;
+  }
+
+  async deleteCustomFieldDefinition(id: string): Promise<void> {
+    await db.delete(customFieldDefinitions).where(eq(customFieldDefinitions.id, id));
   }
 }
 

@@ -3,7 +3,7 @@ import { Link, useParams } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import type { Workspace } from "@shared/schema";
+import type { Workspace, CustomFieldDefinition } from "@shared/schema";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -92,6 +92,12 @@ export default function WorkspaceDetailsPage() {
     enabled: !!tenantConnectionId,
   });
 
+  const { data: customFieldDefs = [] } = useQuery<CustomFieldDefinition[]>({
+    queryKey: ["/api/admin/tenants", tenantConnectionId, "custom-fields"],
+    queryFn: () => fetch(`/api/admin/tenants/${tenantConnectionId}/custom-fields`).then(r => r.json()),
+    enabled: !!tenantConnectionId,
+  });
+
   const { data: allWorkspaces = [] } = useQuery<Workspace[]>({
     queryKey: ["/api/workspaces", tenantConnectionId],
     queryFn: () => {
@@ -126,6 +132,7 @@ export default function WorkspaceDetailsPage() {
     type: "",
     projectType: "",
   });
+  const [customFieldValues, setCustomFieldValues] = useState<Record<string, any>>({});
 
   useEffect(() => {
     if (workspace) {
@@ -142,11 +149,12 @@ export default function WorkspaceDetailsPage() {
         type: workspace.type || "",
         projectType: workspace.projectType || "",
       });
+      setCustomFieldValues(workspace.customFields || {});
     }
   }, [workspace]);
 
   const saveMutation = useMutation({
-    mutationFn: async (data: Partial<typeof form>) => {
+    mutationFn: async (data: Partial<typeof form> & { customFields?: Record<string, any> }) => {
       const res = await apiRequest("PATCH", `/api/workspaces/${id}`, data);
       return res.json();
     },
@@ -226,7 +234,14 @@ export default function WorkspaceDetailsPage() {
   });
 
   const handleSave = () => {
-    saveMutation.mutate(form);
+    const missingCustomRequired = customFieldDefs
+      .filter(f => f.required && (customFieldValues[f.fieldName] === undefined || customFieldValues[f.fieldName] === "" || customFieldValues[f.fieldName] === null))
+      .map(f => f.fieldLabel);
+    if (missingCustomRequired.length > 0) {
+      toast({ title: "Missing Required Custom Fields", description: `Please fill in: ${missingCustomRequired.join(", ")}`, variant: "destructive" });
+      return;
+    }
+    saveMutation.mutate({ ...form, customFields: customFieldValues });
   };
 
   const handleCancel = () => {
@@ -244,6 +259,7 @@ export default function WorkspaceDetailsPage() {
         type: workspace.type || "",
         projectType: workspace.projectType || "",
       });
+      setCustomFieldValues(workspace.customFields || {});
     }
     setEditMode(false);
   };
@@ -921,6 +937,104 @@ export default function WorkspaceDetailsPage() {
                         Complete the following to achieve metadata compliance: {missingRequired.map(f => f.label).join(", ")}
                       </div>
                     </div>
+                  )}
+
+                  {customFieldDefs.length > 0 && (
+                    <>
+                      <Separator />
+                      <div>
+                        <h3 className="text-sm font-semibold mb-4 flex items-center gap-2">
+                          <Tags className="w-4 h-4 text-primary" />
+                          Custom Fields
+                        </h3>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-5">
+                          {[...customFieldDefs].sort((a, b) => a.sortOrder - b.sortOrder).map((field) => {
+                            const value = customFieldValues[field.fieldName];
+                            const isEmpty = value === undefined || value === null || value === "";
+                            return (
+                              <div key={field.id} className="space-y-2" data-testid={`custom-field-${field.fieldName}`}>
+                                <Label className="flex justify-between">
+                                  {field.fieldLabel} {field.required ? <span className="text-destructive text-xs">Required *</span> : <span className="text-muted-foreground text-xs">(Optional)</span>}
+                                </Label>
+                                {editMode ? (
+                                  field.fieldType === "TEXT" ? (
+                                    <Input
+                                      value={value || ""}
+                                      onChange={(e) => setCustomFieldValues({ ...customFieldValues, [field.fieldName]: e.target.value })}
+                                      className={`bg-background/50 ${isEmpty && field.required ? 'border-amber-500/50 focus-visible:ring-amber-500' : ''}`}
+                                      placeholder={`Enter ${field.fieldLabel.toLowerCase()}...`}
+                                      data-testid={`input-custom-${field.fieldName}`}
+                                    />
+                                  ) : field.fieldType === "SELECT" ? (
+                                    <Select
+                                      value={value || "__none__"}
+                                      onValueChange={(v) => setCustomFieldValues({ ...customFieldValues, [field.fieldName]: v === "__none__" ? "" : v })}
+                                    >
+                                      <SelectTrigger className={`bg-background/50 ${isEmpty && field.required ? 'border-amber-500/50 focus-visible:ring-amber-500' : ''}`} data-testid={`select-custom-${field.fieldName}`}>
+                                        <SelectValue placeholder={`Select ${field.fieldLabel.toLowerCase()}...`} />
+                                      </SelectTrigger>
+                                      <SelectContent>
+                                        <SelectItem value="__none__" className="text-muted-foreground">— None —</SelectItem>
+                                        {(field.options || []).map((opt) => (
+                                          <SelectItem key={opt} value={opt}>{opt}</SelectItem>
+                                        ))}
+                                      </SelectContent>
+                                    </Select>
+                                  ) : field.fieldType === "NUMBER" ? (
+                                    <Input
+                                      type="number"
+                                      value={value ?? ""}
+                                      onChange={(e) => setCustomFieldValues({ ...customFieldValues, [field.fieldName]: e.target.value === "" ? "" : Number(e.target.value) })}
+                                      className={`bg-background/50 ${isEmpty && field.required ? 'border-amber-500/50 focus-visible:ring-amber-500' : ''}`}
+                                      placeholder={`Enter ${field.fieldLabel.toLowerCase()}...`}
+                                      data-testid={`input-custom-${field.fieldName}`}
+                                    />
+                                  ) : field.fieldType === "BOOLEAN" ? (
+                                    <div className="h-10 flex items-center gap-3 px-3 rounded-md border border-input bg-background/50">
+                                      <Switch
+                                        checked={!!value}
+                                        onCheckedChange={(v) => setCustomFieldValues({ ...customFieldValues, [field.fieldName]: v })}
+                                        data-testid={`switch-custom-${field.fieldName}`}
+                                      />
+                                      <span className="text-sm">{value ? "Yes" : "No"}</span>
+                                    </div>
+                                  ) : field.fieldType === "DATE" ? (
+                                    <Input
+                                      type="date"
+                                      value={value || ""}
+                                      onChange={(e) => setCustomFieldValues({ ...customFieldValues, [field.fieldName]: e.target.value })}
+                                      className={`bg-background/50 ${isEmpty && field.required ? 'border-amber-500/50 focus-visible:ring-amber-500' : ''}`}
+                                      data-testid={`input-custom-${field.fieldName}`}
+                                    />
+                                  ) : (
+                                    <Input
+                                      value={value || ""}
+                                      onChange={(e) => setCustomFieldValues({ ...customFieldValues, [field.fieldName]: e.target.value })}
+                                      className="bg-background/50"
+                                      data-testid={`input-custom-${field.fieldName}`}
+                                    />
+                                  )
+                                ) : (
+                                  <div className={`h-10 flex items-center px-3 rounded-md bg-muted/50 text-sm ${isEmpty && field.required ? 'border border-amber-500/30 text-amber-500' : ''}`}>
+                                    {field.fieldType === "BOOLEAN" ? (
+                                      <span>{value ? "Yes" : "No"}</span>
+                                    ) : isEmpty ? (
+                                      field.required ? (
+                                        <span className="italic flex items-center gap-1"><AlertTriangle className="w-3 h-3" /> Missing — required</span>
+                                      ) : (
+                                        <span className="text-muted-foreground">—</span>
+                                      )
+                                    ) : (
+                                      <span>{String(value)}</span>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </>
                   )}
                 </CardContent>
               </Card>

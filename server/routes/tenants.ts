@@ -590,4 +590,95 @@ router.get("/api/admin/tenants/:tenantConnectionId/label-coverage", async (req, 
   }
 });
 
+// ── Custom Field Definitions (tenant-owned) ──
+const VALID_FIELD_TYPES = ["TEXT", "SELECT", "NUMBER", "BOOLEAN", "DATE"];
+
+router.get("/api/admin/tenants/:tenantConnectionId/custom-fields", async (req, res) => {
+  try {
+    const conn = await storage.getTenantConnection(req.params.tenantConnectionId);
+    if (!conn) return res.status(404).json({ error: "Tenant connection not found" });
+    const fields = await storage.getCustomFieldDefinitions(conn.tenantId);
+    res.json(fields);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post("/api/admin/tenants/:tenantConnectionId/custom-fields", async (req, res) => {
+  try {
+    const conn = await storage.getTenantConnection(req.params.tenantConnectionId);
+    if (!conn) return res.status(404).json({ error: "Tenant connection not found" });
+    const { fieldName, fieldLabel, fieldType, options, required, filterable, sortOrder } = req.body;
+    if (!fieldLabel || typeof fieldLabel !== "string" || !fieldLabel.trim()) {
+      return res.status(400).json({ error: "fieldLabel is required" });
+    }
+    if (!fieldType || !VALID_FIELD_TYPES.includes(fieldType)) {
+      return res.status(400).json({ error: `fieldType must be one of: ${VALID_FIELD_TYPES.join(", ")}` });
+    }
+    if (fieldType === "SELECT" && (!Array.isArray(options) || options.length === 0)) {
+      return res.status(400).json({ error: "options array is required for SELECT field type" });
+    }
+    const name = fieldName?.trim() || fieldLabel.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
+    const existing = await storage.getCustomFieldDefinitions(conn.tenantId);
+    if (existing.some(f => f.fieldName === name)) {
+      return res.status(409).json({ error: `Field "${name}" already exists for this tenant` });
+    }
+    const created = await storage.createCustomFieldDefinition({
+      tenantId: conn.tenantId,
+      fieldName: name,
+      fieldLabel: fieldLabel.trim(),
+      fieldType,
+      options: fieldType === "SELECT" ? options : null,
+      required: required === true,
+      filterable: filterable !== false,
+      sortOrder: typeof sortOrder === "number" ? sortOrder : existing.length,
+    });
+    res.status(201).json(created);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.patch("/api/admin/tenants/:tenantConnectionId/custom-fields/:fieldId", async (req, res) => {
+  try {
+    const conn = await storage.getTenantConnection(req.params.tenantConnectionId);
+    if (!conn) return res.status(404).json({ error: "Tenant connection not found" });
+    const field = await storage.getCustomFieldDefinition(req.params.fieldId);
+    if (!field || field.tenantId !== conn.tenantId) {
+      return res.status(404).json({ error: "Custom field not found" });
+    }
+    const updates: Record<string, any> = {};
+    if (req.body.fieldLabel !== undefined) updates.fieldLabel = req.body.fieldLabel.trim();
+    if (req.body.fieldType !== undefined) {
+      if (!VALID_FIELD_TYPES.includes(req.body.fieldType)) {
+        return res.status(400).json({ error: `fieldType must be one of: ${VALID_FIELD_TYPES.join(", ")}` });
+      }
+      updates.fieldType = req.body.fieldType;
+    }
+    if (req.body.options !== undefined) updates.options = req.body.options;
+    if (req.body.required !== undefined) updates.required = req.body.required;
+    if (req.body.filterable !== undefined) updates.filterable = req.body.filterable;
+    if (req.body.sortOrder !== undefined) updates.sortOrder = req.body.sortOrder;
+    const updated = await storage.updateCustomFieldDefinition(req.params.fieldId, updates);
+    res.json(updated);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.delete("/api/admin/tenants/:tenantConnectionId/custom-fields/:fieldId", async (req, res) => {
+  try {
+    const conn = await storage.getTenantConnection(req.params.tenantConnectionId);
+    if (!conn) return res.status(404).json({ error: "Tenant connection not found" });
+    const field = await storage.getCustomFieldDefinition(req.params.fieldId);
+    if (!field || field.tenantId !== conn.tenantId) {
+      return res.status(404).json({ error: "Custom field not found" });
+    }
+    await storage.deleteCustomFieldDefinition(req.params.fieldId);
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 export default router;

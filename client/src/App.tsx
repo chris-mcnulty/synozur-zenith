@@ -36,6 +36,7 @@ import TenantConnectionsPage from "./pages/app/admin/tenant-connections";
 import PolicyBuilderPage from "./pages/app/admin/policy-builder";
 import EntraSetupPage from "./pages/app/admin/entra-setup";
 import DataDictionariesPage from "./pages/app/admin/data-dictionaries";
+import CustomFieldsPage from "./pages/app/admin/custom-fields";
 import SupportPage from "./pages/app/support";
 import AppShell from "./components/layout/app-shell";
 
@@ -92,6 +93,7 @@ function AppRoutes() {
         <Route path="/app/admin/system" component={SystemAdminPage} />
         <Route path="/app/admin/tenants" component={TenantConnectionsPage} />
         <Route path="/app/admin/data-dictionaries" component={DataDictionariesPage} />
+        <Route path="/app/admin/custom-fields" component={CustomFieldsPage} />
         <Route path="/app/admin/policies" component={PolicyBuilderPage} />
         <Route path="/app/admin/entra" component={EntraSetupPage} />
         <Route path="/app/admin" component={AdminTemplatesPage} />
