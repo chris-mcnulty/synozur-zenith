@@ -15,6 +15,7 @@ import {
   tenantDataDictionaries,
   sensitivityLabels,
   retentionLabels,
+  documentLibraries,
   type Workspace,
   type InsertWorkspace,
   type ProvisioningRequest,
@@ -43,6 +44,8 @@ import {
   type InsertSensitivityLabel,
   type RetentionLabel,
   type InsertRetentionLabel,
+  type DocumentLibrary,
+  type InsertDocumentLibrary,
   customFieldDefinitions,
   type CustomFieldDefinition,
   type InsertCustomFieldDefinition,
@@ -133,6 +136,12 @@ export interface IStorage {
   updateOrgMembership(id: string, updates: Partial<InsertOrganizationUser>): Promise<OrganizationUser | undefined>;
   deleteOrgMembership(userId: string, organizationId: string): Promise<void>;
   updateOrganizationSettings(id: string, updates: Partial<InsertOrganization>): Promise<Organization | undefined>;
+
+  getDocumentLibraries(workspaceId: string): Promise<DocumentLibrary[]>;
+  getDocumentLibrariesByTenant(tenantConnectionId: string): Promise<DocumentLibrary[]>;
+  getDocumentLibrary(id: string): Promise<DocumentLibrary | undefined>;
+  upsertDocumentLibrary(data: InsertDocumentLibrary): Promise<DocumentLibrary>;
+  deleteDocumentLibrariesForWorkspace(workspaceId: string): Promise<void>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -619,6 +628,48 @@ export class DatabaseStorage implements IStorage {
 
   async deleteCustomFieldDefinition(id: string): Promise<void> {
     await db.delete(customFieldDefinitions).where(eq(customFieldDefinitions.id, id));
+  }
+
+  async getDocumentLibraries(workspaceId: string): Promise<DocumentLibrary[]> {
+    return db.select().from(documentLibraries).where(eq(documentLibraries.workspaceId, workspaceId)).orderBy(documentLibraries.displayName);
+  }
+
+  async getDocumentLibrariesByTenant(tenantConnectionId: string): Promise<DocumentLibrary[]> {
+    return db.select().from(documentLibraries).where(eq(documentLibraries.tenantConnectionId, tenantConnectionId)).orderBy(documentLibraries.displayName);
+  }
+
+  async getDocumentLibrary(id: string): Promise<DocumentLibrary | undefined> {
+    const [lib] = await db.select().from(documentLibraries).where(eq(documentLibraries.id, id));
+    return lib;
+  }
+
+  async upsertDocumentLibrary(data: InsertDocumentLibrary): Promise<DocumentLibrary> {
+    const [result] = await db.insert(documentLibraries)
+      .values(data)
+      .onConflictDoUpdate({
+        target: [documentLibraries.workspaceId, documentLibraries.m365ListId],
+        set: {
+          tenantConnectionId: data.tenantConnectionId,
+          displayName: data.displayName,
+          description: data.description,
+          webUrl: data.webUrl,
+          template: data.template,
+          itemCount: data.itemCount,
+          storageUsedBytes: data.storageUsedBytes,
+          sensitivityLabelId: data.sensitivityLabelId,
+          isDefaultDocLib: data.isDefaultDocLib,
+          hidden: data.hidden,
+          lastModifiedAt: data.lastModifiedAt,
+          createdGraphAt: data.createdGraphAt,
+          lastSyncAt: data.lastSyncAt || new Date(),
+        },
+      })
+      .returning();
+    return result;
+  }
+
+  async deleteDocumentLibrariesForWorkspace(workspaceId: string): Promise<void> {
+    await db.delete(documentLibraries).where(eq(documentLibraries.workspaceId, workspaceId));
   }
 }
 

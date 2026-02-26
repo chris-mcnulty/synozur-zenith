@@ -469,6 +469,36 @@ export const insertCustomFieldDefinitionSchema = createInsertSchema(customFieldD
 export type InsertCustomFieldDefinition = z.infer<typeof insertCustomFieldDefinitionSchema>;
 export type CustomFieldDefinition = typeof customFieldDefinitions.$inferSelect;
 
+export const documentLibraries = pgTable("document_libraries", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  workspaceId: varchar("workspace_id").notNull(),
+  tenantConnectionId: varchar("tenant_connection_id").notNull(),
+  m365ListId: text("m365_list_id").notNull(),
+  displayName: text("display_name").notNull(),
+  description: text("description"),
+  webUrl: text("web_url"),
+  template: text("template"),
+  itemCount: integer("item_count"),
+  storageUsedBytes: bigint("storage_used_bytes", { mode: "number" }),
+  sensitivityLabelId: text("sensitivity_label_id"),
+  isDefaultDocLib: boolean("is_default_doc_lib").default(false),
+  hidden: boolean("hidden").default(false),
+  lastModifiedAt: text("last_modified_at"),
+  createdGraphAt: text("created_graph_at"),
+  lastSyncAt: timestamp("last_sync_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => [
+  unique("uq_workspace_list").on(table.workspaceId, table.m365ListId),
+]);
+
+export const insertDocumentLibrarySchema = createInsertSchema(documentLibraries).omit({
+  id: true,
+  createdAt: true,
+});
+
+export type InsertDocumentLibrary = z.infer<typeof insertDocumentLibrarySchema>;
+export type DocumentLibrary = typeof documentLibraries.$inferSelect;
+
 export const domainBlocklist = pgTable("domain_blocklist", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   domain: text("domain").notNull().unique(),
