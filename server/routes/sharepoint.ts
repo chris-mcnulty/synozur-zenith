@@ -416,8 +416,9 @@ router.post("/api/workspaces/:id/sync", requireRole(ZENITH_ROLES.OPERATOR, ZENIT
     updates.type = siteType;
 
     if (Object.keys(propertyBagData.properties).length > 0) {
-      updates.propertyBag = propertyBagData.properties;
-      console.log(`[single-sync] ${siteUrl} → captured ${Object.keys(propertyBagData.properties).length} property bag entries`);
+      const existingBag = (workspace.propertyBag as Record<string, string>) || {};
+      updates.propertyBag = { ...existingBag, ...propertyBagData.properties };
+      console.log(`[single-sync] ${siteUrl} → merged ${Object.keys(propertyBagData.properties).length} property bag entries (total: ${Object.keys(updates.propertyBag).length})`);
     }
 
     const updated = await storage.updateWorkspace(workspace.id, updates);
@@ -934,8 +935,13 @@ router.post("/api/admin/tenants/:id/sync", requireRole(ZENITH_ROLES.TENANT_ADMIN
         else workspaceData.usage = "Low";
       }
 
+      const existing = await storage.getWorkspaceByM365ObjectId(site.id);
+
       if (enriched.propertyBag && Object.keys(enriched.propertyBag).length > 0) {
-        workspaceData.propertyBag = enriched.propertyBag;
+        const existingBag = (existing?.propertyBag as Record<string, string>) || {};
+        workspaceData.propertyBag = { ...existingBag, ...enriched.propertyBag };
+      } else if (existing?.propertyBag) {
+        workspaceData.propertyBag = existing.propertyBag;
       }
 
       workspaceData.spoSyncHash = computeSpoSyncHash({
@@ -943,7 +949,6 @@ router.post("/api/admin/tenants/:id/sync", requireRole(ZENITH_ROLES.TENANT_ADMIN
         propertyBag: workspaceData.propertyBag || null,
       });
 
-      const existing = await storage.getWorkspaceByM365ObjectId(site.id);
       if (existing) {
         const governedFields: (keyof typeof workspaceData)[] = [
           'sensitivityLabelId', 'department', 'costCenter', 'projectCode',
