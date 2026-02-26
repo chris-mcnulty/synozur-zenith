@@ -608,7 +608,7 @@ router.post("/api/admin/tenants/:tenantConnectionId/custom-fields", async (req, 
   try {
     const conn = await storage.getTenantConnection(req.params.tenantConnectionId);
     if (!conn) return res.status(404).json({ error: "Tenant connection not found" });
-    const { fieldName, fieldLabel, fieldType, options, required, filterable, sortOrder } = req.body;
+    const { fieldName, fieldLabel, fieldType, options, defaultValue, required, filterable, sortOrder } = req.body;
     if (!fieldLabel || typeof fieldLabel !== "string" || !fieldLabel.trim()) {
       return res.status(400).json({ error: "fieldLabel is required" });
     }
@@ -629,6 +629,7 @@ router.post("/api/admin/tenants/:tenantConnectionId/custom-fields", async (req, 
       fieldLabel: fieldLabel.trim(),
       fieldType,
       options: fieldType === "SELECT" ? options : null,
+      defaultValue: defaultValue && typeof defaultValue === "string" ? defaultValue.trim() : null,
       required: required === true,
       filterable: filterable !== false,
       sortOrder: typeof sortOrder === "number" ? sortOrder : existing.length,
@@ -656,6 +657,7 @@ router.patch("/api/admin/tenants/:tenantConnectionId/custom-fields/:fieldId", as
       updates.fieldType = req.body.fieldType;
     }
     if (req.body.options !== undefined) updates.options = req.body.options;
+    if (req.body.defaultValue !== undefined) updates.defaultValue = req.body.defaultValue || null;
     if (req.body.required !== undefined) updates.required = req.body.required;
     if (req.body.filterable !== undefined) updates.filterable = req.body.filterable;
     if (req.body.sortOrder !== undefined) updates.sortOrder = req.body.sortOrder;

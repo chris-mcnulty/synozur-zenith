@@ -60,6 +60,7 @@ type CustomFieldDefinition = {
   fieldLabel: string;
   fieldType: string;
   options: string[] | null;
+  defaultValue: string | null;
   required: boolean;
   filterable: boolean;
   sortOrder: number;
@@ -93,6 +94,7 @@ export default function CustomFieldsPage() {
   const [formType, setFormType] = useState("TEXT");
   const [formOptions, setFormOptions] = useState<string[]>([]);
   const [formOptionInput, setFormOptionInput] = useState("");
+  const [formDefaultValue, setFormDefaultValue] = useState("");
   const [formRequired, setFormRequired] = useState(false);
   const [formFilterable, setFormFilterable] = useState(true);
 
@@ -111,6 +113,7 @@ export default function CustomFieldsPage() {
       fieldLabel: string;
       fieldType: string;
       options?: string[];
+      defaultValue?: string;
       required: boolean;
       filterable: boolean;
     }) => {
@@ -132,6 +135,7 @@ export default function CustomFieldsPage() {
       fieldLabel?: string;
       fieldType?: string;
       options?: string[];
+      defaultValue?: string;
       required?: boolean;
       filterable?: boolean;
     }) => {
@@ -168,6 +172,7 @@ export default function CustomFieldsPage() {
     setFormType("TEXT");
     setFormOptions([]);
     setFormOptionInput("");
+    setFormDefaultValue("");
     setFormRequired(false);
     setFormFilterable(true);
     setDialogOpen(true);
@@ -180,6 +185,7 @@ export default function CustomFieldsPage() {
     setFormType(field.fieldType);
     setFormOptions(field.options || []);
     setFormOptionInput("");
+    setFormDefaultValue(field.defaultValue || "");
     setFormRequired(field.required);
     setFormFilterable(field.filterable);
     setDialogOpen(true);
@@ -224,6 +230,7 @@ export default function CustomFieldsPage() {
         fieldLabel: label,
         fieldType: formType,
         options: formType === "SELECT" ? formOptions : undefined,
+        defaultValue: formDefaultValue.trim() || undefined,
         required: formRequired,
         filterable: formFilterable,
       });
@@ -233,6 +240,7 @@ export default function CustomFieldsPage() {
         fieldLabel: label,
         fieldType: formType,
         options: formType === "SELECT" ? formOptions : undefined,
+        defaultValue: formDefaultValue.trim() || undefined,
         required: formRequired,
         filterable: formFilterable,
       });
@@ -473,6 +481,43 @@ export default function CustomFieldsPage() {
                 )}
               </div>
             )}
+
+            <div className="space-y-2">
+              <Label>Default Value</Label>
+              {formType === "SELECT" && formOptions.length > 0 ? (
+                <Select value={formDefaultValue} onValueChange={setFormDefaultValue}>
+                  <SelectTrigger data-testid="select-default-value">
+                    <SelectValue placeholder="No default" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none__">No default</SelectItem>
+                    {formOptions.map(opt => (
+                      <SelectItem key={opt} value={opt}>{opt}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              ) : formType === "BOOLEAN" ? (
+                <Select value={formDefaultValue} onValueChange={setFormDefaultValue}>
+                  <SelectTrigger data-testid="select-default-value">
+                    <SelectValue placeholder="No default" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none__">No default</SelectItem>
+                    <SelectItem value="true">Yes</SelectItem>
+                    <SelectItem value="false">No</SelectItem>
+                  </SelectContent>
+                </Select>
+              ) : (
+                <Input
+                  type={formType === "NUMBER" ? "number" : formType === "DATE" ? "date" : "text"}
+                  value={formDefaultValue}
+                  onChange={(e) => setFormDefaultValue(e.target.value)}
+                  placeholder="Leave blank for no default"
+                  data-testid="input-default-value"
+                />
+              )}
+              <p className="text-[11px] text-muted-foreground">Pre-populated value for workspaces that don't have this field set.</p>
+            </div>
 
             <div className="flex items-center justify-between rounded-lg border border-border/50 p-3">
               <div>

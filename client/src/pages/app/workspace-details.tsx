@@ -149,9 +149,18 @@ export default function WorkspaceDetailsPage() {
         type: workspace.type || "",
         projectType: workspace.projectType || "",
       });
-      setCustomFieldValues(workspace.customFields || {});
+      const existingCustom = workspace.customFields || {};
+      const merged: Record<string, any> = { ...existingCustom };
+      if (customFieldDefs.length > 0) {
+        for (const def of customFieldDefs) {
+          if ((merged[def.fieldName] === undefined || merged[def.fieldName] === null || merged[def.fieldName] === "") && def.defaultValue) {
+            merged[def.fieldName] = def.fieldType === "NUMBER" ? Number(def.defaultValue) : def.fieldType === "BOOLEAN" ? def.defaultValue === "true" : def.defaultValue;
+          }
+        }
+      }
+      setCustomFieldValues(merged);
     }
-  }, [workspace]);
+  }, [workspace, customFieldDefs]);
 
   const saveMutation = useMutation({
     mutationFn: async (data: Partial<typeof form> & { customFields?: Record<string, any> }) => {
@@ -259,7 +268,16 @@ export default function WorkspaceDetailsPage() {
         type: workspace.type || "",
         projectType: workspace.projectType || "",
       });
-      setCustomFieldValues(workspace.customFields || {});
+      const existingCustom2 = workspace.customFields || {};
+      const merged2: Record<string, any> = { ...existingCustom2 };
+      if (customFieldDefs.length > 0) {
+        for (const def of customFieldDefs) {
+          if ((merged2[def.fieldName] === undefined || merged2[def.fieldName] === null || merged2[def.fieldName] === "") && def.defaultValue) {
+            merged2[def.fieldName] = def.fieldType === "NUMBER" ? Number(def.defaultValue) : def.fieldType === "BOOLEAN" ? def.defaultValue === "true" : def.defaultValue;
+          }
+        }
+      }
+      setCustomFieldValues(merged2);
     }
     setEditMode(false);
   };

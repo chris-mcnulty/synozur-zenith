@@ -452,6 +452,7 @@ export const customFieldDefinitions = pgTable("custom_field_definitions", {
   fieldLabel: text("field_label").notNull(),
   fieldType: text("field_type").notNull(),
   options: jsonb("options").$type<string[]>(),
+  defaultValue: text("default_value"),
   required: boolean("required").notNull().default(false),
   filterable: boolean("filterable").notNull().default(true),
   sortOrder: integer("sort_order").notNull().default(0),
