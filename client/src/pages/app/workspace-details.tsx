@@ -43,25 +43,9 @@ import {
   Unlink,
   Trash2,
   RefreshCw,
-  Archive,
-  Library,
-  FolderOpen
+  Archive
 } from "lucide-react";
 
-type DocLibrary = {
-  id: string;
-  displayName: string;
-  description: string | null;
-  webUrl: string | null;
-  template: string | null;
-  itemCount: number | null;
-  storageUsedBytes: number | null;
-  sensitivityLabelId: string | null;
-  isDefaultDocLib: boolean | null;
-  hidden: boolean | null;
-  lastModifiedAt: string | null;
-  createdGraphAt: string | null;
-};
 type DataDictEntry = { id: string; tenantId: string; category: string; value: string; createdAt: string };
 type SensitivityLabelEntry = { id: string; tenantId: string; labelId: string; name: string; description: string | null; color: string | null; tooltip: string | null; sensitivity: number | null; isActive: boolean; contentFormats: string[] | null; hasProtection: boolean; parentLabelId: string | null; appliesToGroupsSites: boolean; syncedAt: string | null };
 type RetentionLabelEntry = { id: string; tenantId: string; labelId: string; name: string; description: string | null; isInUse: boolean; retentionDuration: string | null; actionAfterRetention: string | null; syncedAt: string | null };
@@ -112,12 +96,6 @@ export default function WorkspaceDetailsPage() {
     queryKey: ["/api/admin/tenants", tenantConnectionId, "custom-fields"],
     queryFn: () => fetch(`/api/admin/tenants/${tenantConnectionId}/custom-fields`).then(r => r.json()),
     enabled: !!tenantConnectionId,
-  });
-
-  const { data: libraries = [] } = useQuery<DocLibrary[]>({
-    queryKey: [`/api/workspaces/${id}/libraries`],
-    queryFn: () => fetch(`/api/workspaces/${id}/libraries`).then(r => r.ok ? r.json() : []),
-    enabled: !!id,
   });
 
   const { data: allWorkspaces = [] } = useQuery<Workspace[]>({
@@ -563,7 +541,6 @@ export default function WorkspaceDetailsPage() {
             <TabsList className="bg-muted/50 border border-border/50">
               <TabsTrigger value="properties" className="gap-2" data-testid="tab-properties"><Settings2 className="w-4 h-4"/> Properties</TabsTrigger>
               <TabsTrigger value="metadata" className="gap-2" data-testid="tab-metadata"><Tags className="w-4 h-4"/> Metadata & Labels</TabsTrigger>
-              <TabsTrigger value="libraries" className="gap-2" data-testid="tab-libraries"><Library className="w-4 h-4"/> Libraries{libraries.length > 0 ? ` (${libraries.length})` : ""}</TabsTrigger>
               <TabsTrigger value="propertybag" className="gap-2" data-testid="tab-propertybag"><Database className="w-4 h-4"/> Property Bag</TabsTrigger>
               <TabsTrigger value="raw" className="gap-2" data-testid="tab-raw"><FileJson className="w-4 h-4"/> Raw JSON</TabsTrigger>
               <TabsTrigger value="lifecycle" className="gap-2" data-testid="tab-lifecycle"><Activity className="w-4 h-4"/> Lifecycle</TabsTrigger>
@@ -1081,115 +1058,6 @@ export default function WorkspaceDetailsPage() {
               </Card>
             </TabsContent>
             
-            <TabsContent value="libraries" className="mt-4">
-              <Card className="glass-panel border-border/50">
-                <CardHeader>
-                  <CardTitle className="flex items-center gap-2">
-                    <Library className="w-5 h-5 text-indigo-500" />
-                    Document Libraries
-                  </CardTitle>
-                  <CardDescription>SharePoint document libraries discovered during inventory sync.</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  {libraries.length === 0 ? (
-                    <div className="text-center py-8 text-muted-foreground">
-                      <FolderOpen className="w-10 h-10 mx-auto mb-3 opacity-40" />
-                      <p className="text-sm">No document libraries synced yet.</p>
-                      <p className="text-xs mt-1">Libraries will appear after running a workspace or tenant sync.</p>
-                    </div>
-                  ) : (
-                    <>
-                      <div className="grid grid-cols-3 gap-4 mb-6">
-                        <div className="rounded-lg border border-border/50 bg-muted/30 p-3 text-center">
-                          <p className="text-2xl font-bold" data-testid="text-lib-count">{libraries.filter(l => !l.hidden).length}</p>
-                          <p className="text-xs text-muted-foreground">Libraries</p>
-                        </div>
-                        <div className="rounded-lg border border-border/50 bg-muted/30 p-3 text-center">
-                          <p className="text-2xl font-bold" data-testid="text-lib-items">{libraries.reduce((sum, l) => sum + (l.itemCount || 0), 0).toLocaleString()}</p>
-                          <p className="text-xs text-muted-foreground">Total Items</p>
-                        </div>
-                        <div className="rounded-lg border border-border/50 bg-muted/30 p-3 text-center">
-                          <p className="text-2xl font-bold" data-testid="text-lib-storage">
-                            {(() => {
-                              const bytes = libraries.reduce((sum, l) => sum + (l.storageUsedBytes || 0), 0);
-                              if (bytes >= 1073741824) return `${(bytes / 1073741824).toFixed(1)} GB`;
-                              if (bytes >= 1048576) return `${(bytes / 1048576).toFixed(0)} MB`;
-                              if (bytes >= 1024) return `${(bytes / 1024).toFixed(0)} KB`;
-                              return `${bytes} B`;
-                            })()}
-                          </p>
-                          <p className="text-xs text-muted-foreground">Total Storage</p>
-                        </div>
-                      </div>
-                      <div className="rounded-md border border-border/50">
-                        <table className="w-full text-sm">
-                          <thead>
-                            <tr className="border-b border-border/50 bg-muted/20">
-                              <th className="text-left p-3 font-medium">Library</th>
-                              <th className="text-right p-3 font-medium">Items</th>
-                              <th className="text-right p-3 font-medium">Storage</th>
-                              <th className="text-left p-3 font-medium">Sensitivity</th>
-                              <th className="text-left p-3 font-medium">Modified</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {libraries
-                              .sort((a, b) => (a.hidden ? 1 : 0) - (b.hidden ? 1 : 0) || a.displayName.localeCompare(b.displayName))
-                              .map((lib) => {
-                                const libLabel = lib.sensitivityLabelId
-                                  ? sensitivityLabelsData.find(l => l.labelId === lib.sensitivityLabelId)?.name
-                                  : null;
-                                const storageStr = (() => {
-                                  const bytes = lib.storageUsedBytes || 0;
-                                  if (bytes >= 1073741824) return `${(bytes / 1073741824).toFixed(1)} GB`;
-                                  if (bytes >= 1048576) return `${(bytes / 1048576).toFixed(0)} MB`;
-                                  if (bytes >= 1024) return `${(bytes / 1024).toFixed(0)} KB`;
-                                  return `${bytes} B`;
-                                })();
-                                return (
-                                  <tr key={lib.id} className={`border-b border-border/30 ${lib.hidden ? "opacity-50" : ""}`} data-testid={`row-library-${lib.id}`}>
-                                    <td className="p-3">
-                                      <div className="flex items-center gap-2">
-                                        <FolderOpen className="w-4 h-4 text-indigo-400 shrink-0" />
-                                        <div>
-                                          {lib.webUrl ? (
-                                            <a href={lib.webUrl} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline font-medium">
-                                              {lib.displayName}
-                                            </a>
-                                          ) : (
-                                            <span className="font-medium">{lib.displayName}</span>
-                                          )}
-                                          <div className="flex gap-1.5 mt-0.5">
-                                            {lib.isDefaultDocLib && <Badge variant="outline" className="text-[10px] px-1.5 py-0">Default</Badge>}
-                                            {lib.hidden && <Badge variant="outline" className="text-[10px] px-1.5 py-0 text-muted-foreground">Hidden</Badge>}
-                                          </div>
-                                        </div>
-                                      </div>
-                                    </td>
-                                    <td className="p-3 text-right tabular-nums">{(lib.itemCount || 0).toLocaleString()}</td>
-                                    <td className="p-3 text-right tabular-nums text-muted-foreground">{storageStr}</td>
-                                    <td className="p-3">
-                                      {libLabel ? (
-                                        <Badge variant="outline" className="text-[10px]">{libLabel}</Badge>
-                                      ) : (
-                                        <span className="text-xs text-muted-foreground">—</span>
-                                      )}
-                                    </td>
-                                    <td className="p-3 text-xs text-muted-foreground">
-                                      {lib.lastModifiedAt ? new Date(lib.lastModifiedAt).toLocaleDateString() : "—"}
-                                    </td>
-                                  </tr>
-                                );
-                              })}
-                          </tbody>
-                        </table>
-                      </div>
-                    </>
-                  )}
-                </CardContent>
-              </Card>
-            </TabsContent>
-
             <TabsContent value="propertybag" className="mt-4">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <Card className="glass-panel border-border/50">

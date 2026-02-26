@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { storage } from "../storage";
 import { insertWorkspaceSchema, insertProvisioningRequestSchema, type ServicePlanTier, ZENITH_ROLES } from "@shared/schema";
-import { fetchSharePointSites, fetchSiteUsageReport, fetchSiteDriveOwner, fetchSiteAnalytics, fetchSiteGroupOwners, fetchSiteCollectionAdmins, getAppToken, writeSitePropertyBag, fetchSitePropertyBag, fetchSensitivityLabels, fetchRetentionLabels, fetchHubSites, fetchSiteHubAssociation, fetchHubSitesViaSearch, applySensitivityLabelToSite, removeSensitivityLabelFromSite, joinHubSite, leaveHubSite, fetchSiteLockState, fetchSiteArchiveStatus, batchToggleNoScript, fetchSiteDocumentLibraries } from "../services/graph";
+import { fetchSharePointSites, fetchSiteUsageReport, fetchSiteDriveOwner, fetchSiteAnalytics, fetchSiteGroupOwners, fetchSiteCollectionAdmins, getAppToken, writeSitePropertyBag, fetchSitePropertyBag, fetchSensitivityLabels, fetchRetentionLabels, fetchHubSites, fetchSiteHubAssociation, fetchHubSitesViaSearch, applySensitivityLabelToSite, removeSensitivityLabelFromSite, joinHubSite, leaveHubSite, fetchSiteLockState, fetchSiteArchiveStatus, batchToggleNoScript } from "../services/graph";
 import { getPlanFeatures } from "../services/feature-gate";
 import { refreshDelegatedToken, getDelegatedSpoToken } from "../routes-entra";
 import { requireRole, type AuthenticatedRequest } from "../middleware/rbac";
@@ -68,53 +68,6 @@ async function getDelegatedSpoTokenForOrg(spoHost: string, currentUserId?: strin
   }
   return null;
 }
-
-// ── Document Libraries ──
-router.get("/api/workspaces/:id/libraries", async (req, res) => {
-  try {
-    const libraries = await storage.getDocumentLibraries(req.params.id);
-    res.json(libraries);
-  } catch (err: any) {
-    console.error("[api-libraries-workspace] Error:", err);
-    res.status(500).json({ message: "Failed to fetch libraries for workspace" });
-  }
-});
-
-router.get("/api/admin/tenants/:tenantConnectionId/libraries", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN), async (req, res) => {
-  try {
-    const libraries = await storage.getDocumentLibrariesByTenant(req.params.tenantConnectionId);
-    res.json(libraries);
-  } catch (err: any) {
-    console.error("[api-libraries-tenant] Error:", err);
-    res.status(500).json({ message: "Failed to fetch libraries for tenant" });
-  }
-});
-
-router.get("/api/admin/tenants/:tenantConnectionId/libraries/stats", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN), async (req, res) => {
-  try {
-    const libraries = await storage.getDocumentLibrariesByTenant(req.params.tenantConnectionId);
-    
-    const stats = {
-      totalCount: libraries.length,
-      totalStorageBytes: libraries.reduce((acc, lib) => acc + (lib.storageUsedBytes || 0), 0),
-      labelDistribution: {} as Record<string, number>,
-      templateDistribution: {} as Record<string, number>,
-    };
-
-    libraries.forEach(lib => {
-      const label = lib.sensitivityLabelId || "Unlabeled";
-      stats.labelDistribution[label] = (stats.labelDistribution[label] || 0) + 1;
-      
-      const template = lib.template || "Unknown";
-      stats.templateDistribution[template] = (stats.templateDistribution[template] || 0) + 1;
-    });
-
-    res.json(stats);
-  } catch (err: any) {
-    console.error("[api-libraries-stats] Error:", err);
-    res.status(500).json({ message: "Failed to fetch library stats" });
-  }
-});
 
 // ── Workspaces (SharePoint Sites) ──
 router.get("/api/workspaces", async (req, res) => {
@@ -505,37 +458,6 @@ router.post("/api/workspaces/:id/sync", requireRole(ZENITH_ROLES.OPERATOR, ZENIT
     }
 
     const finalWorkspace = await storage.getWorkspace(workspace.id);
-
-    // ── Document Library Sync ──
-    try {
-      if (token && finalWorkspace?.m365ObjectId) {
-        const libs = await fetchSiteDocumentLibraries(token, finalWorkspace.m365ObjectId);
-        for (const lib of libs) {
-          await storage.upsertDocumentLibrary({
-            workspaceId: finalWorkspace.id,
-            tenantConnectionId: finalWorkspace.tenantConnectionId!,
-            m365ListId: lib.id,
-            displayName: lib.displayName,
-            description: lib.description || null,
-            webUrl: lib.webUrl,
-            template: lib.template,
-            itemCount: lib.itemCount,
-            storageUsedBytes: lib.storageUsedBytes,
-            sensitivityLabelId: lib.sensitivityLabelId || null,
-            isDefaultDocLib: lib.isDefaultDocLib,
-            hidden: lib.hidden,
-            lastModifiedAt: lib.lastModifiedAt,
-            createdGraphAt: lib.createdGraphAt,
-            lastSyncAt: new Date(),
-          });
-        }
-        console.log(`[single-sync] Synced ${libs.length} document libraries for ${finalWorkspace.displayName}`);
-      }
-    } catch (libErr: any) {
-      console.warn(`[single-sync] Document library sync failed: ${libErr.message}`);
-      warnings.push(`Document library sync failed: ${libErr.message}`);
-    }
-
     res.json({ success: true, workspace: finalWorkspace, warnings: warnings.length > 0 ? warnings : undefined });
   } catch (err: any) {
     console.error("[single-site-sync] Error:", err);
@@ -1354,49 +1276,6 @@ router.post("/api/admin/tenants/:id/sync", requireRole(ZENITH_ROLES.TENANT_ADMIN
       console.error(`[policy-eval] Error during post-sync evaluation: ${evalErr.message}`);
     }
 
-    // ── Document Library Enrichment ──
-    let librariesCount = 0;
-    if (token) {
-      try {
-        console.log(`[sync] Starting document library enrichment for ${siteResult.sites.length} sites...`);
-        const allWorkspaces = await storage.getWorkspaces(undefined, req.params.id);
-        
-        for (let i = 0; i < allWorkspaces.length; i += BATCH_SIZE) {
-          const batch = allWorkspaces.slice(i, i + BATCH_SIZE);
-          await Promise.all(batch.map(async (ws) => {
-            if (!ws.m365ObjectId) return;
-            try {
-              const libs = await fetchSiteDocumentLibraries(token!, ws.m365ObjectId);
-              for (const lib of libs) {
-                await storage.upsertDocumentLibrary({
-                  workspaceId: ws.id,
-                  tenantConnectionId: req.params.id,
-                  m365ListId: lib.id,
-                  displayName: lib.displayName,
-                  description: lib.description || null,
-                  webUrl: lib.webUrl,
-                  template: lib.template,
-                  itemCount: lib.itemCount,
-                  storageUsedBytes: lib.storageUsedBytes,
-                  sensitivityLabelId: lib.sensitivityLabelId || null,
-                  isDefaultDocLib: lib.isDefaultDocLib,
-                  hidden: lib.hidden,
-                  lastModifiedAt: lib.lastModifiedAt,
-                  createdGraphAt: lib.createdGraphAt,
-                  lastSyncAt: new Date(),
-                });
-                librariesCount++;
-              }
-            } catch (err: any) {
-              console.warn(`[sync-libraries] Failed for workspace ${ws.displayName}: ${err.message}`);
-            }
-          }));
-        }
-      } catch (libErr: any) {
-        console.error(`[sync-libraries] Overall enrichment error: ${libErr.message}`);
-      }
-    }
-
     await storage.updateTenantConnection(req.params.id, {
       lastSyncAt: new Date(),
       lastSyncStatus: permissionWarnings.some(w => w.severity === "error") ? "SUCCESS_WITH_ERRORS" : permissionWarnings.length > 0 ? "SUCCESS_WITH_WARNINGS" : "SUCCESS",
@@ -1412,7 +1291,6 @@ router.post("/api/admin/tenants/:id/sync", requireRole(ZENITH_ROLES.TENANT_ADMIN
       usageReportRows: usageResult.report.length,
       usageMatched,
       driveEnriched: enrichCache.size,
-      librariesCount,
       usageReportError: usageResult.error || null,
       enrichErrors: enrichErrors.length > 0 ? enrichErrors : undefined,
       sensitivityLabels: labelSyncResult,
