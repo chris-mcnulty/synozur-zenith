@@ -126,6 +126,48 @@ const BUILT_IN_EVALUATORS: Record<string, (workspace: Workspace, config?: Record
     };
   },
 
+  CUSTOM_FIELD_CHECK: (workspace, config) => {
+    const fieldName = config?.fieldName as string || "";
+    const operator = config?.operator as string || "EXISTS";
+    const expectedValue = config?.value as string || "";
+    const label = config?.label as string || `Custom: ${fieldName}`;
+
+    const customFields = (workspace as any).customFields as Record<string, any> | undefined;
+    const actualValue = customFields?.[fieldName];
+    const strValue = actualValue !== undefined && actualValue !== null ? String(actualValue) : "";
+
+    let pass = false;
+    if (operator === "EQUALS") {
+      pass = strValue === expectedValue;
+    } else if (operator === "NOT_EQUALS") {
+      pass = strValue !== expectedValue;
+    } else if (operator === "EXISTS") {
+      pass = actualValue !== undefined && actualValue !== null && strValue !== "";
+    } else if (operator === "NOT_EXISTS") {
+      pass = !actualValue || strValue === "";
+    } else if (operator === "CONTAINS") {
+      pass = strValue.includes(expectedValue);
+    } else if (operator === "GREATER_THAN") {
+      pass = Number(strValue) > Number(expectedValue);
+    } else if (operator === "LESS_THAN") {
+      pass = Number(strValue) < Number(expectedValue);
+    }
+
+    const opDisplay = operator.toLowerCase().replace(/_/g, " ");
+    const desc = operator === "EXISTS"
+      ? `Custom field "${fieldName}" must have a value.`
+      : operator === "NOT_EXISTS"
+      ? `Custom field "${fieldName}" must be empty.`
+      : `Custom field "${fieldName}" must ${opDisplay} "${expectedValue}".`;
+
+    return {
+      ruleType: "CUSTOM_FIELD_CHECK",
+      ruleName: label,
+      ruleResult: pass ? "PASS" : "FAIL",
+      ruleDescription: desc,
+    };
+  },
+
   ATTESTATION: (workspace, config) => {
     return {
       ruleType: "ATTESTATION",

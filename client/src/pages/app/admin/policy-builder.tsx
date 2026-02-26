@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useTenant } from "@/lib/tenant-context";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -59,13 +60,33 @@ const AVAILABLE_RULE_TYPES = [
   { value: "DUAL_OWNERSHIP", label: "Dual Ownership", description: "Workspace must have at least two active owners." },
   { value: "METADATA_COMPLETE", label: "Metadata Complete", description: "All required governance metadata fields must be populated." },
   { value: "SHARING_POLICY", label: "Sharing Policy", description: "External sharing policy must align with sensitivity classification." },
-  { value: "PROPERTY_BAG_CHECK", label: "Property Bag Check", description: "SharePoint property bag must contain required key-value pairs." },
+  { value: "PROPERTY_BAG_CHECK", label: "Property Bag Check", description: "SharePoint property bag must contain required key-value pairs.", allowMultiple: true },
+  { value: "CUSTOM_FIELD_CHECK", label: "Custom Field Check", description: "Evaluate a custom field value against a condition.", allowMultiple: true },
   { value: "ATTESTATION", label: "Attestation (Future)", description: "Workspace owner must attest to governance compliance periodically." },
+] as const;
+
+type CustomFieldDef = {
+  id: string;
+  fieldName: string;
+  fieldLabel: string;
+  fieldType: string;
+  options: string[] | null;
+};
+
+const OPERATORS = [
+  { value: "EXISTS", label: "Has a value" },
+  { value: "NOT_EXISTS", label: "Is empty" },
+  { value: "EQUALS", label: "Equals" },
+  { value: "NOT_EQUALS", label: "Does not equal" },
+  { value: "CONTAINS", label: "Contains" },
+  { value: "GREATER_THAN", label: "Greater than" },
+  { value: "LESS_THAN", label: "Less than" },
 ];
 
 export default function PolicyBuilderPage() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const { selectedTenant } = useTenant();
   const [selectedPolicyId, setSelectedPolicyId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
   const [editDescription, setEditDescription] = useState("");
@@ -82,6 +103,13 @@ export default function PolicyBuilderPage() {
   });
 
   const organizationId = authData?.user?.organizationId;
+  const activeTenantId = selectedTenant?.id || "";
+
+  const { data: customFieldDefs = [] } = useQuery<CustomFieldDef[]>({
+    queryKey: ["/api/admin/tenants", activeTenantId, "custom-fields"],
+    queryFn: () => fetch(`/api/admin/tenants/${activeTenantId}/custom-fields`).then(r => r.ok ? r.json() : []),
+    enabled: !!activeTenantId,
+  });
 
   const { data: policies, isLoading } = useQuery<GovernancePolicy[]>({
     queryKey: ["/api/policies", organizationId],
@@ -182,18 +210,39 @@ export default function PolicyBuilderPage() {
   function addRule(ruleType: string) {
     const template = AVAILABLE_RULE_TYPES.find(r => r.value === ruleType);
     if (!template) return;
-    const alreadyExists = editRules.some(r => r.ruleType === ruleType);
-    if (alreadyExists) {
+    const allowMultiple = 'allowMultiple' in template && template.allowMultiple;
+    if (!allowMultiple && editRules.some(r => r.ruleType === ruleType)) {
       toast({ title: "Rule already exists", description: `${template.label} is already in this policy.`, variant: "destructive" });
       return;
     }
-    setEditRules([...editRules, {
+    const newRule: PolicyRule = {
       ruleType: template.value,
       label: template.label,
       description: template.description,
       enabled: true,
-    }]);
+    };
+    if (ruleType === "CUSTOM_FIELD_CHECK") {
+      newRule.config = { fieldName: "", operator: "EXISTS", value: "", label: "Custom Field" };
+    } else if (ruleType === "PROPERTY_BAG_CHECK") {
+      newRule.config = { key: "", operator: "EXISTS", value: "", label: "Property Bag" };
+    }
+    setEditRules([...editRules, newRule]);
     setShowAddRule(false);
+    markChanged();
+  }
+
+  function updateRuleConfig(index: number, configUpdates: Record<string, unknown>) {
+    const updated = [...editRules];
+    const rule = { ...updated[index] };
+    rule.config = { ...rule.config, ...configUpdates };
+    if (rule.ruleType === "CUSTOM_FIELD_CHECK" && configUpdates.fieldName !== undefined) {
+      rule.label = `Custom: ${configUpdates.fieldName || "Untitled"}`;
+    }
+    if (rule.ruleType === "PROPERTY_BAG_CHECK" && configUpdates.key !== undefined) {
+      rule.label = `Property: ${configUpdates.key || "Untitled"}`;
+    }
+    updated[index] = rule;
+    setEditRules(updated);
     markChanged();
   }
 
@@ -449,6 +498,118 @@ export default function PolicyBuilderPage() {
                               </Badge>
                             </div>
                             <p className="text-xs text-muted-foreground mt-1">{rule.description}</p>
+                            {rule.ruleType === "CUSTOM_FIELD_CHECK" && rule.enabled && (
+                              <div className="mt-3 grid grid-cols-3 gap-2">
+                                <div>
+                                  <Label className="text-[11px] text-muted-foreground">Field</Label>
+                                  <Select
+                                    value={(rule.config?.fieldName as string) || ""}
+                                    onValueChange={(v) => updateRuleConfig(index, { fieldName: v })}
+                                  >
+                                    <SelectTrigger className="h-8 text-xs" data-testid={`select-custom-field-${index}`}>
+                                      <SelectValue placeholder="Select field..." />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                      {customFieldDefs.map(f => (
+                                        <SelectItem key={f.fieldName} value={f.fieldName}>{f.fieldLabel}</SelectItem>
+                                      ))}
+                                    </SelectContent>
+                                  </Select>
+                                </div>
+                                <div>
+                                  <Label className="text-[11px] text-muted-foreground">Condition</Label>
+                                  <Select
+                                    value={(rule.config?.operator as string) || "EXISTS"}
+                                    onValueChange={(v) => updateRuleConfig(index, { operator: v })}
+                                  >
+                                    <SelectTrigger className="h-8 text-xs" data-testid={`select-operator-${index}`}>
+                                      <SelectValue />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                      {OPERATORS.map(op => (
+                                        <SelectItem key={op.value} value={op.value}>{op.label}</SelectItem>
+                                      ))}
+                                    </SelectContent>
+                                  </Select>
+                                </div>
+                                {!["EXISTS", "NOT_EXISTS"].includes((rule.config?.operator as string) || "EXISTS") && (
+                                  <div>
+                                    <Label className="text-[11px] text-muted-foreground">Value</Label>
+                                    {(() => {
+                                      const selectedField = customFieldDefs.find(f => f.fieldName === (rule.config?.fieldName as string));
+                                      if (selectedField?.fieldType === "SELECT" && selectedField.options) {
+                                        return (
+                                          <Select
+                                            value={(rule.config?.value as string) || ""}
+                                            onValueChange={(v) => updateRuleConfig(index, { value: v })}
+                                          >
+                                            <SelectTrigger className="h-8 text-xs" data-testid={`select-value-${index}`}>
+                                              <SelectValue placeholder="Select..." />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                              {selectedField.options.map(opt => (
+                                                <SelectItem key={opt} value={opt}>{opt}</SelectItem>
+                                              ))}
+                                            </SelectContent>
+                                          </Select>
+                                        );
+                                      }
+                                      return (
+                                        <Input
+                                          className="h-8 text-xs"
+                                          value={(rule.config?.value as string) || ""}
+                                          onChange={(e) => updateRuleConfig(index, { value: e.target.value })}
+                                          placeholder="Expected value"
+                                          data-testid={`input-value-${index}`}
+                                        />
+                                      );
+                                    })()}
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                            {rule.ruleType === "PROPERTY_BAG_CHECK" && rule.enabled && (
+                              <div className="mt-3 grid grid-cols-3 gap-2">
+                                <div>
+                                  <Label className="text-[11px] text-muted-foreground">Property Key</Label>
+                                  <Input
+                                    className="h-8 text-xs font-mono"
+                                    value={(rule.config?.key as string) || ""}
+                                    onChange={(e) => updateRuleConfig(index, { key: e.target.value })}
+                                    placeholder="e.g. ZenithAI"
+                                    data-testid={`input-prop-key-${index}`}
+                                  />
+                                </div>
+                                <div>
+                                  <Label className="text-[11px] text-muted-foreground">Condition</Label>
+                                  <Select
+                                    value={(rule.config?.operator as string) || "EXISTS"}
+                                    onValueChange={(v) => updateRuleConfig(index, { operator: v })}
+                                  >
+                                    <SelectTrigger className="h-8 text-xs" data-testid={`select-prop-operator-${index}`}>
+                                      <SelectValue />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                      {OPERATORS.filter(op => !["GREATER_THAN", "LESS_THAN"].includes(op.value)).map(op => (
+                                        <SelectItem key={op.value} value={op.value}>{op.label}</SelectItem>
+                                      ))}
+                                    </SelectContent>
+                                  </Select>
+                                </div>
+                                {!["EXISTS", "NOT_EXISTS"].includes((rule.config?.operator as string) || "EXISTS") && (
+                                  <div>
+                                    <Label className="text-[11px] text-muted-foreground">Value</Label>
+                                    <Input
+                                      className="h-8 text-xs"
+                                      value={(rule.config?.value as string) || ""}
+                                      onChange={(e) => updateRuleConfig(index, { value: e.target.value })}
+                                      placeholder="Expected value"
+                                      data-testid={`input-prop-value-${index}`}
+                                    />
+                                  </div>
+                                )}
+                              </div>
+                            )}
                           </div>
                           <div className="flex items-center gap-2 shrink-0">
                             <Switch
@@ -476,7 +637,7 @@ export default function PolicyBuilderPage() {
                         <div className="text-sm font-medium">Add a Rule</div>
                         <div className="grid gap-2">
                           {AVAILABLE_RULE_TYPES
-                            .filter(rt => !editRules.some(r => r.ruleType === rt.value))
+                            .filter(rt => ('allowMultiple' in rt && rt.allowMultiple) || !editRules.some(r => r.ruleType === rt.value))
                             .map((rt) => (
                               <button
                                 key={rt.value}
@@ -492,7 +653,7 @@ export default function PolicyBuilderPage() {
                               </button>
                             ))}
                         </div>
-                        {AVAILABLE_RULE_TYPES.filter(rt => !editRules.some(r => r.ruleType === rt.value)).length === 0 && (
+                        {AVAILABLE_RULE_TYPES.filter(rt => ('allowMultiple' in rt && rt.allowMultiple) || !editRules.some(r => r.ruleType === rt.value)).length === 0 && (
                           <p className="text-xs text-muted-foreground text-center py-2">All available rule types have been added.</p>
                         )}
                         <Button variant="ghost" size="sm" onClick={() => setShowAddRule(false)} className="text-muted-foreground">
