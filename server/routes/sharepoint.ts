@@ -241,6 +241,47 @@ router.patch("/api/workspaces/:id", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, Z
   res.json({ ...(finalWorkspace || workspace), labelSyncResult });
 });
 
+router.get("/api/workspaces/:id/libraries", async (req, res) => {
+  try {
+    const libraries = await storage.getDocumentLibraries(req.params.id);
+    res.json(libraries);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get("/api/admin/tenants/:tenantConnectionId/libraries", async (req, res) => {
+  try {
+    const libraries = await storage.getDocumentLibrariesByTenant(req.params.tenantConnectionId);
+    const workspaces = await storage.getWorkspaces(undefined, req.params.tenantConnectionId);
+    const wsMap = new Map(workspaces.map(w => [w.id, w]));
+    const enriched = libraries.map(lib => ({
+      ...lib,
+      workspaceName: wsMap.get(lib.workspaceId)?.displayName || "Unknown",
+      workspaceType: wsMap.get(lib.workspaceId)?.type || "Unknown",
+      workspaceSiteUrl: wsMap.get(lib.workspaceId)?.siteUrl || null,
+    }));
+    res.json(enriched);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get("/api/admin/tenants/:tenantConnectionId/libraries/stats", async (req, res) => {
+  try {
+    const libraries = await storage.getDocumentLibrariesByTenant(req.params.tenantConnectionId);
+    const totalLibraries = libraries.length;
+    const totalItems = libraries.reduce((sum, l) => sum + (l.itemCount || 0), 0);
+    const totalStorageBytes = libraries.reduce((sum, l) => sum + (l.storageUsedBytes || 0), 0);
+    const withSensitivityLabel = libraries.filter(l => l.sensitivityLabelId).length;
+    const hiddenCount = libraries.filter(l => l.hidden).length;
+    const workspaceCount = new Set(libraries.map(l => l.workspaceId)).size;
+    res.json({ totalLibraries, totalItems, totalStorageBytes, withSensitivityLabel, hiddenCount, workspaceCount });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.delete("/api/workspaces/:id", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN), async (req, res) => {
   await storage.deleteWorkspace(req.params.id);
   res.status(204).send();

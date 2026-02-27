@@ -3,7 +3,7 @@ import { Link, useParams } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import type { Workspace, CustomFieldDefinition } from "@shared/schema";
+import type { Workspace, CustomFieldDefinition, DocumentLibrary } from "@shared/schema";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -43,7 +43,8 @@ import {
   Unlink,
   Trash2,
   RefreshCw,
-  Archive
+  Archive,
+  Library
 } from "lucide-react";
 
 type DataDictEntry = { id: string; tenantId: string; category: string; value: string; createdAt: string };
@@ -96,6 +97,12 @@ export default function WorkspaceDetailsPage() {
     queryKey: ["/api/admin/tenants", tenantConnectionId, "custom-fields"],
     queryFn: () => fetch(`/api/admin/tenants/${tenantConnectionId}/custom-fields`).then(r => r.json()),
     enabled: !!tenantConnectionId,
+  });
+
+  const { data: docLibraries = [] } = useQuery<DocumentLibrary[]>({
+    queryKey: ["/api/workspaces", id, "libraries"],
+    queryFn: () => fetch(`/api/workspaces/${id}/libraries`).then(r => r.ok ? r.json() : []),
+    enabled: !!id,
   });
 
   const { data: allWorkspaces = [] } = useQuery<Workspace[]>({
@@ -541,6 +548,7 @@ export default function WorkspaceDetailsPage() {
             <TabsList className="bg-muted/50 border border-border/50">
               <TabsTrigger value="properties" className="gap-2" data-testid="tab-properties"><Settings2 className="w-4 h-4"/> Properties</TabsTrigger>
               <TabsTrigger value="metadata" className="gap-2" data-testid="tab-metadata"><Tags className="w-4 h-4"/> Metadata & Labels</TabsTrigger>
+              <TabsTrigger value="libraries" className="gap-2" data-testid="tab-libraries"><Library className="w-4 h-4"/> Document Libraries{docLibraries.length > 0 ? ` (${docLibraries.length})` : ""}</TabsTrigger>
               <TabsTrigger value="propertybag" className="gap-2" data-testid="tab-propertybag"><Database className="w-4 h-4"/> Property Bag</TabsTrigger>
               <TabsTrigger value="raw" className="gap-2" data-testid="tab-raw"><FileJson className="w-4 h-4"/> Raw JSON</TabsTrigger>
               <TabsTrigger value="lifecycle" className="gap-2" data-testid="tab-lifecycle"><Activity className="w-4 h-4"/> Lifecycle</TabsTrigger>
@@ -1058,6 +1066,88 @@ export default function WorkspaceDetailsPage() {
               </Card>
             </TabsContent>
             
+            <TabsContent value="libraries" className="mt-4">
+              <Card className="glass-panel border-border/50">
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <Library className="w-5 h-5 text-primary" />
+                    Document Libraries
+                  </CardTitle>
+                  <CardDescription>
+                    {docLibraries.length > 0
+                      ? `${docLibraries.length} document ${docLibraries.length === 1 ? "library" : "libraries"} — ${docLibraries.reduce((s, l) => s + (l.itemCount || 0), 0).toLocaleString()} total items`
+                      : "No libraries synced yet. Sync this workspace to discover document libraries."}
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  {docLibraries.length === 0 ? (
+                    <div className="text-center py-8 text-muted-foreground text-sm">
+                      <Library className="w-10 h-10 mx-auto mb-3 opacity-30" />
+                      <p>No document libraries found.</p>
+                      <p className="text-xs mt-1">Use the Sync button to discover libraries for this site.</p>
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      {docLibraries.filter(l => !l.hidden).map((lib) => {
+                        const storageStr = lib.storageUsedBytes != null
+                          ? lib.storageUsedBytes > 1073741824 ? `${(lib.storageUsedBytes / 1073741824).toFixed(1)} GB`
+                            : lib.storageUsedBytes > 1048576 ? `${(lib.storageUsedBytes / 1048576).toFixed(0)} MB`
+                            : `${(lib.storageUsedBytes / 1024).toFixed(0)} KB`
+                          : null;
+                        return (
+                          <div key={lib.id} className="flex items-center justify-between p-3 rounded-lg border border-border/40 hover:bg-muted/10 transition-colors" data-testid={`lib-row-${lib.id}`}>
+                            <div className="flex items-center gap-3">
+                              <div className="w-8 h-8 rounded-lg bg-primary/10 border border-primary/20 flex items-center justify-center shrink-0">
+                                <Library className="w-4 h-4 text-primary" />
+                              </div>
+                              <div>
+                                <div className="flex items-center gap-2">
+                                  {lib.webUrl ? (
+                                    <a href={lib.webUrl} target="_blank" rel="noopener noreferrer" className="font-medium text-sm hover:text-primary transition-colors flex items-center gap-1">
+                                      {lib.displayName}
+                                      <ExternalLink className="w-3 h-3" />
+                                    </a>
+                                  ) : (
+                                    <span className="font-medium text-sm">{lib.displayName}</span>
+                                  )}
+                                  {lib.isDefaultDocLib && <Badge variant="outline" className="text-[10px]">Default</Badge>}
+                                </div>
+                                {lib.description && <p className="text-xs text-muted-foreground mt-0.5">{lib.description}</p>}
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-4 text-xs text-muted-foreground">
+                              <span title="Items">{(lib.itemCount || 0).toLocaleString()} items</span>
+                              {storageStr && <span title="Storage">{storageStr}</span>}
+                              {lib.sensitivityLabelId && <Badge variant="secondary" className="text-[10px]">Labeled</Badge>}
+                              {lib.lastModifiedAt && <span title="Last modified">{new Date(lib.lastModifiedAt).toLocaleDateString()}</span>}
+                            </div>
+                          </div>
+                        );
+                      })}
+                      {docLibraries.some(l => l.hidden) && (
+                        <details className="mt-3">
+                          <summary className="text-xs text-muted-foreground cursor-pointer hover:text-foreground">
+                            {docLibraries.filter(l => l.hidden).length} hidden {docLibraries.filter(l => l.hidden).length === 1 ? "library" : "libraries"}
+                          </summary>
+                          <div className="space-y-2 mt-2 opacity-60">
+                            {docLibraries.filter(l => l.hidden).map((lib) => (
+                              <div key={lib.id} className="flex items-center justify-between p-2 rounded-lg border border-border/20" data-testid={`lib-row-hidden-${lib.id}`}>
+                                <div className="flex items-center gap-2">
+                                  <Library className="w-3.5 h-3.5 text-muted-foreground" />
+                                  <span className="text-xs">{lib.displayName}</span>
+                                </div>
+                                <span className="text-[10px] text-muted-foreground">{(lib.itemCount || 0)} items</span>
+                              </div>
+                            ))}
+                          </div>
+                        </details>
+                      )}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            </TabsContent>
+
             <TabsContent value="propertybag" className="mt-4">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <Card className="glass-panel border-border/50">
