@@ -1441,17 +1441,20 @@ router.post("/api/admin/tenants/:id/sync-libraries", requireRole(ZENITH_ROLES.TE
     const connection = await storage.getTenantConnection(req.params.id);
     if (!connection) return res.status(404).json({ error: "Tenant not found" });
 
-    const token = await getAppToken(connection.tenantId, connection.clientId!, connection.clientSecret!);
-    if (!token) return res.status(500).json({ error: "Failed to acquire app token" });
+    const domain = connection.domain;
+    const spoHost = domain.includes('.sharepoint.com') ? domain : `${domain.replace(/\..*$/, '')}.sharepoint.com`;
+    const token = await getDelegatedSpoTokenForOrg(spoHost, req.session?.userId, connection.organizationId);
+    if (!token) return res.status(401).json({ error: "No delegated SPO token available. Please sign out and sign back in with SSO." });
 
     const allWorkspaces = await storage.getWorkspaces(undefined, req.params.id);
     console.log(`[library-sync] Starting full library sync for ${allWorkspaces.length} workspaces in tenant ${connection.tenantName}...`);
 
     const result = { synced: 0, totalLibraries: 0, skipped: 0, errors: 0 };
-    const BATCH_SIZE = 10;
+    const BATCH_SIZE = 5;
 
     for (let i = 0; i < allWorkspaces.length; i += BATCH_SIZE) {
       const batch = allWorkspaces.slice(i, i + BATCH_SIZE);
+      console.log(`[library-sync] Processing batch ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(allWorkspaces.length / BATCH_SIZE)} (${batch.map(w => w.displayName).join(', ')})`);
       const batchResults = await Promise.allSettled(
         batch.map(async (ws) => {
           if (!ws.m365ObjectId) return { wsId: ws.id, libraries: [], skipped: 0 };
