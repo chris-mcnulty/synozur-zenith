@@ -1576,7 +1576,7 @@ export async function fetchSiteDocumentLibraries(
 ): Promise<{ libraries: SiteDocumentLibrary[]; error?: string }> {
   try {
     const listsRes = await fetch(
-      `https://graph.microsoft.com/v1.0/sites/${graphSiteId}/lists?$expand=list&$select=id,displayName,description,webUrl,lastModifiedDateTime,createdDateTime,list&$top=200`,
+      `https://graph.microsoft.com/v1.0/sites/${graphSiteId}/lists?$top=200`,
       { headers: { Authorization: `Bearer ${token}` } }
     );
 
@@ -1590,6 +1590,7 @@ export async function fetchSiteDocumentLibraries(
     const allLists: any[] = listsData.value || [];
 
     const docLibs = allLists.filter((l: any) => l.list?.template === "documentLibrary");
+    console.log(`[graph] fetchSiteDocumentLibraries ${graphSiteId}: ${docLibs.length} doc libs found. Sample:`, JSON.stringify(docLibs[0]?.list || {}).substring(0, 300));
 
     const drivesMap = new Map<string, number>();
     try {
