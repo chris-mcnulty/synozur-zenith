@@ -1672,3 +1672,157 @@ export async function fetchSiteDocumentLibraries(
     return { libraries: [], error: err.message };
   }
 }
+
+export interface LibraryContentType {
+  id: string;
+  name: string;
+  description: string | null;
+  hidden: boolean;
+  group: string | null;
+}
+
+export interface LibraryColumn {
+  id: string;
+  name: string;
+  displayName: string;
+  description: string | null;
+  type: string;
+  hidden: boolean;
+  readOnly: boolean;
+  sealed: boolean;
+  indexed: boolean;
+  required: boolean;
+  columnGroup: string | null;
+  isSyntexManaged: boolean;
+  isCustom: boolean;
+}
+
+export async function fetchLibraryDetails(
+  token: string,
+  graphSiteId: string,
+  listId: string
+): Promise<{
+  contentTypes: LibraryContentType[];
+  columns: LibraryColumn[];
+  error?: string;
+}> {
+  try {
+    const [ctRes, colRes] = await Promise.all([
+      fetch(
+        `https://graph.microsoft.com/v1.0/sites/${graphSiteId}/lists/${listId}/contentTypes?$top=100`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      ),
+      fetch(
+        `https://graph.microsoft.com/v1.0/sites/${graphSiteId}/lists/${listId}/columns?$top=200`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      ),
+    ]);
+
+    const contentTypes: LibraryContentType[] = [];
+    if (ctRes.ok) {
+      const ctData = await ctRes.json();
+      for (const ct of ctData.value || []) {
+        contentTypes.push({
+          id: ct.id,
+          name: ct.name || ct.displayName || "Unknown",
+          description: ct.description || null,
+          hidden: ct.hidden || false,
+          group: ct.group || null,
+        });
+      }
+    } else {
+      console.log(`[graph] fetchLibraryDetails contentTypes failed: ${ctRes.status} ${(await ctRes.text()).substring(0, 200)}`);
+    }
+
+    const SYSTEM_COLUMNS = new Set([
+      "ContentType", "Created", "Modified", "Author", "Editor",
+      "_ModerationStatus", "_ModerationComments", "FileLeafRef",
+      "FileDirRef", "FSObjType", "PermMask", "FileRef",
+      "File_x0020_Type", "HTML_x0020_File_x0020_Type",
+      "ItemChildCount", "FolderChildCount", "SMTotalSize",
+      "SMLastModifiedDate", "SMTotalFileStreamSize",
+      "SMTotalFileCount", "owshiddenversion", "ScopeId",
+      "UniqueId", "SyncClientId", "ProgId",
+      "_ComplianceFlags", "_ComplianceTag", "_ComplianceTagWrittenTime",
+      "_ComplianceTagUserId", "_IsRecord", "AccessPolicy",
+      "_VirusStatus", "_VirusVendorID", "_VirusInfo",
+      "AppAuthor", "AppEditor", "ComplianceAssetId",
+      "_CommentFlags", "_CommentCount",
+      "ParentUniqueId", "ParentLeafName",
+      "DocConcurrencyNumber", "BSN", "_CheckinComment",
+      "MetaInfo", "_Level", "_IsCurrentVersion",
+      "ItemType", "Restricted", "OriginatorId",
+      "NoExecute", "ContentVersion",
+      "_HasCopyDestinations", "_CopySource",
+      "CheckoutUser", "CheckedOutTitle",
+      "FileSystemObjectType",
+      "_UIVersion", "_UIVersionString",
+      "InstanceID", "Order", "GUID",
+      "WorkflowVersion", "WorkflowInstanceID",
+      "LinkFilename", "LinkFilenameNoMenu",
+      "LinkTitle", "LinkTitleNoMenu",
+      "SelectTitle", "Edit", "DocIcon",
+      "ServerUrl", "EncodedAbsUrl",
+      "BaseName", "FileSizeDisplay",
+      "PropertyBag",
+    ]);
+
+    const SYNTEX_PREFIXES = ["Syntex", "AIBuilder", "FormProcessing", "DocumentUnderstanding"];
+
+    const columns: LibraryColumn[] = [];
+    if (colRes.ok) {
+      const colData = await colRes.json();
+      for (const col of colData.value || []) {
+        const colType = col.text ? "text" :
+          col.number ? "number" :
+          col.dateTime ? "dateTime" :
+          col.choice ? "choice" :
+          col.lookup ? "lookup" :
+          col.boolean ? "boolean" :
+          col.currency ? "currency" :
+          col.personOrGroup ? "personOrGroup" :
+          col.calculated ? "calculated" :
+          col.hyperlinkOrPicture ? "hyperlinkOrPicture" :
+          col.thumbnail ? "thumbnail" :
+          col.contentApprovalStatus ? "contentApprovalStatus" :
+          col.term ? "term" :
+          col.geolocation ? "geolocation" :
+          "unknown";
+
+        const name = col.name || "";
+        const isSyntexManaged = SYNTEX_PREFIXES.some(p => name.startsWith(p)) ||
+          (col.description || "").toLowerCase().includes("syntex");
+        const isSystem = SYSTEM_COLUMNS.has(name) || name.startsWith("ows_") || name.startsWith("_");
+        const isCustom = !isSystem && !col.readOnly && !col.sealed &&
+          col.columnGroup !== "Core Document Columns" &&
+          col.columnGroup !== "Core Task and Issue Columns" &&
+          col.columnGroup !== "Base Columns" &&
+          col.columnGroup !== "_Hidden";
+
+        columns.push({
+          id: col.id,
+          name,
+          displayName: col.displayName || name,
+          description: col.description || null,
+          type: colType,
+          hidden: col.hidden || false,
+          readOnly: col.readOnly || false,
+          sealed: col.sealed || false,
+          indexed: col.indexed || false,
+          required: col.required || false,
+          columnGroup: col.columnGroup || null,
+          isSyntexManaged,
+          isCustom,
+        });
+      }
+    } else {
+      console.log(`[graph] fetchLibraryDetails columns failed: ${colRes.status} ${(await colRes.text()).substring(0, 200)}`);
+    }
+
+    console.log(`[graph] fetchLibraryDetails ${listId}: ${contentTypes.length} content types, ${columns.length} columns (${columns.filter(c => c.isCustom).length} custom, ${columns.filter(c => c.isSyntexManaged).length} Syntex)`);
+    return { contentTypes, columns };
+  } catch (err: any) {
+    console.error(`[graph] fetchLibraryDetails error:`, err.message);
+    return { contentTypes: [], columns: [], error: err.message };
+  }
+}

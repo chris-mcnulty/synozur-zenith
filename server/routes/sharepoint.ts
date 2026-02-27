@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { storage } from "../storage";
 import { insertWorkspaceSchema, insertProvisioningRequestSchema, type ServicePlanTier, ZENITH_ROLES } from "@shared/schema";
-import { fetchSharePointSites, fetchSiteUsageReport, fetchSiteDriveOwner, fetchSiteAnalytics, fetchSiteGroupOwners, fetchSiteCollectionAdmins, getAppToken, writeSitePropertyBag, fetchSitePropertyBag, fetchSensitivityLabels, fetchRetentionLabels, fetchHubSites, fetchSiteHubAssociation, fetchHubSitesViaSearch, applySensitivityLabelToSite, removeSensitivityLabelFromSite, joinHubSite, leaveHubSite, fetchSiteLockState, fetchSiteArchiveStatus, batchToggleNoScript, fetchSiteDocumentLibraries, enumerateSiteDocumentLibraries } from "../services/graph";
+import { fetchSharePointSites, fetchSiteUsageReport, fetchSiteDriveOwner, fetchSiteAnalytics, fetchSiteGroupOwners, fetchSiteCollectionAdmins, getAppToken, writeSitePropertyBag, fetchSitePropertyBag, fetchSensitivityLabels, fetchRetentionLabels, fetchHubSites, fetchSiteHubAssociation, fetchHubSitesViaSearch, applySensitivityLabelToSite, removeSensitivityLabelFromSite, joinHubSite, leaveHubSite, fetchSiteLockState, fetchSiteArchiveStatus, batchToggleNoScript, fetchSiteDocumentLibraries, enumerateSiteDocumentLibraries, fetchLibraryDetails } from "../services/graph";
 import { getPlanFeatures } from "../services/feature-gate";
 import { refreshDelegatedToken, getDelegatedSpoToken } from "../routes-entra";
 import { requireRole, type AuthenticatedRequest } from "../middleware/rbac";
@@ -1526,6 +1526,43 @@ router.post("/api/admin/tenants/:id/sync-libraries", requireRole(ZENITH_ROLES.TE
   } catch (err: any) {
     console.error(`[library-sync] Error: ${err.message}`);
     res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+router.get("/api/admin/libraries/:libraryId/details", requireRole(ZENITH_ROLES.VIEWER), async (req: AuthenticatedRequest, res) => {
+  try {
+    const lib = await storage.getDocumentLibrary(req.params.libraryId);
+    if (!lib) return res.status(404).json({ error: "Library not found" });
+
+    const workspace = await storage.getWorkspace(lib.workspaceId);
+    if (!workspace?.tenantConnectionId) return res.status(400).json({ error: "No tenant connection for this workspace" });
+
+    const connection = await storage.getTenantConnection(workspace.tenantConnectionId);
+    if (!connection) return res.status(400).json({ error: "Tenant connection not found" });
+
+    const clientId = connection.clientId;
+    const clientSecret = connection.clientSecret;
+    if (!clientId || !clientSecret) return res.status(400).json({ error: "Tenant connection missing credentials" });
+
+    const token = await getAppToken(connection.tenantId, clientId, clientSecret);
+    if (!token) return res.status(500).json({ error: "Failed to acquire Graph token" });
+
+    const graphSiteId = workspace.m365ObjectId;
+    if (!graphSiteId) return res.status(400).json({ error: "Workspace has no M365 object ID" });
+
+    const details = await fetchLibraryDetails(token, graphSiteId, lib.m365ListId);
+    res.json({
+      library: lib,
+      workspaceName: workspace.displayName,
+      workspaceType: workspace.workspaceType,
+      siteUrl: workspace.siteUrl,
+      contentTypes: details.contentTypes,
+      columns: details.columns,
+      error: details.error,
+    });
+  } catch (err: any) {
+    console.error(`[library-details] Error:`, err.message);
+    res.status(500).json({ error: err.message });
   }
 });
 
