@@ -1619,18 +1619,18 @@ export async function fetchSiteDocumentLibraries(
               if (itemsData['@odata.count'] != null) {
                 driveItemCounts.set(drive.name, itemsData['@odata.count']);
               } else {
-                // Count by checking if there are more pages and counting items
-                // For now, use a search-based count via /items endpoint
-                const countRes = await fetch(
-                  `https://graph.microsoft.com/v1.0/drives/${drive.id}/root/search(q='')?\$select=id&$top=5000`,
-                  { headers: { Authorization: `Bearer ${token}` } }
-                );
-                if (countRes.ok) {
+                // Page through /drives/{id}/root/search(q='') to count all items recursively
+                let totalCount = 0;
+                let searchUrl: string | null = `https://graph.microsoft.com/v1.0/drives/${drive.id}/root/search(q='')?$select=id&$top=999`;
+                while (searchUrl) {
+                  const countRes = await fetch(searchUrl, { headers: { Authorization: `Bearer ${token}` } });
+                  if (!countRes.ok) break;
                   const countData = await countRes.json();
-                  const items = countData.value || [];
-                  driveItemCounts.set(drive.name, items.length);
-                  console.log(`[graph] drive "${drive.name}" search count: ${items.length} items`);
+                  totalCount += (countData.value || []).length;
+                  searchUrl = countData['@odata.nextLink'] || null;
                 }
+                driveItemCounts.set(drive.name, totalCount);
+                console.log(`[graph] drive "${drive.name}" search count: ${totalCount} items`);
               }
             }
           } catch {}
