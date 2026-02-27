@@ -1592,36 +1592,25 @@ export async function fetchSiteDocumentLibraries(
     const docLibs = allLists.filter((l: any) => l.list?.template === "documentLibrary");
     console.log(`[graph] fetchSiteDocumentLibraries ${graphSiteId}: ${docLibs.length} doc libs. Raw list facet sample:`, JSON.stringify(docLibs[0] || {}).substring(0, 500));
 
-    const drivesMap = new Map<string, { used: number; itemCount: number }>();
+    // Fetch drives for per-library storage and item counts
+    // Graph drives API: quota.used is per-drive (each doc lib may have its own drive)
+    // Also get root folder childCount as fallback for item counts
+    const drivesInfo = new Map<string, { used: number | null; itemCount: number }>();
     try {
       const drivesRes = await fetch(
-        `https://graph.microsoft.com/v1.0/sites/${graphSiteId}/drives?$select=id,name,quota,driveType`,
+        `https://graph.microsoft.com/v1.0/sites/${graphSiteId}/drives?$select=id,name,quota`,
         { headers: { Authorization: `Bearer ${token}` } }
       );
       if (drivesRes.ok) {
         const drivesData = await drivesRes.json();
-        console.log(`[graph] drives for ${graphSiteId}:`, JSON.stringify(drivesData.value?.map((d: any) => ({ name: d.name, itemCount: d.quota?.total, used: d.quota?.used }))).substring(0, 500));
-        for (const drive of drivesData.value || []) {
-          drivesMap.set(drive.name, {
-            used: drive.quota?.used ?? 0,
-            itemCount: 0,
-          });
-        }
-      }
-    } catch {
-    }
-
-    // Fetch item counts per drive via /drives/{id}/root (children count) 
-    // The list facet may not always include itemCount, so also try drives root
-    const driveItemCounts = new Map<string, number>();
-    try {
-      const drivesRes2 = await fetch(
-        `https://graph.microsoft.com/v1.0/sites/${graphSiteId}/drives?$select=id,name`,
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
-      if (drivesRes2.ok) {
-        const drivesData2 = await drivesRes2.json();
-        for (const drive of drivesData2.value || []) {
+        const drives = drivesData.value || [];
+        const isSingleDrive = drives.length === 1;
+        
+        for (const drive of drives) {
+          // If there's only one drive, quota.used is the site total — don't attribute to individual libraries
+          const storageUsed = isSingleDrive ? null : (drive.quota?.used ?? null);
+          
+          let childCount = 0;
           try {
             const rootRes = await fetch(
               `https://graph.microsoft.com/v1.0/drives/${drive.id}/root?$select=id,folder`,
@@ -1629,12 +1618,14 @@ export async function fetchSiteDocumentLibraries(
             );
             if (rootRes.ok) {
               const rootData = await rootRes.json();
-              if (rootData.folder?.childCount != null) {
-                driveItemCounts.set(drive.name, rootData.folder.childCount);
-              }
+              childCount = rootData.folder?.childCount ?? 0;
             }
           } catch {}
+          
+          drivesInfo.set(drive.name, { used: storageUsed, itemCount: childCount });
         }
+        console.log(`[graph] drives for ${graphSiteId}: ${drives.length} drives.`, 
+          [...drivesInfo.entries()].map(([n, d]) => `${n}: ${d.itemCount} items, ${d.used ?? 'n/a'} bytes`).join('; '));
       }
     } catch {}
 
@@ -1642,8 +1633,8 @@ export async function fetchSiteDocumentLibraries(
 
     const libraries: SiteDocumentLibrary[] = docLibs.map((lib: any) => {
       const listItemCount = lib.list?.itemCount;
-      const driveRootCount = driveItemCounts.get(lib.displayName);
-      const finalItemCount = (listItemCount != null && listItemCount > 0) ? listItemCount : (driveRootCount ?? 0);
+      const driveInfo = drivesInfo.get(lib.displayName);
+      const finalItemCount = (listItemCount != null && listItemCount > 0) ? listItemCount : (driveInfo?.itemCount ?? 0);
       
       return {
         listId: lib.id,
@@ -1657,7 +1648,7 @@ export async function fetchSiteDocumentLibraries(
         hidden: lib.list?.hidden || false,
         lastModifiedAt: lib.lastModifiedDateTime || null,
         createdAt: lib.createdDateTime || null,
-        storageUsedBytes: drivesMap.get(lib.displayName)?.used ?? null,
+        storageUsedBytes: driveInfo?.used ?? null,
       };
     });
 
