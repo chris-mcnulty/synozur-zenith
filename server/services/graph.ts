@@ -1512,3 +1512,80 @@ export function clearTokenCache(tenantId?: string, clientId?: string) {
     tokenCache.clear();
   }
 }
+
+export interface SiteDocumentLibrary {
+  listId: string;
+  displayName: string;
+  description: string | null;
+  webUrl: string | null;
+  template: string | null;
+  itemCount: number;
+  sensitivityLabelId: string | null;
+  isDefaultDocLib: boolean;
+  hidden: boolean;
+  lastModifiedAt: string | null;
+  createdAt: string | null;
+  storageUsedBytes: number | null;
+}
+
+export async function fetchSiteDocumentLibraries(
+  token: string,
+  graphSiteId: string
+): Promise<{ libraries: SiteDocumentLibrary[]; error?: string }> {
+  try {
+    const listsRes = await fetch(
+      `https://graph.microsoft.com/v1.0/sites/${graphSiteId}/lists?$expand=list&$select=id,displayName,description,webUrl,lastModifiedDateTime,createdDateTime,list&$top=200`,
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+
+    if (!listsRes.ok) {
+      const errText = await listsRes.text();
+      console.log(`[graph] fetchSiteDocumentLibraries failed for ${graphSiteId}: ${listsRes.status} ${errText.substring(0, 200)}`);
+      return { libraries: [], error: `Lists API returned ${listsRes.status}` };
+    }
+
+    const listsData = await listsRes.json();
+    const allLists: any[] = listsData.value || [];
+
+    const docLibs = allLists.filter((l: any) => l.list?.template === "documentLibrary");
+
+    const drivesMap = new Map<string, number>();
+    try {
+      const drivesRes = await fetch(
+        `https://graph.microsoft.com/v1.0/sites/${graphSiteId}/drives?$select=id,name,quota`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      if (drivesRes.ok) {
+        const drivesData = await drivesRes.json();
+        for (const drive of drivesData.value || []) {
+          if (drive.quota?.used != null) {
+            drivesMap.set(drive.name, drive.quota.used);
+          }
+        }
+      }
+    } catch {
+    }
+
+    const DEFAULT_LIB_NAMES = ["documents", "shared documents", "site assets", "style library", "form templates"];
+
+    const libraries: SiteDocumentLibrary[] = docLibs.map((lib: any) => ({
+      listId: lib.id,
+      displayName: lib.displayName || "Untitled",
+      description: lib.description || null,
+      webUrl: lib.webUrl || null,
+      template: lib.list?.template || "documentLibrary",
+      itemCount: lib.list?.contentTypesEnabled ? (lib.list?.itemCount ?? 0) : 0,
+      sensitivityLabelId: lib.sensitivityLabel?.labelId || null,
+      isDefaultDocLib: DEFAULT_LIB_NAMES.includes((lib.displayName || "").toLowerCase()),
+      hidden: lib.list?.hidden || false,
+      lastModifiedAt: lib.lastModifiedDateTime || null,
+      createdAt: lib.createdDateTime || null,
+      storageUsedBytes: drivesMap.get(lib.displayName) ?? null,
+    }));
+
+    return { libraries };
+  } catch (err: any) {
+    console.error(`[graph] fetchSiteDocumentLibraries error for ${graphSiteId}:`, err.message);
+    return { libraries: [], error: err.message };
+  }
+}
