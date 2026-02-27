@@ -1528,6 +1528,48 @@ export interface SiteDocumentLibrary {
   storageUsedBytes: number | null;
 }
 
+export interface SiteDocumentLibrarySummary {
+  listId: string;
+  displayName: string;
+  itemCount: number;
+  lastModifiedAt: string | null;
+  hidden: boolean;
+  template: string | null;
+}
+
+export async function enumerateSiteDocumentLibraries(
+  token: string,
+  graphSiteId: string
+): Promise<{ libraries: SiteDocumentLibrarySummary[]; error?: string }> {
+  try {
+    const listsRes = await fetch(
+      `https://graph.microsoft.com/v1.0/sites/${graphSiteId}/lists?$select=id,displayName,lastModifiedDateTime,list&$top=200`,
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+
+    if (!listsRes.ok) {
+      return { libraries: [], error: `Lists API returned ${listsRes.status}` };
+    }
+
+    const listsData = await listsRes.json();
+    const allLists: any[] = listsData.value || [];
+    const docLibs = allLists.filter((l: any) => l.list?.template === "documentLibrary");
+
+    const libraries: SiteDocumentLibrarySummary[] = docLibs.map((lib: any) => ({
+      listId: lib.id,
+      displayName: lib.displayName || "Untitled",
+      itemCount: lib.list?.itemCount ?? 0,
+      lastModifiedAt: lib.lastModifiedDateTime || null,
+      hidden: lib.list?.hidden || false,
+      template: lib.list?.template || "documentLibrary",
+    }));
+
+    return { libraries };
+  } catch (err: any) {
+    return { libraries: [], error: err.message };
+  }
+}
+
 export async function fetchSiteDocumentLibraries(
   token: string,
   graphSiteId: string

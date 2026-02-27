@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { storage } from "../storage";
 import { insertWorkspaceSchema, insertProvisioningRequestSchema, type ServicePlanTier, ZENITH_ROLES } from "@shared/schema";
-import { fetchSharePointSites, fetchSiteUsageReport, fetchSiteDriveOwner, fetchSiteAnalytics, fetchSiteGroupOwners, fetchSiteCollectionAdmins, getAppToken, writeSitePropertyBag, fetchSitePropertyBag, fetchSensitivityLabels, fetchRetentionLabels, fetchHubSites, fetchSiteHubAssociation, fetchHubSitesViaSearch, applySensitivityLabelToSite, removeSensitivityLabelFromSite, joinHubSite, leaveHubSite, fetchSiteLockState, fetchSiteArchiveStatus, batchToggleNoScript, fetchSiteDocumentLibraries } from "../services/graph";
+import { fetchSharePointSites, fetchSiteUsageReport, fetchSiteDriveOwner, fetchSiteAnalytics, fetchSiteGroupOwners, fetchSiteCollectionAdmins, getAppToken, writeSitePropertyBag, fetchSitePropertyBag, fetchSensitivityLabels, fetchRetentionLabels, fetchHubSites, fetchSiteHubAssociation, fetchHubSitesViaSearch, applySensitivityLabelToSite, removeSensitivityLabelFromSite, joinHubSite, leaveHubSite, fetchSiteLockState, fetchSiteArchiveStatus, batchToggleNoScript, fetchSiteDocumentLibraries, enumerateSiteDocumentLibraries } from "../services/graph";
 import { getPlanFeatures } from "../services/feature-gate";
 import { refreshDelegatedToken, getDelegatedSpoToken } from "../routes-entra";
 import { requireRole, type AuthenticatedRequest } from "../middleware/rbac";
@@ -1307,50 +1307,57 @@ router.post("/api/admin/tenants/:id/sync", requireRole(ZENITH_ROLES.TENANT_ADMIN
       console.error(`[policy-eval] Error during post-sync evaluation: ${evalErr.message}`);
     }
 
-    let librarySyncResult: { synced: number; totalLibraries: number; error?: string } = { synced: 0, totalLibraries: 0 };
+    let librarySyncResult: { enumerated: number; totalLibraries: number; skipped: number; error?: string } = { enumerated: 0, totalLibraries: 0, skipped: 0 };
     if (token) {
       try {
-        console.log(`[library-sync] Starting document library sync for ${upsertedCount} workspaces...`);
+        console.log(`[library-enum] Starting lightweight library enumeration for ${upsertedCount} workspaces...`);
         const allSyncedWorkspaces = await storage.getWorkspaces(undefined, req.params.id);
-        const LIBRARY_BATCH_SIZE = 5;
+        const LIBRARY_BATCH_SIZE = 10;
         for (let i = 0; i < allSyncedWorkspaces.length; i += LIBRARY_BATCH_SIZE) {
           const batch = allSyncedWorkspaces.slice(i, i + LIBRARY_BATCH_SIZE);
           const results = await Promise.allSettled(
             batch.map(async (ws) => {
               if (!ws.m365ObjectId) return { wsId: ws.id, libraries: [] };
-              const result = await fetchSiteDocumentLibraries(token!, ws.m365ObjectId);
+              const result = await enumerateSiteDocumentLibraries(token!, ws.m365ObjectId);
               return { wsId: ws.id, libraries: result.libraries, error: result.error };
             })
           );
           for (const r of results) {
             if (r.status === 'fulfilled' && r.value.libraries.length > 0) {
+              const existingLibs = await storage.getDocumentLibraries(r.value.wsId);
+              const existingMap = new Map(existingLibs.map(l => [l.m365ListId, l]));
               for (const lib of r.value.libraries) {
+                const existing = existingMap.get(lib.listId);
+                if (existing && existing.lastModifiedAt === lib.lastModifiedAt) {
+                  librarySyncResult.skipped++;
+                  continue;
+                }
                 await storage.upsertDocumentLibrary({
                   workspaceId: r.value.wsId,
                   tenantConnectionId: req.params.id,
                   m365ListId: lib.listId,
                   displayName: lib.displayName,
-                  description: lib.description,
-                  webUrl: lib.webUrl,
+                  description: null,
+                  webUrl: null,
                   template: lib.template,
                   itemCount: lib.itemCount,
-                  storageUsedBytes: lib.storageUsedBytes,
-                  sensitivityLabelId: lib.sensitivityLabelId,
-                  isDefaultDocLib: lib.isDefaultDocLib,
+                  storageUsedBytes: null,
+                  sensitivityLabelId: null,
+                  isDefaultDocLib: false,
                   hidden: lib.hidden,
                   lastModifiedAt: lib.lastModifiedAt,
-                  createdGraphAt: lib.createdAt,
+                  createdGraphAt: null,
                   lastSyncAt: new Date(),
                 });
                 librarySyncResult.totalLibraries++;
               }
-              librarySyncResult.synced++;
+              librarySyncResult.enumerated++;
             }
           }
         }
-        console.log(`[library-sync] Synced ${librarySyncResult.totalLibraries} libraries across ${librarySyncResult.synced} workspaces`);
+        console.log(`[library-enum] Enumerated ${librarySyncResult.totalLibraries} libraries across ${librarySyncResult.enumerated} workspaces (${librarySyncResult.skipped} unchanged, skipped)`);
       } catch (e: any) {
-        console.error(`[library-sync] Error: ${e.message}`);
+        console.error(`[library-enum] Error: ${e.message}`);
         librarySyncResult.error = e.message;
       }
     }
@@ -1384,6 +1391,93 @@ router.post("/api/admin/tenants/:id/sync", requireRole(ZENITH_ROLES.TENANT_ADMIN
       lastSyncAt: new Date(),
       lastSyncStatus: `ERROR: ${err.message}`,
     });
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+router.post("/api/admin/tenants/:id/sync-libraries", requireRole(ZENITH_ROLES.TENANT_ADMIN), async (req: AuthenticatedRequest, res) => {
+  try {
+    const connection = await storage.getTenantConnection(req.params.id);
+    if (!connection) return res.status(404).json({ error: "Tenant not found" });
+
+    const token = await getAppToken(connection.tenantId, connection.clientId!, connection.clientSecret!);
+    if (!token) return res.status(500).json({ error: "Failed to acquire app token" });
+
+    const allWorkspaces = await storage.getWorkspaces(undefined, req.params.id);
+    console.log(`[library-sync] Starting full library sync for ${allWorkspaces.length} workspaces in tenant ${connection.tenantName}...`);
+
+    const result = { synced: 0, totalLibraries: 0, skipped: 0, errors: 0 };
+    const BATCH_SIZE = 10;
+
+    for (let i = 0; i < allWorkspaces.length; i += BATCH_SIZE) {
+      const batch = allWorkspaces.slice(i, i + BATCH_SIZE);
+      const batchResults = await Promise.allSettled(
+        batch.map(async (ws) => {
+          if (!ws.m365ObjectId) return { wsId: ws.id, libraries: [], skipped: 0 };
+          const libResult = await fetchSiteDocumentLibraries(token, ws.m365ObjectId);
+          if (libResult.error) return { wsId: ws.id, libraries: [], error: libResult.error, skipped: 0 };
+
+          const existingLibs = await storage.getDocumentLibraries(ws.id);
+          const existingMap = new Map(existingLibs.map(l => [l.m365ListId, l]));
+          let upserted = 0;
+          let skippedCount = 0;
+
+          for (const lib of libResult.libraries) {
+            const existing = existingMap.get(lib.listId);
+            if (existing && existing.lastModifiedAt === lib.lastModifiedAt) {
+              skippedCount++;
+              continue;
+            }
+            await storage.upsertDocumentLibrary({
+              workspaceId: ws.id,
+              tenantConnectionId: req.params.id,
+              m365ListId: lib.listId,
+              displayName: lib.displayName,
+              description: lib.description,
+              webUrl: lib.webUrl,
+              template: lib.template,
+              itemCount: lib.itemCount,
+              storageUsedBytes: lib.storageUsedBytes,
+              sensitivityLabelId: lib.sensitivityLabelId,
+              isDefaultDocLib: lib.isDefaultDocLib,
+              hidden: lib.hidden,
+              lastModifiedAt: lib.lastModifiedAt,
+              createdGraphAt: lib.createdAt,
+              lastSyncAt: new Date(),
+            });
+            upserted++;
+          }
+          return { wsId: ws.id, libraries: libResult.libraries, upserted, skipped: skippedCount };
+        })
+      );
+
+      for (const r of batchResults) {
+        if (r.status === 'fulfilled') {
+          if ('error' in r.value && r.value.error) {
+            result.errors++;
+          } else {
+            result.synced++;
+            result.totalLibraries += (r.value as any).upserted || 0;
+            result.skipped += r.value.skipped;
+          }
+        } else {
+          result.errors++;
+        }
+      }
+    }
+
+    console.log(`[library-sync] Complete: ${result.totalLibraries} libraries synced across ${result.synced} workspaces (${result.skipped} unchanged, ${result.errors} errors)`);
+
+    res.json({
+      success: true,
+      workspacesProcessed: allWorkspaces.length,
+      workspacesSynced: result.synced,
+      librariesSynced: result.totalLibraries,
+      librariesSkipped: result.skipped,
+      errors: result.errors,
+    });
+  } catch (err: any) {
+    console.error(`[library-sync] Error: ${err.message}`);
     res.status(500).json({ success: false, error: err.message });
   }
 });
