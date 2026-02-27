@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { storage } from "../storage";
 import { insertWorkspaceSchema, insertProvisioningRequestSchema, type ServicePlanTier, ZENITH_ROLES } from "@shared/schema";
-import { fetchSharePointSites, fetchSiteUsageReport, fetchSiteDriveOwner, fetchSiteAnalytics, fetchSiteGroupOwners, fetchSiteCollectionAdmins, getAppToken, writeSitePropertyBag, fetchSitePropertyBag, fetchSensitivityLabels, fetchRetentionLabels, fetchHubSites, fetchSiteHubAssociation, fetchHubSitesViaSearch, applySensitivityLabelToSite, removeSensitivityLabelFromSite, joinHubSite, leaveHubSite, fetchSiteLockState, fetchSiteArchiveStatus, batchToggleNoScript } from "../services/graph";
+import { fetchSharePointSites, fetchSiteUsageReport, fetchSiteDriveOwner, fetchSiteAnalytics, fetchSiteGroupOwners, fetchSiteCollectionAdmins, getAppToken, writeSitePropertyBag, fetchSitePropertyBag, fetchSensitivityLabels, fetchRetentionLabels, fetchHubSites, fetchSiteHubAssociation, fetchHubSitesViaSearch, applySensitivityLabelToSite, removeSensitivityLabelFromSite, joinHubSite, leaveHubSite, fetchSiteLockState, fetchSiteArchiveStatus, batchToggleNoScript, fetchSiteDocumentLibraries } from "../services/graph";
 import { getPlanFeatures } from "../services/feature-gate";
 import { refreshDelegatedToken, getDelegatedSpoToken } from "../routes-entra";
 import { requireRole, type AuthenticatedRequest } from "../middleware/rbac";
@@ -457,8 +457,39 @@ router.post("/api/workspaces/:id/sync", requireRole(ZENITH_ROLES.OPERATOR, ZENIT
       console.error(`[single-sync] Policy evaluation error: ${evalErr.message}`);
     }
 
+    let librarySyncCount = 0;
+    if (token && workspace.m365ObjectId) {
+      try {
+        const libResult = await fetchSiteDocumentLibraries(token, workspace.m365ObjectId);
+        for (const lib of libResult.libraries) {
+          await storage.upsertDocumentLibrary({
+            workspaceId: workspace.id,
+            tenantConnectionId: workspace.tenantConnectionId!,
+            m365ListId: lib.listId,
+            displayName: lib.displayName,
+            description: lib.description,
+            webUrl: lib.webUrl,
+            template: lib.template,
+            itemCount: lib.itemCount,
+            storageUsedBytes: lib.storageUsedBytes,
+            sensitivityLabelId: lib.sensitivityLabelId,
+            isDefaultDocLib: lib.isDefaultDocLib,
+            hidden: lib.hidden,
+            lastModifiedAt: lib.lastModifiedAt,
+            createdGraphAt: lib.createdAt,
+            lastSyncAt: new Date(),
+          });
+          librarySyncCount++;
+        }
+        if (libResult.error) warnings.push(`Document library sync partial: ${libResult.error}`);
+        console.log(`[single-sync] Synced ${librarySyncCount} document libraries for ${workspace.displayName}`);
+      } catch (libErr: any) {
+        warnings.push(`Document library sync failed: ${libErr.message}`);
+      }
+    }
+
     const finalWorkspace = await storage.getWorkspace(workspace.id);
-    res.json({ success: true, workspace: finalWorkspace, warnings: warnings.length > 0 ? warnings : undefined });
+    res.json({ success: true, workspace: finalWorkspace, librariesSynced: librarySyncCount, warnings: warnings.length > 0 ? warnings : undefined });
   } catch (err: any) {
     console.error("[single-site-sync] Error:", err);
     res.status(500).json({ success: false, error: err.message || "Sync failed" });
@@ -1276,6 +1307,54 @@ router.post("/api/admin/tenants/:id/sync", requireRole(ZENITH_ROLES.TENANT_ADMIN
       console.error(`[policy-eval] Error during post-sync evaluation: ${evalErr.message}`);
     }
 
+    let librarySyncResult: { synced: number; totalLibraries: number; error?: string } = { synced: 0, totalLibraries: 0 };
+    if (token) {
+      try {
+        console.log(`[library-sync] Starting document library sync for ${upsertedCount} workspaces...`);
+        const allSyncedWorkspaces = await storage.getWorkspaces(undefined, req.params.id);
+        const LIBRARY_BATCH_SIZE = 5;
+        for (let i = 0; i < allSyncedWorkspaces.length; i += LIBRARY_BATCH_SIZE) {
+          const batch = allSyncedWorkspaces.slice(i, i + LIBRARY_BATCH_SIZE);
+          const results = await Promise.allSettled(
+            batch.map(async (ws) => {
+              if (!ws.m365ObjectId) return { wsId: ws.id, libraries: [] };
+              const result = await fetchSiteDocumentLibraries(token!, ws.m365ObjectId);
+              return { wsId: ws.id, libraries: result.libraries, error: result.error };
+            })
+          );
+          for (const r of results) {
+            if (r.status === 'fulfilled' && r.value.libraries.length > 0) {
+              for (const lib of r.value.libraries) {
+                await storage.upsertDocumentLibrary({
+                  workspaceId: r.value.wsId,
+                  tenantConnectionId: req.params.id,
+                  m365ListId: lib.listId,
+                  displayName: lib.displayName,
+                  description: lib.description,
+                  webUrl: lib.webUrl,
+                  template: lib.template,
+                  itemCount: lib.itemCount,
+                  storageUsedBytes: lib.storageUsedBytes,
+                  sensitivityLabelId: lib.sensitivityLabelId,
+                  isDefaultDocLib: lib.isDefaultDocLib,
+                  hidden: lib.hidden,
+                  lastModifiedAt: lib.lastModifiedAt,
+                  createdGraphAt: lib.createdAt,
+                  lastSyncAt: new Date(),
+                });
+                librarySyncResult.totalLibraries++;
+              }
+              librarySyncResult.synced++;
+            }
+          }
+        }
+        console.log(`[library-sync] Synced ${librarySyncResult.totalLibraries} libraries across ${librarySyncResult.synced} workspaces`);
+      } catch (e: any) {
+        console.error(`[library-sync] Error: ${e.message}`);
+        librarySyncResult.error = e.message;
+      }
+    }
+
     await storage.updateTenantConnection(req.params.id, {
       lastSyncAt: new Date(),
       lastSyncStatus: permissionWarnings.some(w => w.severity === "error") ? "SUCCESS_WITH_ERRORS" : permissionWarnings.length > 0 ? "SUCCESS_WITH_WARNINGS" : "SUCCESS",
@@ -1296,6 +1375,7 @@ router.post("/api/admin/tenants/:id/sync", requireRole(ZENITH_ROLES.TENANT_ADMIN
       sensitivityLabels: labelSyncResult,
       retentionLabels: retentionSyncResult,
       hubSites: hubSyncResult,
+      documentLibraries: librarySyncResult,
       policyEvaluation: policyEvalCount > 0 ? { evaluated: policyEvalCount } : undefined,
       permissionWarnings: permissionWarnings.length > 0 ? permissionWarnings : undefined,
     });
