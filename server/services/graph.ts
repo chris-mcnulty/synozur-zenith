@@ -1590,42 +1590,78 @@ export async function fetchSiteDocumentLibraries(
     const allLists: any[] = listsData.value || [];
 
     const docLibs = allLists.filter((l: any) => l.list?.template === "documentLibrary");
-    console.log(`[graph] fetchSiteDocumentLibraries ${graphSiteId}: ${docLibs.length} doc libs found. Sample:`, JSON.stringify(docLibs[0]?.list || {}).substring(0, 300));
+    console.log(`[graph] fetchSiteDocumentLibraries ${graphSiteId}: ${docLibs.length} doc libs. Raw list facet sample:`, JSON.stringify(docLibs[0] || {}).substring(0, 500));
 
-    const drivesMap = new Map<string, number>();
+    const drivesMap = new Map<string, { used: number; itemCount: number }>();
     try {
       const drivesRes = await fetch(
-        `https://graph.microsoft.com/v1.0/sites/${graphSiteId}/drives?$select=id,name,quota`,
+        `https://graph.microsoft.com/v1.0/sites/${graphSiteId}/drives?$select=id,name,quota,driveType`,
         { headers: { Authorization: `Bearer ${token}` } }
       );
       if (drivesRes.ok) {
         const drivesData = await drivesRes.json();
+        console.log(`[graph] drives for ${graphSiteId}:`, JSON.stringify(drivesData.value?.map((d: any) => ({ name: d.name, itemCount: d.quota?.total, used: d.quota?.used }))).substring(0, 500));
         for (const drive of drivesData.value || []) {
-          if (drive.quota?.used != null) {
-            drivesMap.set(drive.name, drive.quota.used);
-          }
+          drivesMap.set(drive.name, {
+            used: drive.quota?.used ?? 0,
+            itemCount: 0,
+          });
         }
       }
     } catch {
     }
 
+    // Fetch item counts per drive via /drives/{id}/root (children count) 
+    // The list facet may not always include itemCount, so also try drives root
+    const driveItemCounts = new Map<string, number>();
+    try {
+      const drivesRes2 = await fetch(
+        `https://graph.microsoft.com/v1.0/sites/${graphSiteId}/drives?$select=id,name`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      if (drivesRes2.ok) {
+        const drivesData2 = await drivesRes2.json();
+        for (const drive of drivesData2.value || []) {
+          try {
+            const rootRes = await fetch(
+              `https://graph.microsoft.com/v1.0/drives/${drive.id}/root?$select=id,folder`,
+              { headers: { Authorization: `Bearer ${token}` } }
+            );
+            if (rootRes.ok) {
+              const rootData = await rootRes.json();
+              if (rootData.folder?.childCount != null) {
+                driveItemCounts.set(drive.name, rootData.folder.childCount);
+              }
+            }
+          } catch {}
+        }
+      }
+    } catch {}
+
     const DEFAULT_LIB_NAMES = ["documents", "shared documents", "site assets", "style library", "form templates"];
 
-    const libraries: SiteDocumentLibrary[] = docLibs.map((lib: any) => ({
-      listId: lib.id,
-      displayName: lib.displayName || "Untitled",
-      description: lib.description || null,
-      webUrl: lib.webUrl || null,
-      template: lib.list?.template || "documentLibrary",
-      itemCount: lib.list?.itemCount ?? 0,
-      sensitivityLabelId: lib.sensitivityLabel?.labelId || null,
-      isDefaultDocLib: DEFAULT_LIB_NAMES.includes((lib.displayName || "").toLowerCase()),
-      hidden: lib.list?.hidden || false,
-      lastModifiedAt: lib.lastModifiedDateTime || null,
-      createdAt: lib.createdDateTime || null,
-      storageUsedBytes: drivesMap.get(lib.displayName) ?? null,
-    }));
+    const libraries: SiteDocumentLibrary[] = docLibs.map((lib: any) => {
+      const listItemCount = lib.list?.itemCount;
+      const driveRootCount = driveItemCounts.get(lib.displayName);
+      const finalItemCount = (listItemCount != null && listItemCount > 0) ? listItemCount : (driveRootCount ?? 0);
+      
+      return {
+        listId: lib.id,
+        displayName: lib.displayName || "Untitled",
+        description: lib.description || null,
+        webUrl: lib.webUrl || null,
+        template: lib.list?.template || "documentLibrary",
+        itemCount: finalItemCount,
+        sensitivityLabelId: lib.sensitivityLabel?.labelId || null,
+        isDefaultDocLib: DEFAULT_LIB_NAMES.includes((lib.displayName || "").toLowerCase()),
+        hidden: lib.list?.hidden || false,
+        lastModifiedAt: lib.lastModifiedDateTime || null,
+        createdAt: lib.createdDateTime || null,
+        storageUsedBytes: drivesMap.get(lib.displayName)?.used ?? null,
+      };
+    });
 
+    console.log(`[graph] fetchSiteDocumentLibraries result:`, libraries.map(l => `${l.displayName}: ${l.itemCount} items`).join(', '));
     return { libraries };
   } catch (err: any) {
     console.error(`[graph] fetchSiteDocumentLibraries error for ${graphSiteId}:`, err.message);
