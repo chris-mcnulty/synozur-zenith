@@ -1616,7 +1616,7 @@ export async function fetchSiteDocumentLibraries(
       description: lib.description || null,
       webUrl: lib.webUrl || null,
       template: lib.list?.template || "documentLibrary",
-      itemCount: lib.list?.contentTypesEnabled ? (lib.list?.itemCount ?? 0) : 0,
+      itemCount: lib.list?.itemCount ?? 0,
       sensitivityLabelId: lib.sensitivityLabel?.labelId || null,
       isDefaultDocLib: DEFAULT_LIB_NAMES.includes((lib.displayName || "").toLowerCase()),
       hidden: lib.list?.hidden || false,
