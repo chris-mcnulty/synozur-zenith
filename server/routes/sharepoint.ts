@@ -1441,10 +1441,11 @@ router.post("/api/admin/tenants/:id/sync-libraries", requireRole(ZENITH_ROLES.TE
     const connection = await storage.getTenantConnection(req.params.id);
     if (!connection) return res.status(404).json({ error: "Tenant not found" });
 
-    const domain = connection.domain;
-    const spoHost = domain.includes('.sharepoint.com') ? domain : `${domain.replace(/\..*$/, '')}.sharepoint.com`;
-    const token = await getDelegatedSpoTokenForOrg(spoHost, req.session?.userId, connection.organizationId);
-    if (!token) return res.status(401).json({ error: "No delegated SPO token available. Please sign out and sign back in with SSO." });
+    const clientId = connection.clientId;
+    const clientSecret = connection.clientSecret;
+    if (!clientId || !clientSecret) return res.status(400).json({ error: "Tenant connection missing client credentials." });
+    const token = await getAppToken(connection.tenantId, clientId, clientSecret);
+    if (!token) return res.status(500).json({ error: "Failed to acquire Graph API token." });
 
     const allWorkspaces = await storage.getWorkspaces(undefined, req.params.id);
     console.log(`[library-sync] Starting full library sync for ${allWorkspaces.length} workspaces in tenant ${connection.tenantName}...`);
@@ -1499,6 +1500,7 @@ router.post("/api/admin/tenants/:id/sync-libraries", requireRole(ZENITH_ROLES.TE
         if (r.status === 'fulfilled') {
           if ('error' in r.value && r.value.error) {
             result.errors++;
+            console.log(`[library-sync] Error for workspace ${r.value.wsId}: ${r.value.error}`);
           } else {
             result.synced++;
             result.totalLibraries += (r.value as any).upserted || 0;
@@ -1506,6 +1508,7 @@ router.post("/api/admin/tenants/:id/sync-libraries", requireRole(ZENITH_ROLES.TE
           }
         } else {
           result.errors++;
+          console.log(`[library-sync] Rejected: ${r.reason?.message || r.reason}`);
         }
       }
     }
