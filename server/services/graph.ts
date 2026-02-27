@@ -1592,34 +1592,11 @@ export async function fetchSiteDocumentLibraries(
     const docLibs = allLists.filter((l: any) => l.list?.template === "documentLibrary");
     console.log(`[graph] fetchSiteDocumentLibraries ${graphSiteId}: ${docLibs.length} doc libs found`);
 
-    // The /lists collection endpoint does NOT include list.itemCount.
-    // Fetch each list individually via /lists/{id} (no $select) to get full list facet with itemCount.
-    const listItemCounts = new Map<string, number>();
-    for (const lib of docLibs) {
-      try {
-        const singleListRes = await fetch(
-          `https://graph.microsoft.com/v1.0/sites/${graphSiteId}/lists/${lib.id}`,
-          { headers: { Authorization: `Bearer ${token}` } }
-        );
-        if (singleListRes.ok) {
-          const singleListData = await singleListRes.json();
-          console.log(`[graph] individual list ${lib.id.substring(0, 8)} (${lib.displayName}): list facet=`, JSON.stringify(singleListData.list || 'MISSING').substring(0, 300));
-          if (singleListData.list?.itemCount != null) {
-            listItemCounts.set(lib.id, singleListData.list.itemCount);
-          }
-        } else {
-          console.log(`[graph] individual list ${lib.id.substring(0, 8)} failed: ${singleListRes.status}`);
-        }
-      } catch (err: any) {
-        console.log(`[graph] individual list ${lib.id.substring(0, 8)} error: ${err.message}`);
-      }
-    }
-    console.log(`[graph] per-list itemCounts:`, [...listItemCounts.entries()].map(([id, c]) => `${id.substring(0, 8)}: ${c}`).join(', '));
-
-    // Fetch drives for per-library storage
-    // Note: Graph reports site-level quota.used for all drives on the same site,
-    // so storage is only useful when there are multiple drives (rare)
-    const drivesStorage = new Map<string, number | null>();
+    // Graph delegated SPO tokens don't return list.itemCount in the list facet.
+    // Use drives API to get item counts via /drives/{id}/list/items?$top=1&$count=true
+    // and per-drive storage via quota.used (only meaningful when drives > 1)
+    const driveItemCounts = new Map<string, number>();
+    const driveStorage = new Map<string, number>();
     try {
       const drivesRes = await fetch(
         `https://graph.microsoft.com/v1.0/sites/${graphSiteId}/drives?$select=id,name,quota`,
@@ -1628,14 +1605,48 @@ export async function fetchSiteDocumentLibraries(
       if (drivesRes.ok) {
         const drivesData = await drivesRes.json();
         const drives = drivesData.value || [];
-        // All drives on a site share the same quota.used (site total), so only show
-        // per-drive storage when there are multiple drives
-        const isSingleDrive = drives.length <= 1;
+        
         for (const drive of drives) {
-          drivesStorage.set(drive.name, isSingleDrive ? null : (drive.quota?.used ?? null));
+          // Get item count via the drive's list items with $count
+          try {
+            const itemsRes = await fetch(
+              `https://graph.microsoft.com/v1.0/drives/${drive.id}/list/items?$top=1&$select=id`,
+              { headers: { Authorization: `Bearer ${token}`, 'ConsistencyLevel': 'eventual' } }
+            );
+            if (itemsRes.ok) {
+              const itemsData = await itemsRes.json();
+              // If @odata.count is present, use it; otherwise page through
+              if (itemsData['@odata.count'] != null) {
+                driveItemCounts.set(drive.name, itemsData['@odata.count']);
+              } else {
+                // Count by checking if there are more pages and counting items
+                // For now, use a search-based count via /items endpoint
+                const countRes = await fetch(
+                  `https://graph.microsoft.com/v1.0/drives/${drive.id}/root/search(q='')?\$select=id&$top=5000`,
+                  { headers: { Authorization: `Bearer ${token}` } }
+                );
+                if (countRes.ok) {
+                  const countData = await countRes.json();
+                  const items = countData.value || [];
+                  driveItemCounts.set(drive.name, items.length);
+                  console.log(`[graph] drive "${drive.name}" search count: ${items.length} items`);
+                }
+              }
+            }
+          } catch {}
+          
+          if (drive.quota?.used != null) {
+            driveStorage.set(drive.name, drive.quota.used);
+          }
         }
+        console.log(`[graph] drives for ${graphSiteId}: ${drives.length} drives.`,
+          [...driveItemCounts.entries()].map(([n, c]) => `${n}: ${c} items`).join(', '));
       }
     } catch {}
+
+    // Determine if storage values are per-drive or site-level duplicates
+    const storageValues = [...driveStorage.values()];
+    const allSameStorage = storageValues.length > 1 && storageValues.every(v => v === storageValues[0]);
 
     const DEFAULT_LIB_NAMES = ["documents", "shared documents", "site assets", "style library", "form templates"];
 
@@ -1645,13 +1656,13 @@ export async function fetchSiteDocumentLibraries(
       description: lib.description || null,
       webUrl: lib.webUrl || null,
       template: lib.list?.template || "documentLibrary",
-      itemCount: listItemCounts.get(lib.id) ?? 0,
+      itemCount: driveItemCounts.get(lib.displayName) ?? 0,
       sensitivityLabelId: lib.sensitivityLabel?.labelId || null,
       isDefaultDocLib: DEFAULT_LIB_NAMES.includes((lib.displayName || "").toLowerCase()),
       hidden: lib.list?.hidden || false,
       lastModifiedAt: lib.lastModifiedDateTime || null,
       createdAt: lib.createdDateTime || null,
-      storageUsedBytes: drivesStorage.get(lib.displayName) ?? null,
+      storageUsedBytes: allSameStorage ? null : (driveStorage.get(lib.displayName) ?? null),
     }));
 
     console.log(`[graph] fetchSiteDocumentLibraries result:`, libraries.map(l => `${l.displayName}: ${l.itemCount} items`).join(', '));
