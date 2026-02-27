@@ -1593,21 +1593,26 @@ export async function fetchSiteDocumentLibraries(
     console.log(`[graph] fetchSiteDocumentLibraries ${graphSiteId}: ${docLibs.length} doc libs found`);
 
     // The /lists collection endpoint does NOT include list.itemCount.
-    // We must fetch each list individually via /lists/{id} to get the itemCount.
+    // Fetch each list individually via /lists/{id} (no $select) to get full list facet with itemCount.
     const listItemCounts = new Map<string, number>();
     for (const lib of docLibs) {
       try {
         const singleListRes = await fetch(
-          `https://graph.microsoft.com/v1.0/sites/${graphSiteId}/lists/${lib.id}?$select=id,list`,
+          `https://graph.microsoft.com/v1.0/sites/${graphSiteId}/lists/${lib.id}`,
           { headers: { Authorization: `Bearer ${token}` } }
         );
         if (singleListRes.ok) {
           const singleListData = await singleListRes.json();
+          console.log(`[graph] individual list ${lib.id.substring(0, 8)} (${lib.displayName}): list facet=`, JSON.stringify(singleListData.list || 'MISSING').substring(0, 300));
           if (singleListData.list?.itemCount != null) {
             listItemCounts.set(lib.id, singleListData.list.itemCount);
           }
+        } else {
+          console.log(`[graph] individual list ${lib.id.substring(0, 8)} failed: ${singleListRes.status}`);
         }
-      } catch {}
+      } catch (err: any) {
+        console.log(`[graph] individual list ${lib.id.substring(0, 8)} error: ${err.message}`);
+      }
     }
     console.log(`[graph] per-list itemCounts:`, [...listItemCounts.entries()].map(([id, c]) => `${id.substring(0, 8)}: ${c}`).join(', '));
 
