@@ -100,19 +100,30 @@ type OrgMembership = {
 };
 
 export default function AppShell({ children }: AppShellProps) {
-  const [location] = useLocation();
+  const [location, setLocation] = useLocation();
   const { tenants, selectedTenant, setSelectedTenantId } = useTenant();
 
-  const { data: authData } = useQuery<{
+  const { data: authData, isLoading: authLoading } = useQuery<{
     user: { id: string; name: string | null; email: string; role: string; effectiveRole?: string; authProvider: string | null };
     organization: { id: string; name: string } | null;
     activeOrganizationId: string | null;
     membershipCount: number;
-  }>({
+  } | null>({
     queryKey: ["/api/auth/me"],
-    queryFn: () => fetch("/api/auth/me", { credentials: "include" }).then(r => r.ok ? r.json() : null),
+    queryFn: async () => {
+      const r = await fetch("/api/auth/me", { credentials: "include" });
+      if (r.status === 401) return null;
+      if (!r.ok) return null;
+      return r.json();
+    },
     staleTime: 5 * 60 * 1000,
+    retry: false,
   });
+
+  if (!authLoading && !authData?.user) {
+    setLocation("/login");
+    return null;
+  }
 
   const { data: myOrgs = [] } = useQuery<OrgMembership[]>({
     queryKey: ["/api/orgs/mine"],

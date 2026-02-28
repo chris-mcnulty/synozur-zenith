@@ -47,8 +47,9 @@ async function getDelegatedTokenForRetention(currentUserId?: string, organizatio
 }
 
 // ── Tenant Connections ──
-router.get("/api/admin/tenants", requireAuth(), async (_req: AuthenticatedRequest, res) => {
-  const connections = await storage.getTenantConnections();
+router.get("/api/admin/tenants", requireAuth(), async (req: AuthenticatedRequest, res) => {
+  const orgId = req.activeOrganizationId || req.user?.organizationId;
+  const connections = await storage.getTenantConnections(orgId || undefined);
   const safe = connections.map(c => ({
     ...c,
     clientSecret: undefined,

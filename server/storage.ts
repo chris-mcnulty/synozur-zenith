@@ -76,7 +76,7 @@ export interface IStorage {
   updateGovernancePolicy(id: string, updates: Partial<InsertGovernancePolicy>): Promise<GovernancePolicy | undefined>;
   deleteGovernancePolicy(id: string): Promise<void>;
 
-  getTenantConnections(): Promise<TenantConnection[]>;
+  getTenantConnections(organizationId?: string): Promise<TenantConnection[]>;
   getTenantConnection(id: string): Promise<TenantConnection | undefined>;
   createTenantConnection(connection: InsertTenantConnection): Promise<TenantConnection>;
   updateTenantConnection(id: string, updates: Partial<TenantConnection>): Promise<TenantConnection | undefined>;
@@ -258,7 +258,12 @@ export class DatabaseStorage implements IStorage {
     await db.delete(governancePolicies).where(eq(governancePolicies.id, id));
   }
 
-  async getTenantConnections(): Promise<TenantConnection[]> {
+  async getTenantConnections(organizationId?: string): Promise<TenantConnection[]> {
+    if (organizationId) {
+      return db.select().from(tenantConnections)
+        .where(eq(tenantConnections.organizationId, organizationId))
+        .orderBy(desc(tenantConnections.createdAt));
+    }
     return db.select().from(tenantConnections).orderBy(desc(tenantConnections.createdAt));
   }
 
