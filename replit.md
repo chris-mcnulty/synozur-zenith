@@ -26,6 +26,8 @@ The frontend uses React, Vite, TanStack Query, shadcn/ui, and wouter for a moder
 - **Sync-Safe Governance Fields**: Preserves locally-set governance fields during full tenant sync to prevent overwriting by stale usage reports.
 - **Key Design Decisions**: SharePoint sites are the primary managed workspaces, with automated `DEAL-` and `PORTCO-` prefixes for naming. Enforces "Highly Confidential" sensitivity labels. Tracks site owners by merging Graph group owners and SharePoint site collection admins. Auto-evaluates Copilot readiness after sync. Detects Hub site hierarchy.
 - **System Design Choices**: Custom field definitions are tenant-owned. Document libraries are tracked as first-class inventory entities with a three-tier sync strategy. The database schema includes core tables for workspaces, policies, users, and organizations. A multi-policy engine evaluates workspaces against customizable governance policies. All significant actions are logged for audit. Comprehensive RESTful APIs are provided.
+- **CSV Export/Import**: Tenant-level workspace export to CSV includes all inventory fields plus custom fields (prefixed `CF:`). Import matches on Site URL and supports updating Zenith-editable fields (Department, Cost Center, Project Code, Stewards, Project Type, Sensitivity, Description) and custom fields. Import uses a dry-run preview step before applying changes.
+- **Document Library Detail View**: Clicking a library row in the Document Libraries page opens a slide-over panel showing Content Types, Custom Columns, Syntex/AI models, and All Columns fetched live from Graph API (`/sites/{id}/lists/{id}/contentTypes` and `/columns`).
 
 ## External Dependencies
 - **Microsoft 365 / SharePoint**: Core platform for M365 governance.

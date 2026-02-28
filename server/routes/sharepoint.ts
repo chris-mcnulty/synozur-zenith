@@ -1566,6 +1566,273 @@ router.get("/api/admin/libraries/:libraryId/details", requireRole(ZENITH_ROLES.V
   }
 });
 
+router.get("/api/admin/tenants/:id/export-csv", requireRole(ZENITH_ROLES.VIEWER), async (req: AuthenticatedRequest, res) => {
+  try {
+    const connection = await storage.getTenantConnection(req.params.id);
+    if (!connection) return res.status(404).json({ error: "Tenant not found" });
+
+    const allWorkspaces = await storage.getWorkspaces(undefined, req.params.id);
+    const customFieldDefs = await storage.getCustomFieldDefinitions(req.params.id);
+
+    const baseHeaders = [
+      "Site URL", "Display Name", "Type", "Teams Connected", "Project Type",
+      "Sensitivity", "Retention Policy", "Copilot Ready",
+      "Department", "Cost Center", "Project Code",
+      "Primary Steward", "Secondary Steward",
+      "Description", "Template",
+      "Storage Used (Bytes)", "Storage Allocated (Bytes)",
+      "File Count", "Active File Count",
+      "Page Views", "Visited Pages",
+      "Last Activity Date", "Last Content Modified",
+      "Site Created Date",
+      "Sharing Capability", "Lock State",
+      "External Sharing", "Is Hub Site", "Hub Site ID",
+      "Is Archived", "Is Deleted",
+      "Owner Display Name", "Owner UPN",
+      "Site Owners",
+      "Sensitivity Label ID", "Retention Label ID",
+      "M365 Object ID",
+    ];
+
+    const customFieldHeaders = customFieldDefs.map(d => `CF: ${d.fieldLabel}`);
+    const allHeaders = [...baseHeaders, ...customFieldHeaders];
+
+    function escapeCsv(val: any): string {
+      if (val === null || val === undefined) return "";
+      const str = String(val);
+      if (str.includes(",") || str.includes('"') || str.includes("\n") || str.includes("\r")) {
+        return `"${str.replace(/"/g, '""')}"`;
+      }
+      return str;
+    }
+
+    const rows = allWorkspaces.map(ws => {
+      const owners = (ws.siteOwners || []).map(o => o.displayName || o.userPrincipalName || "").join("; ");
+      const cf = (ws.customFields || {}) as Record<string, any>;
+
+      const baseValues = [
+        ws.siteUrl || "",
+        ws.displayName,
+        ws.type,
+        ws.teamsConnected ? "Yes" : "No",
+        ws.projectType,
+        ws.sensitivity,
+        ws.retentionPolicy,
+        ws.copilotReady ? "Yes" : "No",
+        ws.department || "",
+        ws.costCenter || "",
+        ws.projectCode || "",
+        ws.primarySteward || "",
+        ws.secondarySteward || "",
+        ws.description || "",
+        ws.template || "",
+        ws.storageUsedBytes ?? "",
+        ws.storageAllocatedBytes ?? "",
+        ws.fileCount ?? "",
+        ws.activeFileCount ?? "",
+        ws.pageViewCount ?? "",
+        ws.visitedPageCount ?? "",
+        ws.lastActivityDate || "",
+        ws.lastContentModifiedDate || "",
+        ws.siteCreatedDate || "",
+        ws.sharingCapability || "",
+        ws.lockState || "",
+        ws.externalSharing ? "Yes" : "No",
+        ws.isHubSite ? "Yes" : "No",
+        ws.hubSiteId || "",
+        ws.isArchived ? "Yes" : "No",
+        ws.isDeleted ? "Yes" : "No",
+        ws.ownerDisplayName || "",
+        ws.ownerPrincipalName || "",
+        owners,
+        ws.sensitivityLabelId || "",
+        ws.retentionLabelId || "",
+        ws.m365ObjectId || "",
+      ];
+
+      const customValues = customFieldDefs.map(d => {
+        const val = cf[d.fieldName];
+        return val !== undefined && val !== null ? String(val) : "";
+      });
+
+      return [...baseValues, ...customValues].map(escapeCsv).join(",");
+    });
+
+    const csv = [allHeaders.map(escapeCsv).join(","), ...rows].join("\r\n");
+    const filename = `${connection.tenantName.replace(/[^a-zA-Z0-9]/g, "_")}_workspaces_${new Date().toISOString().split("T")[0]}.csv`;
+
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    res.send(csv);
+  } catch (err: any) {
+    console.error(`[csv-export] Error:`, err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post("/api/admin/tenants/:id/import-csv", requireRole(ZENITH_ROLES.TENANT_ADMIN), async (req: AuthenticatedRequest, res) => {
+  try {
+    const connection = await storage.getTenantConnection(req.params.id);
+    if (!connection) return res.status(404).json({ error: "Tenant not found" });
+
+    const { csvData, dryRun } = req.body;
+    if (!csvData || typeof csvData !== "string") {
+      return res.status(400).json({ error: "csvData is required as a string" });
+    }
+
+    const customFieldDefs = await storage.getCustomFieldDefinitions(req.params.id);
+    const cfMap = new Map(customFieldDefs.map(d => [`CF: ${d.fieldLabel}`, d]));
+
+    function parseCsvLine(line: string): string[] {
+      const values: string[] = [];
+      let current = "";
+      let inQuotes = false;
+      for (let i = 0; i < line.length; i++) {
+        const ch = line[i];
+        if (inQuotes) {
+          if (ch === '"') {
+            if (i + 1 < line.length && line[i + 1] === '"') {
+              current += '"';
+              i++;
+            } else {
+              inQuotes = false;
+            }
+          } else {
+            current += ch;
+          }
+        } else {
+          if (ch === '"') {
+            inQuotes = true;
+          } else if (ch === ',') {
+            values.push(current);
+            current = "";
+          } else {
+            current += ch;
+          }
+        }
+      }
+      values.push(current);
+      return values;
+    }
+
+    const lines = csvData.split(/\r?\n/).filter(l => l.trim().length > 0);
+    if (lines.length < 2) return res.status(400).json({ error: "CSV must have a header row and at least one data row" });
+
+    const headers = parseCsvLine(lines[0]);
+    const siteUrlIdx = headers.indexOf("Site URL");
+    if (siteUrlIdx === -1) return res.status(400).json({ error: 'CSV must have a "Site URL" column for matching' });
+
+    const allWorkspaces = await storage.getWorkspaces(undefined, req.params.id);
+    const urlMap = new Map<string, typeof allWorkspaces[0]>();
+    for (const ws of allWorkspaces) {
+      if (ws.siteUrl) urlMap.set(ws.siteUrl.toLowerCase().replace(/\/$/, ""), ws);
+    }
+
+    const EDITABLE_FIELDS: Record<string, string> = {
+      "Department": "department",
+      "Cost Center": "costCenter",
+      "Project Code": "projectCode",
+      "Primary Steward": "primarySteward",
+      "Secondary Steward": "secondarySteward",
+      "Project Type": "projectType",
+      "Sensitivity": "sensitivity",
+      "Description": "description",
+    };
+
+    const results = {
+      total: lines.length - 1,
+      matched: 0,
+      updated: 0,
+      skipped: 0,
+      notFound: 0,
+      errors: 0,
+      changes: [] as Array<{ siteUrl: string; displayName: string; field: string; oldValue: string; newValue: string }>,
+      notFoundUrls: [] as string[],
+    };
+
+    for (let i = 1; i < lines.length; i++) {
+      const values = parseCsvLine(lines[i]);
+      const rawUrl = values[siteUrlIdx]?.trim();
+      if (!rawUrl) { results.skipped++; continue; }
+
+      const normalizedUrl = rawUrl.toLowerCase().replace(/\/$/, "");
+      const ws = urlMap.get(normalizedUrl);
+      if (!ws) {
+        results.notFound++;
+        results.notFoundUrls.push(rawUrl);
+        continue;
+      }
+
+      results.matched++;
+      const updates: Record<string, any> = {};
+      let hasChanges = false;
+
+      for (let h = 0; h < headers.length; h++) {
+        const header = headers[h].trim();
+        const newVal = (values[h] || "").trim();
+
+        if (EDITABLE_FIELDS[header]) {
+          const dbField = EDITABLE_FIELDS[header];
+          const oldVal = (ws as any)[dbField] || "";
+          if (newVal !== "" && newVal !== oldVal) {
+            updates[dbField] = newVal;
+            results.changes.push({
+              siteUrl: rawUrl,
+              displayName: ws.displayName,
+              field: header,
+              oldValue: oldVal,
+              newValue: newVal,
+            });
+            hasChanges = true;
+          }
+        }
+
+        if (header.startsWith("CF: ")) {
+          const def = cfMap.get(header);
+          if (def) {
+            const cf = { ...((ws.customFields || {}) as Record<string, any>), ...((updates.customFields || {}) as Record<string, any>) };
+            const oldVal = cf[def.fieldName] !== undefined ? String(cf[def.fieldName]) : "";
+            if (newVal !== "" && newVal !== oldVal) {
+              cf[def.fieldName] = def.fieldType === "number" ? Number(newVal) : def.fieldType === "boolean" ? (newVal.toLowerCase() === "true" || newVal === "1" || newVal.toLowerCase() === "yes") : newVal;
+              updates.customFields = cf;
+              results.changes.push({
+                siteUrl: rawUrl,
+                displayName: ws.displayName,
+                field: header,
+                oldValue: oldVal,
+                newValue: newVal,
+              });
+              hasChanges = true;
+            }
+          }
+        }
+      }
+
+      if (hasChanges && !dryRun) {
+        try {
+          await storage.updateWorkspace(ws.id, updates);
+          results.updated++;
+        } catch (err: any) {
+          results.errors++;
+          console.error(`[csv-import] Error updating ${ws.displayName}: ${err.message}`);
+        }
+      } else if (hasChanges) {
+        results.updated++;
+      }
+    }
+
+    console.log(`[csv-import] ${dryRun ? "DRY RUN" : "APPLIED"}: ${results.matched} matched, ${results.updated} updated, ${results.notFound} not found, ${results.errors} errors`);
+    res.json({
+      success: true,
+      dryRun: !!dryRun,
+      ...results,
+    });
+  } catch (err: any) {
+    console.error(`[csv-import] Error:`, err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 async function handleMetadataWriteback(req: any, res: any) {
   const org = await storage.getOrganization();
   const plan = (org?.servicePlan || "TRIAL") as ServicePlanTier;

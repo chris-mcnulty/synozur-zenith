@@ -36,6 +36,7 @@ import {
   Activity,
   Building2,
   Upload,
+  Download,
   ArrowUpDown,
   ArrowUp,
   ArrowDown,
@@ -115,6 +116,11 @@ export default function GovernancePage() {
   const [bulkSensitivity, setBulkSensitivity] = useState("");
   const [bulkDepartment, setBulkDepartment] = useState("");
   const [bulkCostCenter, setBulkCostCenter] = useState("");
+
+  const [showImportDialog, setShowImportDialog] = useState(false);
+  const [importFile, setImportFile] = useState<File | null>(null);
+  const [importPreview, setImportPreview] = useState<any>(null);
+  const [importStep, setImportStep] = useState<"upload" | "preview" | "done">("upload");
 
   const { selectedTenant } = useTenant();
 
@@ -220,6 +226,53 @@ export default function GovernancePage() {
       toast({ title: "Sync Failed", description: err?.message || "Failed to sync inventory.", variant: "destructive" });
     },
   });
+
+  const handleExportCsv = () => {
+    if (!tenantConnectionId) return;
+    window.open(`/api/admin/tenants/${tenantConnectionId}/export-csv`, "_blank");
+  };
+
+  const importDryRunMutation = useMutation({
+    mutationFn: async (csvData: string) => {
+      const res = await apiRequest("POST", `/api/admin/tenants/${tenantConnectionId}/import-csv`, { csvData, dryRun: true });
+      return res.json();
+    },
+    onSuccess: (data) => {
+      setImportPreview(data);
+      setImportStep("preview");
+    },
+    onError: (err: any) => {
+      toast({ title: "Preview failed", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const importApplyMutation = useMutation({
+    mutationFn: async (csvData: string) => {
+      const res = await apiRequest("POST", `/api/admin/tenants/${tenantConnectionId}/import-csv`, { csvData, dryRun: false });
+      return res.json();
+    },
+    onSuccess: (data) => {
+      setImportPreview(data);
+      setImportStep("done");
+      queryClient.invalidateQueries({ queryKey: ["/api/workspaces"] });
+      toast({ title: "Import complete", description: `${data.updated} workspaces updated, ${data.notFound} not found.` });
+    },
+    onError: (err: any) => {
+      toast({ title: "Import failed", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const handleImportFile = async () => {
+    if (!importFile) return;
+    const csvData = await importFile.text();
+    importDryRunMutation.mutate(csvData);
+  };
+
+  const handleApplyImport = async () => {
+    if (!importFile) return;
+    const csvData = await importFile.text();
+    importApplyMutation.mutate(csvData);
+  };
 
   const toggleSelectAll = () => {
     if (selectedIds.size === filteredAndSortedWorkspaces.length) {
@@ -882,7 +935,23 @@ export default function GovernancePage() {
             <RefreshCw className={`w-4 h-4 ${inventorySyncMutation.isPending ? 'animate-spin' : ''}`} />
             {inventorySyncMutation.isPending ? "Syncing..." : "Sync Inventory"}
           </Button>
-          <Button className="gap-2 rounded-full shadow-md shadow-primary/20">
+          <Button
+            variant="outline"
+            className="gap-2 rounded-full"
+            onClick={() => { setShowImportDialog(true); setImportStep("upload"); setImportFile(null); setImportPreview(null); }}
+            disabled={!tenantConnectionId}
+            data-testid="button-import-csv"
+          >
+            <Upload className="w-4 h-4" />
+            Import CSV
+          </Button>
+          <Button
+            className="gap-2 rounded-full shadow-md shadow-primary/20"
+            onClick={handleExportCsv}
+            disabled={!tenantConnectionId}
+            data-testid="button-export-csv"
+          >
+            <Download className="w-4 h-4" />
             Export CSV
           </Button>
         </div>
@@ -1451,6 +1520,168 @@ export default function GovernancePage() {
               {hubAssignMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
               {hubAssignMutation.isPending ? "Saving..." : "Save Assignment"}
             </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={showImportDialog} onOpenChange={(open) => { if (!open) { setShowImportDialog(false); setImportStep("upload"); setImportFile(null); setImportPreview(null); } }}>
+        <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Upload className="w-5 h-5" />
+              Import CSV
+            </DialogTitle>
+            <DialogDescription>
+              {importStep === "upload" && "Upload a CSV file to update workspace fields. Matching is done by Site URL."}
+              {importStep === "preview" && "Review the changes below before applying them."}
+              {importStep === "done" && "Import complete. Changes have been applied."}
+            </DialogDescription>
+          </DialogHeader>
+
+          {importStep === "upload" && (
+            <div className="space-y-4">
+              <div className="p-4 rounded-lg border-2 border-dashed border-border/50 bg-muted/10 text-center">
+                <Upload className="w-8 h-8 mx-auto mb-2 text-muted-foreground" />
+                <p className="text-sm text-muted-foreground mb-3">
+                  Upload a CSV file exported from Zenith or modified in Excel.
+                </p>
+                <input
+                  type="file"
+                  accept=".csv"
+                  className="hidden"
+                  id="csv-import-input"
+                  data-testid="input-csv-file"
+                  onChange={(e) => setImportFile(e.target.files?.[0] || null)}
+                />
+                <label htmlFor="csv-import-input">
+                  <Button variant="outline" className="gap-2" asChild>
+                    <span>Choose CSV File</span>
+                  </Button>
+                </label>
+                {importFile && (
+                  <p className="text-sm mt-2 text-foreground font-medium">{importFile.name}</p>
+                )}
+              </div>
+              <div className="text-xs text-muted-foreground space-y-1">
+                <p><strong>Editable fields:</strong> Department, Cost Center, Project Code, Primary Steward, Secondary Steward, Project Type, Sensitivity, Description, and all Custom Fields (CF: columns).</p>
+                <p><strong>Matching:</strong> Workspaces are matched by "Site URL" column. Empty values are skipped (not cleared).</p>
+              </div>
+            </div>
+          )}
+
+          {importStep === "preview" && importPreview && (
+            <div className="space-y-4">
+              <div className="grid grid-cols-4 gap-3">
+                <div className="p-3 rounded-lg bg-muted/30 border border-border/30 text-center">
+                  <p className="text-lg font-bold">{importPreview.matched}</p>
+                  <p className="text-[10px] text-muted-foreground">Matched</p>
+                </div>
+                <div className="p-3 rounded-lg bg-blue-500/10 border border-blue-500/20 text-center">
+                  <p className="text-lg font-bold text-blue-600">{importPreview.updated}</p>
+                  <p className="text-[10px] text-muted-foreground">To Update</p>
+                </div>
+                <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/20 text-center">
+                  <p className="text-lg font-bold text-amber-600">{importPreview.notFound}</p>
+                  <p className="text-[10px] text-muted-foreground">Not Found</p>
+                </div>
+                <div className="p-3 rounded-lg bg-muted/30 border border-border/30 text-center">
+                  <p className="text-lg font-bold">{importPreview.skipped}</p>
+                  <p className="text-[10px] text-muted-foreground">Skipped</p>
+                </div>
+              </div>
+
+              {importPreview.changes?.length > 0 && (
+                <div className="border rounded-lg overflow-hidden">
+                  <div className="bg-muted/30 px-4 py-2 text-sm font-medium border-b">
+                    Changes to Apply ({importPreview.changes.length})
+                  </div>
+                  <div className="max-h-60 overflow-y-auto">
+                    <Table>
+                      <TableHeader>
+                        <TableRow className="text-xs">
+                          <TableHead>Site</TableHead>
+                          <TableHead>Field</TableHead>
+                          <TableHead>Old Value</TableHead>
+                          <TableHead>New Value</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {importPreview.changes.map((ch: any, i: number) => (
+                          <TableRow key={i} className="text-xs">
+                            <TableCell className="font-medium max-w-[150px] truncate">{ch.displayName}</TableCell>
+                            <TableCell><Badge variant="outline" className="text-[10px]">{ch.field}</Badge></TableCell>
+                            <TableCell className="text-muted-foreground max-w-[120px] truncate">{ch.oldValue || "—"}</TableCell>
+                            <TableCell className="text-blue-600 font-medium max-w-[120px] truncate">{ch.newValue}</TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                </div>
+              )}
+
+              {importPreview.notFoundUrls?.length > 0 && (
+                <div className="border rounded-lg overflow-hidden">
+                  <div className="bg-amber-500/10 px-4 py-2 text-sm font-medium border-b text-amber-700">
+                    URLs Not Found ({importPreview.notFoundUrls.length})
+                  </div>
+                  <div className="max-h-32 overflow-y-auto p-3 text-xs text-muted-foreground space-y-1">
+                    {importPreview.notFoundUrls.map((url: string, i: number) => (
+                      <p key={i} className="font-mono truncate">{url}</p>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {importStep === "done" && importPreview && (
+            <div className="text-center py-4 space-y-3">
+              <div className="w-12 h-12 rounded-full bg-green-500/10 flex items-center justify-center mx-auto">
+                <CheckSquare className="w-6 h-6 text-green-600" />
+              </div>
+              <p className="text-lg font-semibold">Import Complete</p>
+              <p className="text-sm text-muted-foreground">
+                {importPreview.updated} workspaces updated with {importPreview.changes?.length || 0} field changes.
+                {importPreview.notFound > 0 && ` ${importPreview.notFound} URLs were not found.`}
+                {importPreview.errors > 0 && ` ${importPreview.errors} errors occurred.`}
+              </p>
+            </div>
+          )}
+
+          <DialogFooter>
+            {importStep === "upload" && (
+              <Button
+                onClick={handleImportFile}
+                disabled={!importFile || importDryRunMutation.isPending}
+                className="gap-2"
+                data-testid="button-preview-import"
+              >
+                {importDryRunMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Eye className="w-4 h-4" />}
+                Preview Changes
+              </Button>
+            )}
+            {importStep === "preview" && (
+              <div className="flex gap-2">
+                <Button variant="outline" onClick={() => { setImportStep("upload"); setImportPreview(null); }} data-testid="button-back-import">
+                  Back
+                </Button>
+                <Button
+                  onClick={handleApplyImport}
+                  disabled={importApplyMutation.isPending || !importPreview?.changes?.length}
+                  className="gap-2"
+                  data-testid="button-apply-import"
+                >
+                  {importApplyMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                  Apply {importPreview?.changes?.length || 0} Changes
+                </Button>
+              </div>
+            )}
+            {importStep === "done" && (
+              <Button onClick={() => { setShowImportDialog(false); setImportStep("upload"); setImportFile(null); setImportPreview(null); }} data-testid="button-close-import">
+                Close
+              </Button>
+            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>
