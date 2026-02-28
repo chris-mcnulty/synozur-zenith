@@ -214,8 +214,8 @@ router.get('/me', async (req: AuthenticatedRequest, res) => {
       ? memberships.find(m => m.organizationId === activeOrgId)
       : null;
 
-    const effectiveRole = user.role === 'PLATFORM_OWNER'
-      ? 'PLATFORM_OWNER'
+    const effectiveRole = user.role === 'platform_owner'
+      ? 'platform_owner'
       : (activeMembership?.role || user.role);
 
     return res.json({

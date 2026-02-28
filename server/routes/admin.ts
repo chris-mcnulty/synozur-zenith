@@ -1,12 +1,13 @@
 import { Router } from "express";
+import { requireAuth, requireRole, type AuthenticatedRequest } from "../middleware/rbac";
+import { ZENITH_ROLES, SERVICE_PLANS, type ServicePlanTier } from "@shared/schema";
 import { storage } from "../storage";
-import { SERVICE_PLANS, type ServicePlanTier } from "@shared/schema";
 import { getPlanFeatures } from "../services/feature-gate";
 
 const router = Router();
 
 // ── Dashboard Stats ──
-router.get("/api/stats", async (_req, res) => {
+router.get("/api/stats", requireAuth(), async (_req: AuthenticatedRequest, res) => {
   const allWorkspaces = await storage.getWorkspaces();
   const total = allWorkspaces.length;
   const copilotReady = allWorkspaces.filter(w => w.copilotReady).length;
@@ -29,7 +30,7 @@ router.get("/api/stats", async (_req, res) => {
 });
 
 // ── Organization & Service Plan ──
-router.get("/api/organization", async (req, res) => {
+router.get("/api/organization", requireAuth(), async (req: AuthenticatedRequest, res) => {
   const id = req.query.id as string | undefined;
   let org = await storage.getOrganization(id);
   if (!org) {
@@ -45,7 +46,7 @@ router.get("/api/organization", async (req, res) => {
   res.json({ ...org, features });
 });
 
-router.get("/api/organizations", async (_req, res) => {
+router.get("/api/organizations", requireAuth(), async (_req: AuthenticatedRequest, res) => {
   const orgs = await storage.getOrganizations();
   const withFeatures = orgs.map(org => ({
     ...org,
@@ -54,7 +55,7 @@ router.get("/api/organizations", async (_req, res) => {
   res.json(withFeatures);
 });
 
-router.patch("/api/organization/plan", async (req, res) => {
+router.patch("/api/organization/plan", requireRole(ZENITH_ROLES.PLATFORM_OWNER, ZENITH_ROLES.TENANT_ADMIN), async (req: AuthenticatedRequest, res) => {
   const { plan } = req.body;
   if (!SERVICE_PLANS.includes(plan)) {
     return res.status(400).json({ message: `Invalid plan. Must be one of: ${SERVICE_PLANS.join(", ")}` });
@@ -67,7 +68,7 @@ router.patch("/api/organization/plan", async (req, res) => {
   res.json({ ...updated, features });
 });
 
-router.get("/api/feature-check/:feature", async (req, res) => {
+router.get("/api/feature-check/:feature", requireAuth(), async (req: AuthenticatedRequest, res) => {
   const org = await storage.getOrganization();
   const plan = (org?.servicePlan || "TRIAL") as ServicePlanTier;
   const features = getPlanFeatures(plan);
@@ -84,7 +85,7 @@ router.get("/api/feature-check/:feature", async (req, res) => {
 });
 
 // ── Domain Blocklist ──
-router.get("/api/admin/domain-blocklist", async (_req, res) => {
+router.get("/api/admin/domain-blocklist", requireRole(ZENITH_ROLES.TENANT_ADMIN), async (_req: AuthenticatedRequest, res) => {
   try {
     const domains = await storage.getBlockedDomains();
     res.json(domains);
@@ -93,7 +94,7 @@ router.get("/api/admin/domain-blocklist", async (_req, res) => {
   }
 });
 
-router.post("/api/admin/domain-blocklist", async (req, res) => {
+router.post("/api/admin/domain-blocklist", requireRole(ZENITH_ROLES.TENANT_ADMIN), async (req: AuthenticatedRequest, res) => {
   try {
     const { domain, reason } = req.body;
     if (!domain) {
@@ -118,7 +119,7 @@ router.post("/api/admin/domain-blocklist", async (req, res) => {
   }
 });
 
-router.delete("/api/admin/domain-blocklist/:domain", async (req, res) => {
+router.delete("/api/admin/domain-blocklist/:domain", requireRole(ZENITH_ROLES.TENANT_ADMIN), async (req: AuthenticatedRequest, res) => {
   try {
     await storage.removeBlockedDomain(decodeURIComponent(req.params.domain));
     res.json({ success: true });

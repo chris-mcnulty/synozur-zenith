@@ -1,11 +1,12 @@
 import { Router } from "express";
+import { requireAuth, requireRole, type AuthenticatedRequest } from "../middleware/rbac";
+import { ZENITH_ROLES, insertGovernancePolicySchema } from "@shared/schema";
 import { storage } from "../storage";
-import { insertGovernancePolicySchema } from "@shared/schema";
 import { evaluatePolicy, evaluationResultsToCopilotRules, formatPolicyBagValue, type EvaluationContext } from "../services/policy-engine";
 
 const router = Router();
 
-router.get("/api/policies", async (req, res) => {
+router.get("/api/policies", requireAuth(), async (req: AuthenticatedRequest, res) => {
   const organizationId = req.query.organizationId as string;
   if (!organizationId) {
     return res.status(400).json({ message: "organizationId query parameter is required" });
@@ -14,20 +15,20 @@ router.get("/api/policies", async (req, res) => {
   res.json(policies);
 });
 
-router.get("/api/policies/:id", async (req, res) => {
+router.get("/api/policies/:id", requireAuth(), async (req: AuthenticatedRequest, res) => {
   const policy = await storage.getGovernancePolicy(req.params.id);
   if (!policy) return res.status(404).json({ message: "Policy not found" });
   res.json(policy);
 });
 
-router.post("/api/policies", async (req, res) => {
+router.post("/api/policies", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN), async (req: AuthenticatedRequest, res) => {
   const parsed = insertGovernancePolicySchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ message: parsed.error.message });
   const policy = await storage.createGovernancePolicy(parsed.data);
   res.status(201).json(policy);
 });
 
-router.patch("/api/policies/:id", async (req, res) => {
+router.patch("/api/policies/:id", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN), async (req: AuthenticatedRequest, res) => {
   const existing = await storage.getGovernancePolicy(req.params.id);
   if (!existing) return res.status(404).json({ message: "Policy not found" });
 
@@ -43,12 +44,12 @@ router.patch("/api/policies/:id", async (req, res) => {
   res.json(updated);
 });
 
-router.delete("/api/policies/:id", async (req, res) => {
+router.delete("/api/policies/:id", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN), async (req: AuthenticatedRequest, res) => {
   await storage.deleteGovernancePolicy(req.params.id);
   res.json({ message: "Policy deleted" });
 });
 
-router.post("/api/policies/:id/evaluate", async (req, res) => {
+router.post("/api/policies/:id/evaluate", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN), async (req: AuthenticatedRequest, res) => {
   const policy = await storage.getGovernancePolicy(req.params.id);
   if (!policy) return res.status(404).json({ message: "Policy not found" });
 
@@ -92,7 +93,7 @@ router.post("/api/policies/:id/evaluate", async (req, res) => {
   res.json({ evaluated: results.length, results });
 });
 
-router.post("/api/admin/tenants/:id/evaluate-policies", async (req, res) => {
+router.post("/api/admin/tenants/:id/evaluate-policies", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN), async (req: AuthenticatedRequest, res) => {
   try {
     const connection = await storage.getTenantConnection(req.params.id);
     if (!connection) return res.status(404).json({ message: "Tenant connection not found" });
@@ -138,7 +139,7 @@ router.post("/api/admin/tenants/:id/evaluate-policies", async (req, res) => {
   }
 });
 
-router.get("/api/workspaces/:id/policy-results", async (req, res) => {
+router.get("/api/workspaces/:id/policy-results", requireAuth(), async (req: AuthenticatedRequest, res) => {
   const workspace = await storage.getWorkspace(req.params.id);
   if (!workspace) return res.status(404).json({ message: "Workspace not found" });
 

@@ -4,7 +4,7 @@ import { insertWorkspaceSchema, insertProvisioningRequestSchema, type ServicePla
 import { fetchSharePointSites, fetchSiteUsageReport, fetchSiteDriveOwner, fetchSiteAnalytics, fetchSiteGroupOwners, fetchSiteCollectionAdmins, getAppToken, writeSitePropertyBag, fetchSitePropertyBag, fetchSensitivityLabels, fetchRetentionLabels, fetchHubSites, fetchSiteHubAssociation, fetchHubSitesViaSearch, applySensitivityLabelToSite, removeSensitivityLabelFromSite, joinHubSite, leaveHubSite, fetchSiteLockState, fetchSiteArchiveStatus, batchToggleNoScript, fetchSiteDocumentLibraries, enumerateSiteDocumentLibraries, fetchLibraryDetails } from "../services/graph";
 import { getPlanFeatures } from "../services/feature-gate";
 import { refreshDelegatedToken, getDelegatedSpoToken } from "../routes-entra";
-import { requireRole, type AuthenticatedRequest } from "../middleware/rbac";
+import { requireAuth, requireRole, type AuthenticatedRequest } from "../middleware/rbac";
 import { computeWritebackHash, computeSpoSyncHash } from "../services/writeback-hash";
 import { evaluatePolicy, evaluationResultsToCopilotRules, formatPolicyBagValue, DEFAULT_COPILOT_READINESS_RULES, type EvaluationContext } from "../services/policy-engine";
 
@@ -70,14 +70,14 @@ async function getDelegatedSpoTokenForOrg(spoHost: string, currentUserId?: strin
 }
 
 // ── Workspaces (SharePoint Sites) ──
-router.get("/api/workspaces", async (req, res) => {
+router.get("/api/workspaces", requireAuth(), async (req: AuthenticatedRequest, res) => {
   const search = req.query.search as string | undefined;
   const tenantConnectionId = req.query.tenantConnectionId as string | undefined;
   const workspaces = await storage.getWorkspaces(search, tenantConnectionId);
   res.json(workspaces);
 });
 
-router.get("/api/workspaces/:id", async (req, res) => {
+router.get("/api/workspaces/:id", requireAuth(), async (req: AuthenticatedRequest, res) => {
   const workspace = await storage.getWorkspace(req.params.id);
   if (!workspace) return res.status(404).json({ message: "Workspace not found" });
   res.json(workspace);
@@ -241,7 +241,7 @@ router.patch("/api/workspaces/:id", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, Z
   res.json({ ...(finalWorkspace || workspace), labelSyncResult });
 });
 
-router.get("/api/workspaces/:id/libraries", async (req, res) => {
+router.get("/api/workspaces/:id/libraries", requireAuth(), async (req: AuthenticatedRequest, res) => {
   try {
     const libraries = await storage.getDocumentLibraries(req.params.id);
     res.json(libraries);
@@ -250,7 +250,7 @@ router.get("/api/workspaces/:id/libraries", async (req, res) => {
   }
 });
 
-router.get("/api/admin/tenants/:tenantConnectionId/libraries", async (req, res) => {
+router.get("/api/admin/tenants/:tenantConnectionId/libraries", requireAuth(), async (req: AuthenticatedRequest, res) => {
   try {
     const libraries = await storage.getDocumentLibrariesByTenant(req.params.tenantConnectionId);
     const workspaces = await storage.getWorkspaces(undefined, req.params.tenantConnectionId);
@@ -267,7 +267,7 @@ router.get("/api/admin/tenants/:tenantConnectionId/libraries", async (req, res) 
   }
 });
 
-router.get("/api/admin/tenants/:tenantConnectionId/libraries/stats", async (req, res) => {
+router.get("/api/admin/tenants/:tenantConnectionId/libraries/stats", requireAuth(), async (req: AuthenticatedRequest, res) => {
   try {
     const libraries = await storage.getDocumentLibrariesByTenant(req.params.tenantConnectionId);
     const totalLibraries = libraries.length;
@@ -685,7 +685,7 @@ router.patch("/api/workspaces/bulk/hub-assignment", requireRole(ZENITH_ROLES.GOV
 });
 
 // ── Copilot Rules ──
-router.get("/api/workspaces/:id/copilot-rules", async (req, res) => {
+router.get("/api/workspaces/:id/copilot-rules", requireAuth(), async (req: AuthenticatedRequest, res) => {
   const rules = await storage.getCopilotRules(req.params.id);
   res.json(rules);
 });
@@ -700,12 +700,12 @@ router.put("/api/workspaces/:id/copilot-rules", requireRole(ZENITH_ROLES.GOVERNA
 });
 
 // ── Provisioning Requests ──
-router.get("/api/provisioning-requests", async (_req, res) => {
+router.get("/api/provisioning-requests", requireAuth(), async (_req: AuthenticatedRequest, res) => {
   const requests = await storage.getProvisioningRequests();
   res.json(requests);
 });
 
-router.get("/api/provisioning-requests/:id", async (req, res) => {
+router.get("/api/provisioning-requests/:id", requireAuth(), async (req: AuthenticatedRequest, res) => {
   const request = await storage.getProvisioningRequest(req.params.id);
   if (!request) return res.status(404).json({ message: "Request not found" });
   res.json(request);
@@ -2052,7 +2052,7 @@ router.post("/api/admin/tenants/:id/writeback", requireRole(ZENITH_ROLES.TENANT_
   res.json({ total: allWorkspaces.length, dirty: dirty.length, written, failed, results });
 });
 
-router.get("/api/debug/spo-test/:workspaceId", async (req, res) => {
+router.get("/api/debug/spo-test/:workspaceId", requireAuth(), async (req: AuthenticatedRequest, res) => {
   const workspace = await storage.getWorkspace(req.params.workspaceId);
   if (!workspace) return res.status(404).json({ error: "Not found" });
   if (!workspace.tenantConnectionId || !workspace.siteUrl) return res.status(400).json({ error: "No tenant or site URL" });
@@ -2095,7 +2095,7 @@ router.get("/api/debug/spo-test/:workspaceId", async (req, res) => {
   res.json(results);
 });
 
-router.get("/api/structures", async (req, res) => {
+router.get("/api/structures", requireAuth(), async (req: AuthenticatedRequest, res) => {
   const tenantConnectionId = req.query.tenantConnectionId as string | undefined;
   const workspaces = await storage.getWorkspaces(undefined, tenantConnectionId);
 
