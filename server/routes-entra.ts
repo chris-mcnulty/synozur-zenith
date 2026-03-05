@@ -13,7 +13,10 @@ const SCOPES = ['openid', 'profile', 'email', 'User.Read', 'offline_access', 'Re
 
 function getBaseUrl(): string {
   if (process.env.REPLIT_DOMAINS) {
-    return `https://${process.env.REPLIT_DOMAINS.split(',')[0]}`;
+    const domains = process.env.REPLIT_DOMAINS.split(',');
+    const customDomain = domains.find(d => !d.endsWith('.replit.dev') && !d.endsWith('.replit.app'));
+    if (customDomain) return `https://${customDomain}`;
+    return `https://${domains[0]}`;
   }
   if (process.env.REPLIT_DEV_DOMAIN) {
     return `https://${process.env.REPLIT_DEV_DOMAIN}`;
