@@ -12,6 +12,9 @@ const cryptoProvider = new CryptoProvider();
 const SCOPES = ['openid', 'profile', 'email', 'User.Read', 'offline_access', 'RecordsManagement.Read.All', 'Group.ReadWrite.All'];
 
 function getBaseUrl(): string {
+  if (process.env.REPLIT_DOMAINS) {
+    return `https://${process.env.REPLIT_DOMAINS.split(',')[0]}`;
+  }
   if (process.env.REPLIT_DEV_DOMAIN) {
     return `https://${process.env.REPLIT_DEV_DOMAIN}`;
   }
