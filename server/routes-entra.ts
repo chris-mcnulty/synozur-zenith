@@ -295,6 +295,7 @@ router.get('/callback', async (req: AuthenticatedRequest, res: Response) => {
     }
 
     if (state !== req.session.authState) {
+      console.error('[Entra] State mismatch - received:', state, 'session:', req.session.authState, 'sessionID:', req.sessionID);
       return res.redirect('/login?error=state_mismatch');
     }
 
