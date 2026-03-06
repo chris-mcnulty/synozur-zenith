@@ -47,6 +47,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
+import SynozurAppSwitcher from "@/components/synozur-app-switcher";
 import { useTenant } from "@/lib/tenant-context";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient } from "@/lib/queryClient";
@@ -331,6 +332,8 @@ export default function AppShell({ children }: AppShellProps) {
         {/* Top Header */}
         <header className="h-16 border-b border-border/40 bg-background/80 backdrop-blur-md flex items-center justify-between px-4 lg:px-8 sticky top-0 z-30">
           <div className="flex items-center gap-4">
+            <SynozurAppSwitcher currentApp="zenith" />
+            <div className="w-px h-6 bg-border/40 hidden sm:block" />
             <Sheet>
               <SheetTrigger asChild>
                 <Button variant="ghost" size="icon" className="lg:hidden -ml-2">
