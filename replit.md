@@ -15,11 +15,11 @@ The frontend uses React, Vite, TanStack Query, shadcn/ui, and wouter for a moder
 - **Frontend**: React + Vite + TanStack Query + shadcn/ui + wouter
 - **Backend**: Express.js + Drizzle ORM
 - **Database**: PostgreSQL
-- **Authentication**: Microsoft Entra ID (SSO) with Zenith-managed RBAC. Dual email/password login is also supported. Tokens are encrypted at rest.
+- **Authentication**: Microsoft Entra ID (SSO) with Zenith-managed RBAC. Dual email/password login is also supported. Tokens are encrypted at rest. Frontend auth guard redirects to `/login` when session expires. Production uses `REPLIT_DOMAINS` with custom domain preference for redirect URI construction.
 - **Multi-Tenancy**: Primarily organization-level, allowing organizations to connect multiple M365 tenants. Users can belong to multiple organizations with distinct roles.
 - **Security Model**: Zenith manages authorization and RBAC, while Entra ID handles authentication. It employs a four-layer separation: Entra ID (authentication), Zenith Control Plane (authorization), Zenith Data Plane (inventory), and Zenith RBAC (permissions).
-- **Tenant Ownership**: Each M365 tenant is owned by one Zenith organization with defined ownership types (MSP, Customer, Hybrid).
-- **RBAC**: A robust Role-Based Access Control system (Platform Owner, Tenant Admin, Governance Admin, Operator, Viewer, Read-Only Auditor) gates access and write operations.
+- **Tenant Ownership**: Each M365 tenant is owned by one Zenith organization with defined ownership types (MSP, Customer, Hybrid). Self-service tenant onboarding flow: enter domain → validate → Microsoft admin consent → auto-discover tenant name → link to org. Select-tenant page shows real org memberships and tenant connections from API.
+- **RBAC**: A robust Role-Based Access Control system (Platform Owner, Tenant Admin, Governance Admin, Operator, Viewer, Read-Only Auditor) gates access and write operations. All API routes enforce authentication. Sidebar nav items are filtered by role — admin sections hidden from non-admin users. Entra configure/test routes require Tenant Admin role.
 - **Service Plan Gating**: Features are gated by service plans (TRIAL, STANDARD, PROFESSIONAL, ENTERPRISE) server-side and client-side.
 - **Hash-Based Writeback Dirty Checking**: Uses `spoSyncHash` and `localHash` to detect and manage changes requiring writeback to SharePoint, optimizing bulk updates.
 - **Policy Status Writeback**: Governance policy evaluation results can be written back to SharePoint property bags.

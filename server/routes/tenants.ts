@@ -83,9 +83,16 @@ router.get("/api/admin/tenants/consent/initiate", requireAuth(), async (req: Aut
   (req.session as any).consentNonce = nonce;
   (req.session as any).consentOrgId = user.organizationId;
 
-  const protocol = req.headers['x-forwarded-proto'] || req.protocol;
-  const host = req.headers['x-forwarded-host'] || req.get('host');
-  const baseUrl = `${protocol}://${host}`;
+  let baseUrl: string;
+  if (process.env.REPLIT_DOMAINS) {
+    const domains = process.env.REPLIT_DOMAINS.split(',');
+    const customDomain = domains.find(d => !d.endsWith('.replit.dev') && !d.endsWith('.replit.app'));
+    baseUrl = `https://${customDomain || domains[0]}`;
+  } else {
+    const protocol = req.headers['x-forwarded-proto'] || req.protocol;
+    const host = req.headers['x-forwarded-host'] || req.get('host');
+    baseUrl = `${protocol}://${host}`;
+  }
   const redirectUri = `${baseUrl}/api/admin/tenants/consent/callback`;
 
   const state = Buffer.from(JSON.stringify({
@@ -108,11 +115,11 @@ router.get("/api/admin/tenants/consent/callback", async (req, res) => {
 
   if (error) {
     console.error('[Consent] Admin consent error:', error, error_description);
-    return res.redirect(`/app/admin/tenants?consent_error=${encodeURIComponent(String(error_description || error))}`);
+    return res.redirect(`/app/add-tenant?consent_error=${encodeURIComponent(String(error_description || error))}`);
   }
 
   if (admin_consent !== 'True' || !tenant || !state) {
-    return res.redirect('/app/admin/tenants?consent_error=Consent+was+not+granted');
+    return res.redirect('/app/add-tenant?consent_error=Consent+was+not+granted');
   }
 
   try {
@@ -121,7 +128,7 @@ router.get("/api/admin/tenants/consent/callback", async (req, res) => {
     const sessionOrgId = (req.session as any)?.consentOrgId;
 
     if (!sessionNonce || sessionNonce !== stateData.nonce) {
-      return res.redirect('/app/admin/tenants?consent_error=Invalid+consent+session.+Please+try+again.');
+      return res.redirect('/app/add-tenant?consent_error=Invalid+consent+session.+Please+try+again.');
     }
 
     delete (req.session as any).consentNonce;
@@ -143,7 +150,7 @@ router.get("/api/admin/tenants/consent/callback", async (req, res) => {
         consentGranted: true,
         status: 'ACTIVE',
       });
-      return res.redirect('/app/admin/tenants?consent_success=true');
+      return res.redirect('/app/add-tenant?consent_success=true');
     }
 
     let tenantName = domain.split('.')[0];
@@ -167,10 +174,10 @@ router.get("/api/admin/tenants/consent/callback", async (req, res) => {
       status: 'ACTIVE',
     });
 
-    return res.redirect('/app/admin/tenants?consent_success=true');
+    return res.redirect('/app/add-tenant?consent_success=true');
   } catch (err: any) {
     console.error('[Consent] Callback processing error:', err);
-    return res.redirect(`/app/admin/tenants?consent_error=${encodeURIComponent(err.message)}`);
+    return res.redirect(`/app/add-tenant?consent_error=${encodeURIComponent(err.message)}`);
   }
 });
 

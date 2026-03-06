@@ -1,85 +1,204 @@
 import { Link, useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
-import { Building2, ArrowRight, CheckCircle2 } from "lucide-react";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Building2, ArrowRight, CheckCircle2, Plus, Globe, Loader2, LogOut } from "lucide-react";
+import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { useQuery, useMutation } from "@tanstack/react-query";
+import { queryClient } from "@/lib/queryClient";
+
+type OrgMembership = {
+  id: string;
+  name: string;
+  domain: string;
+  servicePlan: string;
+  role: string;
+  isPrimary: boolean;
+};
+
+type TenantConnection = {
+  id: string;
+  tenantName: string;
+  domain: string;
+  status: string;
+  ownershipType: string;
+  lastSyncAt: string | null;
+  lastSyncSiteCount: number | null;
+};
 
 export default function SelectTenantPage() {
   const [, setLocation] = useLocation();
 
-  const tenants = [
-    {
-      id: "t1",
-      name: "The Synozur Alliance",
-      plan: "BASE",
-      environments: 2,
-      active: true
-    },
-    {
-      id: "t2",
-      name: "Enterprise Demo",
-      plan: "ENTERPRISE",
-      environments: 4,
-      active: false
-    }
-  ];
+  const { data: authData, isLoading: authLoading } = useQuery<{
+    user: { id: string; email: string; name: string | null; role: string };
+    organization: { id: string; name: string; servicePlan: string } | null;
+    activeOrganizationId: string | null;
+  }>({
+    queryKey: ["/api/auth/me"],
+    queryFn: () => fetch("/api/auth/me", { credentials: "include" }).then(r => r.ok ? r.json() : null),
+    staleTime: 5 * 60 * 1000,
+  });
 
-  const handleSelect = (tenantId: string) => {
-    // In a real app, this would set the active tenant in context/state
-    setLocation("/app/dashboard");
+  const { data: orgs = [], isLoading: orgsLoading } = useQuery<OrgMembership[]>({
+    queryKey: ["/api/orgs/mine"],
+    queryFn: () => fetch("/api/orgs/mine", { credentials: "include" }).then(r => r.ok ? r.json() : []),
+    enabled: !!authData?.user,
+  });
+
+  const { data: tenants = [] } = useQuery<TenantConnection[]>({
+    queryKey: ["/api/admin/tenants"],
+    queryFn: () => fetch("/api/admin/tenants", { credentials: "include" }).then(r => r.ok ? r.json() : []),
+    enabled: !!authData?.user,
+  });
+
+  const switchOrgMutation = useMutation({
+    mutationFn: async (organizationId: string) => {
+      const res = await fetch("/api/orgs/switch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ organizationId }),
+      });
+      if (!res.ok) throw new Error("Failed to switch organization");
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries();
+      setLocation("/app/dashboard");
+    },
+  });
+
+  const handleSelectOrg = (orgId: string) => {
+    if (authData?.activeOrganizationId === orgId) {
+      setLocation("/app/dashboard");
+    } else {
+      switchOrgMutation.mutate(orgId);
+    }
   };
+
+  const handleLogout = async () => {
+    try {
+      const res = await fetch("/api/auth/logout", { method: "POST", credentials: "include" });
+      const data = await res.json();
+      if (data.logoutUrl) {
+        window.location.href = data.logoutUrl;
+      } else {
+        setLocation("/login");
+      }
+    } catch {
+      setLocation("/login");
+    }
+  };
+
+  if (authLoading || orgsLoading) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <Loader2 className="w-8 h-8 animate-spin text-primary" />
+      </div>
+    );
+  }
+
+  if (!authData?.user) {
+    setLocation("/login");
+    return null;
+  }
+
+  const activeOrgId = authData.activeOrganizationId || authData.organization?.id;
 
   return (
     <div className="min-h-screen bg-background flex flex-col items-center py-24 px-4">
       <div className="max-w-3xl w-full">
         <div className="text-center mb-12 animate-in fade-in slide-in-from-bottom-4 duration-500">
-          <h1 className="text-3xl font-bold tracking-tight mb-3">Select your tenant</h1>
-          <p className="text-muted-foreground">Choose the Zenith environment you want to access.</p>
+          <h1 className="text-3xl font-bold tracking-tight mb-3" data-testid="text-select-title">
+            {orgs.length > 1 ? "Select your organization" : "Your organization"}
+          </h1>
+          <p className="text-muted-foreground">
+            {authData.user.name ? `Welcome back, ${authData.user.name.split(' ')[0]}.` : `Welcome back.`}
+            {orgs.length > 1 ? " Choose the organization you want to work in." : ""}
+          </p>
         </div>
 
         <div className="grid gap-4 animate-in fade-in slide-in-from-bottom-8 duration-700 delay-100 fill-mode-both">
-          {tenants.map((tenant) => (
-            <Card 
-              key={tenant.id} 
-              className={`cursor-pointer transition-all hover:border-primary/50 hover:shadow-md hover:shadow-primary/5 ${tenant.active ? 'border-primary/30 bg-primary/5' : ''}`}
-              onClick={() => handleSelect(tenant.id)}
-            >
-              <CardContent className="p-6 flex items-center justify-between">
-                <div className="flex items-center gap-4">
-                  <div className="w-12 h-12 rounded-xl bg-muted flex items-center justify-center">
-                    <Building2 className="w-6 h-6 text-muted-foreground" />
-                  </div>
-                  <div>
-                    <h3 className="font-semibold text-lg flex items-center gap-2">
-                      {tenant.name}
-                      {tenant.active && <CheckCircle2 className="w-4 h-4 text-primary" />}
-                    </h3>
-                    <div className="flex items-center gap-3 mt-1 text-sm text-muted-foreground">
-                      <Badge variant={tenant.plan === 'ENTERPRISE' ? 'default' : 'secondary'} className="text-[10px] uppercase font-bold tracking-wider">
-                        {tenant.plan}
-                      </Badge>
-                      <span>{tenant.environments} environments</span>
+          {orgs.map((org) => {
+            const isActive = org.id === activeOrgId;
+            const orgTenants = tenants.filter(t => true);
+            return (
+              <Card
+                key={org.id}
+                className={`cursor-pointer transition-all hover:border-primary/50 hover:shadow-md hover:shadow-primary/5 ${isActive ? 'border-primary/30 bg-primary/5' : ''}`}
+                onClick={() => handleSelectOrg(org.id)}
+                data-testid={`card-org-${org.id}`}
+              >
+                <CardContent className="p-6 flex items-center justify-between">
+                  <div className="flex items-center gap-4">
+                    <div className="w-12 h-12 rounded-xl bg-muted flex items-center justify-center">
+                      <Building2 className="w-6 h-6 text-muted-foreground" />
+                    </div>
+                    <div>
+                      <h3 className="font-semibold text-lg flex items-center gap-2" data-testid={`text-org-name-${org.id}`}>
+                        {org.name}
+                        {isActive && <CheckCircle2 className="w-4 h-4 text-primary" />}
+                      </h3>
+                      <div className="flex items-center gap-3 mt-1 text-sm text-muted-foreground">
+                        <Badge
+                          variant={org.servicePlan === 'ENTERPRISE' ? 'default' : 'secondary'}
+                          className="text-[10px] uppercase font-bold tracking-wider"
+                        >
+                          {org.servicePlan || 'TRIAL'}
+                        </Badge>
+                        {org.domain && (
+                          <span className="flex items-center gap-1">
+                            <Globe className="w-3 h-3" />
+                            {org.domain}
+                          </span>
+                        )}
+                        <span className="capitalize text-xs">{org.role.replace('_', ' ')}</span>
+                      </div>
+                      {orgTenants.length > 0 && (
+                        <p className="text-xs text-muted-foreground mt-1">
+                          {orgTenants.length} connected tenant{orgTenants.length !== 1 ? 's' : ''}
+                        </p>
+                      )}
                     </div>
                   </div>
-                </div>
-                <Button variant="ghost" size="icon" className="rounded-full">
-                  <ArrowRight className="w-5 h-5" />
-                </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="rounded-full"
+                    disabled={switchOrgMutation.isPending}
+                  >
+                    {switchOrgMutation.isPending ? (
+                      <Loader2 className="w-5 h-5 animate-spin" />
+                    ) : (
+                      <ArrowRight className="w-5 h-5" />
+                    )}
+                  </Button>
+                </CardContent>
+              </Card>
+            );
+          })}
+
+          {orgs.length === 0 && (
+            <Card className="border-dashed">
+              <CardContent className="p-8 text-center text-muted-foreground">
+                <Building2 className="w-10 h-10 mx-auto mb-3 opacity-50" />
+                <p className="font-medium">No organizations found</p>
+                <p className="text-sm mt-1">Connect a Microsoft 365 tenant to get started.</p>
               </CardContent>
             </Card>
-          ))}
+          )}
         </div>
 
         <div className="mt-12 flex flex-col items-center gap-4 text-sm text-muted-foreground">
           <Link href="/app/add-tenant">
-            <Button variant="outline" className="gap-2 rounded-full border-dashed border-2 hover:border-primary hover:text-primary">
-              <Building2 className="w-4 h-4" />
-              Connect another tenant
+            <Button variant="outline" className="gap-2 rounded-full border-dashed border-2 hover:border-primary hover:text-primary" data-testid="button-connect-tenant">
+              <Plus className="w-4 h-4" />
+              Connect a new M365 tenant
             </Button>
           </Link>
-          <div>
-            Need access to a different tenant? <a href="#" className="text-primary hover:underline">Contact your administrator</a>.
-          </div>
+          <Button variant="ghost" size="sm" className="gap-2 text-muted-foreground" onClick={handleLogout} data-testid="button-logout">
+            <LogOut className="w-4 h-4" />
+            Sign out
+          </Button>
         </div>
       </div>
     </div>

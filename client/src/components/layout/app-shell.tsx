@@ -55,20 +55,49 @@ interface AppShellProps {
   children: React.ReactNode;
 }
 
-const navGroups = [
+const ROLE_LEVELS: Record<string, number> = {
+  platform_owner: 100,
+  tenant_admin: 80,
+  governance_admin: 60,
+  operator: 40,
+  viewer: 20,
+  read_only_auditor: 10,
+};
+
+function hasMinRole(userRole: string | undefined, minRole: string): boolean {
+  if (!userRole) return false;
+  return (ROLE_LEVELS[userRole] ?? 0) >= (ROLE_LEVELS[minRole] ?? 999);
+}
+
+type NavItem = {
+  name: string;
+  href: string;
+  icon: any;
+  badge?: string;
+  minRole?: string;
+};
+
+type NavGroup = {
+  label: string;
+  minRole?: string;
+  items: NavItem[];
+};
+
+const navGroups: NavGroup[] = [
   {
     label: "Overview",
     items: [
       { name: "Dashboard", href: "/app/dashboard", icon: LayoutDashboard },
-      { name: "Approvals", href: "/app/approvals", icon: CheckCircle2, badge: "3" },
-      { name: "Provision", href: "/app/provision", icon: FolderPlus },
+      { name: "Approvals", href: "/app/approvals", icon: CheckCircle2, badge: "3", minRole: "operator" },
+      { name: "Provision", href: "/app/provision", icon: FolderPlus, minRole: "operator" },
     ]
   },
   {
     label: "Management",
+    minRole: "operator",
     items: [
       { name: "Site Governance", href: "/app/governance", icon: ShieldCheck },
-      { name: "Policy Builder", href: "/app/admin/policies", icon: ShieldCheck, badge: "Ent+" },
+      { name: "Policy Builder", href: "/app/admin/policies", icon: ShieldCheck, badge: "Ent+", minRole: "governance_admin" },
       { name: "Structures", href: "/app/structures", icon: Layers },
       { name: "Document Library", href: "/app/document-library", icon: Library },
       { name: "Content Types", href: "/app/content-types", icon: FileText },
@@ -156,143 +185,118 @@ export default function AppShell({ children }: AppShellProps) {
     ? currentUser.name.split(" ").map(n => n[0]).join("").toUpperCase().slice(0, 2)
     : currentUser?.email?.[0]?.toUpperCase() || "?";
 
-  const NavLinks = () => (
-    <div className="space-y-6 py-4">
-      {navGroups.map((group, i) => (
-        <div key={i} className="space-y-2">
-          <h4 className="px-4 text-xs font-bold text-muted-foreground uppercase tracking-widest mb-2">
-            {group.label}
-          </h4>
-          <div className="space-y-1">
-            {group.items.map((item) => {
-              const isActive = location.startsWith(item.href);
-              return (
-                <Link key={item.name} href={item.href} className={`flex items-center justify-between px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
-                  isActive 
-                    ? "bg-primary/10 text-primary shadow-sm shadow-primary/5" 
-                    : "text-muted-foreground hover:bg-muted/80 hover:text-foreground"
-                }`}>
-                  <div className="flex items-center gap-3">
-                    <item.icon className={`w-5 h-5 ${isActive ? "text-primary" : "text-muted-foreground/70"}`} />
-                    {item.name}
-                  </div>
-                  {item.badge && (
-                    <span className={`flex h-5 items-center justify-center rounded-full px-2 text-[10px] font-bold ${isActive ? 'bg-primary text-primary-foreground' : 'bg-primary/20 text-primary'}`}>
-                      {item.badge}
-                    </span>
-                  )}
-                </Link>
-              );
-            })}
-          </div>
-        </div>
-      ))}
+  const effectiveRole = currentUser?.effectiveRole || currentUser?.role || "viewer";
 
-      <div className="space-y-2 pt-4 border-t border-border/50">
-        <h4 className="px-4 text-xs font-bold text-muted-foreground uppercase tracking-widest mb-2">
-          Administration
-        </h4>
-        <div className="space-y-1">
-          <Link href="/app/admin" className={`flex items-center justify-between px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
-            location === "/app/admin" 
-              ? "bg-primary/10 text-primary shadow-sm shadow-primary/5" 
-              : "text-muted-foreground hover:bg-muted/80 hover:text-foreground"
-          }`}>
-            <div className="flex items-center gap-3">
-              <LayoutTemplate className={`w-5 h-5 ${location === "/app/admin" ? "text-primary" : "text-muted-foreground/70"}`} />
-              Provisioning Templates
+  const adminItems: Array<{ name: string; href: string; icon: any; matchExact?: boolean; minRole: string }> = [
+    { name: "Provisioning Templates", href: "/app/admin", icon: LayoutTemplate, matchExact: true, minRole: "tenant_admin" },
+    { name: "User Management", href: "/app/admin/users", icon: UsersIcon, minRole: "tenant_admin" },
+    { name: "Organization Settings", href: "/app/admin/organization", icon: Building2, minRole: "tenant_admin" },
+    { name: "Tenant Connections", href: "/app/admin/tenants", icon: Cloud, minRole: "tenant_admin" },
+    { name: "Data Dictionaries", href: "/app/admin/data-dictionaries", icon: BookMarked, minRole: "tenant_admin" },
+    { name: "Custom Fields", href: "/app/admin/custom-fields", icon: Settings, minRole: "tenant_admin" },
+    { name: "Service Plans", href: "/app/admin/plans", icon: CreditCard, minRole: "tenant_admin" },
+  ];
+
+  const platformAdminItems: Array<{ name: string; href: string; icon: any; minRole: string }> = [
+    { name: "System Administration", href: "/app/admin/system", icon: Server, minRole: "platform_owner" },
+    { name: "Entra ID Setup", href: "/app/admin/entra", icon: KeyRound, minRole: "tenant_admin" },
+  ];
+
+  const NavLinks = () => {
+    const filteredGroups = navGroups
+      .filter(group => !group.minRole || hasMinRole(effectiveRole, group.minRole))
+      .map(group => ({
+        ...group,
+        items: group.items.filter(item => !item.minRole || hasMinRole(effectiveRole, item.minRole)),
+      }))
+      .filter(group => group.items.length > 0);
+
+    const visibleAdminItems = adminItems.filter(item => hasMinRole(effectiveRole, item.minRole));
+    const visiblePlatformItems = platformAdminItems.filter(item => hasMinRole(effectiveRole, item.minRole));
+    const showAdminSection = visibleAdminItems.length > 0 || visiblePlatformItems.length > 0;
+
+    return (
+      <div className="space-y-6 py-4">
+        {filteredGroups.map((group, i) => (
+          <div key={i} className="space-y-2">
+            <h4 className="px-4 text-xs font-bold text-muted-foreground uppercase tracking-widest mb-2">
+              {group.label}
+            </h4>
+            <div className="space-y-1">
+              {group.items.map((item) => {
+                const isActive = location.startsWith(item.href);
+                return (
+                  <Link key={item.name} href={item.href} className={`flex items-center justify-between px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
+                    isActive 
+                      ? "bg-primary/10 text-primary shadow-sm shadow-primary/5" 
+                      : "text-muted-foreground hover:bg-muted/80 hover:text-foreground"
+                  }`}>
+                    <div className="flex items-center gap-3">
+                      <item.icon className={`w-5 h-5 ${isActive ? "text-primary" : "text-muted-foreground/70"}`} />
+                      {item.name}
+                    </div>
+                    {item.badge && (
+                      <span className={`flex h-5 items-center justify-center rounded-full px-2 text-[10px] font-bold ${isActive ? 'bg-primary text-primary-foreground' : 'bg-primary/20 text-primary'}`}>
+                        {item.badge}
+                      </span>
+                    )}
+                  </Link>
+                );
+              })}
             </div>
-          </Link>
-          <Link href="/app/admin/users" className={`flex items-center justify-between px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
-            location.startsWith("/app/admin/users") 
-              ? "bg-primary/10 text-primary shadow-sm shadow-primary/5" 
-              : "text-muted-foreground hover:bg-muted/80 hover:text-foreground"
-          }`}>
-            <div className="flex items-center gap-3">
-              <UsersIcon className={`w-5 h-5 ${location.startsWith("/app/admin/users") ? "text-primary" : "text-muted-foreground/70"}`} />
-              User Management
-            </div>
-          </Link>
-          <Link href="/app/admin/organization" className={`flex items-center justify-between px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
-            location.startsWith("/app/admin/organization") 
-              ? "bg-primary/10 text-primary shadow-sm shadow-primary/5" 
-              : "text-muted-foreground hover:bg-muted/80 hover:text-foreground"
-          }`}>
-            <div className="flex items-center gap-3">
-              <Building2 className={`w-5 h-5 ${location.startsWith("/app/admin/organization") ? "text-primary" : "text-muted-foreground/70"}`} />
-              Organization Settings
-            </div>
-          </Link>
-          <Link href="/app/admin/tenants" className={`flex items-center justify-between px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
-            location.startsWith("/app/admin/tenants") 
-              ? "bg-primary/10 text-primary shadow-sm shadow-primary/5" 
-              : "text-muted-foreground hover:bg-muted/80 hover:text-foreground"
-          }`}>
-            <div className="flex items-center gap-3">
-              <Cloud className={`w-5 h-5 ${location.startsWith("/app/admin/tenants") ? "text-primary" : "text-muted-foreground/70"}`} />
-              Tenant Connections
-            </div>
-          </Link>
-          <Link href="/app/admin/data-dictionaries" className={`flex items-center justify-between px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
-            location.startsWith("/app/admin/data-dictionaries") 
-              ? "bg-primary/10 text-primary shadow-sm shadow-primary/5" 
-              : "text-muted-foreground hover:bg-muted/80 hover:text-foreground"
-          }`}>
-            <div className="flex items-center gap-3">
-              <BookMarked className={`w-5 h-5 ${location.startsWith("/app/admin/data-dictionaries") ? "text-primary" : "text-muted-foreground/70"}`} />
-              Data Dictionaries
-            </div>
-          </Link>
-          <Link href="/app/admin/custom-fields" className={`flex items-center justify-between px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
-            location.startsWith("/app/admin/custom-fields") 
-              ? "bg-primary/10 text-primary shadow-sm shadow-primary/5" 
-              : "text-muted-foreground hover:bg-muted/80 hover:text-foreground"
-          }`}>
-            <div className="flex items-center gap-3">
-              <Settings className={`w-5 h-5 ${location.startsWith("/app/admin/custom-fields") ? "text-primary" : "text-muted-foreground/70"}`} />
-              Custom Fields
-            </div>
-          </Link>
-          <Link href="/app/admin/plans" className={`flex items-center justify-between px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
-            location.startsWith("/app/admin/plans") 
-              ? "bg-primary/10 text-primary shadow-sm shadow-primary/5" 
-              : "text-muted-foreground hover:bg-muted/80 hover:text-foreground"
-          }`}>
-            <div className="flex items-center gap-3">
-              <CreditCard className={`w-5 h-5 ${location.startsWith("/app/admin/plans") ? "text-primary" : "text-muted-foreground/70"}`} />
-              Service Plans
-            </div>
-          </Link>
-          
-          <div className="pt-2 mt-2 border-t border-border/50">
-            <div className="px-3 pb-1 flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest text-primary/70">
-              <ShieldCheck className="w-3 h-3" /> Platform Admin Only
-            </div>
-            <Link href="/app/admin/system" className={`flex items-center justify-between px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
-              location.startsWith("/app/admin/system") 
-                ? "bg-primary/10 text-primary shadow-sm shadow-primary/5" 
-                : "text-muted-foreground hover:bg-muted/80 hover:text-foreground"
-            }`}>
-              <div className="flex items-center gap-3">
-                <Server className={`w-5 h-5 ${location.startsWith("/app/admin/system") ? "text-primary" : "text-muted-foreground/70"}`} />
-                System Administration
-              </div>
-            </Link>
-            <Link href="/app/admin/entra" className={`flex items-center justify-between px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
-              location.startsWith("/app/admin/entra") 
-                ? "bg-primary/10 text-primary shadow-sm shadow-primary/5" 
-                : "text-muted-foreground hover:bg-muted/80 hover:text-foreground"
-            }`}>
-              <div className="flex items-center gap-3">
-                <KeyRound className={`w-5 h-5 ${location.startsWith("/app/admin/entra") ? "text-primary" : "text-muted-foreground/70"}`} />
-                Entra ID Setup
-              </div>
-            </Link>
           </div>
-        </div>
+        ))}
+
+        {showAdminSection && (
+          <div className="space-y-2 pt-4 border-t border-border/50">
+            <h4 className="px-4 text-xs font-bold text-muted-foreground uppercase tracking-widest mb-2">
+              Administration
+            </h4>
+            <div className="space-y-1">
+              {visibleAdminItems.map((item) => {
+                const isActive = item.matchExact ? location === item.href : location.startsWith(item.href);
+                return (
+                  <Link key={item.name} href={item.href} className={`flex items-center justify-between px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
+                    isActive 
+                      ? "bg-primary/10 text-primary shadow-sm shadow-primary/5" 
+                      : "text-muted-foreground hover:bg-muted/80 hover:text-foreground"
+                  }`}>
+                    <div className="flex items-center gap-3">
+                      <item.icon className={`w-5 h-5 ${isActive ? "text-primary" : "text-muted-foreground/70"}`} />
+                      {item.name}
+                    </div>
+                  </Link>
+                );
+              })}
+
+              {visiblePlatformItems.length > 0 && (
+                <div className="pt-2 mt-2 border-t border-border/50">
+                  <div className="px-3 pb-1 flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest text-primary/70">
+                    <ShieldCheck className="w-3 h-3" /> Platform Admin Only
+                  </div>
+                  {visiblePlatformItems.map((item) => {
+                    const isActive = location.startsWith(item.href);
+                    return (
+                      <Link key={item.name} href={item.href} className={`flex items-center justify-between px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
+                        isActive 
+                          ? "bg-primary/10 text-primary shadow-sm shadow-primary/5" 
+                          : "text-muted-foreground hover:bg-muted/80 hover:text-foreground"
+                      }`}>
+                        <div className="flex items-center gap-3">
+                          <item.icon className={`w-5 h-5 ${isActive ? "text-primary" : "text-muted-foreground/70"}`} />
+                          {item.name}
+                        </div>
+                      </Link>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
       </div>
-    </div>
-  );
+    );
+  };
 
   return (
     <div className="min-h-screen bg-background flex text-foreground">

@@ -3,6 +3,7 @@ import { ConfidentialClientApplication, CryptoProvider, AuthorizationCodeRequest
 import { storage } from './storage';
 import { encryptToken, isEncryptionConfigured } from './utils/encryption';
 import type { AuthenticatedRequest } from './middleware/rbac';
+import { requireAuth, requireRole } from './middleware/rbac';
 import { ZENITH_ROLES } from '@shared/schema';
 import { isPublicEmailDomain } from './utils/publicDomains';
 
@@ -143,7 +144,7 @@ router.get('/status', (_req: Request, res: Response) => {
   });
 });
 
-router.post('/configure', async (req: AuthenticatedRequest, res: Response) => {
+router.post('/configure', requireAuth(), requireRole(ZENITH_ROLES.TENANT_ADMIN), async (req: AuthenticatedRequest, res: Response) => {
   try {
     const { clientId, clientSecret, tenantId, tokenEncryptionSecret } = req.body;
 
@@ -174,7 +175,7 @@ router.post('/configure', async (req: AuthenticatedRequest, res: Response) => {
   }
 });
 
-router.post('/test', async (_req: Request, res: Response) => {
+router.post('/test', requireAuth(), requireRole(ZENITH_ROLES.TENANT_ADMIN), async (_req: Request, res: Response) => {
   try {
     const clientId = process.env.AZURE_CLIENT_ID;
     const clientSecret = process.env.AZURE_CLIENT_SECRET;
