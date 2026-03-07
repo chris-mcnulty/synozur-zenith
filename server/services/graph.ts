@@ -1055,6 +1055,25 @@ async function writeSitePropertyBagViaRest(
   }
 }
 
+function encodeIndexedPropertyKey(key: string): string {
+  const buf = Buffer.alloc(key.length * 2);
+  for (let i = 0; i < key.length; i++) {
+    buf.writeUInt16LE(key.charCodeAt(i), i * 2);
+  }
+  return buf.toString('base64');
+}
+
+function buildIndexedPropertyKeysValue(existingValue: string | null, newKeys: string[]): string {
+  const existingEntries = existingValue ? existingValue.split('|').filter(e => e.length > 0) : [];
+  const encodedNewKeys = newKeys.map(k => encodeIndexedPropertyKey(k));
+  for (const encoded of encodedNewKeys) {
+    if (!existingEntries.includes(encoded)) {
+      existingEntries.push(encoded);
+    }
+  }
+  return existingEntries.join('|') + '|';
+}
+
 async function writeSitePropertyBagViaCsom(
   spoToken: string,
   siteUrl: string,
@@ -1076,7 +1095,44 @@ async function writeSitePropertyBagViaCsom(
   const csomXml = `<Request AddExpandoFieldTypeSuffix="true" SchemaVersion="15.0.0.0" LibraryVersion="16.0.0.0" ApplicationName="Zenith" xmlns="http://schemas.microsoft.com/sharepoint/clientquery/2009"><Actions>${actionsXml}</Actions><ObjectPaths><Property Id="1" ParentId="0" Name="Web" /><Property Id="3" ParentId="1" Name="AllProperties" /><StaticProperty Id="0" TypeId="{3747adcd-a3c3-41b9-bfab-4a64dd2f1e0a}" Name="Current" /></ObjectPaths></Request>`;
 
   console.log(`[property-bag] Trying CSOM Web.AllProperties approach`);
-  return executeCsomQuery(spoToken, siteUrl, csomXml);
+  const result = await executeCsomQuery(spoToken, siteUrl, csomXml);
+  if (!result.success) return result;
+
+  const indexResult = await ensurePropertyKeysIndexed(spoToken, siteUrl, Object.keys(properties));
+  if (!indexResult.success) {
+    console.warn(`[property-bag] Properties written but indexing failed: ${indexResult.error}`);
+  }
+  return result;
+}
+
+async function ensurePropertyKeysIndexed(
+  spoToken: string,
+  siteUrl: string,
+  keys: string[]
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    console.log(`[property-bag] Ensuring ${keys.length} property keys are indexed: ${keys.join(', ')}`);
+
+    const existingProps = await fetchSitePropertyBag(spoToken, siteUrl);
+    const existingIndexedKeys = (existingProps.properties?.['vti_indexedpropertykeys'] as string) || '';
+    const updatedIndexedKeys = buildIndexedPropertyKeysValue(existingIndexedKeys, keys);
+
+    if (updatedIndexedKeys === existingIndexedKeys) {
+      console.log(`[property-bag] All keys already indexed, skipping`);
+      return { success: true };
+    }
+
+    const safeVal = updatedIndexedKeys.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const indexCsomXml = `<Request AddExpandoFieldTypeSuffix="true" SchemaVersion="15.0.0.0" LibraryVersion="16.0.0.0" ApplicationName="Zenith" xmlns="http://schemas.microsoft.com/sharepoint/clientquery/2009"><Actions><ObjectPath Id="2" ObjectPathId="1" /><ObjectPath Id="4" ObjectPathId="3" /><Method Name="SetFieldValue" Id="5" ObjectPathId="3"><Parameters><Parameter Type="String">vti_indexedpropertykeys</Parameter><Parameter Type="String">${safeVal}</Parameter></Parameters></Method><Method Name="Update" Id="6" ObjectPathId="1" /></Actions><ObjectPaths><Property Id="1" ParentId="0" Name="Web" /><Property Id="3" ParentId="1" Name="AllProperties" /><StaticProperty Id="0" TypeId="{3747adcd-a3c3-41b9-bfab-4a64dd2f1e0a}" Name="Current" /></ObjectPaths></Request>`;
+
+    const result = await executeCsomQuery(spoToken, siteUrl, indexCsomXml);
+    if (result.success) {
+      console.log(`[property-bag] Successfully indexed ${keys.length} property keys`);
+    }
+    return result;
+  } catch (err: any) {
+    return { success: false, error: `Indexing failed: ${err.message}` };
+  }
 }
 
 async function writeSitePropertyBagWithNoScriptToggle(
@@ -1098,7 +1154,14 @@ async function writeSitePropertyBagWithNoScriptToggle(
   actionsXml += `<Method Name="Update" Id="${actionId}" ObjectPathId="1" />`;
   const csomXml = `<Request AddExpandoFieldTypeSuffix="true" SchemaVersion="15.0.0.0" LibraryVersion="16.0.0.0" ApplicationName="Zenith" xmlns="http://schemas.microsoft.com/sharepoint/clientquery/2009"><Actions>${actionsXml}</Actions><ObjectPaths><Property Id="1" ParentId="0" Name="Web" /><Property Id="3" ParentId="1" Name="AllProperties" /><StaticProperty Id="0" TypeId="{3747adcd-a3c3-41b9-bfab-4a64dd2f1e0a}" Name="Current" /></ObjectPaths></Request>`;
 
-  return executeCsomWithNoScriptToggle(spoToken, siteUrl, csomXml, userId);
+  const result = await executeCsomWithNoScriptToggle(spoToken, siteUrl, csomXml, userId);
+  if (!result.success) return result;
+
+  const indexResult = await ensurePropertyKeysIndexed(spoToken, siteUrl, Object.keys(properties));
+  if (!indexResult.success) {
+    console.warn(`[property-bag] Properties written but indexing failed: ${indexResult.error}`);
+  }
+  return result;
 }
 
 export async function applySensitivityLabelToSite(
