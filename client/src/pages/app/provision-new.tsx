@@ -69,8 +69,7 @@ export default function ProvisionNewPage() {
         projectType,
         sensitivity: sensitivityMap[sensitivity] || sensitivity.toUpperCase(),
         externalSharing: sensitivity !== "highly_confidential",
-        primarySteward: owner,
-        secondarySteward: secondaryOwner,
+        requestedBy: owner,
         governedName: getPolicyPreview(),
       });
     },

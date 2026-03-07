@@ -61,8 +61,6 @@ const BUILT_IN_EVALUATORS: Record<string, (workspace: Workspace, config?: Record
       projectCode: (w) => w.projectCode,
       description: (w) => w.description,
       sensitivityLabelId: (w) => w.sensitivityLabelId,
-      primarySteward: (w) => w.primarySteward,
-      secondarySteward: (w) => w.secondarySteward,
     };
 
     const missingFields: string[] = [];

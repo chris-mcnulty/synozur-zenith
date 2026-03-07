@@ -37,6 +37,7 @@ import {
   X,
   KeyRound,
   Lock,
+  Play,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -178,6 +179,32 @@ export default function TenantConnectionsPage() {
       toast({ title: "Error", description: err.message, variant: "destructive" });
     } finally {
       setReconsentingId(null);
+    }
+  };
+
+  const [evaluatingId, setEvaluatingId] = useState<string | null>(null);
+
+  const handleEvaluatePolicies = async (id: string) => {
+    setEvaluatingId(id);
+    try {
+      const res = await apiRequest("POST", `/api/admin/tenants/${id}/evaluate-policies`);
+      const result = await res.json();
+      if (result.error) {
+        toast({ title: "Evaluation Error", description: result.error, variant: "destructive" });
+      } else if (result.message && result.evaluated === 0) {
+        toast({ title: "No Policies", description: result.message });
+      } else {
+        const policyList = result.policies?.join(", ") || result.policyName || "policies";
+        toast({
+          title: "Policies Evaluated",
+          description: `Evaluated ${result.evaluated} workspaces against ${policyList}. ${result.changed} changed.`,
+        });
+        queryClient.invalidateQueries({ queryKey: ["/api/admin/tenants"] });
+      }
+    } catch (err: any) {
+      toast({ title: "Evaluation Failed", description: err.message, variant: "destructive" });
+    } finally {
+      setEvaluatingId(null);
     }
   };
 
@@ -559,6 +586,14 @@ export default function TenantConnectionsPage() {
                           >
                             {reconsentingId === conn.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Lock className="w-4 h-4" />}
                             Update Permissions
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            className="gap-2"
+                            onClick={() => handleEvaluatePolicies(conn.id)}
+                            disabled={evaluatingId === conn.id}
+                          >
+                            {evaluatingId === conn.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
+                            {evaluatingId === conn.id ? "Evaluating..." : "Evaluate Policies"}
                           </DropdownMenuItem>
                           <DropdownMenuItem className="gap-2" onClick={() => setMetadataDialogTenantId(conn.id)}>
                             <Settings2 className="w-4 h-4" /> Governance Settings

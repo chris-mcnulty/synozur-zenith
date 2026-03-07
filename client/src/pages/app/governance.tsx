@@ -1563,7 +1563,7 @@ export default function GovernancePage() {
                 )}
               </div>
               <div className="text-xs text-muted-foreground space-y-1">
-                <p><strong>Editable fields:</strong> Department, Cost Center, Project Code, Primary Steward, Secondary Steward, Project Type, Sensitivity, Description, and all Custom Fields (CF: columns).</p>
+                <p><strong>Editable fields:</strong> Department, Cost Center, Project Code, Project Type, Sensitivity, Description, and all Custom Fields (CF: columns).</p>
                 <p><strong>Matching:</strong> Workspaces are matched by "Site URL" column. Empty values are skipped (not cleared).</p>
               </div>
             </div>

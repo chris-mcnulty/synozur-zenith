@@ -360,8 +360,6 @@ const CONFIGURABLE_METADATA_FIELDS = [
   { field: "projectCode", label: "Project Code", description: "Project or engagement code" },
   { field: "description", label: "Description", description: "Workspace description or purpose" },
   { field: "sensitivityLabelId", label: "Sensitivity Label (Purview)", description: "Microsoft Purview sensitivity label" },
-  { field: "primarySteward", label: "Primary Owner", description: "Primary steward / owner assigned" },
-  { field: "secondarySteward", label: "Secondary Owner", description: "Secondary steward / owner assigned" },
 ];
 
 router.get("/api/admin/tenants/:tenantConnectionId/required-metadata", requireAuth(), async (req: AuthenticatedRequest, res) => {
