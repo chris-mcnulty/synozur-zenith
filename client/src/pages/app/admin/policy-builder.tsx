@@ -383,7 +383,7 @@ export default function PolicyBuilderPage() {
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
           {/* Left Sidebar - Policy List */}
-          <div className="space-y-3">
+          <div className="space-y-3 md:sticky md:top-4 md:self-start">
             <div className="text-xs font-semibold uppercase text-muted-foreground mb-2 px-1">Policies ({policies.length})</div>
             {policies.map((policy) => (
               <button
