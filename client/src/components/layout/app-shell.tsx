@@ -1,4 +1,5 @@
-import { Link, useLocation } from "wouter";
+import { useState, useEffect } from "react";
+import { Link, useLocation, Redirect } from "wouter";
 import { 
   LayoutDashboard, 
   FolderPlus, 
@@ -132,7 +133,7 @@ type OrgMembership = {
 };
 
 export default function AppShell({ children }: AppShellProps) {
-  const [location, setLocation] = useLocation();
+  const [location] = useLocation();
   const { tenants, selectedTenant, setSelectedTenantId } = useTenant();
 
   const { data: authData, isLoading: authLoading } = useQuery<{
@@ -151,11 +152,6 @@ export default function AppShell({ children }: AppShellProps) {
     staleTime: 5 * 60 * 1000,
     retry: false,
   });
-
-  if (!authLoading && !authData?.user) {
-    setLocation("/login");
-    return null;
-  }
 
   const { data: myOrgs = [] } = useQuery<OrgMembership[]>({
     queryKey: ["/api/orgs/mine"],
@@ -181,6 +177,10 @@ export default function AppShell({ children }: AppShellProps) {
       queryClient.invalidateQueries();
     },
   });
+
+  if (!authLoading && !authData?.user) {
+    return <Redirect to="/login" />;
+  }
 
   const currentUser = authData?.user;
   const activeOrg = authData?.organization;
