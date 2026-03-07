@@ -587,14 +587,6 @@ export default function TenantConnectionsPage() {
                             {reconsentingId === conn.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Lock className="w-4 h-4" />}
                             Update Permissions
                           </DropdownMenuItem>
-                          <DropdownMenuItem
-                            className="gap-2"
-                            onClick={() => handleEvaluatePolicies(conn.id)}
-                            disabled={evaluatingId === conn.id}
-                          >
-                            {evaluatingId === conn.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
-                            {evaluatingId === conn.id ? "Evaluating..." : "Evaluate Policies"}
-                          </DropdownMenuItem>
                           <DropdownMenuItem className="gap-2" onClick={() => setMetadataDialogTenantId(conn.id)}>
                             <Settings2 className="w-4 h-4" /> Governance Settings
                           </DropdownMenuItem>

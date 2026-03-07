@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTenant } from "@/lib/tenant-context";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -16,6 +16,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
+import { apiRequest } from "@/lib/queryClient";
 import { 
   ShieldCheck, 
   Plus, 
@@ -29,7 +30,8 @@ import {
   XCircle,
   AlertTriangle,
   FileCheck2,
-  Pencil
+  Pencil,
+  BrainCircuit
 } from "lucide-react";
 
 interface PolicyRule {
@@ -81,6 +83,14 @@ const OPERATORS = [
   { value: "CONTAINS", label: "Contains" },
   { value: "GREATER_THAN", label: "Greater than" },
   { value: "LESS_THAN", label: "Less than" },
+];
+
+const DEFAULT_COPILOT_READINESS_RULES: PolicyRule[] = [
+  { ruleType: "SENSITIVITY_LABEL_REQUIRED", label: "Sensitivity Label Required", description: "Workspace must have a Purview sensitivity label applied.", enabled: true },
+  { ruleType: "DEPARTMENT_REQUIRED", label: "Department Assigned", description: "Workspace must have a department assigned.", enabled: true },
+  { ruleType: "DUAL_OWNERSHIP", label: "Dual Ownership", description: "Workspace must have at least two active owners.", enabled: true },
+  { ruleType: "METADATA_COMPLETE", label: "Metadata Complete", description: "All required governance metadata fields must be populated.", enabled: true },
+  { ruleType: "SHARING_POLICY", label: "Sharing Policy", description: "External sharing policy must align with sensitivity classification.", enabled: true },
 ];
 
 export default function PolicyBuilderPage() {
@@ -179,6 +189,46 @@ export default function PolicyBuilderPage() {
     },
   });
 
+  const [evaluating, setEvaluating] = useState(false);
+
+  async function handleEvaluatePolicies() {
+    if (!selectedTenant?.id) {
+      toast({ title: "No tenant selected", description: "Select a tenant connection first.", variant: "destructive" });
+      return;
+    }
+    setEvaluating(true);
+    try {
+      const res = await apiRequest("POST", `/api/admin/tenants/${selectedTenant.id}/evaluate-policies`);
+      const result = await res.json();
+      if (result.error) {
+        toast({ title: "Evaluation Error", description: result.error, variant: "destructive" });
+      } else if (result.message && result.evaluated === 0) {
+        toast({ title: "No Policies", description: result.message });
+      } else {
+        const policyList = result.policies?.join(", ") || result.policyName || "policies";
+        toast({
+          title: "Policies Evaluated",
+          description: `Evaluated ${result.evaluated} workspaces against ${policyList}. ${result.changed} changed.`,
+        });
+        queryClient.invalidateQueries({ queryKey: ["/api/policies"] });
+      }
+    } catch (err: any) {
+      toast({ title: "Evaluation Failed", description: err.message, variant: "destructive" });
+    } finally {
+      setEvaluating(false);
+    }
+  }
+
+  function handleCreateCopilotReadiness() {
+    if (!organizationId) return;
+    createMutation.mutate({
+      organizationId,
+      name: "Copilot Readiness",
+      policyType: "COPILOT_READINESS",
+      rules: DEFAULT_COPILOT_READINESS_RULES,
+    });
+  }
+
   function selectPolicy(policy: GovernancePolicy) {
     setSelectedPolicyId(policy.id);
     setEditName(policy.name);
@@ -263,9 +313,11 @@ export default function PolicyBuilderPage() {
 
   const selectedPolicy = policies?.find(p => p.id === selectedPolicyId);
 
-  if (!selectedPolicyId && policies && policies.length > 0 && !isLoading) {
-    selectPolicy(policies[0]);
-  }
+  useEffect(() => {
+    if (!selectedPolicyId && policies && policies.length > 0 && !isLoading) {
+      selectPolicy(policies[0]);
+    }
+  }, [policies, isLoading, selectedPolicyId]);
 
   return (
     <div className="space-y-6 animate-in fade-in duration-500 pb-12 max-w-6xl mx-auto">
@@ -279,7 +331,7 @@ export default function PolicyBuilderPage() {
           </div>
           <p className="text-muted-foreground mt-1">Manage composable governance policies with rule-based evaluation for Copilot readiness and compliance.</p>
         </div>
-        <div className="flex gap-3">
+        <div className="flex gap-3 flex-wrap">
           {hasChanges && selectedPolicyId && (
             <Button
               onClick={handleSave}
@@ -291,6 +343,16 @@ export default function PolicyBuilderPage() {
               Save Changes
             </Button>
           )}
+          <Button
+            variant="outline"
+            onClick={handleEvaluatePolicies}
+            disabled={evaluating || !selectedTenant}
+            className="gap-2"
+            data-testid="button-evaluate-policies"
+          >
+            {evaluating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
+            {evaluating ? "Evaluating..." : "Evaluate All"}
+          </Button>
           <Button variant="outline" onClick={handleCreateNew} disabled={createMutation.isPending} className="gap-2" data-testid="button-create-policy">
             <Plus className="w-4 h-4" />
             New Policy
@@ -308,9 +370,14 @@ export default function PolicyBuilderPage() {
             <ShieldCheck className="w-12 h-12 mx-auto text-muted-foreground/50 mb-4" />
             <h3 className="text-lg font-semibold mb-2">No Governance Policies</h3>
             <p className="text-muted-foreground mb-6">Create your first governance policy to define rules for Copilot readiness, compliance, and provisioning.</p>
-            <Button onClick={handleCreateNew} disabled={createMutation.isPending} className="gap-2" data-testid="button-create-first-policy">
-              <Plus className="w-4 h-4" /> Create Policy
-            </Button>
+            <div className="flex gap-3 justify-center">
+              <Button onClick={handleCreateCopilotReadiness} disabled={createMutation.isPending} className="gap-2" data-testid="button-create-copilot-policy">
+                <BrainCircuit className="w-4 h-4" /> Copilot Readiness Policy
+              </Button>
+              <Button variant="outline" onClick={handleCreateNew} disabled={createMutation.isPending} className="gap-2" data-testid="button-create-first-policy">
+                <Plus className="w-4 h-4" /> Blank Policy
+              </Button>
+            </div>
           </CardContent>
         </Card>
       ) : (
