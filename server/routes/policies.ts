@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { requireAuth, requireRole, type AuthenticatedRequest } from "../middleware/rbac";
-import { ZENITH_ROLES, insertGovernancePolicySchema } from "@shared/schema";
+import { ZENITH_ROLES, insertGovernancePolicySchema, type PolicyRuleDefinition, type GovernancePolicy } from "@shared/schema";
 import { storage } from "../storage";
 import { evaluatePolicy, evaluationResultsToCopilotRules, formatPolicyBagValue, type EvaluationContext } from "../services/policy-engine";
 
@@ -47,6 +47,116 @@ router.patch("/api/policies/:id", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZEN
 router.delete("/api/policies/:id", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN), async (req: AuthenticatedRequest, res) => {
   await storage.deleteGovernancePolicy(req.params.id);
   res.json({ message: "Policy deleted" });
+});
+
+router.post("/api/policies/simulate", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN), async (req: AuthenticatedRequest, res) => {
+  try {
+    const { tenantConnectionId, rules, policyId } = req.body;
+    if (!tenantConnectionId || !Array.isArray(rules)) {
+      return res.status(400).json({ message: "tenantConnectionId and rules array are required" });
+    }
+
+    const connection = await storage.getTenantConnection(tenantConnectionId);
+    if (!connection) return res.status(404).json({ message: "Tenant connection not found" });
+
+    const orgId = connection.organizationId;
+    if (!orgId) return res.status(400).json({ message: "No organization linked to this tenant" });
+
+    const metaEntries = await storage.getDataDictionary(connection.tenantId, "required_metadata_field");
+    const context: EvaluationContext = { requiredMetadataFields: metaEntries.map(e => e.value) };
+
+    const proposedPolicy: GovernancePolicy = {
+      id: policyId || "simulation",
+      name: "Simulation",
+      policyType: "CUSTOM",
+      organizationId: orgId,
+      status: "ACTIVE",
+      rules: rules as PolicyRuleDefinition[],
+      propertyBagKey: null,
+      propertyBagValueFormat: null,
+      description: null,
+      createdAt: new Date(),
+    };
+
+    let currentPolicy: GovernancePolicy | undefined;
+    if (policyId) {
+      currentPolicy = await storage.getGovernancePolicy(policyId);
+    }
+    if (!currentPolicy) {
+      const allPolicies = await storage.getGovernancePolicies(orgId);
+      currentPolicy = allPolicies.find(p => p.status === "ACTIVE");
+    }
+
+    const workspaces = await storage.getWorkspaces(undefined, tenantConnectionId);
+
+    const workspaceResults: {
+      id: string;
+      displayName: string;
+      siteUrl: string | null;
+      type: string;
+      currentPass: boolean;
+      proposedPass: boolean;
+      changeType: "no_change" | "now_passing" | "now_failing";
+      currentRules: { ruleName: string; ruleResult: string; ruleDescription: string }[];
+      proposedRules: { ruleName: string; ruleResult: string; ruleDescription: string }[];
+    }[] = [];
+
+    let currentPassCount = 0;
+    let currentFailCount = 0;
+    let proposedPassCount = 0;
+    let proposedFailCount = 0;
+    let newlyPassing = 0;
+    let newlyFailing = 0;
+
+    for (const ws of workspaces) {
+      const currentEval = currentPolicy
+        ? evaluatePolicy(ws, currentPolicy, context)
+        : { overallPass: false, results: [] as { ruleName: string; ruleResult: string; ruleDescription: string }[] };
+
+      const proposedEval = evaluatePolicy(ws, proposedPolicy, context);
+
+      const currentPass = currentEval.overallPass;
+      const proposedPass = proposedEval.overallPass;
+
+      if (currentPass) currentPassCount++;
+      else currentFailCount++;
+      if (proposedPass) proposedPassCount++;
+      else proposedFailCount++;
+
+      let changeType: "no_change" | "now_passing" | "now_failing" = "no_change";
+      if (!currentPass && proposedPass) { changeType = "now_passing"; newlyPassing++; }
+      if (currentPass && !proposedPass) { changeType = "now_failing"; newlyFailing++; }
+
+      workspaceResults.push({
+        id: ws.id,
+        displayName: ws.displayName,
+        siteUrl: ws.siteUrl,
+        type: ws.type,
+        currentPass,
+        proposedPass,
+        changeType,
+        currentRules: currentEval.results.map(r => ({ ruleName: r.ruleName, ruleResult: r.ruleResult, ruleDescription: r.ruleDescription })),
+        proposedRules: proposedEval.results.map(r => ({ ruleName: r.ruleName, ruleResult: r.ruleResult, ruleDescription: r.ruleDescription })),
+      });
+    }
+
+    res.json({
+      summary: {
+        total: workspaces.length,
+        currentPass: currentPassCount,
+        currentFail: currentFailCount,
+        proposedPass: proposedPassCount,
+        proposedFail: proposedFailCount,
+        newlyPassing,
+        newlyFailing,
+        unchanged: workspaces.length - newlyPassing - newlyFailing,
+      },
+      workspaces: workspaceResults,
+    });
+  } catch (err: any) {
+    console.error("[Policy Simulate] Error:", err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 router.post("/api/policies/:id/evaluate", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN), async (req: AuthenticatedRequest, res) => {
