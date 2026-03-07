@@ -7,8 +7,50 @@ import { refreshDelegatedToken, getDelegatedSpoToken } from "../routes-entra";
 import { requireAuth, requireRole, type AuthenticatedRequest } from "../middleware/rbac";
 import { computeWritebackHash, computeSpoSyncHash } from "../services/writeback-hash";
 import { evaluatePolicy, evaluationResultsToCopilotRules, formatPolicyBagValue, DEFAULT_COPILOT_READINESS_RULES, type EvaluationContext } from "../services/policy-engine";
+import type { Workspace, PolicyOutcome, GovernancePolicy } from "@shared/schema";
 
 const router = Router();
+
+async function evaluateAllPoliciesForWorkspace(ws: Workspace, orgId: string, tenantId: string, logPrefix: string = "[policy-eval]"): Promise<void> {
+  const policiesWithOutcomes = await storage.getActivePoliciesWithOutcomes(orgId);
+  if (policiesWithOutcomes.length === 0) return;
+
+  const metaEntries = await storage.getDataDictionary(tenantId, "required_metadata_field");
+  const context: EvaluationContext = { requiredMetadataFields: metaEntries.map(e => e.value) };
+
+  const allRuleRecords: any[] = [];
+  const updates: Record<string, any> = {};
+  const existingBag = (ws.propertyBag as Record<string, string>) || {};
+  let bagUpdated = false;
+
+  for (const policy of policiesWithOutcomes) {
+    const evaluation = evaluatePolicy(ws, policy, context);
+    const ruleRecords = evaluationResultsToCopilotRules(ws.id, evaluation);
+    allRuleRecords.push(...ruleRecords);
+
+    if (policy.outcome?.workspaceField === "copilotReady" && ws.copilotReady !== evaluation.overallPass) {
+      updates.copilotReady = evaluation.overallPass;
+    }
+
+    const effectiveBagKey = policy.propertyBagKey || policy.outcome?.propertyBagKey;
+    if (effectiveBagKey) {
+      const bagValue = formatPolicyBagValue(evaluation, policy.propertyBagValueFormat);
+      if (existingBag[effectiveBagKey] !== bagValue) {
+        existingBag[effectiveBagKey] = bagValue;
+        bagUpdated = true;
+        console.log(`${logPrefix} ${ws.displayName}: ${effectiveBagKey}=${bagValue}`);
+      }
+    }
+  }
+
+  await storage.setCopilotRules(ws.id, allRuleRecords);
+  if (bagUpdated) {
+    updates.propertyBag = existingBag;
+  }
+  if (Object.keys(updates).length > 0) {
+    await storage.updateWorkspace(ws.id, updates);
+  }
+}
 
 async function getDelegatedTokenForRetention(currentUserId?: string, organizationId?: string): Promise<string | null> {
   const tryUser = async (userId: string): Promise<string | null> => {
@@ -204,33 +246,8 @@ router.patch("/api/workspaces/:id", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, Z
   try {
     if (existing.tenantConnectionId) {
       const conn = await storage.getTenantConnection(existing.tenantConnectionId);
-      const orgId = conn?.organizationId;
-      if (orgId) {
-        const policy = await storage.getGovernancePolicyByType(orgId, "COPILOT_READINESS");
-        if (policy) {
-          let requiredMetadataFields: string[] = [];
-          const metaEntries = await storage.getDataDictionary(conn!.tenantId, "required_metadata_field");
-          requiredMetadataFields = metaEntries.map(e => e.value);
-          const context: EvaluationContext = { requiredMetadataFields };
-          const evaluation = evaluatePolicy(workspace, policy, context);
-          const ruleRecords = evaluationResultsToCopilotRules(workspace.id, evaluation);
-          await storage.setCopilotRules(workspace.id, ruleRecords);
-          const evalUpdates: Record<string, any> = {};
-          if (workspace.copilotReady !== evaluation.overallPass) {
-            evalUpdates.copilotReady = evaluation.overallPass;
-          }
-          if (policy.propertyBagKey) {
-            const bagValue = formatPolicyBagValue(evaluation, policy.propertyBagValueFormat);
-            const existingBag = (workspace.propertyBag as Record<string, string>) || {};
-            if (existingBag[policy.propertyBagKey] !== bagValue) {
-              evalUpdates.propertyBag = { ...existingBag, [policy.propertyBagKey]: bagValue };
-              console.log(`[workspace-update] ${workspace.displayName}: ${policy.propertyBagKey}=${bagValue}`);
-            }
-          }
-          if (Object.keys(evalUpdates).length > 0) {
-            await storage.updateWorkspace(workspace.id, evalUpdates);
-          }
-        }
+      if (conn?.organizationId) {
+        await evaluateAllPoliciesForWorkspace(workspace, conn.organizationId, conn.tenantId, "[workspace-update]");
       }
     }
   } catch (evalErr: any) {
@@ -466,33 +483,8 @@ router.post("/api/workspaces/:id/sync", requireRole(ZENITH_ROLES.OPERATOR, ZENIT
 
     try {
       const connection2 = await storage.getTenantConnection(workspace.tenantConnectionId!);
-      const orgId = connection2?.organizationId;
-      if (orgId) {
-        const policy = await storage.getGovernancePolicyByType(orgId, "COPILOT_READINESS");
-        if (policy) {
-          let requiredMetadataFields: string[] = [];
-          const metaEntries = await storage.getDataDictionary(connection2!.tenantId, "required_metadata_field");
-          requiredMetadataFields = metaEntries.map(e => e.value);
-          const context: EvaluationContext = { requiredMetadataFields };
-
-          const evaluation = evaluatePolicy(updated, policy, context);
-          const ruleRecords = evaluationResultsToCopilotRules(updated.id, evaluation);
-          await storage.setCopilotRules(updated.id, ruleRecords);
-          const evalUpdates: Record<string, any> = {};
-          if (updated.copilotReady !== evaluation.overallPass) {
-            evalUpdates.copilotReady = evaluation.overallPass;
-          }
-          if (policy.propertyBagKey) {
-            const bagValue = formatPolicyBagValue(evaluation, policy.propertyBagValueFormat);
-            const existingBag = (updated.propertyBag as Record<string, string>) || {};
-            evalUpdates.propertyBag = { ...existingBag, [policy.propertyBagKey]: bagValue };
-            console.log(`[single-sync] ${updated.displayName}: ${policy.propertyBagKey}=${bagValue}`);
-          }
-          if (Object.keys(evalUpdates).length > 0) {
-            await storage.updateWorkspace(updated.id, evalUpdates);
-          }
-          console.log(`[single-sync] Policy "${policy.name}" evaluated: ${evaluation.overallPass ? "PASS" : "FAIL"} (${evaluation.results.filter(r => r.ruleResult === "PASS").length}/${evaluation.results.length})`);
-        }
+      if (connection2?.organizationId) {
+        await evaluateAllPoliciesForWorkspace(updated, connection2.organizationId, connection2.tenantId, "[single-sync]");
       }
     } catch (evalErr: any) {
       console.error(`[single-sync] Policy evaluation error: ${evalErr.message}`);
@@ -550,31 +542,8 @@ router.patch("/api/workspaces/bulk/update", requireRole(ZENITH_ROLES.GOVERNANCE_
       const ws = await storage.getWorkspace(wsId);
       if (!ws?.tenantConnectionId) continue;
       const conn = await storage.getTenantConnection(ws.tenantConnectionId);
-      const orgId = conn?.organizationId;
-      if (!orgId) continue;
-      const policy = await storage.getGovernancePolicyByType(orgId, "COPILOT_READINESS");
-      if (!policy) continue;
-      let requiredMetadataFields: string[] = [];
-      const metaEntries = await storage.getDataDictionary(conn!.tenantId, "required_metadata_field");
-      requiredMetadataFields = metaEntries.map(e => e.value);
-      const context: EvaluationContext = { requiredMetadataFields };
-      const evaluation = evaluatePolicy(ws, policy, context);
-      const ruleRecords = evaluationResultsToCopilotRules(ws.id, evaluation);
-      await storage.setCopilotRules(ws.id, ruleRecords);
-      const evalUpdates: Record<string, any> = {};
-      if (ws.copilotReady !== evaluation.overallPass) {
-        evalUpdates.copilotReady = evaluation.overallPass;
-      }
-      if (policy.propertyBagKey) {
-        const bagValue = formatPolicyBagValue(evaluation, policy.propertyBagValueFormat);
-        const existingBag = (ws.propertyBag as Record<string, string>) || {};
-        if (existingBag[policy.propertyBagKey] !== bagValue) {
-          evalUpdates.propertyBag = { ...existingBag, [policy.propertyBagKey]: bagValue };
-        }
-      }
-      if (Object.keys(evalUpdates).length > 0) {
-        await storage.updateWorkspace(ws.id, evalUpdates);
-      }
+      if (!conn?.organizationId) continue;
+      await evaluateAllPoliciesForWorkspace(ws, conn.organizationId, conn.tenantId, "[bulk-update]");
       policyEvalCount++;
     }
   } catch (evalErr: any) {
@@ -1308,41 +1277,15 @@ router.post("/api/admin/tenants/:id/sync", requireRole(ZENITH_ROLES.TENANT_ADMIN
 
     let policyEvalCount = 0;
     try {
-      const allSyncedWorkspaces = await storage.getWorkspaces(undefined, req.params.id);
-      const policy = connection.organizationId
-        ? await storage.getGovernancePolicyByType(connection.organizationId, "COPILOT_READINESS")
-        : null;
-
-      if (policy) {
-        let requiredMetadataFields: string[] = [];
-        const metaEntries = await storage.getDataDictionary(connection.tenantId, "required_metadata_field");
-        requiredMetadataFields = metaEntries.map(e => e.value);
-        const context: EvaluationContext = { requiredMetadataFields };
-
+      if (connection.organizationId) {
+        const allSyncedWorkspaces = await storage.getWorkspaces(undefined, req.params.id);
         for (const ws of allSyncedWorkspaces) {
-          const evaluation = evaluatePolicy(ws, policy, context);
-          const ruleRecords = evaluationResultsToCopilotRules(ws.id, evaluation);
-          await storage.setCopilotRules(ws.id, ruleRecords);
-          const updates: Record<string, any> = {};
-          if (ws.copilotReady !== evaluation.overallPass) {
-            updates.copilotReady = evaluation.overallPass;
-          }
-          if (policy.propertyBagKey) {
-            const bagValue = formatPolicyBagValue(evaluation, policy.propertyBagValueFormat);
-            const existingBag = (ws.propertyBag as Record<string, string>) || {};
-            if (existingBag[policy.propertyBagKey] !== bagValue) {
-              updates.propertyBag = { ...existingBag, [policy.propertyBagKey]: bagValue };
-              console.log(`[policy-eval] ${ws.displayName}: ${policy.propertyBagKey}=${bagValue}`);
-            }
-          }
-          if (Object.keys(updates).length > 0) {
-            await storage.updateWorkspace(ws.id, updates);
-          }
+          await evaluateAllPoliciesForWorkspace(ws, connection.organizationId, connection.tenantId, "[policy-eval]");
           policyEvalCount++;
         }
-        console.log(`[policy-eval] Evaluated ${policyEvalCount} workspaces against "${policy.name}" policy`);
+        console.log(`[policy-eval] Evaluated ${policyEvalCount} workspaces against all active policies`);
       } else {
-        console.log(`[policy-eval] No COPILOT_READINESS policy found for org, skipping auto-evaluation`);
+        console.log(`[policy-eval] No organization linked to tenant, skipping auto-evaluation`);
       }
     } catch (evalErr: any) {
       console.error(`[policy-eval] Error during post-sync evaluation: ${evalErr.message}`);

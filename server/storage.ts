@@ -5,6 +5,7 @@ import {
   provisioningRequests,
   copilotRules,
   governancePolicies,
+  policyOutcomes,
   tenantConnections,
   organizations,
   users,
@@ -23,6 +24,8 @@ import {
   type InsertCopilotRule,
   type GovernancePolicy,
   type InsertGovernancePolicy,
+  type PolicyOutcome,
+  type InsertPolicyOutcome,
   type TenantConnection,
   type InsertTenantConnection,
   type Organization,
@@ -69,9 +72,18 @@ export interface IStorage {
   getCopilotRules(workspaceId: string): Promise<CopilotRule[]>;
   setCopilotRules(workspaceId: string, rules: InsertCopilotRule[]): Promise<CopilotRule[]>;
 
+  getPolicyOutcomes(organizationId: string): Promise<PolicyOutcome[]>;
+  getPolicyOutcome(id: string): Promise<PolicyOutcome | undefined>;
+  getPolicyOutcomeByKey(organizationId: string, key: string): Promise<PolicyOutcome | undefined>;
+  createPolicyOutcome(outcome: InsertPolicyOutcome): Promise<PolicyOutcome>;
+  updatePolicyOutcome(id: string, updates: Partial<InsertPolicyOutcome>): Promise<PolicyOutcome | undefined>;
+  deletePolicyOutcome(id: string): Promise<void>;
+
   getGovernancePolicies(organizationId: string): Promise<GovernancePolicy[]>;
   getGovernancePolicy(id: string): Promise<GovernancePolicy | undefined>;
   getGovernancePolicyByType(organizationId: string, policyType: string): Promise<GovernancePolicy | undefined>;
+  getGovernancePolicyByOutcome(organizationId: string, outcomeId: string): Promise<GovernancePolicy | undefined>;
+  getActivePoliciesWithOutcomes(organizationId: string): Promise<(GovernancePolicy & { outcome?: PolicyOutcome })[]>;
   createGovernancePolicy(policy: InsertGovernancePolicy): Promise<GovernancePolicy>;
   updateGovernancePolicy(id: string, updates: Partial<InsertGovernancePolicy>): Promise<GovernancePolicy | undefined>;
   deleteGovernancePolicy(id: string): Promise<void>;
@@ -228,6 +240,38 @@ export class DatabaseStorage implements IStorage {
     return created;
   }
 
+  async getPolicyOutcomes(organizationId: string): Promise<PolicyOutcome[]> {
+    return db.select().from(policyOutcomes)
+      .where(eq(policyOutcomes.organizationId, organizationId))
+      .orderBy(policyOutcomes.sortOrder);
+  }
+
+  async getPolicyOutcome(id: string): Promise<PolicyOutcome | undefined> {
+    const [outcome] = await db.select().from(policyOutcomes).where(eq(policyOutcomes.id, id));
+    return outcome;
+  }
+
+  async getPolicyOutcomeByKey(organizationId: string, key: string): Promise<PolicyOutcome | undefined> {
+    const [outcome] = await db.select().from(policyOutcomes).where(
+      and(eq(policyOutcomes.organizationId, organizationId), eq(policyOutcomes.key, key))
+    );
+    return outcome;
+  }
+
+  async createPolicyOutcome(outcome: InsertPolicyOutcome): Promise<PolicyOutcome> {
+    const [created] = await db.insert(policyOutcomes).values(outcome).returning();
+    return created;
+  }
+
+  async updatePolicyOutcome(id: string, updates: Partial<InsertPolicyOutcome>): Promise<PolicyOutcome | undefined> {
+    const [updated] = await db.update(policyOutcomes).set(updates).where(eq(policyOutcomes.id, id)).returning();
+    return updated;
+  }
+
+  async deletePolicyOutcome(id: string): Promise<void> {
+    await db.delete(policyOutcomes).where(eq(policyOutcomes.id, id));
+  }
+
   async getGovernancePolicies(organizationId: string): Promise<GovernancePolicy[]> {
     return db.select().from(governancePolicies).where(eq(governancePolicies.organizationId, organizationId)).orderBy(desc(governancePolicies.createdAt));
   }
@@ -242,6 +286,25 @@ export class DatabaseStorage implements IStorage {
       and(eq(governancePolicies.organizationId, organizationId), eq(governancePolicies.policyType, policyType), eq(governancePolicies.status, "ACTIVE"))
     );
     return policy;
+  }
+
+  async getGovernancePolicyByOutcome(organizationId: string, outcomeId: string): Promise<GovernancePolicy | undefined> {
+    const [policy] = await db.select().from(governancePolicies).where(
+      and(eq(governancePolicies.organizationId, organizationId), eq(governancePolicies.outcomeId, outcomeId), eq(governancePolicies.status, "ACTIVE"))
+    );
+    return policy;
+  }
+
+  async getActivePoliciesWithOutcomes(organizationId: string): Promise<(GovernancePolicy & { outcome?: PolicyOutcome })[]> {
+    const policies = await db.select().from(governancePolicies).where(
+      and(eq(governancePolicies.organizationId, organizationId), eq(governancePolicies.status, "ACTIVE"))
+    );
+    const outcomes = await this.getPolicyOutcomes(organizationId);
+    const outcomeMap = new Map(outcomes.map(o => [o.id, o]));
+    return policies.map(p => ({
+      ...p,
+      outcome: p.outcomeId ? outcomeMap.get(p.outcomeId) : undefined,
+    }));
   }
 
   async createGovernancePolicy(policy: InsertGovernancePolicy): Promise<GovernancePolicy> {

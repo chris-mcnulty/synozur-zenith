@@ -91,16 +91,48 @@ export const insertProvisioningRequestSchema = createInsertSchema(provisioningRe
 export type InsertProvisioningRequest = z.infer<typeof insertProvisioningRequestSchema>;
 export type ProvisioningRequest = typeof provisioningRequests.$inferSelect;
 
+export const policyOutcomes = pgTable("policy_outcomes", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  organizationId: varchar("organization_id").notNull(),
+  name: text("name").notNull(),
+  key: text("key").notNull(),
+  description: text("description"),
+  builtIn: boolean("built_in").notNull().default(false),
+  workspaceField: text("workspace_field"),
+  propertyBagKey: text("property_bag_key"),
+  showAsColumn: boolean("show_as_column").notNull().default(true),
+  showAsFilter: boolean("show_as_filter").notNull().default(true),
+  sortOrder: integer("sort_order").notNull().default(0),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertPolicyOutcomeSchema = createInsertSchema(policyOutcomes).omit({
+  id: true,
+  createdAt: true,
+});
+
+export type InsertPolicyOutcome = z.infer<typeof insertPolicyOutcomeSchema>;
+export type PolicyOutcome = typeof policyOutcomes.$inferSelect;
+
+export const BUILT_IN_OUTCOMES = [
+  { key: "copilot_eligible", name: "Copilot Eligible", description: "Determines whether a workspace meets all governance criteria for Microsoft 365 Copilot eligibility.", workspaceField: "copilotReady", propertyBagKey: "CopilotReady", sortOrder: 0 },
+  { key: "external_sharing", name: "External Sharing Approved", description: "Controls whether a workspace is approved for external sharing based on governance policy.", workspaceField: null, propertyBagKey: "ExternalSharingApproved", sortOrder: 1 },
+  { key: "pii_approved", name: "PII Approved", description: "Validates that a workspace meets requirements for storing personally identifiable information.", workspaceField: null, propertyBagKey: "PIIApproved", sortOrder: 2 },
+  { key: "sensitive_data", name: "Sensitive Data Approved", description: "Validates that a workspace meets requirements for handling classified or sensitive data.", workspaceField: null, propertyBagKey: "SensitiveDataApproved", sortOrder: 3 },
+  { key: "general_compliance", name: "General Compliance", description: "General governance compliance check — informational only, does not update workspace fields.", workspaceField: null, propertyBagKey: null, sortOrder: 4 },
+] as const;
+
 export const governancePolicies = pgTable("governance_policies", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   organizationId: varchar("organization_id").notNull(),
   name: text("name").notNull(),
   description: text("description"),
-  policyType: text("policy_type").notNull(), // COPILOT_READINESS, PROVISIONING_GATE, etc.
-  status: text("status").notNull().default("ACTIVE"), // DRAFT, ACTIVE, DISABLED
-  rules: jsonb("rules").notNull().default(sql`'[]'::jsonb`), // Array of rule definitions
-  propertyBagKey: text("property_bag_key"), // e.g. "ZenithCopilotReady" — key to write result into SPO property bag
-  propertyBagValueFormat: text("property_bag_value_format").default("PASS_FAIL"), // PASS_FAIL, READY_NOTREADY, SCORE_DATE, CUSTOM
+  policyType: text("policy_type").notNull(),
+  status: text("status").notNull().default("ACTIVE"),
+  rules: jsonb("rules").notNull().default(sql`'[]'::jsonb`),
+  outcomeId: varchar("outcome_id"),
+  propertyBagKey: text("property_bag_key"),
+  propertyBagValueFormat: text("property_bag_value_format").default("PASS_FAIL"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });

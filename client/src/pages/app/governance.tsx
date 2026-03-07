@@ -110,7 +110,7 @@ export default function GovernancePage() {
   const [filterDepartment, setFilterDepartment] = useState("all");
   const [filterSize, setFilterSize] = useState("all");
   const [filterAge, setFilterAge] = useState("all");
-  const [filterCopilot, setFilterCopilot] = useState("all");
+  const [outcomeFilters, setOutcomeFilters] = useState<Record<string, string>>({});
   const [filterStatus, setFilterStatus] = useState("active");
 
   const [bulkSensitivity, setBulkSensitivity] = useState("");
@@ -132,6 +132,31 @@ export default function GovernancePage() {
   }, [searchTerm]);
 
   const tenantConnectionId = selectedTenant?.id || "";
+
+  const { data: authData } = useQuery<{ user: { organizationId: string } }>({
+    queryKey: ["/api/auth/me"],
+    queryFn: () => fetch("/api/auth/me", { credentials: "include" }).then(r => r.ok ? r.json() : null),
+  });
+  const organizationId = authData?.user?.organizationId;
+
+  interface PolicyOutcome {
+    id: string;
+    name: string;
+    key: string;
+    showAsColumn: boolean;
+    showAsFilter: boolean;
+    workspaceField: string | null;
+    propertyBagKey: string | null;
+  }
+
+  const { data: policyOutcomes = [] } = useQuery<PolicyOutcome[]>({
+    queryKey: ["/api/policy-outcomes", organizationId],
+    queryFn: () => fetch(`/api/policy-outcomes?organizationId=${organizationId}`, { credentials: "include" }).then(r => r.ok ? r.json() : []),
+    enabled: !!organizationId,
+  });
+
+  const columnOutcomes = policyOutcomes.filter(o => o.showAsColumn);
+  const filterOutcomes = policyOutcomes.filter(o => o.showAsFilter);
 
   const { data: dictEntries = [] } = useQuery<{id: string; tenantId: string; category: string; value: string; createdAt: string}[]>({
     queryKey: ["/api/admin/tenants", tenantConnectionId, "data-dictionaries"],
@@ -394,12 +419,14 @@ export default function GovernancePage() {
     setFilterDepartment("all");
     setFilterSize("all");
     setFilterAge("all");
-    setFilterCopilot("all");
+    setOutcomeFilters({});
     setFilterStatus("active");
   };
 
   const isDefaultView = filterStatus === "active";
-  const activeFilterCount = [filterType, filterSensitivity, filterMetadata, filterDepartment, filterSize, filterAge, filterCopilot].filter(v => v !== "all").length
+  const outcomeFilterCount = Object.values(outcomeFilters).filter(v => v && v !== "all").length;
+  const activeFilterCount = [filterType, filterSensitivity, filterMetadata, filterDepartment, filterSize, filterAge].filter(v => v !== "all").length
+    + outcomeFilterCount
     + (filterStatus !== "active" ? 1 : 0);
 
   const filteredAndSortedWorkspaces = useMemo(() => {
@@ -483,12 +510,18 @@ export default function GovernancePage() {
       }
     }
 
-    if (filterCopilot !== "all") {
-      result = result.filter(ws => {
-        if (filterCopilot === "ready") return ws.copilotReady === true;
-        if (filterCopilot === "not_ready") return ws.copilotReady !== true;
-        return true;
-      });
+    for (const outcome of policyOutcomes) {
+      const filterVal = outcomeFilters[outcome.key];
+      if (filterVal && filterVal !== "all") {
+        result = result.filter(ws => {
+          if (outcome.workspaceField) {
+            const val = (ws as any)[outcome.workspaceField];
+            if (filterVal === "pass") return val === true;
+            if (filterVal === "fail") return val !== true;
+          }
+          return true;
+        });
+      }
     }
 
     if (filterStatus !== "all") {
@@ -529,7 +562,7 @@ export default function GovernancePage() {
     });
 
     return result;
-  }, [workspaces, filterType, filterSensitivity, filterMetadata, filterDepartment, filterSize, filterAge, filterCopilot, filterStatus, sortColumn, sortDirection, requiredMetadataFields]);
+  }, [workspaces, filterType, filterSensitivity, filterMetadata, filterDepartment, filterSize, filterAge, outcomeFilters, policyOutcomes, filterStatus, sortColumn, sortDirection, requiredMetadataFields]);
 
   const hubSites = useMemo(() => workspaces.filter(ws => ws.isHubSite), [workspaces]);
 
@@ -814,13 +847,19 @@ export default function GovernancePage() {
         <TableCell className="relative z-10">
           {getSensitivityBadge(ws)}
         </TableCell>
-        <TableCell className="relative z-10">
-          {ws.copilotReady ? (
-            <Badge variant="outline" className="bg-primary/10 text-primary border-primary/20 hover:bg-primary/20">Ready</Badge>
-          ) : (
-            <Badge variant="secondary" className="text-muted-foreground">Not Eligible</Badge>
-          )}
-        </TableCell>
+        {columnOutcomes.map(outcome => (
+          <TableCell key={outcome.id} className="relative z-10" data-testid={`cell-outcome-${outcome.key}-${ws.id}`}>
+            {outcome.workspaceField ? (
+              (ws as any)[outcome.workspaceField] ? (
+                <Badge variant="outline" className="bg-primary/10 text-primary border-primary/20 hover:bg-primary/20">Pass</Badge>
+              ) : (
+                <Badge variant="secondary" className="text-muted-foreground">Fail</Badge>
+              )
+            ) : (
+              <Badge variant="secondary" className="text-muted-foreground">N/A</Badge>
+            )}
+          </TableCell>
+        ))}
         <TableCell className="relative z-10">
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -1006,19 +1045,22 @@ export default function GovernancePage() {
           <Tag className="w-3 h-3" />
           No Label
         </Button>
-        <Button
-          variant={filterCopilot === "not_ready" ? "secondary" : "ghost"}
-          size="sm"
-          className={`h-7 rounded-full text-xs gap-1.5 px-3 ${filterCopilot === "not_ready" ? "bg-purple-500/15 text-purple-600 hover:bg-purple-500/25 border border-purple-500/20" : ""}`}
-          onClick={() => {
-            clearAllFilters();
-            setFilterCopilot("not_ready");
-          }}
-          data-testid="chip-not-copilot"
-        >
-          <Sparkles className="w-3 h-3" />
-          Not Copilot Ready
-        </Button>
+        {filterOutcomes.filter(o => o.workspaceField).map(outcome => (
+          <Button
+            key={outcome.id}
+            variant={outcomeFilters[outcome.key] === "fail" ? "secondary" : "ghost"}
+            size="sm"
+            className={`h-7 rounded-full text-xs gap-1.5 px-3 ${outcomeFilters[outcome.key] === "fail" ? "bg-purple-500/15 text-purple-600 hover:bg-purple-500/25 border border-purple-500/20" : ""}`}
+            onClick={() => {
+              clearAllFilters();
+              setOutcomeFilters({ [outcome.key]: "fail" });
+            }}
+            data-testid={`chip-outcome-fail-${outcome.key}`}
+          >
+            <Sparkles className="w-3 h-3" />
+            {outcome.name} Fail
+          </Button>
+        ))}
         <Button
           variant={filterStatus === "deleted" ? "secondary" : "ghost"}
           size="sm"
@@ -1131,7 +1173,9 @@ export default function GovernancePage() {
                     </TableHead>
                     <TableHead className="min-w-[100px]">Metadata</TableHead>
                     <TableHead>Sensitivity</TableHead>
-                    <TableHead>Copilot</TableHead>
+                    {columnOutcomes.map(outcome => (
+                      <TableHead key={outcome.id} data-testid={`header-outcome-${outcome.key}`}>{outcome.name}</TableHead>
+                    ))}
                     <TableHead className="w-[80px]"></TableHead>
                   </TableRow>
                 </TableHeader>
@@ -1157,7 +1201,7 @@ export default function GovernancePage() {
                                 />
                               )}
                             </TableCell>
-                            <TableCell colSpan={9} onClick={() => toggleHubCollapse(group.hubId)}>
+                            <TableCell colSpan={8 + columnOutcomes.length} onClick={() => toggleHubCollapse(group.hubId)}>
                               <div className="flex items-center gap-2">
                                 {isCollapsed ? <ChevronRight className="w-4 h-4 text-muted-foreground" /> : <ChevronDown className="w-4 h-4 text-muted-foreground" />}
                                 {group.hubId === "__standalone__" ? (
@@ -1417,19 +1461,27 @@ export default function GovernancePage() {
               </Select>
             </div>
 
-            <div className="space-y-2">
-              <Label>Copilot Ready</Label>
-              <Select value={filterCopilot} onValueChange={setFilterCopilot}>
-                <SelectTrigger className="w-full bg-background/50" data-testid="filter-copilot">
-                  <SelectValue placeholder="All" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All</SelectItem>
-                  <SelectItem value="ready">Ready</SelectItem>
-                  <SelectItem value="not_ready">Not Ready</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
+            {filterOutcomes.map(outcome => (
+              <div key={outcome.id} className="space-y-2">
+                <Label>{outcome.name}</Label>
+                <Select value={outcomeFilters[outcome.key] || "all"} onValueChange={(val) => setOutcomeFilters(prev => ({ ...prev, [outcome.key]: val }))}>
+                  <SelectTrigger className="w-full bg-background/50" data-testid={`filter-outcome-${outcome.key}`}>
+                    <SelectValue placeholder="All" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All</SelectItem>
+                    {outcome.workspaceField ? (
+                      <>
+                        <SelectItem value="pass">Pass</SelectItem>
+                        <SelectItem value="fail">Fail</SelectItem>
+                      </>
+                    ) : (
+                      <SelectItem value="na" disabled>N/A (not yet evaluated)</SelectItem>
+                    )}
+                  </SelectContent>
+                </Select>
+              </div>
+            ))}
 
             <div className="space-y-2">
               <Label>Site Status</Label>

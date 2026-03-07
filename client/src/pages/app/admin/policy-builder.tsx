@@ -25,13 +25,19 @@ import {
   Play,
   Settings2,
   ChevronRight,
+  ChevronDown,
   Loader2,
   CheckCircle2,
   XCircle,
   AlertTriangle,
   FileCheck2,
   Pencil,
-  BrainCircuit
+  BrainCircuit,
+  Target,
+  Eye,
+  EyeOff,
+  Filter,
+  FilterX
 } from "lucide-react";
 
 interface PolicyRule {
@@ -50,10 +56,25 @@ interface GovernancePolicy {
   policyType: string;
   status: string;
   rules: PolicyRule[];
+  outcomeId: string | null;
   propertyBagKey: string | null;
   propertyBagValueFormat: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+interface PolicyOutcome {
+  id: string;
+  organizationId: string;
+  name: string;
+  key: string;
+  description: string | null;
+  builtIn: boolean;
+  workspaceField: string | null;
+  propertyBagKey: string | null;
+  showAsColumn: boolean;
+  showAsFilter: boolean;
+  sortOrder: number;
 }
 
 const AVAILABLE_RULE_TYPES = [
@@ -102,10 +123,12 @@ export default function PolicyBuilderPage() {
   const [editDescription, setEditDescription] = useState("");
   const [editStatus, setEditStatus] = useState("ACTIVE");
   const [editRules, setEditRules] = useState<PolicyRule[]>([]);
+  const [editOutcomeId, setEditOutcomeId] = useState<string | null>(null);
   const [editPropertyBagKey, setEditPropertyBagKey] = useState("");
   const [editPropertyBagValueFormat, setEditPropertyBagValueFormat] = useState("PASS_FAIL");
   const [hasChanges, setHasChanges] = useState(false);
   const [showAddRule, setShowAddRule] = useState(false);
+  const [showOutcomeManager, setShowOutcomeManager] = useState(false);
 
   const { data: authData } = useQuery<{ user: { organizationId: string }; organization: { id: string; name: string; servicePlan: string } | null }>({
     queryKey: ["/api/auth/me"],
@@ -127,8 +150,14 @@ export default function PolicyBuilderPage() {
     enabled: !!organizationId,
   });
 
+  const { data: outcomes = [] } = useQuery<PolicyOutcome[]>({
+    queryKey: ["/api/policy-outcomes", organizationId],
+    queryFn: () => fetch(`/api/policy-outcomes?organizationId=${organizationId}`, { credentials: "include" }).then(r => r.ok ? r.json() : []),
+    enabled: !!organizationId,
+  });
+
   const saveMutation = useMutation({
-    mutationFn: async (data: { id: string; name: string; description: string; status: string; rules: PolicyRule[]; propertyBagKey: string; propertyBagValueFormat: string }) => {
+    mutationFn: async (data: { id: string; name: string; description: string; status: string; rules: PolicyRule[]; outcomeId: string | null; propertyBagKey: string; propertyBagValueFormat: string }) => {
       const res = await fetch(`/api/policies/${data.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
@@ -138,6 +167,7 @@ export default function PolicyBuilderPage() {
           description: data.description,
           status: data.status,
           rules: data.rules,
+          outcomeId: data.outcomeId,
           propertyBagKey: data.propertyBagKey || null,
           propertyBagValueFormat: data.propertyBagValueFormat,
         }),
@@ -235,6 +265,7 @@ export default function PolicyBuilderPage() {
     setEditDescription(policy.description || "");
     setEditStatus(policy.status);
     setEditRules(JSON.parse(JSON.stringify(policy.rules || [])));
+    setEditOutcomeId(policy.outcomeId);
     setEditPropertyBagKey(policy.propertyBagKey || "");
     setEditPropertyBagValueFormat(policy.propertyBagValueFormat || "PASS_FAIL");
     setHasChanges(false);
@@ -298,7 +329,7 @@ export default function PolicyBuilderPage() {
 
   function handleSave() {
     if (!selectedPolicyId) return;
-    saveMutation.mutate({ id: selectedPolicyId, name: editName, description: editDescription, status: editStatus, rules: editRules, propertyBagKey: editPropertyBagKey, propertyBagValueFormat: editPropertyBagValueFormat });
+    saveMutation.mutate({ id: selectedPolicyId, name: editName, description: editDescription, status: editStatus, rules: editRules, outcomeId: editOutcomeId, propertyBagKey: editPropertyBagKey, propertyBagValueFormat: editPropertyBagValueFormat });
   }
 
   function handleCreateNew() {
@@ -360,6 +391,114 @@ export default function PolicyBuilderPage() {
         </div>
       </div>
 
+      {/* Outcome Manager */}
+      <Card className="glass-panel border-border/50 shadow-sm">
+        <CardHeader className="pb-2 cursor-pointer" onClick={() => setShowOutcomeManager(!showOutcomeManager)}>
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-sm flex items-center gap-2">
+              <Target className="w-4 h-4 text-primary" />
+              Policy Outcomes
+              <Badge variant="outline" className="ml-1 text-[10px]">{outcomes.length}</Badge>
+            </CardTitle>
+            <div className="flex items-center gap-2">
+              <p className="text-xs text-muted-foreground">Define what each policy controls and how results appear in the workspace catalog</p>
+              {showOutcomeManager ? <ChevronDown className="w-4 h-4 text-muted-foreground" /> : <ChevronRight className="w-4 h-4 text-muted-foreground" />}
+            </div>
+          </div>
+        </CardHeader>
+        {showOutcomeManager && (
+          <CardContent className="pt-0">
+            <div className="space-y-2">
+              {outcomes.map(outcome => {
+                const assignedPolicy = policies?.find(p => p.outcomeId === outcome.id);
+                return (
+                  <div key={outcome.id} className="flex items-center gap-4 p-3 rounded-lg border border-border/50 bg-background/50" data-testid={`outcome-row-${outcome.key}`}>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-medium">{outcome.name}</span>
+                        {outcome.builtIn && <Badge variant="outline" className="text-[10px]">Built-in</Badge>}
+                        {outcome.workspaceField && <Badge variant="outline" className="text-[10px] bg-primary/5 text-primary border-primary/20">{outcome.workspaceField}</Badge>}
+                      </div>
+                      <div className="text-xs text-muted-foreground mt-0.5">
+                        {assignedPolicy ? (
+                          <span>Assigned to <strong>{assignedPolicy.name}</strong></span>
+                        ) : (
+                          <span className="text-amber-500">No policy assigned</span>
+                        )}
+                        {outcome.propertyBagKey && <span className="ml-2">· SPO: <code className="text-[10px] bg-muted px-1 rounded">{outcome.propertyBagKey}</code></span>}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-3 shrink-0">
+                      <button
+                        className={`p-1.5 rounded-md transition-colors ${outcome.showAsColumn ? "text-primary bg-primary/10" : "text-muted-foreground hover:text-foreground"}`}
+                        title={outcome.showAsColumn ? "Visible as column" : "Hidden from catalog"}
+                        onClick={async () => {
+                          await fetch(`/api/policy-outcomes/${outcome.id}`, {
+                            method: "PATCH", headers: { "Content-Type": "application/json" }, credentials: "include",
+                            body: JSON.stringify({ showAsColumn: !outcome.showAsColumn }),
+                          });
+                          queryClient.invalidateQueries({ queryKey: ["/api/policy-outcomes"] });
+                        }}
+                        data-testid={`toggle-column-${outcome.key}`}
+                      >
+                        {outcome.showAsColumn ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
+                      </button>
+                      <button
+                        className={`p-1.5 rounded-md transition-colors ${outcome.showAsFilter ? "text-primary bg-primary/10" : "text-muted-foreground hover:text-foreground"}`}
+                        title={outcome.showAsFilter ? "Filterable" : "Not filterable"}
+                        onClick={async () => {
+                          await fetch(`/api/policy-outcomes/${outcome.id}`, {
+                            method: "PATCH", headers: { "Content-Type": "application/json" }, credentials: "include",
+                            body: JSON.stringify({ showAsFilter: !outcome.showAsFilter }),
+                          });
+                          queryClient.invalidateQueries({ queryKey: ["/api/policy-outcomes"] });
+                        }}
+                        data-testid={`toggle-filter-${outcome.key}`}
+                      >
+                        {outcome.showAsFilter ? <Filter className="w-4 h-4" /> : <FilterX className="w-4 h-4" />}
+                      </button>
+                      {!outcome.builtIn && (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                          onClick={async () => {
+                            if (!confirm(`Delete outcome "${outcome.name}"?`)) return;
+                            await fetch(`/api/policy-outcomes/${outcome.id}`, { method: "DELETE", credentials: "include" });
+                            queryClient.invalidateQueries({ queryKey: ["/api/policy-outcomes"] });
+                          }}
+                          data-testid={`delete-outcome-${outcome.key}`}
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+              <Button
+                variant="ghost"
+                size="sm"
+                className="gap-2 text-muted-foreground mt-1 border border-dashed border-border/60 w-fit"
+                onClick={async () => {
+                  const name = prompt("Outcome name (e.g. 'Retention Compliant'):");
+                  if (!name || !organizationId) return;
+                  const key = name.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
+                  await fetch("/api/policy-outcomes", {
+                    method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include",
+                    body: JSON.stringify({ organizationId, name, key, description: "", builtIn: false, showAsColumn: true, showAsFilter: true, sortOrder: outcomes.length }),
+                  });
+                  queryClient.invalidateQueries({ queryKey: ["/api/policy-outcomes"] });
+                }}
+                data-testid="button-add-outcome"
+              >
+                <Plus className="w-3.5 h-3.5" /> Add Custom Outcome
+              </Button>
+            </div>
+          </CardContent>
+        )}
+      </Card>
+
       {isLoading ? (
         <div className="flex items-center justify-center py-20">
           <Loader2 className="w-8 h-8 animate-spin text-muted-foreground" />
@@ -399,7 +538,7 @@ export default function PolicyBuilderPage() {
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0">
                     <div className="font-medium text-sm truncate">{policy.name}</div>
-                    <div className="text-xs text-muted-foreground mt-0.5">{policy.policyType.replace(/_/g, " ")}</div>
+                    <div className="text-xs text-muted-foreground mt-0.5">{outcomes.find(o => o.id === policy.outcomeId)?.name || "No Outcome"}</div>
                   </div>
                   <Badge
                     variant="outline"
@@ -442,10 +581,38 @@ export default function PolicyBuilderPage() {
                         />
                       </div>
                       <div className="space-y-2">
-                        <Label className="text-xs font-semibold uppercase text-muted-foreground">Type</Label>
-                        <div className="h-9 flex items-center px-3 rounded-md bg-muted/30 border border-border/50 text-sm text-muted-foreground">
-                          {selectedPolicy.policyType.replace(/_/g, " ")}
-                        </div>
+                        <Label className="text-xs font-semibold uppercase text-muted-foreground">Outcome</Label>
+                        <Select
+                          value={editOutcomeId || "none"}
+                          onValueChange={(v) => {
+                            const newOutcomeId = v === "none" ? null : v;
+                            setEditOutcomeId(newOutcomeId);
+                            const outcome = outcomes.find(o => o.id === newOutcomeId);
+                            if (outcome?.propertyBagKey && !editPropertyBagKey) {
+                              setEditPropertyBagKey(outcome.propertyBagKey);
+                            }
+                            markChanged();
+                          }}
+                        >
+                          <SelectTrigger className="h-9 bg-background/50" data-testid="select-policy-outcome">
+                            <SelectValue placeholder="Select outcome..." />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="none">No Outcome (Informational)</SelectItem>
+                            {outcomes.map(o => {
+                              const assignedPolicy = policies?.find(p => p.outcomeId === o.id && p.id !== selectedPolicyId);
+                              return (
+                                <SelectItem key={o.id} value={o.id} disabled={!!assignedPolicy}>
+                                  {o.name}{assignedPolicy ? ` (assigned to ${assignedPolicy.name})` : ""}
+                                </SelectItem>
+                              );
+                            })}
+                          </SelectContent>
+                        </Select>
+                        {editOutcomeId && (() => {
+                          const o = outcomes.find(oc => oc.id === editOutcomeId);
+                          return o?.description ? <p className="text-[11px] text-muted-foreground">{o.description}</p> : null;
+                        })()}
                       </div>
                       <div className="space-y-2">
                         <Label className="text-xs font-semibold uppercase text-muted-foreground">Status</Label>
@@ -755,6 +922,7 @@ export default function PolicyBuilderPage() {
                         id: selectedPolicy.id,
                         name: editName,
                         policyType: selectedPolicy.policyType,
+                        outcome: outcomes.find(o => o.id === editOutcomeId)?.name || null,
                         status: editStatus,
                         propertyBagKey: editPropertyBagKey || null,
                         propertyBagValueFormat: editPropertyBagValueFormat,
@@ -765,23 +933,21 @@ export default function PolicyBuilderPage() {
                 </Card>
 
                 {/* Delete Policy */}
-                {selectedPolicy.policyType !== "COPILOT_READINESS" && (
-                  <div className="flex justify-end">
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="text-destructive hover:text-destructive hover:bg-destructive/10 gap-2"
-                      onClick={() => {
-                        if (confirm("Are you sure you want to delete this policy?")) {
-                          deleteMutation.mutate(selectedPolicy.id);
-                        }
-                      }}
-                      data-testid="button-delete-policy"
-                    >
-                      <Trash2 className="w-4 h-4" /> Delete Policy
-                    </Button>
-                  </div>
-                )}
+                <div className="flex justify-end">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="text-destructive hover:text-destructive hover:bg-destructive/10 gap-2"
+                    onClick={() => {
+                      if (confirm("Are you sure you want to delete this policy?")) {
+                        deleteMutation.mutate(selectedPolicy.id);
+                      }
+                    }}
+                    data-testid="button-delete-policy"
+                  >
+                    <Trash2 className="w-4 h-4" /> Delete Policy
+                  </Button>
+                </div>
               </>
             ) : (
               <Card className="glass-panel border-border/50">

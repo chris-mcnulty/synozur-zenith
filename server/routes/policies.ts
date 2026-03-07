@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { requireAuth, requireRole, type AuthenticatedRequest } from "../middleware/rbac";
-import { ZENITH_ROLES, insertGovernancePolicySchema, type PolicyRuleDefinition, type GovernancePolicy } from "@shared/schema";
+import { ZENITH_ROLES, insertGovernancePolicySchema, insertPolicyOutcomeSchema, type PolicyRuleDefinition, type GovernancePolicy } from "@shared/schema";
 import { storage } from "../storage";
 import { evaluatePolicy, evaluationResultsToCopilotRules, formatPolicyBagValue, type EvaluationContext } from "../services/policy-engine";
 
@@ -37,6 +37,7 @@ router.patch("/api/policies/:id", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZEN
   if (req.body.description !== undefined) updates.description = req.body.description;
   if (req.body.status !== undefined) updates.status = req.body.status;
   if (req.body.rules !== undefined) updates.rules = req.body.rules;
+  if (req.body.outcomeId !== undefined) updates.outcomeId = req.body.outcomeId;
   if (req.body.propertyBagKey !== undefined) updates.propertyBagKey = req.body.propertyBagKey;
   if (req.body.propertyBagValueFormat !== undefined) updates.propertyBagValueFormat = req.body.propertyBagValueFormat;
 
@@ -47,6 +48,42 @@ router.patch("/api/policies/:id", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZEN
 router.delete("/api/policies/:id", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN), async (req: AuthenticatedRequest, res) => {
   await storage.deleteGovernancePolicy(req.params.id);
   res.json({ message: "Policy deleted" });
+});
+
+router.get("/api/policy-outcomes", requireAuth(), async (req: AuthenticatedRequest, res) => {
+  const organizationId = req.query.organizationId as string;
+  if (!organizationId) return res.status(400).json({ message: "organizationId required" });
+  const outcomes = await storage.getPolicyOutcomes(organizationId);
+  res.json(outcomes);
+});
+
+router.post("/api/policy-outcomes", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN), async (req: AuthenticatedRequest, res) => {
+  const parsed = insertPolicyOutcomeSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ message: parsed.error.message });
+  const outcome = await storage.createPolicyOutcome(parsed.data);
+  res.status(201).json(outcome);
+});
+
+router.patch("/api/policy-outcomes/:id", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN), async (req: AuthenticatedRequest, res) => {
+  const existing = await storage.getPolicyOutcome(req.params.id);
+  if (!existing) return res.status(404).json({ message: "Outcome not found" });
+  const updates: Record<string, unknown> = {};
+  if (req.body.name !== undefined) updates.name = req.body.name;
+  if (req.body.description !== undefined) updates.description = req.body.description;
+  if (req.body.showAsColumn !== undefined) updates.showAsColumn = req.body.showAsColumn;
+  if (req.body.showAsFilter !== undefined) updates.showAsFilter = req.body.showAsFilter;
+  if (req.body.propertyBagKey !== undefined) updates.propertyBagKey = req.body.propertyBagKey;
+  if (req.body.sortOrder !== undefined) updates.sortOrder = req.body.sortOrder;
+  const updated = await storage.updatePolicyOutcome(req.params.id, updates as any);
+  res.json(updated);
+});
+
+router.delete("/api/policy-outcomes/:id", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN), async (req: AuthenticatedRequest, res) => {
+  const existing = await storage.getPolicyOutcome(req.params.id);
+  if (!existing) return res.status(404).json({ message: "Outcome not found" });
+  if (existing.builtIn) return res.status(400).json({ message: "Cannot delete built-in outcomes" });
+  await storage.deletePolicyOutcome(req.params.id);
+  res.json({ message: "Outcome deleted" });
 });
 
 router.post("/api/policies/simulate", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN), async (req: AuthenticatedRequest, res) => {
@@ -168,6 +205,7 @@ router.post("/api/policies/:id/evaluate", requireRole(ZENITH_ROLES.GOVERNANCE_AD
     return res.status(400).json({ message: "workspaceIds array is required" });
   }
 
+  const outcome = policy.outcomeId ? await storage.getPolicyOutcome(policy.outcomeId) : null;
   const tenantMetadataCache = new Map<string, string[]>();
 
   const results = [];
@@ -194,10 +232,23 @@ router.post("/api/policies/:id/evaluate", requireRole(ZENITH_ROLES.GOVERNANCE_AD
     const ruleRecords = evaluationResultsToCopilotRules(wsId, evaluation);
     await storage.setCopilotRules(wsId, ruleRecords);
 
-    const copilotReady = evaluation.overallPass;
-    await storage.updateWorkspace(wsId, { copilotReady });
+    const updates: Record<string, any> = {};
+    if (outcome?.workspaceField === "copilotReady") {
+      updates.copilotReady = evaluation.overallPass;
+    }
+    const effectiveBagKey = policy.propertyBagKey || outcome?.propertyBagKey;
+    if (effectiveBagKey) {
+      const bagValue = formatPolicyBagValue(evaluation, policy.propertyBagValueFormat);
+      const existingBag = (workspace.propertyBag as Record<string, string>) || {};
+      if (existingBag[effectiveBagKey] !== bagValue) {
+        updates.propertyBag = { ...existingBag, [effectiveBagKey]: bagValue };
+      }
+    }
+    if (Object.keys(updates).length > 0) {
+      await storage.updateWorkspace(wsId, updates);
+    }
 
-    results.push({ workspaceId: wsId, ...evaluation, copilotReady });
+    results.push({ workspaceId: wsId, ...evaluation, copilotReady: outcome?.workspaceField === "copilotReady" ? evaluation.overallPass : workspace.copilotReady });
   }
 
   res.json({ evaluated: results.length, results });
@@ -211,9 +262,8 @@ router.post("/api/admin/tenants/:id/evaluate-policies", requireRole(ZENITH_ROLES
     const orgId = connection.organizationId;
     if (!orgId) return res.status(400).json({ message: "No organization linked to this tenant" });
 
-    const allPolicies = await storage.getGovernancePolicies(orgId);
-    const activePolicies = allPolicies.filter(p => p.status === "ACTIVE");
-    if (activePolicies.length === 0) return res.json({ message: "No active policies found", evaluated: 0 });
+    const policiesWithOutcomes = await storage.getActivePoliciesWithOutcomes(orgId);
+    if (policiesWithOutcomes.length === 0) return res.json({ message: "No active policies found", evaluated: 0 });
 
     const metaEntries = await storage.getDataDictionary(connection.tenantId, "required_metadata_field");
     const context: EvaluationContext = { requiredMetadataFields: metaEntries.map(e => e.value) };
@@ -223,7 +273,7 @@ router.post("/api/admin/tenants/:id/evaluate-policies", requireRole(ZENITH_ROLES
     let changed = 0;
     const policyNames: string[] = [];
 
-    for (const policy of activePolicies) {
+    for (const policy of policiesWithOutcomes) {
       policyNames.push(policy.name);
       for (const ws of workspaces) {
         const evaluation = evaluatePolicy(ws, policy, context);
@@ -231,16 +281,16 @@ router.post("/api/admin/tenants/:id/evaluate-policies", requireRole(ZENITH_ROLES
         await storage.setCopilotRules(ws.id, ruleRecords);
         const updates: Record<string, any> = {};
 
-        const isCopilotPolicy = policy.policyType === "COPILOT_READINESS" || activePolicies.length === 1;
-        if (isCopilotPolicy && ws.copilotReady !== evaluation.overallPass) {
+        if (policy.outcome?.workspaceField === "copilotReady" && ws.copilotReady !== evaluation.overallPass) {
           updates.copilotReady = evaluation.overallPass;
           changed++;
         }
-        if (policy.propertyBagKey) {
+        const effectiveBagKey = policy.propertyBagKey || policy.outcome?.propertyBagKey;
+        if (effectiveBagKey) {
           const bagValue = formatPolicyBagValue(evaluation, policy.propertyBagValueFormat);
           const existingBag = (ws.propertyBag as Record<string, string>) || {};
-          if (existingBag[policy.propertyBagKey] !== bagValue) {
-            updates.propertyBag = { ...existingBag, [policy.propertyBagKey]: bagValue };
+          if (existingBag[effectiveBagKey] !== bagValue) {
+            updates.propertyBag = { ...existingBag, [effectiveBagKey]: bagValue };
           }
         }
         if (Object.keys(updates).length > 0) {
@@ -275,9 +325,8 @@ router.get("/api/workspaces/:id/policy-results", requireAuth(), async (req: Auth
     return res.json({ policyId: null, policyName: "Copilot Readiness", policies: [], results: storedRules, overallPass: workspace.copilotReady });
   }
 
-  const allPolicies = await storage.getGovernancePolicies(org.id);
-  const activePolicies = allPolicies.filter(p => p.status === "ACTIVE");
-  if (activePolicies.length === 0) {
+  const policiesWithOutcomes = await storage.getActivePoliciesWithOutcomes(org.id);
+  if (policiesWithOutcomes.length === 0) {
     const storedRules = await storage.getCopilotRules(req.params.id);
     return res.json({ policyId: null, policyName: "Copilot Readiness", policies: [], results: storedRules, overallPass: workspace.copilotReady });
   }
@@ -288,14 +337,13 @@ router.get("/api/workspaces/:id/policy-results", requireAuth(), async (req: Auth
   };
 
   const allResults: { ruleType: string; ruleName: string; ruleResult: string; ruleDescription: string; policyName?: string }[] = [];
-  const policyEvaluations: { policyId: string; policyName: string; policyType: string; overallPass: boolean; passCount: number; failCount: number }[] = [];
-  let overallCopilotReady = true;
+  const policyEvaluations: { policyId: string; policyName: string; policyType: string; outcomeId?: string | null; outcomeName?: string; overallPass: boolean; passCount: number; failCount: number }[] = [];
   const evalUpdates: Record<string, any> = {};
   const existingBag = (workspace.propertyBag as Record<string, string>) || {};
   let bagUpdated = false;
   const allRuleRecords: any[] = [];
 
-  for (const policy of activePolicies) {
+  for (const policy of policiesWithOutcomes) {
     const evaluation = evaluatePolicy(workspace, policy, context);
     const ruleRecords = evaluationResultsToCopilotRules(req.params.id, evaluation);
     allRuleRecords.push(...ruleRecords);
@@ -308,17 +356,24 @@ router.get("/api/workspaces/:id/policy-results", requireAuth(), async (req: Auth
       policyId: policy.id,
       policyName: policy.name,
       policyType: policy.policyType,
+      outcomeId: policy.outcomeId,
+      outcomeName: policy.outcome?.name,
       overallPass: evaluation.overallPass,
       passCount: evaluation.passCount,
       failCount: evaluation.failCount,
     });
 
-    if (!evaluation.overallPass) overallCopilotReady = false;
+    if (policy.outcome?.workspaceField === "copilotReady") {
+      if (workspace.copilotReady !== evaluation.overallPass) {
+        evalUpdates.copilotReady = evaluation.overallPass;
+      }
+    }
 
-    if (policy.propertyBagKey) {
+    const effectiveBagKey = policy.propertyBagKey || policy.outcome?.propertyBagKey;
+    if (effectiveBagKey) {
       const bagValue = formatPolicyBagValue(evaluation, policy.propertyBagValueFormat);
-      if (existingBag[policy.propertyBagKey] !== bagValue) {
-        existingBag[policy.propertyBagKey] = bagValue;
+      if (existingBag[effectiveBagKey] !== bagValue) {
+        existingBag[effectiveBagKey] = bagValue;
         bagUpdated = true;
       }
     }
@@ -326,9 +381,6 @@ router.get("/api/workspaces/:id/policy-results", requireAuth(), async (req: Auth
 
   await storage.setCopilotRules(req.params.id, allRuleRecords);
 
-  if (workspace.copilotReady !== overallCopilotReady) {
-    evalUpdates.copilotReady = overallCopilotReady;
-  }
   if (bagUpdated) {
     evalUpdates.propertyBag = existingBag;
   }
@@ -336,7 +388,7 @@ router.get("/api/workspaces/:id/policy-results", requireAuth(), async (req: Auth
     await storage.updateWorkspace(req.params.id, evalUpdates);
   }
 
-  const primaryPolicy = activePolicies.find(p => p.policyType === "COPILOT_READINESS") || activePolicies[0];
+  const primaryPolicy = policiesWithOutcomes.find(p => p.outcome?.workspaceField === "copilotReady") || policiesWithOutcomes[0];
 
   res.json({
     policyId: primaryPolicy.id,
@@ -344,7 +396,7 @@ router.get("/api/workspaces/:id/policy-results", requireAuth(), async (req: Auth
     policyType: primaryPolicy.policyType,
     policies: policyEvaluations,
     results: allResults,
-    overallPass: overallCopilotReady,
+    overallPass: evalUpdates.copilotReady !== undefined ? evalUpdates.copilotReady : workspace.copilotReady,
     passCount: allResults.filter(r => r.ruleResult === "PASS").length,
     failCount: allResults.filter(r => r.ruleResult === "FAIL").length,
   });

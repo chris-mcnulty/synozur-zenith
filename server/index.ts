@@ -6,6 +6,7 @@ import { serveStatic } from "./static";
 import { createServer } from "http";
 import { loadCurrentUser } from "./middleware/rbac";
 import { storage } from "./storage";
+import { BUILT_IN_OUTCOMES } from "@shared/schema";
 import crypto from "crypto";
 
 const app = express();
@@ -90,6 +91,46 @@ app.use((req, res, next) => {
   next();
 });
 
+async function seedBuiltInOutcomes() {
+  try {
+    const orgs = await storage.getOrganizations();
+    for (const org of orgs) {
+      const existing = await storage.getPolicyOutcomes(org.id);
+      const existingKeys = new Set(existing.map(o => o.key));
+
+      for (const outcome of BUILT_IN_OUTCOMES) {
+        if (!existingKeys.has(outcome.key)) {
+          await storage.createPolicyOutcome({
+            organizationId: org.id,
+            name: outcome.name,
+            key: outcome.key,
+            description: outcome.description,
+            builtIn: true,
+            workspaceField: outcome.workspaceField,
+            propertyBagKey: outcome.propertyBagKey,
+            showAsColumn: true,
+            showAsFilter: true,
+            sortOrder: outcome.sortOrder,
+          });
+        }
+      }
+
+      const policies = await storage.getGovernancePolicies(org.id);
+      const outcomes = await storage.getPolicyOutcomes(org.id);
+      const copilotOutcome = outcomes.find(o => o.key === "copilot_eligible");
+
+      for (const policy of policies) {
+        if (!policy.outcomeId && policy.policyType === "COPILOT_READINESS" && copilotOutcome) {
+          await storage.updateGovernancePolicy(policy.id, { outcomeId: copilotOutcome.id });
+          log(`Migrated policy "${policy.name}" to Copilot Eligible outcome`);
+        }
+      }
+    }
+  } catch (err) {
+    console.error('[Seed] Failed to seed built-in outcomes:', err);
+  }
+}
+
 async function backfillOrgMemberships() {
   try {
     const orgs = await storage.getOrganizations();
@@ -123,6 +164,7 @@ async function backfillOrgMemberships() {
   await registerRoutes(httpServer, app);
 
   await backfillOrgMemberships();
+  await seedBuiltInOutcomes();
 
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
     const status = err.status || err.statusCode || 500;
