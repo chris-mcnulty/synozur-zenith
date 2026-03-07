@@ -32,7 +32,8 @@ import {
   Server,
   CheckCircle2,
   KeyRound,
-  BookMarked
+  BookMarked,
+  FlaskConical
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -99,6 +100,7 @@ const navGroups: NavGroup[] = [
     items: [
       { name: "Site Governance", href: "/app/governance", icon: ShieldCheck },
       { name: "Policy Builder", href: "/app/admin/policies", icon: ShieldCheck, badge: "Ent+", minRole: "governance_admin" },
+      { name: "What-If Planner", href: "/app/admin/policy-whatif", icon: FlaskConical, badge: "Ent+", minRole: "governance_admin" },
       { name: "Structures", href: "/app/structures", icon: Layers },
       { name: "Document Library", href: "/app/document-library", icon: Library },
       { name: "Content Types", href: "/app/content-types", icon: FileText },
