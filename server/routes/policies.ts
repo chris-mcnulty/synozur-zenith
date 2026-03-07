@@ -101,8 +101,9 @@ router.post("/api/admin/tenants/:id/evaluate-policies", requireRole(ZENITH_ROLES
     const orgId = connection.organizationId;
     if (!orgId) return res.status(400).json({ message: "No organization linked to this tenant" });
 
-    const policy = await storage.getGovernancePolicyByType(orgId, "COPILOT_READINESS");
-    if (!policy) return res.json({ message: "No COPILOT_READINESS policy found", evaluated: 0 });
+    const allPolicies = await storage.getGovernancePolicies(orgId);
+    const activePolicies = allPolicies.filter(p => p.status === "ACTIVE");
+    if (activePolicies.length === 0) return res.json({ message: "No active policies found", evaluated: 0 });
 
     const metaEntries = await storage.getDataDictionary(connection.tenantId, "required_metadata_field");
     const context: EvaluationContext = { requiredMetadataFields: metaEntries.map(e => e.value) };
@@ -110,30 +111,36 @@ router.post("/api/admin/tenants/:id/evaluate-policies", requireRole(ZENITH_ROLES
     const workspaces = await storage.getWorkspaces(undefined, req.params.id);
     let evaluated = 0;
     let changed = 0;
+    const policyNames: string[] = [];
 
-    for (const ws of workspaces) {
-      const evaluation = evaluatePolicy(ws, policy, context);
-      const ruleRecords = evaluationResultsToCopilotRules(ws.id, evaluation);
-      await storage.setCopilotRules(ws.id, ruleRecords);
-      const updates: Record<string, any> = {};
-      if (ws.copilotReady !== evaluation.overallPass) {
-        updates.copilotReady = evaluation.overallPass;
-        changed++;
-      }
-      if (policy.propertyBagKey) {
-        const bagValue = formatPolicyBagValue(evaluation, policy.propertyBagValueFormat);
-        const existingBag = (ws.propertyBag as Record<string, string>) || {};
-        if (existingBag[policy.propertyBagKey] !== bagValue) {
-          updates.propertyBag = { ...existingBag, [policy.propertyBagKey]: bagValue };
+    for (const policy of activePolicies) {
+      policyNames.push(policy.name);
+      for (const ws of workspaces) {
+        const evaluation = evaluatePolicy(ws, policy, context);
+        const ruleRecords = evaluationResultsToCopilotRules(ws.id, evaluation);
+        await storage.setCopilotRules(ws.id, ruleRecords);
+        const updates: Record<string, any> = {};
+
+        const isCopilotPolicy = policy.policyType === "COPILOT_READINESS" || activePolicies.length === 1;
+        if (isCopilotPolicy && ws.copilotReady !== evaluation.overallPass) {
+          updates.copilotReady = evaluation.overallPass;
+          changed++;
+        }
+        if (policy.propertyBagKey) {
+          const bagValue = formatPolicyBagValue(evaluation, policy.propertyBagValueFormat);
+          const existingBag = (ws.propertyBag as Record<string, string>) || {};
+          if (existingBag[policy.propertyBagKey] !== bagValue) {
+            updates.propertyBag = { ...existingBag, [policy.propertyBagKey]: bagValue };
+          }
+        }
+        if (Object.keys(updates).length > 0) {
+          await storage.updateWorkspace(ws.id, updates);
         }
       }
-      if (Object.keys(updates).length > 0) {
-        await storage.updateWorkspace(ws.id, updates);
-      }
-      evaluated++;
+      evaluated += workspaces.length;
     }
 
-    res.json({ evaluated, changed, policyName: policy.name });
+    res.json({ evaluated, changed, policies: policyNames });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -143,27 +150,26 @@ router.get("/api/workspaces/:id/policy-results", requireAuth(), async (req: Auth
   const workspace = await storage.getWorkspace(req.params.id);
   if (!workspace) return res.status(404).json({ message: "Workspace not found" });
 
-  const policyType = (req.query.policyType as string) || "COPILOT_READINESS";
-
   const connection = workspace.tenantConnectionId
     ? await storage.getTenantConnection(workspace.tenantConnectionId)
     : null;
 
   if (!connection) {
     const storedRules = await storage.getCopilotRules(req.params.id);
-    return res.json({ policyId: null, policyName: policyType, results: storedRules, overallPass: workspace.copilotReady });
+    return res.json({ policyId: null, policyName: "Copilot Readiness", policies: [], results: storedRules, overallPass: workspace.copilotReady });
   }
 
   const org = connection.organizationId ? await storage.getOrganization(connection.organizationId) : undefined;
   if (!org) {
     const storedRules = await storage.getCopilotRules(req.params.id);
-    return res.json({ policyId: null, policyName: policyType, results: storedRules, overallPass: workspace.copilotReady });
+    return res.json({ policyId: null, policyName: "Copilot Readiness", policies: [], results: storedRules, overallPass: workspace.copilotReady });
   }
 
-  const policy = await storage.getGovernancePolicyByType(org.id, policyType);
-  if (!policy) {
+  const allPolicies = await storage.getGovernancePolicies(org.id);
+  const activePolicies = allPolicies.filter(p => p.status === "ACTIVE");
+  if (activePolicies.length === 0) {
     const storedRules = await storage.getCopilotRules(req.params.id);
-    return res.json({ policyId: null, policyName: policyType, results: storedRules, overallPass: workspace.copilotReady });
+    return res.json({ policyId: null, policyName: "Copilot Readiness", policies: [], results: storedRules, overallPass: workspace.copilotReady });
   }
 
   const requiredMetadataEntries = await storage.getDataDictionary(connection.tenantId, "required_metadata_field");
@@ -171,34 +177,66 @@ router.get("/api/workspaces/:id/policy-results", requireAuth(), async (req: Auth
     requiredMetadataFields: requiredMetadataEntries.map(e => e.value),
   };
 
-  const evaluation = evaluatePolicy(workspace, policy, context);
-  const ruleRecords = evaluationResultsToCopilotRules(req.params.id, evaluation);
-  await storage.setCopilotRules(req.params.id, ruleRecords);
-
-  const copilotReady = evaluation.overallPass;
+  const allResults: { ruleType: string; ruleName: string; ruleResult: string; ruleDescription: string; policyName?: string }[] = [];
+  const policyEvaluations: { policyId: string; policyName: string; policyType: string; overallPass: boolean; passCount: number; failCount: number }[] = [];
+  let overallCopilotReady = true;
   const evalUpdates: Record<string, any> = {};
-  if (workspace.copilotReady !== copilotReady) {
-    evalUpdates.copilotReady = copilotReady;
-  }
-  if (policy.propertyBagKey) {
-    const bagValue = formatPolicyBagValue(evaluation, policy.propertyBagValueFormat);
-    const existingBag = (workspace.propertyBag as Record<string, string>) || {};
-    if (existingBag[policy.propertyBagKey] !== bagValue) {
-      evalUpdates.propertyBag = { ...existingBag, [policy.propertyBagKey]: bagValue };
+  const existingBag = (workspace.propertyBag as Record<string, string>) || {};
+  let bagUpdated = false;
+  const allRuleRecords: any[] = [];
+
+  for (const policy of activePolicies) {
+    const evaluation = evaluatePolicy(workspace, policy, context);
+    const ruleRecords = evaluationResultsToCopilotRules(req.params.id, evaluation);
+    allRuleRecords.push(...ruleRecords);
+
+    for (const r of evaluation.results) {
+      allResults.push({ ...r, policyName: policy.name });
     }
+
+    policyEvaluations.push({
+      policyId: policy.id,
+      policyName: policy.name,
+      policyType: policy.policyType,
+      overallPass: evaluation.overallPass,
+      passCount: evaluation.passCount,
+      failCount: evaluation.failCount,
+    });
+
+    if (!evaluation.overallPass) overallCopilotReady = false;
+
+    if (policy.propertyBagKey) {
+      const bagValue = formatPolicyBagValue(evaluation, policy.propertyBagValueFormat);
+      if (existingBag[policy.propertyBagKey] !== bagValue) {
+        existingBag[policy.propertyBagKey] = bagValue;
+        bagUpdated = true;
+      }
+    }
+  }
+
+  await storage.setCopilotRules(req.params.id, allRuleRecords);
+
+  if (workspace.copilotReady !== overallCopilotReady) {
+    evalUpdates.copilotReady = overallCopilotReady;
+  }
+  if (bagUpdated) {
+    evalUpdates.propertyBag = existingBag;
   }
   if (Object.keys(evalUpdates).length > 0) {
     await storage.updateWorkspace(req.params.id, evalUpdates);
   }
 
+  const primaryPolicy = activePolicies.find(p => p.policyType === "COPILOT_READINESS") || activePolicies[0];
+
   res.json({
-    policyId: policy.id,
-    policyName: policy.name,
-    policyType: policy.policyType,
-    results: evaluation.results,
-    overallPass: copilotReady,
-    passCount: evaluation.passCount,
-    failCount: evaluation.failCount,
+    policyId: primaryPolicy.id,
+    policyName: primaryPolicy.name,
+    policyType: primaryPolicy.policyType,
+    policies: policyEvaluations,
+    results: allResults,
+    overallPass: overallCopilotReady,
+    passCount: allResults.filter(r => r.ruleResult === "PASS").length,
+    failCount: allResults.filter(r => r.ruleResult === "FAIL").length,
   });
 });
 

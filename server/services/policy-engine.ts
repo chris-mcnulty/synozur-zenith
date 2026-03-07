@@ -148,9 +148,21 @@ const BUILT_IN_EVALUATORS: Record<string, (workspace: Workspace, config?: Record
     } else if (operator === "CONTAINS") {
       pass = strValue.includes(expectedValue);
     } else if (operator === "GREATER_THAN") {
-      pass = Number(strValue) > Number(expectedValue);
+      const dateActual = Date.parse(strValue);
+      const dateExpected = Date.parse(expectedValue);
+      if (!isNaN(dateActual) && !isNaN(dateExpected)) {
+        pass = dateActual > dateExpected;
+      } else {
+        pass = Number(strValue) > Number(expectedValue);
+      }
     } else if (operator === "LESS_THAN") {
-      pass = Number(strValue) < Number(expectedValue);
+      const dateActual = Date.parse(strValue);
+      const dateExpected = Date.parse(expectedValue);
+      if (!isNaN(dateActual) && !isNaN(dateExpected)) {
+        pass = dateActual < dateExpected;
+      } else {
+        pass = Number(strValue) < Number(expectedValue);
+      }
     }
 
     const opDisplay = operator.toLowerCase().replace(/_/g, " ");

@@ -64,7 +64,8 @@ export default function WorkspaceDetailsPage() {
     policyId: string | null;
     policyName: string;
     policyType?: string;
-    results: { ruleType?: string; ruleName: string; ruleResult: string; ruleDescription: string }[];
+    policies?: { policyId: string; policyName: string; policyType: string; overallPass: boolean; passCount: number; failCount: number }[];
+    results: { ruleType?: string; ruleName: string; ruleResult: string; ruleDescription: string; policyName?: string }[];
     overallPass: boolean;
     passCount?: number;
     failCount?: number;
@@ -340,8 +341,8 @@ export default function WorkspaceDetailsPage() {
     ? retentionLabelsData.find(l => l.labelId === workspace.retentionLabelId)
     : null;
 
-  const computedRules: { ruleName: string; ruleResult: string; ruleDescription: string }[] = policyResults?.results && policyResults.results.length > 0
-    ? policyResults.results.map(r => ({ ruleName: r.ruleName, ruleResult: r.ruleResult, ruleDescription: r.ruleDescription }))
+  const computedRules: { ruleName: string; ruleResult: string; ruleDescription: string; policyName?: string }[] = policyResults?.results && policyResults.results.length > 0
+    ? policyResults.results.map(r => ({ ruleName: r.ruleName, ruleResult: r.ruleResult, ruleDescription: r.ruleDescription, policyName: r.policyName }))
     : [
         { ruleName: "Sensitivity Label", ruleResult: workspace.sensitivityLabelId ? "PASS" : "FAIL", ruleDescription: "Workspace must have a Purview sensitivity label applied." },
         { ruleName: "Department Assigned", ruleResult: workspace.department ? "PASS" : "FAIL", ruleDescription: "Workspace must have a department assigned." },
@@ -350,7 +351,9 @@ export default function WorkspaceDetailsPage() {
         { ruleName: "Sharing Policy", ruleResult: (!workspace.externalSharing || workspace.sensitivity !== "HIGHLY_CONFIDENTIAL") ? "PASS" : "FAIL", ruleDescription: "External sharing policy must align with sensitivity classification." },
       ];
 
-  const policyName = policyResults?.policyName || "Copilot Readiness";
+  const policyName = policyResults?.policies && policyResults.policies.length > 1
+    ? "Policy Evaluation"
+    : (policyResults?.policyName || "Copilot Eligibility");
 
   const rawJson = JSON.stringify(workspace, null, 2);
   const passCount = computedRules.filter(r => r.ruleResult === "PASS").length;
@@ -1290,7 +1293,7 @@ export default function WorkspaceDetailsPage() {
           <Card className={`border-border/50 ${copilotEligible ? 'bg-gradient-to-br from-emerald-500/5 to-card' : 'bg-gradient-to-br from-card to-card/50'}`}>
             <CardHeader className="pb-2">
               <CardTitle className="text-base flex items-center justify-between">
-                Copilot Eligibility
+                {policyName}
                 <Badge variant={copilotEligible ? "default" : "destructive"} className={copilotEligible ? "bg-emerald-500/10 text-emerald-600 border-emerald-500/20" : "bg-destructive/10 text-destructive border-destructive/20"}>
                   {passCount}/{computedRules.length} Passed
                 </Badge>
@@ -1309,23 +1312,59 @@ export default function WorkspaceDetailsPage() {
                   <p className="text-xs text-muted-foreground">{copilotEligible ? "All governance rules passed" : `${failCount} rule${failCount > 1 ? 's' : ''} failed — resolve to enable`}</p>
                 </div>
               </div>
-              <div className="space-y-2">
-                {computedRules.map((rule, idx) => {
-                  const pass = rule.ruleResult === "PASS";
-                  return (
-                    <div key={idx} className={`flex items-start gap-2 text-xs p-2 rounded-lg ${pass ? 'bg-emerald-500/5' : 'bg-destructive/5'}`} data-testid={`copilot-rule-${idx}`}>
-                      {pass 
-                        ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 shrink-0 mt-0.5"/>
-                        : <ShieldAlert className="w-3.5 h-3.5 text-destructive shrink-0 mt-0.5"/>
-                      }
-                      <div>
-                        <span className={`font-medium block ${pass ? '' : 'text-destructive'}`}>{rule.ruleName}</span>
-                        <span className="text-muted-foreground">{rule.ruleDescription}</span>
+              {policyResults?.policies && policyResults.policies.length > 1 ? (
+                <div className="space-y-4">
+                  {policyResults.policies.map((pol) => {
+                    const polRules = computedRules.filter(r => (r as any).policyName === pol.policyName);
+                    if (polRules.length === 0) return null;
+                    return (
+                      <div key={pol.policyId}>
+                        <div className="flex items-center gap-2 mb-2">
+                          <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">{pol.policyName}</span>
+                          <Badge variant={pol.overallPass ? "default" : "secondary"} className={`text-[10px] px-1.5 py-0 ${pol.overallPass ? "bg-emerald-500/10 text-emerald-600 border-emerald-500/20" : "bg-muted text-muted-foreground"}`}>
+                            {pol.overallPass ? "PASS" : "FAIL"}
+                          </Badge>
+                        </div>
+                        <div className="space-y-2">
+                          {polRules.map((rule, idx) => {
+                            const pass = rule.ruleResult === "PASS";
+                            return (
+                              <div key={idx} className={`flex items-start gap-2 text-xs p-2 rounded-lg ${pass ? 'bg-emerald-500/5' : 'bg-destructive/5'}`}>
+                                {pass 
+                                  ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 shrink-0 mt-0.5"/>
+                                  : <ShieldAlert className="w-3.5 h-3.5 text-destructive shrink-0 mt-0.5"/>
+                                }
+                                <div>
+                                  <span className={`font-medium block ${pass ? '' : 'text-destructive'}`}>{rule.ruleName}</span>
+                                  <span className="text-muted-foreground">{rule.ruleDescription}</span>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
                       </div>
-                    </div>
-                  );
-                })}
-              </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {computedRules.map((rule, idx) => {
+                    const pass = rule.ruleResult === "PASS";
+                    return (
+                      <div key={idx} className={`flex items-start gap-2 text-xs p-2 rounded-lg ${pass ? 'bg-emerald-500/5' : 'bg-destructive/5'}`} data-testid={`copilot-rule-${idx}`}>
+                        {pass 
+                          ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 shrink-0 mt-0.5"/>
+                          : <ShieldAlert className="w-3.5 h-3.5 text-destructive shrink-0 mt-0.5"/>
+                        }
+                        <div>
+                          <span className={`font-medium block ${pass ? '' : 'text-destructive'}`}>{rule.ruleName}</span>
+                          <span className="text-muted-foreground">{rule.ruleDescription}</span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </CardContent>
           </Card>
 
