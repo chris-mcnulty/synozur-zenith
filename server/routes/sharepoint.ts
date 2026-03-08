@@ -11,9 +11,14 @@ import type { Workspace, PolicyOutcome, GovernancePolicy } from "@shared/schema"
 
 const router = Router();
 
-async function evaluateAllPoliciesForWorkspace(ws: Workspace, orgId: string, tenantId: string, logPrefix: string = "[policy-eval]"): Promise<void> {
+interface PolicyEvalResult {
+  bagChanged: boolean;
+  changedBagKeys: Record<string, string>;
+}
+
+async function evaluateAllPoliciesForWorkspace(ws: Workspace, orgId: string, tenantId: string, logPrefix: string = "[policy-eval]"): Promise<PolicyEvalResult> {
   const policiesWithOutcomes = await storage.getActivePoliciesWithOutcomes(orgId);
-  if (policiesWithOutcomes.length === 0) return;
+  if (policiesWithOutcomes.length === 0) return { bagChanged: false, changedBagKeys: {} };
 
   const metaEntries = await storage.getDataDictionary(tenantId, "required_metadata_field");
   const context: EvaluationContext = { requiredMetadataFields: metaEntries.map(e => e.value) };
@@ -21,7 +26,8 @@ async function evaluateAllPoliciesForWorkspace(ws: Workspace, orgId: string, ten
   const allRuleRecords: any[] = [];
   const updates: Record<string, any> = {};
   const existingBag = (ws.propertyBag as Record<string, string>) || {};
-  let bagUpdated = false;
+  let bagChanged = false;
+  const changedBagKeys: Record<string, string> = {};
 
   for (const policy of policiesWithOutcomes) {
     const evaluation = evaluatePolicy(ws, policy, context);
@@ -37,19 +43,21 @@ async function evaluateAllPoliciesForWorkspace(ws: Workspace, orgId: string, ten
       const bagValue = formatPolicyBagValue(evaluation, policy.propertyBagValueFormat);
       if (existingBag[effectiveBagKey] !== bagValue) {
         existingBag[effectiveBagKey] = bagValue;
-        bagUpdated = true;
+        bagChanged = true;
+        changedBagKeys[effectiveBagKey] = bagValue;
         console.log(`${logPrefix} ${ws.displayName}: ${effectiveBagKey}=${bagValue}`);
       }
     }
   }
 
   await storage.setCopilotRules(ws.id, allRuleRecords);
-  if (bagUpdated) {
+  if (bagChanged) {
     updates.propertyBag = existingBag;
   }
   if (Object.keys(updates).length > 0) {
     await storage.updateWorkspace(ws.id, updates);
   }
+  return { bagChanged, changedBagKeys };
 }
 
 async function getDelegatedTokenForRetention(currentUserId?: string, organizationId?: string): Promise<string | null> {
@@ -112,6 +120,18 @@ async function getDelegatedSpoTokenForOrg(spoHost: string, currentUserId?: strin
 }
 
 // ── Workspaces (SharePoint Sites) ──
+router.get("/api/workspaces/writeback-pending", requireAuth(), async (req: AuthenticatedRequest, res) => {
+  const tenantConnectionId = req.query.tenantConnectionId as string | undefined;
+  const workspaces = await storage.getWorkspaces(undefined, tenantConnectionId);
+  const pending = workspaces.filter(ws =>
+    ws.localHash && ws.spoSyncHash && ws.localHash !== ws.spoSyncHash && ws.siteUrl
+  );
+  res.json({
+    count: pending.length,
+    workspaces: pending.map(ws => ({ id: ws.id, displayName: ws.displayName, siteUrl: ws.siteUrl })),
+  });
+});
+
 router.get("/api/workspaces", requireAuth(), async (req: AuthenticatedRequest, res) => {
   const search = req.query.search as string | undefined;
   const tenantConnectionId = req.query.tenantConnectionId as string | undefined;
@@ -243,11 +263,50 @@ router.patch("/api/workspaces/:id", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, Z
   const workspace = await storage.updateWorkspace(req.params.id, updates);
   if (!workspace) return res.status(404).json({ message: "Workspace not found" });
 
+  let writebackResult: { attempted: boolean; success?: boolean; error?: string } = { attempted: false };
   try {
     if (existing.tenantConnectionId) {
       const conn = await storage.getTenantConnection(existing.tenantConnectionId);
       if (conn?.organizationId) {
-        await evaluateAllPoliciesForWorkspace(workspace, conn.organizationId, conn.tenantId, "[workspace-update]");
+        const evalResult = await evaluateAllPoliciesForWorkspace(workspace, conn.organizationId, conn.tenantId, "[workspace-update]");
+
+        if (evalResult.bagChanged && workspace.siteUrl && Object.keys(evalResult.changedBagKeys).length > 0) {
+          console.log(`[workspace-update] Policy bag changed for ${workspace.displayName}, auto-writing back ${Object.keys(evalResult.changedBagKeys).length} keys`);
+          writebackResult.attempted = true;
+          try {
+            const spoHost = conn.domain.includes('.sharepoint.com') ? conn.domain : `${conn.domain.replace(/\..*$/, '')}.sharepoint.com`;
+            const spoToken = (req as any).session?.userId ? await getDelegatedSpoToken((req as any).session.userId, spoHost) : null;
+            if (spoToken) {
+              const wbResult = await writeSitePropertyBag(spoToken, workspace.siteUrl, evalResult.changedBagKeys, (req as any).session?.userId);
+              writebackResult.success = wbResult.success;
+              if (!wbResult.success) writebackResult.error = wbResult.error;
+              if (wbResult.success) {
+                const refreshedWs = await storage.getWorkspace(workspace.id);
+                if (refreshedWs) {
+                  const wbHash = computeWritebackHash({
+                    sensitivityLabelId: refreshedWs.sensitivityLabelId,
+                    department: refreshedWs.department,
+                    costCenter: refreshedWs.costCenter,
+                    projectCode: refreshedWs.projectCode,
+                    propertyBag: refreshedWs.propertyBag,
+                  });
+                  await storage.updateWorkspace(workspace.id, { spoSyncHash: wbHash, localHash: wbHash } as any);
+                }
+                console.log(`[workspace-update] Auto-writeback succeeded for ${workspace.displayName}`);
+              } else {
+                console.warn(`[workspace-update] Auto-writeback failed for ${workspace.displayName}: ${wbResult.error}`);
+              }
+            } else {
+              writebackResult.success = false;
+              writebackResult.error = "No SPO token available — sign in via SSO to enable auto-writeback";
+              console.warn(`[workspace-update] No SPO token for auto-writeback on ${workspace.displayName}`);
+            }
+          } catch (wbErr: any) {
+            writebackResult.success = false;
+            writebackResult.error = wbErr.message;
+            console.error(`[workspace-update] Auto-writeback error: ${wbErr.message}`);
+          }
+        }
       }
     }
   } catch (evalErr: any) {
@@ -255,7 +314,7 @@ router.patch("/api/workspaces/:id", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, Z
   }
 
   const finalWorkspace = await storage.getWorkspace(req.params.id);
-  res.json({ ...(finalWorkspace || workspace), labelSyncResult });
+  res.json({ ...(finalWorkspace || workspace), labelSyncResult, ...(writebackResult.attempted ? { autoWriteback: writebackResult } : {}) });
 });
 
 router.get("/api/workspaces/:id/libraries", requireAuth(), async (req: AuthenticatedRequest, res) => {
@@ -484,7 +543,40 @@ router.post("/api/workspaces/:id/sync", requireRole(ZENITH_ROLES.OPERATOR, ZENIT
     try {
       const connection2 = await storage.getTenantConnection(workspace.tenantConnectionId!);
       if (connection2?.organizationId) {
-        await evaluateAllPoliciesForWorkspace(updated, connection2.organizationId, connection2.tenantId, "[single-sync]");
+        const evalResult = await evaluateAllPoliciesForWorkspace(updated, connection2.organizationId, connection2.tenantId, "[single-sync]");
+
+        if (evalResult.bagChanged && workspace.siteUrl && Object.keys(evalResult.changedBagKeys).length > 0) {
+          console.log(`[single-sync] Policy bag changed for ${workspace.displayName}, auto-writing back ${Object.keys(evalResult.changedBagKeys).length} keys`);
+          try {
+            const spoHost2 = connection2.domain.includes('.sharepoint.com') ? connection2.domain : `${connection2.domain.replace(/\..*$/, '')}.sharepoint.com`;
+            const spoToken2 = (req as any).session?.userId ? await getDelegatedSpoToken((req as any).session.userId, spoHost2) : null;
+            if (spoToken2) {
+              const wbResult = await writeSitePropertyBag(spoToken2, workspace.siteUrl, evalResult.changedBagKeys, (req as any).session?.userId);
+              if (wbResult.success) {
+                const refreshedWs = await storage.getWorkspace(workspace.id);
+                if (refreshedWs) {
+                  const wbHash = computeWritebackHash({
+                    sensitivityLabelId: refreshedWs.sensitivityLabelId,
+                    department: refreshedWs.department,
+                    costCenter: refreshedWs.costCenter,
+                    projectCode: refreshedWs.projectCode,
+                    propertyBag: refreshedWs.propertyBag,
+                  });
+                  await storage.updateWorkspace(workspace.id, { spoSyncHash: wbHash, localHash: wbHash } as any);
+                }
+                console.log(`[single-sync] Auto-writeback succeeded for ${workspace.displayName}`);
+              } else {
+                console.warn(`[single-sync] Auto-writeback failed for ${workspace.displayName}: ${wbResult.error}`);
+                warnings.push(`Policy writeback failed: ${wbResult.error}`);
+              }
+            } else {
+              warnings.push("Policy outcome changed but auto-writeback skipped — no SPO token available");
+            }
+          } catch (wbErr: any) {
+            console.error(`[single-sync] Auto-writeback error: ${wbErr.message}`);
+            warnings.push(`Policy writeback error: ${wbErr.message}`);
+          }
+        }
       }
     } catch (evalErr: any) {
       console.error(`[single-sync] Policy evaluation error: ${evalErr.message}`);
@@ -537,20 +629,45 @@ router.patch("/api/workspaces/bulk/update", requireRole(ZENITH_ROLES.GOVERNANCE_
   await storage.bulkUpdateWorkspaces(ids, updates);
 
   let policyEvalCount = 0;
+  let writebackPendingCount = 0;
   try {
     for (const wsId of ids) {
       const ws = await storage.getWorkspace(wsId);
       if (!ws?.tenantConnectionId) continue;
       const conn = await storage.getTenantConnection(ws.tenantConnectionId);
       if (!conn?.organizationId) continue;
-      await evaluateAllPoliciesForWorkspace(ws, conn.organizationId, conn.tenantId, "[bulk-update]");
+      const evalResult = await evaluateAllPoliciesForWorkspace(ws, conn.organizationId, conn.tenantId, "[bulk-update]");
       policyEvalCount++;
+
+      if (evalResult.bagChanged && ws.siteUrl) {
+        const refreshedWs = await storage.getWorkspace(wsId);
+        if (refreshedWs) {
+          const newLocalHash = computeWritebackHash({
+            sensitivityLabelId: refreshedWs.sensitivityLabelId,
+            department: refreshedWs.department,
+            costCenter: refreshedWs.costCenter,
+            projectCode: refreshedWs.projectCode,
+            propertyBag: refreshedWs.propertyBag,
+          });
+          await storage.updateWorkspace(wsId, { localHash: newLocalHash } as any);
+        }
+        writebackPendingCount++;
+      }
     }
   } catch (evalErr: any) {
     console.error(`[bulk-update] Policy evaluation error: ${evalErr.message}`);
   }
 
-  res.json({ message: "Bulk update complete", count: ids.length, policyEvaluation: policyEvalCount > 0 ? { evaluated: policyEvalCount } : undefined });
+  if (writebackPendingCount > 0) {
+    console.log(`[bulk-update] ${writebackPendingCount} workspaces have pending property bag writebacks`);
+  }
+
+  res.json({
+    message: "Bulk update complete",
+    count: ids.length,
+    policyEvaluation: policyEvalCount > 0 ? { evaluated: policyEvalCount } : undefined,
+    writebackPending: writebackPendingCount > 0 ? { count: writebackPendingCount, message: `${writebackPendingCount} workspace(s) have policy outcome changes that need to be written back to SharePoint.` } : undefined,
+  });
 });
 
 router.patch("/api/workspaces/bulk/hub-assignment", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN), async (req, res) => {
@@ -1276,14 +1393,33 @@ router.post("/api/admin/tenants/:id/sync", requireRole(ZENITH_ROLES.TENANT_ADMIN
     }
 
     let policyEvalCount = 0;
+    let writebackPendingCount = 0;
     try {
       if (connection.organizationId) {
         const allSyncedWorkspaces = await storage.getWorkspaces(undefined, req.params.id);
         for (const ws of allSyncedWorkspaces) {
-          await evaluateAllPoliciesForWorkspace(ws, connection.organizationId, connection.tenantId, "[policy-eval]");
+          const evalResult = await evaluateAllPoliciesForWorkspace(ws, connection.organizationId, connection.tenantId, "[policy-eval]");
           policyEvalCount++;
+
+          if (evalResult.bagChanged && ws.siteUrl) {
+            const refreshedWs = await storage.getWorkspace(ws.id);
+            if (refreshedWs) {
+              const newLocalHash = computeWritebackHash({
+                sensitivityLabelId: refreshedWs.sensitivityLabelId,
+                department: refreshedWs.department,
+                costCenter: refreshedWs.costCenter,
+                projectCode: refreshedWs.projectCode,
+                propertyBag: refreshedWs.propertyBag,
+              });
+              await storage.updateWorkspace(ws.id, { localHash: newLocalHash } as any);
+            }
+            writebackPendingCount++;
+          }
         }
         console.log(`[policy-eval] Evaluated ${policyEvalCount} workspaces against all active policies`);
+        if (writebackPendingCount > 0) {
+          console.log(`[policy-eval] ${writebackPendingCount} workspaces have pending property bag writebacks`);
+        }
       } else {
         console.log(`[policy-eval] No organization linked to tenant, skipping auto-evaluation`);
       }
@@ -1368,6 +1504,7 @@ router.post("/api/admin/tenants/:id/sync", requireRole(ZENITH_ROLES.TENANT_ADMIN
       hubSites: hubSyncResult,
       documentLibraries: librarySyncResult,
       policyEvaluation: policyEvalCount > 0 ? { evaluated: policyEvalCount } : undefined,
+      writebackPending: writebackPendingCount > 0 ? { count: writebackPendingCount, message: `${writebackPendingCount} workspace(s) have policy outcome changes that need to be written back to SharePoint.` } : undefined,
       permissionWarnings: permissionWarnings.length > 0 ? permissionWarnings : undefined,
     });
   } catch (err: any) {
