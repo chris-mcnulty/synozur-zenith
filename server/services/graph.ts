@@ -1113,8 +1113,23 @@ async function ensurePropertyKeysIndexed(
   try {
     console.log(`[property-bag] Ensuring ${keys.length} property keys are indexed: ${keys.join(', ')}`);
 
-    const existingProps = await fetchSitePropertyBag(spoToken, siteUrl);
-    const existingIndexedKeys = (existingProps.properties?.['vti_indexedpropertykeys'] as string) || '';
+    const rawUrl = `${siteUrl.replace(/\/+$/, '')}/_api/web/AllProperties`;
+    let existingIndexedKeys = '';
+    try {
+      const rawRes = await fetch(rawUrl, {
+        headers: {
+          Authorization: `Bearer ${spoToken}`,
+          Accept: "application/json;odata=nometadata",
+        },
+      });
+      if (rawRes.ok) {
+        const rawData = await rawRes.json();
+        existingIndexedKeys = (rawData['vti_indexedpropertykeys'] as string) || '';
+        console.log(`[property-bag] Existing vti_indexedpropertykeys: ${existingIndexedKeys ? existingIndexedKeys.substring(0, 80) + '...' : '(empty)'}`);
+      }
+    } catch (readErr: any) {
+      console.warn(`[property-bag] Could not read existing indexed keys: ${readErr.message}`);
+    }
     const updatedIndexedKeys = buildIndexedPropertyKeysValue(existingIndexedKeys, keys);
 
     if (updatedIndexedKeys === existingIndexedKeys) {
