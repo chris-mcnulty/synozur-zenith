@@ -6,6 +6,22 @@ import { evaluatePolicy, evaluationResultsToCopilotRules, formatPolicyBagValue, 
 
 const router = Router();
 
+const RESERVED_PROPERTY_BAG_PREFIXES = ['vti_', 'ows_', 'docid_', '_vti_', '__', 'ecm_', 'ir_'];
+
+function validatePropertyBagKey(key: string | undefined | null): string | null {
+  if (!key) return null;
+  const lower = key.toLowerCase();
+  for (const prefix of RESERVED_PROPERTY_BAG_PREFIXES) {
+    if (lower.startsWith(prefix)) {
+      return `Property bag key "${key}" uses a reserved SharePoint prefix "${prefix}". Use a custom prefix like "Zenith" instead.`;
+    }
+  }
+  if (/[^a-zA-Z0-9_]/.test(key)) {
+    return `Property bag key "${key}" contains invalid characters. Use only letters, numbers, and underscores.`;
+  }
+  return null;
+}
+
 router.get("/api/policies", requireAuth(), async (req: AuthenticatedRequest, res) => {
   const organizationId = req.query.organizationId as string;
   if (!organizationId) {
@@ -38,7 +54,11 @@ router.patch("/api/policies/:id", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZEN
   if (req.body.status !== undefined) updates.status = req.body.status;
   if (req.body.rules !== undefined) updates.rules = req.body.rules;
   if (req.body.outcomeId !== undefined) updates.outcomeId = req.body.outcomeId;
-  if (req.body.propertyBagKey !== undefined) updates.propertyBagKey = req.body.propertyBagKey;
+  if (req.body.propertyBagKey !== undefined) {
+    const keyError = validatePropertyBagKey(req.body.propertyBagKey);
+    if (keyError) return res.status(400).json({ message: keyError });
+    updates.propertyBagKey = req.body.propertyBagKey;
+  }
   if (req.body.propertyBagValueFormat !== undefined) updates.propertyBagValueFormat = req.body.propertyBagValueFormat;
 
   const updated = await storage.updateGovernancePolicy(req.params.id, updates as any);
@@ -58,6 +78,10 @@ router.get("/api/policy-outcomes", requireAuth(), async (req: AuthenticatedReque
 });
 
 router.post("/api/policy-outcomes", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN), async (req: AuthenticatedRequest, res) => {
+  if (req.body.propertyBagKey) {
+    const keyError = validatePropertyBagKey(req.body.propertyBagKey);
+    if (keyError) return res.status(400).json({ message: keyError });
+  }
   const parsed = insertPolicyOutcomeSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ message: parsed.error.message });
   const outcome = await storage.createPolicyOutcome(parsed.data);
@@ -72,7 +96,11 @@ router.patch("/api/policy-outcomes/:id", requireRole(ZENITH_ROLES.GOVERNANCE_ADM
   if (req.body.description !== undefined) updates.description = req.body.description;
   if (req.body.showAsColumn !== undefined) updates.showAsColumn = req.body.showAsColumn;
   if (req.body.showAsFilter !== undefined) updates.showAsFilter = req.body.showAsFilter;
-  if (req.body.propertyBagKey !== undefined) updates.propertyBagKey = req.body.propertyBagKey;
+  if (req.body.propertyBagKey !== undefined) {
+    const keyError = validatePropertyBagKey(req.body.propertyBagKey);
+    if (keyError) return res.status(400).json({ message: keyError });
+    updates.propertyBagKey = req.body.propertyBagKey;
+  }
   if (req.body.sortOrder !== undefined) updates.sortOrder = req.body.sortOrder;
   const updated = await storage.updatePolicyOutcome(req.params.id, updates as any);
   res.json(updated);

@@ -990,21 +990,44 @@ export async function fetchSitePropertyBag(
   }
 }
 
+const PROPERTY_BAG_BLOCKED_PREFIXES = ['vti_', 'ows_', 'docid_', '_vti_', '__', 'ecm_', 'ir_'];
+
+function sanitizePropertyBagKeys(properties: Record<string, string>): { safe: Record<string, string>; blocked: string[] } {
+  const safe: Record<string, string> = {};
+  const blocked: string[] = [];
+  for (const [key, value] of Object.entries(properties)) {
+    const lower = key.toLowerCase();
+    if (PROPERTY_BAG_BLOCKED_PREFIXES.some(p => lower.startsWith(p))) {
+      blocked.push(key);
+      continue;
+    }
+    safe[key] = value;
+  }
+  return { safe, blocked };
+}
+
 export async function writeSitePropertyBag(
   spoToken: string,
   siteUrl: string,
   properties: Record<string, string>,
   userId?: string
 ): Promise<{ success: boolean; error?: string }> {
-  console.log(`[property-bag] Attempting to write ${Object.keys(properties).length} properties to ${siteUrl}`);
+  const { safe, blocked } = sanitizePropertyBagKeys(properties);
+  if (blocked.length > 0) {
+    console.warn(`[property-bag] BLOCKED ${blocked.length} reserved keys from write: ${blocked.join(', ')}`);
+  }
+  if (Object.keys(safe).length === 0) {
+    return { success: false, error: `All property keys were blocked (reserved prefixes): ${blocked.join(', ')}` };
+  }
+  console.log(`[property-bag] Writing ${Object.keys(safe).length} properties to ${siteUrl}: ${Object.keys(safe).join(', ')}`);
 
-  const result1 = await writeSitePropertyBagViaCsom(spoToken, siteUrl, properties);
+  const result1 = await writeSitePropertyBagViaCsom(spoToken, siteUrl, safe);
   if (result1.success) return result1;
   console.warn(`[property-bag] Direct CSOM failed: ${result1.error}`);
 
   if (userId) {
     console.log(`[property-bag] Trying admin NoScript toggle approach (disable NoScript → write → re-enable)`);
-    const result2 = await writeSitePropertyBagWithNoScriptToggle(spoToken, siteUrl, properties, userId);
+    const result2 = await writeSitePropertyBagWithNoScriptToggle(spoToken, siteUrl, safe, userId);
     if (result2.success) return result2;
     console.warn(`[property-bag] Admin NoScript toggle failed: ${result2.error}`);
     return { success: false, error: result2.error };
