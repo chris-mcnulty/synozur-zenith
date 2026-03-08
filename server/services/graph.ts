@@ -1179,6 +1179,26 @@ async function writeSitePropertyBagWithNoScriptToggle(
   properties: Record<string, string>,
   userId: string
 ): Promise<{ success: boolean; error?: string }> {
+  const rawUrl = `${siteUrl.replace(/\/+$/, '')}/_api/web/AllProperties`;
+  let existingIndexedKeys = '';
+  try {
+    const rawRes = await fetch(rawUrl, {
+      headers: {
+        Authorization: `Bearer ${spoToken}`,
+        Accept: "application/json;odata=nometadata",
+      },
+    });
+    if (rawRes.ok) {
+      const rawData = await rawRes.json();
+      existingIndexedKeys = (rawData['vti_indexedpropertykeys'] as string) || '';
+    }
+  } catch (readErr: any) {
+    console.warn(`[property-bag] Could not read existing indexed keys for combined write: ${readErr.message}`);
+  }
+
+  const updatedIndexedKeys = buildIndexedPropertyKeysValue(existingIndexedKeys, Object.keys(properties));
+  const needsIndexUpdate = updatedIndexedKeys !== existingIndexedKeys;
+
   let actionId = 5;
   let actionsXml = '';
   actionsXml += '<ObjectPath Id="2" ObjectPathId="1" />';
@@ -1189,15 +1209,18 @@ async function writeSitePropertyBagWithNoScriptToggle(
     actionsXml += `<Method Name="SetFieldValue" Id="${actionId}" ObjectPathId="3"><Parameters><Parameter Type="String">${safeKey}</Parameter><Parameter Type="String">${safeVal}</Parameter></Parameters></Method>`;
     actionId++;
   }
+  if (needsIndexUpdate) {
+    const safeIndexVal = updatedIndexedKeys.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    actionsXml += `<Method Name="SetFieldValue" Id="${actionId}" ObjectPathId="3"><Parameters><Parameter Type="String">vti_indexedpropertykeys</Parameter><Parameter Type="String">${safeIndexVal}</Parameter></Parameters></Method>`;
+    actionId++;
+    console.log(`[property-bag] Including vti_indexedpropertykeys update in NoScript write (${Object.keys(properties).length} keys)`);
+  }
   actionsXml += `<Method Name="Update" Id="${actionId}" ObjectPathId="1" />`;
   const csomXml = `<Request AddExpandoFieldTypeSuffix="true" SchemaVersion="15.0.0.0" LibraryVersion="16.0.0.0" ApplicationName="Zenith" xmlns="http://schemas.microsoft.com/sharepoint/clientquery/2009"><Actions>${actionsXml}</Actions><ObjectPaths><Property Id="1" ParentId="0" Name="Web" /><Property Id="3" ParentId="1" Name="AllProperties" /><StaticProperty Id="0" TypeId="{3747adcd-a3c3-41b9-bfab-4a64dd2f1e0a}" Name="Current" /></ObjectPaths></Request>`;
 
   const result = await executeCsomWithNoScriptToggle(spoToken, siteUrl, csomXml, userId);
-  if (!result.success) return result;
-
-  const indexResult = await ensurePropertyKeysIndexed(spoToken, siteUrl, Object.keys(properties));
-  if (!indexResult.success) {
-    console.warn(`[property-bag] Properties written but indexing failed: ${indexResult.error}`);
+  if (result.success && needsIndexUpdate) {
+    console.log(`[property-bag] Successfully wrote properties and indexed ${Object.keys(properties).length} keys in single NoScript window`);
   }
   return result;
 }
