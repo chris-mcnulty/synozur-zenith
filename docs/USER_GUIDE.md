@@ -342,20 +342,21 @@ foreach ($site in $sites) {
 
 ### Step 3: Map the Crawled Property to a Managed Property
 
+The recommended approach is to map the crawled property to an existing `RefinableStringXX` managed property and give it an alias. This avoids issues with custom managed property creation and works reliably with Purview Adaptive Scopes.
+
 1. Still in **Manage Search Schema**, switch to the **Managed Properties** tab
-2. Click **New Managed Property**
-3. Configure:
-   - **Property name**: Use a clear name (e.g., `ZenithCopilotReady`)
-   - **Type**: Text
+2. Search for `RefinableString101` (or another unused RefinableString slot)
+3. Click to edit it
+4. Configure:
+   - **Alias**: `ZenithCopilotReady`
    - **Searchable**: Yes
    - **Queryable**: Yes (required for Purview Adaptive Scopes)
    - **Retrievable**: Yes
-   - **Refinable**: Yes (recommended — enables use as a filter)
-4. Under **Mappings to crawled properties**, click **Add a mapping**
-5. Search for and select the crawled property (e.g., `ows_ZenithCopilotReady`)
-6. Save the managed property
+5. Under **Mappings to crawled properties**, click **Add a mapping**
+6. Search for and select the crawled property `ows_ZenithCopilotReady`
+7. Save the managed property
 
-Alternatively, you can map to an existing `RefinableStringXX` managed property if you want to avoid creating new ones. Note the property name you choose — you will need it exactly for Purview.
+After this mapping, you can query using either `RefinableString101:PASS` or the alias `ZenithCopilotReady:PASS` — both will work in SharePoint search and Purview Adaptive Scopes.
 
 ### Step 4: Wait for Another Crawl
 
