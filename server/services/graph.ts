@@ -1011,7 +1011,7 @@ export async function writeSitePropertyBag(
   siteUrl: string,
   properties: Record<string, string>,
   userId?: string
-): Promise<{ success: boolean; error?: string }> {
+): Promise<{ success: boolean; error?: string; reindexRequested?: boolean }> {
   const { safe, blocked } = sanitizePropertyBagKeys(properties);
   if (blocked.length > 0) {
     console.warn(`[property-bag] BLOCKED ${blocked.length} reserved keys from write: ${blocked.join(', ')}`);
@@ -1021,19 +1021,88 @@ export async function writeSitePropertyBag(
   }
   console.log(`[property-bag] Writing ${Object.keys(safe).length} properties to ${siteUrl}: ${Object.keys(safe).join(', ')}`);
 
-  const result1 = await writeSitePropertyBagViaCsom(spoToken, siteUrl, safe);
-  if (result1.success) return result1;
-  console.warn(`[property-bag] Direct CSOM failed: ${result1.error}`);
+  let writeResult: { success: boolean; error?: string };
 
-  if (userId) {
-    console.log(`[property-bag] Trying admin NoScript toggle approach (disable NoScript → write → re-enable)`);
-    const result2 = await writeSitePropertyBagWithNoScriptToggle(spoToken, siteUrl, safe, userId);
-    if (result2.success) return result2;
-    console.warn(`[property-bag] Admin NoScript toggle failed: ${result2.error}`);
-    return { success: false, error: result2.error };
+  const result1 = await writeSitePropertyBagViaCsom(spoToken, siteUrl, safe);
+  if (result1.success) {
+    writeResult = result1;
+  } else {
+    console.warn(`[property-bag] Direct CSOM failed: ${result1.error}`);
+    if (userId) {
+      console.log(`[property-bag] Trying admin NoScript toggle approach (disable NoScript → write → re-enable)`);
+      const result2 = await writeSitePropertyBagWithNoScriptToggle(spoToken, siteUrl, safe, userId);
+      if (result2.success) {
+        writeResult = result2;
+      } else {
+        console.warn(`[property-bag] Admin NoScript toggle failed: ${result2.error}`);
+        return { success: false, error: result2.error };
+      }
+    } else {
+      return { success: false, error: result1.error };
+    }
   }
 
-  return { success: false, error: result1.error };
+  let reindexRequested = false;
+  try {
+    const reindexResult = await requestSiteReindex(spoToken, siteUrl, userId);
+    if (reindexResult.success) {
+      reindexRequested = true;
+      console.log(`[property-bag] Re-index requested for ${siteUrl} — crawl will pick up changes faster`);
+    } else {
+      console.warn(`[property-bag] Re-index request failed (non-blocking): ${reindexResult.error}`);
+    }
+  } catch (reindexErr: any) {
+    console.warn(`[property-bag] Re-index request error (non-blocking): ${reindexErr.message}`);
+  }
+
+  return { success: true, reindexRequested };
+}
+
+export async function requestSiteReindex(
+  spoToken: string,
+  siteUrl: string,
+  userId?: string
+): Promise<{ success: boolean; error?: string; searchVersion?: number }> {
+  const normalizedUrl = siteUrl.replace(/\/+$/, '');
+  try {
+    const propsRes = await fetch(`${normalizedUrl}/_api/web/AllProperties`, {
+      headers: {
+        Authorization: `Bearer ${spoToken}`,
+        Accept: "application/json;odata=nometadata",
+      },
+    });
+    let currentVersion = 0;
+    if (propsRes.ok) {
+      const propsData = await propsRes.json();
+      const raw = propsData['vti_searchversion'];
+      if (raw !== undefined && raw !== null) {
+        currentVersion = parseInt(String(raw), 10) || 0;
+      }
+    }
+    const newVersion = currentVersion + 1;
+
+    const csomXml = `<Request AddExpandoFieldTypeSuffix="true" SchemaVersion="15.0.0.0" LibraryVersion="16.0.0.0" ApplicationName="Zenith" xmlns="http://schemas.microsoft.com/sharepoint/clientquery/2009"><Actions><ObjectPath Id="2" ObjectPathId="1" /><ObjectPath Id="4" ObjectPathId="3" /><Method Name="SetFieldValue" Id="5" ObjectPathId="3"><Parameters><Parameter Type="String">vti_searchversion</Parameter><Parameter Type="String">${newVersion}</Parameter></Parameters></Method><Method Name="Update" Id="6" ObjectPathId="1" /></Actions><ObjectPaths><Property Id="1" ParentId="0" Name="Web" /><Property Id="3" ParentId="1" Name="AllProperties" /><StaticProperty Id="0" TypeId="{3747adcd-a3c3-41b9-bfab-4a64dd2f1e0a}" Name="Current" /></ObjectPaths></Request>`;
+
+    const result = await executeCsomQuery(spoToken, normalizedUrl, csomXml);
+    if (result.success) {
+      console.log(`[reindex] Successfully requested re-index for ${normalizedUrl} (vti_searchversion: ${currentVersion} → ${newVersion})`);
+      return { success: true, searchVersion: newVersion };
+    }
+
+    if (userId) {
+      console.log(`[reindex] Direct CSOM failed, trying NoScript toggle for re-index`);
+      const noScriptResult = await executeCsomWithNoScriptToggle(spoToken, normalizedUrl, csomXml, userId);
+      if (noScriptResult.success) {
+        console.log(`[reindex] Successfully requested re-index via NoScript toggle (vti_searchversion: ${currentVersion} → ${newVersion})`);
+        return { success: true, searchVersion: newVersion };
+      }
+      return { success: false, error: noScriptResult.error };
+    }
+
+    return { success: false, error: result.error };
+  } catch (err: any) {
+    return { success: false, error: `Re-index request failed: ${err.message}` };
+  }
 }
 
 async function writeSitePropertyBagViaRest(
