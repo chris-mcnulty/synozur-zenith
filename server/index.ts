@@ -7,6 +7,7 @@ import { createServer } from "http";
 import { loadCurrentUser } from "./middleware/rbac";
 import { storage } from "./storage";
 import { BUILT_IN_OUTCOMES } from "@shared/schema";
+import { DEFAULT_COPILOT_READINESS_RULES } from "./services/policy-engine";
 import crypto from "crypto";
 
 const app = express();
@@ -120,9 +121,30 @@ async function seedBuiltInOutcomes() {
       const copilotOutcome = outcomes.find(o => o.key === "copilot_eligible");
 
       for (const policy of policies) {
-        if (!policy.outcomeId && policy.policyType === "COPILOT_READINESS" && copilotOutcome) {
-          await storage.updateGovernancePolicy(policy.id, { outcomeId: copilotOutcome.id });
-          log(`Migrated policy "${policy.name}" to Copilot Eligible outcome`);
+        if (!policy.outcomeId && copilotOutcome) {
+          const nameMatch = policy.name.toLowerCase().includes("copilot");
+          const typeMatch = policy.policyType === "COPILOT_READINESS";
+          if (nameMatch || typeMatch) {
+            await storage.updateGovernancePolicy(policy.id, { outcomeId: copilotOutcome.id });
+            log(`Linked policy "${policy.name}" to Copilot Eligible outcome`);
+          }
+        }
+      }
+
+      if (copilotOutcome) {
+        const hasCopilotPolicy = policies.some(p => p.outcomeId === copilotOutcome.id || 
+          (p.name.toLowerCase().includes("copilot") || p.policyType === "COPILOT_READINESS"));
+        if (!hasCopilotPolicy) {
+          await storage.createGovernancePolicy({
+            organizationId: org.id,
+            name: "Copilot Readiness",
+            description: "Default policy evaluating workspace readiness for Microsoft 365 Copilot deployment. Checks sensitivity labels, department assignment, dual ownership, metadata completeness, and sharing policies.",
+            policyType: "CUSTOM",
+            status: "ACTIVE",
+            rules: DEFAULT_COPILOT_READINESS_RULES,
+            outcomeId: copilotOutcome.id,
+          });
+          log(`Seeded default Copilot Readiness policy for org "${org.name}"`);
         }
       }
     }
