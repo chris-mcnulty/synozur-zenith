@@ -208,7 +208,7 @@ export default function SynozurAppSwitcher({ currentApp = "zenith" }: AppSwitche
             </span>
           </div>
 
-          <div className="px-2 pb-2 max-h-[420px] overflow-y-auto">
+          <div className="px-2 pb-2">
             {SYNOZUR_APPS.map((app) => {
               const isCurrent = app.id === currentApp;
               const Icon = APP_ICONS[app.id];
