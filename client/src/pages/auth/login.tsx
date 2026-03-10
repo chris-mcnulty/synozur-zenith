@@ -9,7 +9,7 @@ import { Separator } from "@/components/ui/separator";
 import { LogIn, UserPlus, AlertCircle, Loader2 } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import heroBg from "@assets/AdobeStock_382432785_1771938099802.jpeg";
+import heroBg from "@/assets/images/hero-login-bg.jpeg";
 
 export default function LoginPage() {
   const [, setLocation] = useLocation();
