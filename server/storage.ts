@@ -53,6 +53,9 @@ import {
   type DocumentLibrary,
   type InsertDocumentLibrary,
   tenantDepartments,
+  workspaceTelemetry,
+  type WorkspaceTelemetry,
+  type InsertWorkspaceTelemetry,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -146,6 +149,9 @@ export interface IStorage {
   getDocumentLibrary(id: string): Promise<DocumentLibrary | undefined>;
   upsertDocumentLibrary(data: InsertDocumentLibrary): Promise<DocumentLibrary>;
   deleteDocumentLibrariesForWorkspace(workspaceId: string): Promise<void>;
+
+  createWorkspaceTelemetry(data: InsertWorkspaceTelemetry): Promise<WorkspaceTelemetry>;
+  getWorkspaceTelemetry(workspaceId: string, limit?: number): Promise<WorkspaceTelemetry[]>;
 
   getOrgMembership(userId: string, organizationId: string): Promise<OrganizationUser | undefined>;
   getOrgMemberships(userId: string): Promise<OrganizationUser[]>;
@@ -746,6 +752,18 @@ export class DatabaseStorage implements IStorage {
 
   async deleteDocumentLibrariesForWorkspace(workspaceId: string): Promise<void> {
     await db.delete(documentLibraries).where(eq(documentLibraries.workspaceId, workspaceId));
+  }
+
+  async createWorkspaceTelemetry(data: InsertWorkspaceTelemetry): Promise<WorkspaceTelemetry> {
+    const [result] = await db.insert(workspaceTelemetry).values(data).returning();
+    return result;
+  }
+
+  async getWorkspaceTelemetry(workspaceId: string, limit = 30): Promise<WorkspaceTelemetry[]> {
+    return db.select().from(workspaceTelemetry)
+      .where(eq(workspaceTelemetry.workspaceId, workspaceId))
+      .orderBy(desc(workspaceTelemetry.snapshotAt))
+      .limit(limit);
   }
 }
 

@@ -6,8 +6,20 @@ import { checkTenantPermissions, REQUIRED_PERMISSIONS, PERMISSIONS_VERSION } fro
 import { METADATA_CATEGORIES, ZENITH_ROLES } from "@shared/schema";
 import { refreshDelegatedToken } from "../routes-entra";
 import { requireAuth, requireRole, type AuthenticatedRequest } from "../middleware/rbac";
+import { encryptToken, decryptToken, isEncryptionConfigured } from "../utils/encryption";
 
 const router = Router();
+
+function getEffectiveClientSecret(conn: { clientSecret?: string | null }): string | undefined {
+  if (conn.clientSecret) {
+    try {
+      return decryptToken(conn.clientSecret);
+    } catch {
+      return conn.clientSecret;
+    }
+  }
+  return process.env.AZURE_CLIENT_SECRET || undefined;
+}
 
 async function getDelegatedTokenForRetention(currentUserId?: string, organizationId?: string): Promise<string | null> {
   const tryUser = async (userId: string): Promise<string | null> => {
@@ -184,11 +196,14 @@ router.get("/api/admin/tenants/consent/callback", async (req, res) => {
 router.get("/api/admin/tenants/:id", requireAuth(), async (req: AuthenticatedRequest, res) => {
   const connection = await storage.getTenantConnection(req.params.id);
   if (!connection) return res.status(404).json({ message: "Tenant connection not found" });
+  if (req.user?.role !== ZENITH_ROLES.PLATFORM_OWNER && connection.organizationId !== req.user?.organizationId) {
+    return res.status(404).json({ message: "Tenant connection not found" });
+  }
   res.json({ ...connection, clientSecret: undefined });
 });
 
 router.post("/api/admin/tenants", requireRole(ZENITH_ROLES.TENANT_ADMIN), async (req: AuthenticatedRequest, res) => {
-  const { tenantId, tenantName, domain, ownershipType, organizationId } = req.body;
+  const { tenantId, tenantName, domain, ownershipType } = req.body;
   if (!tenantId || !domain) {
     return res.status(400).json({ message: "tenantId and domain are required" });
   }
@@ -197,7 +212,7 @@ router.post("/api/admin/tenants", requireRole(ZENITH_ROLES.TENANT_ADMIN), async 
     tenantName: tenantName || domain.split('.')[0],
     domain,
     ownershipType: ownershipType || 'MSP',
-    organizationId: organizationId || null,
+    organizationId: req.user?.organizationId || null,
     status: 'PENDING',
     consentGranted: false,
   });
@@ -205,13 +220,25 @@ router.post("/api/admin/tenants", requireRole(ZENITH_ROLES.TENANT_ADMIN), async 
 });
 
 router.patch("/api/admin/tenants/:id", requireRole(ZENITH_ROLES.TENANT_ADMIN), async (req: AuthenticatedRequest, res) => {
-  const connection = await storage.updateTenantConnection(req.params.id, req.body);
+  const existing = await storage.getTenantConnection(req.params.id);
+  if (!existing) return res.status(404).json({ message: "Tenant connection not found" });
+  if (req.user?.role !== ZENITH_ROLES.PLATFORM_OWNER && existing.organizationId !== req.user?.organizationId) {
+    return res.status(404).json({ message: "Tenant connection not found" });
+  }
+  const updates = { ...req.body };
+  if (updates.clientSecret && isEncryptionConfigured()) {
+    updates.clientSecret = encryptToken(updates.clientSecret);
+  }
+  const connection = await storage.updateTenantConnection(req.params.id, updates);
   if (!connection) return res.status(404).json({ message: "Tenant connection not found" });
   res.json({ ...connection, clientSecret: undefined });
 });
 
 router.delete("/api/admin/tenants/:id", requireRole(ZENITH_ROLES.TENANT_ADMIN), async (req: AuthenticatedRequest, res) => {
   const conn = await storage.getTenantConnection(req.params.id);
+  if (conn && req.user?.role !== ZENITH_ROLES.PLATFORM_OWNER && conn.organizationId !== req.user?.organizationId) {
+    return res.status(404).json({ message: "Tenant connection not found" });
+  }
   if (conn) {
     const cid = conn.clientId || process.env.AZURE_CLIENT_ID;
     if (cid) clearTokenCache(conn.tenantId, cid);

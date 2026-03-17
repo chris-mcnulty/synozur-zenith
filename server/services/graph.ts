@@ -870,6 +870,58 @@ export async function fetchSiteAnalytics(token: string, graphSiteId: string): Pr
   }
 }
 
+export async function fetchSiteTelemetry(token: string, graphSiteId: string): Promise<{
+  storageUsedBytes?: number;
+  storageTotalBytes?: number;
+  fileCount?: number;
+  listCount?: number;
+  lastActivityDate?: string;
+}> {
+  try {
+    const res = await fetch(`https://graph.microsoft.com/v1.0/sites/${graphSiteId}?$select=id`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) return {};
+
+    const driveRes = await fetch(`https://graph.microsoft.com/v1.0/sites/${graphSiteId}/drive`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    let storageUsedBytes: number | undefined;
+    let storageTotalBytes: number | undefined;
+    if (driveRes.ok) {
+      const driveData = await driveRes.json();
+      storageUsedBytes = driveData?.quota?.used;
+      storageTotalBytes = driveData?.quota?.total;
+    }
+
+    const listsRes = await fetch(`https://graph.microsoft.com/v1.0/sites/${graphSiteId}/lists?$select=id,list&$top=999`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    let listCount: number | undefined;
+    let fileCount: number | undefined;
+    if (listsRes.ok) {
+      const listsData = await listsRes.json();
+      const allLists = listsData?.value || [];
+      listCount = allLists.length;
+      const docLibs = allLists.filter((l: any) => l.list?.template === 'documentLibrary' || l.list?.template === 'genericList');
+      fileCount = docLibs.reduce((sum: number, l: any) => sum + (l.list?.contentTypesEnabled ? 0 : 0), 0);
+    }
+
+    const analytics = await fetchSiteAnalytics(token, graphSiteId);
+
+    return {
+      storageUsedBytes,
+      storageTotalBytes,
+      fileCount,
+      listCount,
+      lastActivityDate: analytics.lastActivityDate,
+    };
+  } catch (err) {
+    console.error(`[graph] fetchSiteTelemetry error for ${graphSiteId}:`, err);
+    return {};
+  }
+}
+
 async function getFormDigest(
   spoToken: string,
   siteUrl: string

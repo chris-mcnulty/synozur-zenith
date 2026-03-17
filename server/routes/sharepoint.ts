@@ -1,15 +1,44 @@
 import { Router } from "express";
 import { storage } from "../storage";
 import { insertWorkspaceSchema, insertProvisioningRequestSchema, type ServicePlanTier, ZENITH_ROLES } from "@shared/schema";
-import { fetchSharePointSites, fetchSiteUsageReport, fetchSiteDriveOwner, fetchSiteAnalytics, fetchSiteGroupOwners, fetchSiteCollectionAdmins, getAppToken, writeSitePropertyBag, requestSiteReindex, fetchSitePropertyBag, fetchSensitivityLabels, fetchRetentionLabels, fetchHubSites, fetchSiteHubAssociation, fetchHubSitesViaSearch, applySensitivityLabelToSite, removeSensitivityLabelFromSite, joinHubSite, leaveHubSite, fetchSiteLockState, fetchSiteArchiveStatus, batchToggleNoScript, fetchSiteDocumentLibraries, enumerateSiteDocumentLibraries, fetchLibraryDetails } from "../services/graph";
+import { fetchSharePointSites, fetchSiteUsageReport, fetchSiteDriveOwner, fetchSiteAnalytics, fetchSiteGroupOwners, fetchSiteCollectionAdmins, getAppToken, writeSitePropertyBag, requestSiteReindex, fetchSitePropertyBag, fetchSensitivityLabels, fetchRetentionLabels, fetchHubSites, fetchSiteHubAssociation, fetchHubSitesViaSearch, applySensitivityLabelToSite, removeSensitivityLabelFromSite, joinHubSite, leaveHubSite, fetchSiteLockState, fetchSiteArchiveStatus, batchToggleNoScript, fetchSiteDocumentLibraries, enumerateSiteDocumentLibraries, fetchLibraryDetails, fetchSiteTelemetry } from "../services/graph";
 import { getPlanFeatures } from "../services/feature-gate";
 import { refreshDelegatedToken, getDelegatedSpoToken } from "../routes-entra";
 import { requireAuth, requireRole, type AuthenticatedRequest } from "../middleware/rbac";
 import { computeWritebackHash, computeSpoSyncHash } from "../services/writeback-hash";
+import { decryptToken } from "../utils/encryption";
 import { evaluatePolicy, evaluationResultsToCopilotRules, formatPolicyBagValue, DEFAULT_COPILOT_READINESS_RULES, type EvaluationContext } from "../services/policy-engine";
 import type { Workspace, PolicyOutcome, GovernancePolicy } from "@shared/schema";
 
 const router = Router();
+
+function getEffectiveClientSecret(conn: { clientSecret?: string | null }): string {
+  if (conn.clientSecret) {
+    try {
+      return decryptToken(conn.clientSecret);
+    } catch {
+      return conn.clientSecret;
+    }
+  }
+  return process.env.AZURE_CLIENT_SECRET!;
+}
+
+async function getOrgTenantConnectionIds(user: AuthenticatedRequest["user"]): Promise<string[] | null> {
+  if (!user?.organizationId) return null;
+  if (user.role === ZENITH_ROLES.PLATFORM_OWNER) return null;
+  const connections = await storage.getTenantConnectionsByOrganization(user.organizationId);
+  return connections.map(c => c.id);
+}
+
+async function isWorkspaceInScope(user: AuthenticatedRequest["user"], workspaceId: string): Promise<boolean> {
+  if (!user) return false;
+  if (user.role === ZENITH_ROLES.PLATFORM_OWNER) return true;
+  const ws = await storage.getWorkspace(workspaceId);
+  if (!ws?.tenantConnectionId) return false;
+  const allowedIds = await getOrgTenantConnectionIds(user);
+  if (!allowedIds) return true;
+  return allowedIds.includes(ws.tenantConnectionId);
+}
 
 interface PolicyEvalResult {
   bagChanged: boolean;
@@ -135,14 +164,76 @@ router.get("/api/workspaces/writeback-pending", requireAuth(), async (req: Authe
 router.get("/api/workspaces", requireAuth(), async (req: AuthenticatedRequest, res) => {
   const search = req.query.search as string | undefined;
   const tenantConnectionId = req.query.tenantConnectionId as string | undefined;
+  const allowedIds = await getOrgTenantConnectionIds(req.user);
+  if (tenantConnectionId) {
+    if (allowedIds && !allowedIds.includes(tenantConnectionId)) {
+      return res.json([]);
+    }
+    const workspaces = await storage.getWorkspaces(search, tenantConnectionId);
+    return res.json(workspaces);
+  }
+  if (allowedIds) {
+    let allWorkspaces: Workspace[] = [];
+    for (const id of allowedIds) {
+      const ws = await storage.getWorkspaces(search, id);
+      allWorkspaces = allWorkspaces.concat(ws);
+    }
+    return res.json(allWorkspaces);
+  }
   const workspaces = await storage.getWorkspaces(search, tenantConnectionId);
   res.json(workspaces);
 });
 
 router.get("/api/workspaces/:id", requireAuth(), async (req: AuthenticatedRequest, res) => {
+  if (!(await isWorkspaceInScope(req.user, req.params.id))) {
+    return res.status(404).json({ message: "Workspace not found" });
+  }
   const workspace = await storage.getWorkspace(req.params.id);
   if (!workspace) return res.status(404).json({ message: "Workspace not found" });
   res.json(workspace);
+});
+
+router.get("/api/workspaces/:id/telemetry", requireAuth(), async (req: AuthenticatedRequest, res) => {
+  if (!(await isWorkspaceInScope(req.user, req.params.id))) {
+    return res.status(404).json({ message: "Workspace not found" });
+  }
+  const records = await storage.getWorkspaceTelemetry(req.params.id, Number(req.query.limit) || 30);
+  res.json(records);
+});
+
+router.post("/api/workspaces/:id/telemetry/snapshot", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN), async (req: AuthenticatedRequest, res) => {
+  if (!(await isWorkspaceInScope(req.user, req.params.id))) {
+    return res.status(404).json({ message: "Workspace not found" });
+  }
+  const workspace = await storage.getWorkspace(req.params.id);
+  if (!workspace) return res.status(404).json({ message: "Workspace not found" });
+  if (!workspace.tenantConnectionId) return res.status(400).json({ message: "No tenant connection" });
+
+  const conn = await storage.getTenantConnection(workspace.tenantConnectionId);
+  if (!conn) return res.status(400).json({ message: "Tenant connection not found" });
+
+  const clientId = conn.clientId || process.env.AZURE_CLIENT_ID!;
+  const clientSecret = getEffectiveClientSecret(conn);
+
+  try {
+    const token = await getAppToken(conn.tenantId, clientId, clientSecret);
+    const graphSiteId = workspace.m365ObjectId || '';
+    const telemetry = await fetchSiteTelemetry(token, graphSiteId);
+
+    const record = await storage.createWorkspaceTelemetry({
+      workspaceId: workspace.id,
+      tenantConnectionId: workspace.tenantConnectionId,
+      storageUsedBytes: telemetry.storageUsedBytes ?? null,
+      storageTotalBytes: telemetry.storageTotalBytes ?? null,
+      fileCount: telemetry.fileCount ?? null,
+      listCount: telemetry.listCount ?? null,
+      lastActivityDate: telemetry.lastActivityDate ? new Date(telemetry.lastActivityDate) : null,
+    });
+    res.json(record);
+  } catch (err: any) {
+    console.error(`[telemetry] Snapshot error for workspace ${req.params.id}:`, err);
+    res.status(500).json({ message: err.message || "Failed to capture telemetry snapshot" });
+  }
 });
 
 router.post("/api/workspaces", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN), async (req, res) => {
@@ -153,6 +244,9 @@ router.post("/api/workspaces", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH
 });
 
 router.patch("/api/workspaces/:id", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN), async (req: AuthenticatedRequest, res) => {
+  if (!(await isWorkspaceInScope(req.user, req.params.id))) {
+    return res.status(404).json({ message: "Workspace not found" });
+  }
   const existing = await storage.getWorkspace(req.params.id);
   if (!existing) return res.status(404).json({ message: "Workspace not found" });
 
@@ -373,7 +467,7 @@ router.post("/api/workspaces/:id/sync", requireRole(ZENITH_ROLES.OPERATOR, ZENIT
     if (!connection) return res.status(404).json({ message: "Tenant connection not found" });
 
     const clientId = connection.clientId || process.env.AZURE_CLIENT_ID;
-    const clientSecret = connection.clientSecret || process.env.AZURE_CLIENT_SECRET;
+    const clientSecret = getEffectiveClientSecret(connection);
     if (!clientId || !clientSecret) {
       return res.status(503).json({ success: false, error: "Zenith app credentials not configured." });
     }
@@ -621,10 +715,18 @@ router.post("/api/workspaces/:id/sync", requireRole(ZENITH_ROLES.OPERATOR, ZENIT
   }
 });
 
-router.patch("/api/workspaces/bulk/update", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN), async (req, res) => {
+router.patch("/api/workspaces/bulk/update", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN), async (req: AuthenticatedRequest, res) => {
   const { ids, updates } = req.body;
   if (!Array.isArray(ids) || ids.length === 0) {
     return res.status(400).json({ message: "ids array is required" });
+  }
+  const allowedIds = await getOrgTenantConnectionIds(req.user);
+  if (allowedIds) {
+    for (const wsId of ids) {
+      if (!(await isWorkspaceInScope(req.user, wsId))) {
+        return res.status(403).json({ message: "One or more workspaces are outside your organization scope" });
+      }
+    }
   }
   await storage.bulkUpdateWorkspaces(ids, updates);
 
@@ -833,7 +935,7 @@ router.post("/api/admin/tenants/:id/sync", requireRole(ZENITH_ROLES.TENANT_ADMIN
   if (!connection) return res.status(404).json({ message: "Tenant connection not found" });
 
   const clientId = connection.clientId || process.env.AZURE_CLIENT_ID;
-  const clientSecret = connection.clientSecret || process.env.AZURE_CLIENT_SECRET;
+  const clientSecret = getEffectiveClientSecret(connection);
 
   if (!clientId || !clientSecret) {
     return res.status(503).json({ success: false, error: "Zenith app credentials not configured. Set AZURE_CLIENT_ID and AZURE_CLIENT_SECRET." });
@@ -1522,7 +1624,7 @@ router.post("/api/admin/tenants/:id/sync-libraries", requireRole(ZENITH_ROLES.TE
     if (!connection) return res.status(404).json({ error: "Tenant not found" });
 
     const clientId = connection.clientId;
-    const clientSecret = connection.clientSecret;
+    const clientSecret = clientId ? getEffectiveClientSecret(connection) : undefined;
     if (!clientId || !clientSecret) return res.status(400).json({ error: "Tenant connection missing client credentials." });
     const token = await getAppToken(connection.tenantId, clientId, clientSecret);
     if (!token) return res.status(500).json({ error: "Failed to acquire Graph API token." });
@@ -1621,7 +1723,7 @@ router.get("/api/admin/libraries/:libraryId/details", requireRole(ZENITH_ROLES.V
     if (!connection) return res.status(400).json({ error: "Tenant connection not found" });
 
     const clientId = connection.clientId;
-    const clientSecret = connection.clientSecret;
+    const clientSecret = clientId ? getEffectiveClientSecret(connection) : undefined;
     if (!clientId || !clientSecret) return res.status(400).json({ error: "Tenant connection missing credentials" });
 
     const token = await getAppToken(connection.tenantId, clientId, clientSecret);
@@ -1979,7 +2081,7 @@ async function handleMetadataWriteback(req: any, res: any) {
     }
 
     const clientId = conn.clientId || process.env.AZURE_CLIENT_ID;
-    const clientSecret = conn.clientSecret || process.env.AZURE_CLIENT_SECRET;
+    const clientSecret = getEffectiveClientSecret(conn);
     if (!clientId || !clientSecret) {
       results.push({ workspaceId: wsId, displayName: workspace.displayName, success: false, error: "Missing credentials" });
       continue;
