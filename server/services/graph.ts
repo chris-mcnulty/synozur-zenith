@@ -1108,7 +1108,73 @@ export async function fetchAllSpeContainers(
     return allContainers;
   }
 
-  console.log(`[spe] Graph APIs returned 0, using SPO Admin GetSPOContainersByApplicationId...`);
+  console.log(`[spe] Graph APIs returned 0, using SPO Admin REST...`);
+
+  const seenContainerIds = new Set<string>();
+
+  try {
+    console.log(`[spe] Trying GetSPOContainers (all containers)...`);
+    const allRes = await fetch(`https://${adminHost}/_api/SPO.Tenant/GetSPOContainers`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${adminToken}`,
+        Accept: "application/json;odata=verbose",
+        "Content-Type": "application/json;odata=verbose",
+      },
+      body: JSON.stringify({}),
+    });
+
+    if (allRes.ok) {
+      const allData = await allRes.json();
+      const rawBody = JSON.stringify(allData).slice(0, 500);
+      console.log(`[spe] GetSPOContainers 200 — ${rawBody}`);
+
+      const containerResults = allData?.d?.GetSPOContainers?.ContainerCollection?.results
+        || allData?.d?.GetSPOContainers?.results
+        || allData?.d?.results
+        || [];
+
+      if (containerResults.length > 0) {
+        console.log(`[spe] GetSPOContainers returned ${containerResults.length} containers`);
+        for (const item of containerResults) {
+          const containerId = item.ContainerId || "";
+          if (!containerId || seenContainerIds.has(containerId)) continue;
+          seenContainerIds.add(containerId);
+
+          const appName = item.OwningApplicationName || item.ApplicationName || "Unknown";
+          allContainers.push({
+            id: containerId,
+            displayName: item.ContainerName || item.Title || `Container`,
+            containerTypeId: item.ContainerTypeId || "",
+            description: item.Description || "",
+            status: item.Status === 1 ? "active" : item.Status === 2 ? "inactive" : String(item.Status || "active"),
+            createdDateTime: item.CreatedOn || "",
+            _owningAppName: appName,
+            _owningAppId: item.OwningApplicationId || item.ApplicationId || "",
+            _storageUsed: item.StorageUsedInBytes ?? item.StorageUsed ?? null,
+            _storageTotal: item.StorageQuota ?? null,
+            _sensitivityLabel: item.SensitivityLabel || null,
+            _sharingCapability: item.SharingCapability ?? null,
+            _lockState: item.LockState ?? null,
+            _siteUrl: item.ContainerSiteUrl || item.SiteUrl || null,
+            _owners: item.Owners || item.OwnerLoginName || null,
+          } as any);
+        }
+
+        if (allContainers.length > 0) {
+          console.log(`[spe] GetSPOContainers found ${allContainers.length} total containers`);
+          return allContainers;
+        }
+      }
+    } else {
+      const errText = await allRes.text();
+      console.log(`[spe] GetSPOContainers ${allRes.status} — ${errText.slice(0, 300)}`);
+    }
+  } catch (err: any) {
+    console.log(`[spe] GetSPOContainers error: ${err.message}`);
+  }
+
+  console.log(`[spe] Falling back to GetSPOContainersByApplicationId per-app probing...`);
 
   const KNOWN_SPE_APPS: Array<{ name: string; appId: string }> = [
     { name: "Microsoft Loop", appId: "a187e399-0c36-4b98-8f04-1edc167a0996" },
@@ -1132,8 +1198,6 @@ export async function fetchAllSpeContainers(
       }
     }
   }
-
-  const seenContainerIds = new Set<string>();
 
   for (const app of KNOWN_SPE_APPS) {
     try {
