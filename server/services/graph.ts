@@ -922,123 +922,188 @@ export async function fetchSiteTelemetry(token: string, graphSiteId: string): Pr
   }
 }
 
-export interface SpeContainerFromGraph {
-  id: string;
-  displayName: string;
-  description?: string;
-  containerTypeId?: string;
-  status?: string;
-  createdDateTime?: string;
-  storageUsedInBytes?: number;
-  storageTotalInBytes?: number;
-  sensitivityLabel?: { id?: string; displayName?: string };
-  owners?: Array<{ user?: { displayName?: string; userPrincipalName?: string } }>;
-  permissions?: Array<{ roles?: string[]; grantedToV2?: { user?: { displayName?: string } } }>;
+export interface SpeContainerFromAdmin {
+  ContainerId: string;
+  ContainerName: string;
+  ContainerTypeId: string;
+  ContainerSiteUrl?: string;
+  OwningApplicationId?: string;
+  OwningApplicationName?: string;
+  Status?: string;
+  CreatedOn?: string;
+  StorageUsedInBytes?: number;
+  StorageTotalInBytes?: number;
+  SensitivityLabel?: string;
+  SensitivityLabelId?: string;
+  SharingCapability?: string;
+  Description?: string;
+  Owners?: string[];
+  LockState?: string;
 }
 
-export interface SpeContainerTypeFromGraph {
-  containerTypeId: string;
-  displayName: string;
-  description?: string;
-  owningAppId?: string;
-  owningTenantId?: string;
+export interface SpeContainerTypeFromAdmin {
+  ContainerTypeId: string;
+  DisplayName: string;
+  Description?: string;
+  OwningAppId: string;
+  OwningTenantId?: string;
+  Classification?: string;
+  AzureSubscriptionId?: string;
 }
 
-export async function fetchSpeContainerTypes(token: string): Promise<SpeContainerTypeFromGraph[]> {
+export async function fetchSpeContainerTypesViaAdmin(
+  adminToken: string,
+  adminHost: string
+): Promise<SpeContainerTypeFromAdmin[]> {
+  const adminUrl = `https://${adminHost}`;
   try {
-    const res = await fetch("https://graph.microsoft.com/v1.0/storage/fileStorage/containerTypes", {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) {
-      const errText = await res.text();
-      console.error(`[graph] fetchSpeContainerTypes failed ${res.status}: ${errText.slice(0, 500)}`);
+    const csomXml = `<Request SchemaVersion="15.0.0.0" LibraryVersion="16.0.0.0" ApplicationName="Zenith" xmlns="http://schemas.microsoft.com/sharepoint/clientquery/2009"><Actions><ObjectPath Id="2" ObjectPathId="1" /><ObjectPath Id="4" ObjectPathId="3" /><Query Id="5" ObjectPathId="3"><Query SelectAllProperties="true"><Properties /></Query><ChildItemQuery SelectAllProperties="true"><Properties /></ChildItemQuery></Query></Actions><ObjectPaths><Constructor Id="1" TypeId="{268004ae-ef6b-4e9b-8425-127220d84719}" /><Method Id="3" ParentId="1" Name="GetSPOContainerTypes"><Parameters><Parameter Type="Enum">0</Parameter></Parameters></Method></ObjectPaths></Request>`;
+
+    const result = await executeCsomQuery(adminToken, adminUrl, csomXml);
+    if (!result.success) {
+      console.error(`[spe-admin] fetchSpeContainerTypes failed: ${result.error}`);
+
+      const restUrl = `https://${adminHost}/_api/SPO.Tenant/GetSPOContainerTypes`;
+      try {
+        const res = await fetch(restUrl, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${adminToken}`,
+            Accept: "application/json;odata=verbose",
+            "Content-Type": "application/json;odata=verbose",
+          },
+          body: JSON.stringify({}),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          const items = data?.d?.GetSPOContainerTypes?.results || data?.d?.results || data?.value || [];
+          return items.map((item: any) => ({
+            ContainerTypeId: item.ContainerTypeId || item.containerTypeId,
+            DisplayName: item.DisplayName || item.displayName || "",
+            Description: item.Description || item.description || "",
+            OwningAppId: item.OwningApplicationId || item.owningAppId || "",
+            OwningTenantId: item.OwningTenantId || "",
+          }));
+        }
+        const errText = await res.text();
+        console.error(`[spe-admin] REST fallback for container types failed ${res.status}: ${errText.slice(0, 500)}`);
+      } catch (restErr: any) {
+        console.error(`[spe-admin] REST fallback error:`, restErr.message);
+      }
+
       return [];
     }
-    const data = await res.json();
-    return data.value || [];
-  } catch (err) {
-    console.error("[graph] fetchSpeContainerTypes error:", err);
+
+    if (result.data) {
+      try {
+        const parsed = JSON.parse(result.data);
+        const childItems = parsed?.find?.((item: any) => item?._Child_Items_)
+          ?._Child_Items_ || [];
+        return childItems.map((item: any) => ({
+          ContainerTypeId: item.ContainerTypeId || "",
+          DisplayName: item.DisplayName || "",
+          Description: item.Description || "",
+          OwningAppId: item.OwningApplicationId || "",
+          OwningTenantId: item.OwningTenantId || "",
+        }));
+      } catch {}
+    }
+    return [];
+  } catch (err: any) {
+    console.error("[spe-admin] fetchSpeContainerTypes error:", err.message);
     return [];
   }
 }
 
-export async function fetchSpeContainers(token: string, containerTypeId?: string): Promise<SpeContainerFromGraph[]> {
-  const allContainers: SpeContainerFromGraph[] = [];
+export async function fetchSpeContainersViaAdmin(
+  adminToken: string,
+  adminHost: string,
+  spoHost: string
+): Promise<SpeContainerFromAdmin[]> {
+  const allContainers: SpeContainerFromAdmin[] = [];
   try {
-    let url = "https://graph.microsoft.com/v1.0/storage/fileStorage/containers?$select=id,displayName,description,containerTypeId,status,createdDateTime&$top=999";
-    if (containerTypeId) {
-      url += `&$filter=containerTypeId eq '${containerTypeId}'`;
+    const restUrl = `https://${adminHost}/_api/SPO.Tenant/GetSPOContainersByContainerTypeId`;
+    const containerTypeIds = await fetchSpeContainerTypesViaAdmin(adminToken, adminHost);
+
+    if (containerTypeIds.length === 0) {
+      console.log(`[spe-admin] No container types found, trying direct enumeration...`);
+      const directUrl = `https://${adminHost}/_api/SPO.Tenant/GetSPOContainers`;
+      try {
+        const res = await fetch(directUrl, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${adminToken}`,
+            Accept: "application/json;odata=verbose",
+            "Content-Type": "application/json;odata=verbose",
+          },
+          body: JSON.stringify({}),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          const items = data?.d?.GetSPOContainers?.results || data?.d?.results || data?.value || [];
+          return items.map(normalizeAdminContainer);
+        }
+      } catch {}
+      return [];
     }
 
-    let nextLink: string | null = url;
-    while (nextLink) {
-      const res = await fetch(nextLink, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (!res.ok) {
-        const errText = await res.text();
-        console.error(`[graph] fetchSpeContainers failed ${res.status}: ${errText.slice(0, 500)}`);
-        break;
+    for (const ct of containerTypeIds) {
+      try {
+        const res = await fetch(restUrl, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${adminToken}`,
+            Accept: "application/json;odata=verbose",
+            "Content-Type": "application/json;odata=verbose",
+          },
+          body: JSON.stringify({
+            containerTypeId: ct.ContainerTypeId,
+          }),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          const items = data?.d?.GetSPOContainersByContainerTypeId?.results || data?.d?.results || data?.value || [];
+          const containers = items.map((item: any) => ({
+            ...normalizeAdminContainer(item),
+            ContainerTypeId: ct.ContainerTypeId,
+            OwningApplicationName: ct.DisplayName,
+          }));
+          allContainers.push(...containers);
+        } else {
+          const errText = await res.text();
+          console.warn(`[spe-admin] Failed to fetch containers for type ${ct.ContainerTypeId}: ${errText.slice(0, 300)}`);
+        }
+      } catch (err: any) {
+        console.warn(`[spe-admin] Error fetching containers for type ${ct.ContainerTypeId}: ${err.message}`);
       }
-      const data = await res.json();
-      const containers = data.value || [];
-      allContainers.push(...containers);
-      nextLink = data["@odata.nextLink"] || null;
     }
+
     return allContainers;
-  } catch (err) {
-    console.error("[graph] fetchSpeContainers error:", err);
+  } catch (err: any) {
+    console.error("[spe-admin] fetchSpeContainers error:", err.message);
     return allContainers;
   }
 }
 
-export async function fetchSpeContainerDetails(token: string, containerId: string): Promise<{
-  storageUsedInBytes?: number;
-  itemCount?: number;
-  sensitivityLabel?: { id?: string; displayName?: string };
-  owners?: Array<{ displayName?: string; userPrincipalName?: string }>;
-  lastActivityDate?: string;
-}> {
-  const result: any = {};
-  try {
-    const driveRes = await fetch(`https://graph.microsoft.com/v1.0/storage/fileStorage/containers/${containerId}/drive`, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    if (driveRes.ok) {
-      const driveData = await driveRes.json();
-      result.storageUsedInBytes = driveData?.quota?.used;
-      result.itemCount = driveData?.quota?.fileCount;
-    }
-  } catch {}
-
-  try {
-    const permRes = await fetch(`https://graph.microsoft.com/v1.0/storage/fileStorage/containers/${containerId}/permissions?$top=100`, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    if (permRes.ok) {
-      const permData = await permRes.json();
-      const perms = permData.value || [];
-      result.owners = perms
-        .filter((p: any) => p.roles?.includes("owner"))
-        .map((p: any) => ({
-          displayName: p.grantedToV2?.user?.displayName || p.grantedToV2?.group?.displayName,
-          userPrincipalName: p.grantedToV2?.user?.userPrincipalName,
-        }))
-        .filter((o: any) => o.displayName);
-    }
-  } catch {}
-
-  try {
-    const actRes = await fetch(`https://graph.microsoft.com/v1.0/storage/fileStorage/containers/${containerId}/drive/root`, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    if (actRes.ok) {
-      const actData = await actRes.json();
-      result.lastActivityDate = actData?.lastModifiedDateTime;
-    }
-  } catch {}
-
-  return result;
+function normalizeAdminContainer(item: any): SpeContainerFromAdmin {
+  return {
+    ContainerId: item.ContainerId || item.Id || item.id || "",
+    ContainerName: item.ContainerName || item.Title || item.DisplayName || item.displayName || "",
+    ContainerTypeId: item.ContainerTypeId || item.containerTypeId || "",
+    ContainerSiteUrl: item.ContainerSiteUrl || item.SiteUrl || item.Url || "",
+    OwningApplicationId: item.OwningApplicationId || item.OwningAppId || "",
+    OwningApplicationName: item.OwningApplicationName || "",
+    Status: item.Status || item.status || "Active",
+    CreatedOn: item.CreatedOn || item.Created || item.createdDateTime || "",
+    StorageUsedInBytes: item.StorageUsedInBytes ?? item.StorageUsed ?? null,
+    StorageTotalInBytes: item.StorageQuota ?? item.StorageTotalInBytes ?? null,
+    SensitivityLabel: item.SensitivityLabel || item.SensitivityLabelName || null,
+    SensitivityLabelId: item.SensitivityLabelId || null,
+    SharingCapability: item.SharingCapability ?? null,
+    Description: item.Description || item.description || null,
+    Owners: item.Owners || [],
+    LockState: item.LockState || null,
+  };
 }
 
 async function getFormDigest(
@@ -1079,7 +1144,7 @@ async function executeCsomQuery(
   spoToken: string,
   siteUrl: string,
   csomXml: string
-): Promise<{ success: boolean; error?: string }> {
+): Promise<{ success: boolean; error?: string; data?: string }> {
   const normalizedUrl = siteUrl.replace(/\/$/, '');
   try {
     try {
@@ -1120,7 +1185,7 @@ async function executeCsomQuery(
         }
       }
     } catch {}
-    return { success: true };
+    return { success: true, data: responseText };
   } catch (e: any) {
     return { success: false, error: e.message };
   }

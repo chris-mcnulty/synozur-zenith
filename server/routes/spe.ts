@@ -2,17 +2,10 @@ import { Router } from "express";
 import { storage } from "../storage";
 import { ZENITH_ROLES } from "@shared/schema";
 import { requireAuth, requireRole, type AuthenticatedRequest } from "../middleware/rbac";
-import { getAppToken, fetchSpeContainers, fetchSpeContainerTypes, fetchSpeContainerDetails } from "../services/graph";
-import { decryptToken } from "../utils/encryption";
+import { fetchSpeContainerTypesViaAdmin, fetchSpeContainersViaAdmin } from "../services/graph";
+import { getDelegatedSpoToken } from "../routes-entra";
 
 const router = Router();
-
-function getEffectiveClientSecret(conn: { clientSecret?: string | null }): string {
-  if (conn.clientSecret) {
-    try { return decryptToken(conn.clientSecret); } catch { return conn.clientSecret; }
-  }
-  return process.env.AZURE_CLIENT_SECRET!;
-}
 
 async function getOrgTenantConnectionIds(user: AuthenticatedRequest["user"]): Promise<string[] | null> {
   if (!user?.organizationId) return null;
@@ -109,123 +102,130 @@ router.post("/api/spe/tenants/:id/sync", requireRole(ZENITH_ROLES.TENANT_ADMIN),
     return res.status(404).json({ message: "Tenant connection not found" });
   }
 
-  const clientId = conn.clientId || process.env.AZURE_CLIENT_ID;
-  const clientSecret = getEffectiveClientSecret(conn);
-  if (!clientId || !clientSecret) {
-    return res.status(503).json({ success: false, error: "Zenith app credentials not configured." });
+  const userId = req.user!.id;
+  const domain = conn.domain || "";
+  const spoHost = domain.includes(".sharepoint.com")
+    ? domain
+    : `${domain.split(".")[0]}.sharepoint.com`;
+  const adminHost = `${spoHost.split(".")[0]}-admin.sharepoint.com`;
+
+  let adminToken: string | null = null;
+  try {
+    adminToken = await getDelegatedSpoToken(userId, adminHost);
+  } catch (err: any) {
+    console.error(`[spe-sync] Failed to get admin SPO token: ${err.message}`);
+  }
+  if (!adminToken) {
+    return res.status(403).json({
+      success: false,
+      error: "Could not acquire SharePoint Admin token. Ensure you have SharePoint Admin permissions and have completed Entra consent.",
+    });
   }
 
   try {
-    console.log(`[spe-sync] Starting SPE sync for tenant ${conn.tenantName} (${conn.tenantId})...`);
-    const token = await getAppToken(conn.tenantId, clientId, clientSecret);
+    console.log(`[spe-sync] Starting SPE sync for tenant ${conn.tenantName} (${conn.tenantId}) via SPO Admin API...`);
 
-    const graphContainerTypes = await fetchSpeContainerTypes(token);
-    console.log(`[spe-sync] Found ${graphContainerTypes.length} container types`);
+    const graphContainerTypes = await fetchSpeContainerTypesViaAdmin(adminToken, adminHost);
+    console.log(`[spe-sync] Found ${graphContainerTypes.length} container types via admin API`);
 
     const typeIdMap = new Map<string, string>();
 
     for (const gct of graphContainerTypes) {
       const existing = (await storage.getSpeContainerTypes(conn.id))
-        .find(ct => ct.containerTypeId === gct.containerTypeId);
+        .find(ct => ct.containerTypeId === gct.ContainerTypeId);
 
       if (existing) {
         await storage.updateSpeContainerType(existing.id, {
-          displayName: gct.displayName || existing.displayName,
-          description: gct.description || existing.description,
-          azureAppId: gct.owningAppId || existing.azureAppId,
-          owningTenantId: gct.owningTenantId || existing.owningTenantId,
+          displayName: gct.DisplayName || existing.displayName,
+          description: gct.Description || existing.description,
+          azureAppId: gct.OwningAppId || existing.azureAppId,
+          owningTenantId: gct.OwningTenantId || existing.owningTenantId,
         });
-        typeIdMap.set(gct.containerTypeId, existing.id);
+        typeIdMap.set(gct.ContainerTypeId, existing.id);
       } else {
         const created = await storage.createSpeContainerType({
           tenantConnectionId: conn.id,
-          containerTypeId: gct.containerTypeId,
-          displayName: gct.displayName || `Type ${gct.containerTypeId}`,
-          description: gct.description,
-          azureAppId: gct.owningAppId,
-          owningTenantId: gct.owningTenantId,
+          containerTypeId: gct.ContainerTypeId,
+          displayName: gct.DisplayName || `Type ${gct.ContainerTypeId}`,
+          description: gct.Description,
+          azureAppId: gct.OwningAppId,
+          owningTenantId: gct.OwningTenantId,
           status: "ACTIVE",
         });
-        typeIdMap.set(gct.containerTypeId, created.id);
+        typeIdMap.set(gct.ContainerTypeId, created.id);
       }
     }
 
-    const graphContainers = await fetchSpeContainers(token);
-    console.log(`[spe-sync] Found ${graphContainers.length} containers`);
+    const graphContainers = await fetchSpeContainersViaAdmin(adminToken, adminHost, spoHost);
+    console.log(`[spe-sync] Found ${graphContainers.length} containers via admin API`);
 
     let syncedCount = 0;
     let errorCount = 0;
-    const BATCH_SIZE = 5;
 
-    for (let i = 0; i < graphContainers.length; i += BATCH_SIZE) {
-      const batch = graphContainers.slice(i, i + BATCH_SIZE);
+    for (const gc of graphContainers) {
+      try {
+        const zenithTypeId = gc.ContainerTypeId ? typeIdMap.get(gc.ContainerTypeId) : undefined;
 
-      await Promise.all(batch.map(async (gc) => {
-        try {
-          const details = await fetchSpeContainerDetails(token, gc.id);
+        const containerData = {
+          tenantConnectionId: conn.id,
+          containerTypeId: zenithTypeId || null,
+          m365ContainerId: gc.ContainerId,
+          displayName: gc.ContainerName || `Container ${gc.ContainerId}`,
+          description: gc.Description || null,
+          status: gc.Status || "Active",
+          storageUsedBytes: gc.StorageUsedInBytes ?? null,
+          storageAllocatedBytes: gc.StorageTotalInBytes ?? null,
+          fileCount: null as number | null,
+          activeFileCount: null as number | null,
+          lastActivityDate: null as string | null,
+          sensitivityLabelId: gc.SensitivityLabelId || null,
+          sensitivityLabel: gc.SensitivityLabel || null,
+          retentionLabelId: null as string | null,
+          retentionLabel: null as string | null,
+          sharingCapability: gc.SharingCapability || null,
+          externalSharing: gc.SharingCapability === "ExternalUserSharingOnly" ||
+                           gc.SharingCapability === "ExternalUserAndGuestSharing" ||
+                           gc.SharingCapability === "ExistingExternalUserSharingOnly",
+          ownerDisplayName: gc.OwningApplicationName || null,
+          ownerPrincipalName: gc.Owners?.[0] || null,
+          permissions: gc.OwningApplicationName || "System",
+          containerCreatedDate: gc.CreatedOn || null,
+          lastSyncAt: new Date(),
+        };
 
-          const ownerInfo = details.owners?.[0];
-          const zenithTypeId = gc.containerTypeId ? typeIdMap.get(gc.containerTypeId) : undefined;
+        const existingContainers = await storage.getSpeContainers(undefined, conn.id);
+        const existing = existingContainers.find(c => c.m365ContainerId === gc.ContainerId);
 
-          const containerData = {
-            tenantConnectionId: conn.id,
-            containerTypeId: zenithTypeId || null,
-            m365ContainerId: gc.id,
-            displayName: gc.displayName || `Container ${gc.id}`,
-            description: gc.description || null,
-            status: gc.status === "active" ? "Active" : gc.status === "inactive" ? "Inactive" : (gc.status || "Active"),
-            storageUsedBytes: details.storageUsedInBytes ?? null,
-            storageAllocatedBytes: gc.storageTotalInBytes ?? null,
-            fileCount: details.itemCount ?? null,
-            activeFileCount: null as number | null,
-            lastActivityDate: details.lastActivityDate || null,
-            sensitivityLabelId: gc.sensitivityLabel?.id || null,
-            sensitivityLabel: gc.sensitivityLabel?.displayName || null,
-            retentionLabelId: null as string | null,
-            retentionLabel: null as string | null,
-            sharingCapability: null as string | null,
-            externalSharing: false,
-            ownerDisplayName: ownerInfo?.displayName || null,
-            ownerPrincipalName: ownerInfo?.userPrincipalName || null,
-            permissions: details.owners && details.owners.length > 0 ? "Custom App Role" : "System",
-            containerCreatedDate: gc.createdDateTime || null,
-            lastSyncAt: new Date(),
-          };
-
-          const existingContainers = await storage.getSpeContainers(undefined, conn.id);
-          const existing = existingContainers.find(c => c.m365ContainerId === gc.id);
-
-          let savedContainer;
-          if (existing) {
-            savedContainer = await storage.updateSpeContainer(existing.id, containerData);
-          } else {
-            savedContainer = await storage.createSpeContainer(containerData);
-          }
-
-          if (savedContainer) {
-            await storage.createSpeContainerUsage({
-              containerId: savedContainer.id,
-              tenantConnectionId: conn.id,
-              storageUsedBytes: containerData.storageUsedBytes,
-              storageTotalBytes: containerData.storageAllocatedBytes,
-              fileCount: containerData.fileCount,
-              activeFileCount: containerData.activeFileCount,
-              activeUsers: details.owners?.length ?? null,
-              apiCallCount: null,
-              lastActivityDate: containerData.lastActivityDate,
-            });
-          }
-
-          syncedCount++;
-        } catch (err: any) {
-          console.error(`[spe-sync] Error syncing container ${gc.id}:`, err.message);
-          errorCount++;
+        let savedContainer;
+        if (existing) {
+          savedContainer = await storage.updateSpeContainer(existing.id, containerData);
+        } else {
+          savedContainer = await storage.createSpeContainer(containerData);
         }
-      }));
+
+        if (savedContainer) {
+          await storage.createSpeContainerUsage({
+            containerId: savedContainer.id,
+            tenantConnectionId: conn.id,
+            storageUsedBytes: containerData.storageUsedBytes,
+            storageTotalBytes: containerData.storageAllocatedBytes,
+            fileCount: containerData.fileCount,
+            activeFileCount: containerData.activeFileCount,
+            activeUsers: null,
+            apiCallCount: null,
+            lastActivityDate: containerData.lastActivityDate,
+          });
+        }
+
+        syncedCount++;
+      } catch (err: any) {
+        console.error(`[spe-sync] Error syncing container ${gc.ContainerId}:`, err.message);
+        errorCount++;
+      }
     }
 
     for (const [graphTypeId, zenithTypeId] of typeIdMap.entries()) {
-      const count = graphContainers.filter(gc => gc.containerTypeId === graphTypeId).length;
+      const count = graphContainers.filter(gc => gc.ContainerTypeId === graphTypeId).length;
       await storage.updateSpeContainerType(zenithTypeId, { containerCount: count });
     }
 
