@@ -108,18 +108,21 @@ export default function EmbeddedContainersPage() {
     enabled: !!tenantConnectionId,
   });
 
-  const seedMutation = useMutation({
+  const syncMutation = useMutation({
     mutationFn: async () => {
-      const res = await apiRequest("POST", "/api/spe/seed-demo", { tenantConnectionId });
+      const res = await apiRequest("POST", `/api/spe/tenants/${tenantConnectionId}/sync`);
       return res.json();
     },
-    onSuccess: () => {
+    onSuccess: (data: any) => {
       queryClient.invalidateQueries({ queryKey: ["/api/spe/containers"] });
       queryClient.invalidateQueries({ queryKey: ["/api/spe/container-types"] });
-      toast({ title: "Demo data seeded", description: "SPE containers and types have been populated." });
+      toast({
+        title: "SPE Sync Complete",
+        description: `${data.containerTypes ?? 0} container types, ${data.containers ?? 0} containers synced.${data.errors ? ` ${data.errors} errors.` : ""}`,
+      });
     },
     onError: (err: any) => {
-      toast({ title: "Seed failed", description: err.message, variant: "destructive" });
+      toast({ title: "SPE Sync Failed", description: err.message, variant: "destructive" });
     },
   });
 
@@ -204,18 +207,16 @@ export default function EmbeddedContainersPage() {
           <h1 className="text-3xl font-bold tracking-tight" data-testid="heading-spe">SharePoint Embedded</h1>
           <p className="text-muted-foreground mt-1">Manage headless SharePoint containers, usage, and Purview labeling.</p>
         </div>
-        {isEmpty && (
-          <Button
-            onClick={() => seedMutation.mutate()}
-            disabled={seedMutation.isPending}
-            className="gap-2 shadow-md shadow-primary/20"
-            data-testid="button-seed-demo"
-          >
-            {seedMutation.isPending && <Loader2 className="w-4 h-4 animate-spin" />}
-            <Database className="w-4 h-4" />
-            Load Demo Data
-          </Button>
-        )}
+        <Button
+          onClick={() => syncMutation.mutate()}
+          disabled={syncMutation.isPending}
+          className="gap-2 shadow-md shadow-primary/20"
+          data-testid="button-sync-spe"
+        >
+          {syncMutation.isPending && <Loader2 className="w-4 h-4 animate-spin" />}
+          <Database className="w-4 h-4" />
+          {syncMutation.isPending ? "Syncing..." : "Sync Containers"}
+        </Button>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
@@ -314,7 +315,7 @@ export default function EmbeddedContainersPage() {
                     <div className="text-center space-y-2">
                       <Box className="w-10 h-10 mx-auto text-muted-foreground/40" />
                       <p className="font-medium">No containers found</p>
-                      {containers.length === 0 && <p className="text-sm">Click "Load Demo Data" to populate sample SPE containers.</p>}
+                      {containers.length === 0 && <p className="text-sm">Click "Sync Containers" to pull SPE containers from your connected tenant.</p>}
                     </div>
                   </div>
                 ) : (

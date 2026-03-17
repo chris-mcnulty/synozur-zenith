@@ -922,6 +922,125 @@ export async function fetchSiteTelemetry(token: string, graphSiteId: string): Pr
   }
 }
 
+export interface SpeContainerFromGraph {
+  id: string;
+  displayName: string;
+  description?: string;
+  containerTypeId?: string;
+  status?: string;
+  createdDateTime?: string;
+  storageUsedInBytes?: number;
+  storageTotalInBytes?: number;
+  sensitivityLabel?: { id?: string; displayName?: string };
+  owners?: Array<{ user?: { displayName?: string; userPrincipalName?: string } }>;
+  permissions?: Array<{ roles?: string[]; grantedToV2?: { user?: { displayName?: string } } }>;
+}
+
+export interface SpeContainerTypeFromGraph {
+  containerTypeId: string;
+  displayName: string;
+  description?: string;
+  owningAppId?: string;
+  owningTenantId?: string;
+}
+
+export async function fetchSpeContainerTypes(token: string): Promise<SpeContainerTypeFromGraph[]> {
+  try {
+    const res = await fetch("https://graph.microsoft.com/v1.0/storage/fileStorage/containerTypes", {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) {
+      const errText = await res.text();
+      console.error(`[graph] fetchSpeContainerTypes failed ${res.status}: ${errText.slice(0, 500)}`);
+      return [];
+    }
+    const data = await res.json();
+    return data.value || [];
+  } catch (err) {
+    console.error("[graph] fetchSpeContainerTypes error:", err);
+    return [];
+  }
+}
+
+export async function fetchSpeContainers(token: string, containerTypeId?: string): Promise<SpeContainerFromGraph[]> {
+  const allContainers: SpeContainerFromGraph[] = [];
+  try {
+    let url = "https://graph.microsoft.com/v1.0/storage/fileStorage/containers?$select=id,displayName,description,containerTypeId,status,createdDateTime&$top=999";
+    if (containerTypeId) {
+      url += `&$filter=containerTypeId eq '${containerTypeId}'`;
+    }
+
+    let nextLink: string | null = url;
+    while (nextLink) {
+      const res = await fetch(nextLink, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) {
+        const errText = await res.text();
+        console.error(`[graph] fetchSpeContainers failed ${res.status}: ${errText.slice(0, 500)}`);
+        break;
+      }
+      const data = await res.json();
+      const containers = data.value || [];
+      allContainers.push(...containers);
+      nextLink = data["@odata.nextLink"] || null;
+    }
+    return allContainers;
+  } catch (err) {
+    console.error("[graph] fetchSpeContainers error:", err);
+    return allContainers;
+  }
+}
+
+export async function fetchSpeContainerDetails(token: string, containerId: string): Promise<{
+  storageUsedInBytes?: number;
+  itemCount?: number;
+  sensitivityLabel?: { id?: string; displayName?: string };
+  owners?: Array<{ displayName?: string; userPrincipalName?: string }>;
+  lastActivityDate?: string;
+}> {
+  const result: any = {};
+  try {
+    const driveRes = await fetch(`https://graph.microsoft.com/v1.0/storage/fileStorage/containers/${containerId}/drive`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (driveRes.ok) {
+      const driveData = await driveRes.json();
+      result.storageUsedInBytes = driveData?.quota?.used;
+      result.itemCount = driveData?.quota?.fileCount;
+    }
+  } catch {}
+
+  try {
+    const permRes = await fetch(`https://graph.microsoft.com/v1.0/storage/fileStorage/containers/${containerId}/permissions?$top=100`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (permRes.ok) {
+      const permData = await permRes.json();
+      const perms = permData.value || [];
+      result.owners = perms
+        .filter((p: any) => p.roles?.includes("owner"))
+        .map((p: any) => ({
+          displayName: p.grantedToV2?.user?.displayName || p.grantedToV2?.group?.displayName,
+          userPrincipalName: p.grantedToV2?.user?.userPrincipalName,
+        }))
+        .filter((o: any) => o.displayName);
+    }
+  } catch {}
+
+  try {
+    const actRes = await fetch(`https://graph.microsoft.com/v1.0/storage/fileStorage/containers/${containerId}/drive/root`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (actRes.ok) {
+      const actData = await actRes.json();
+      result.lastActivityDate = actData?.lastModifiedDateTime;
+    }
+  } catch {}
+
+  return result;
+}
+
 async function getFormDigest(
   spoToken: string,
   siteUrl: string
