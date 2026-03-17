@@ -201,24 +201,41 @@ router.post("/api/spe/tenants/:id/sync", requireRole(ZENITH_ROLES.TENANT_ADMIN),
         }
       }
 
+      const existingTypes = await storage.getSpeContainerTypes(conn.id);
       for (const [appId, info] of appGroups) {
-        const existingTypes = await storage.getSpeContainerTypes(conn.id);
-        const existing = existingTypes.find(ct => ct.azureAppId === appId);
+        const existing = existingTypes.find(ct => ct.azureAppId === appId || ct.containerTypeId === info.typeId);
         if (existing) {
           typeIdMap.set(info.typeId, existing.id);
           typeIdMap.set(appId, existing.id);
-        } else {
-          const created = await storage.createSpeContainerType({
-            tenantConnectionId: conn.id,
-            containerTypeId: info.typeId,
+          await storage.updateSpeContainerType(existing.id, {
             displayName: info.name,
-            description: `${info.name} containers`,
             azureAppId: appId,
-            status: "ACTIVE",
           });
-          typeIdMap.set(info.typeId, created.id);
-          typeIdMap.set(appId, created.id);
-          console.log(`[spe-sync] Auto-created container type for ${info.name}`);
+        } else {
+          try {
+            const created = await storage.createSpeContainerType({
+              tenantConnectionId: conn.id,
+              containerTypeId: info.typeId,
+              displayName: info.name,
+              description: `${info.name} containers`,
+              azureAppId: appId,
+              status: "ACTIVE",
+            });
+            typeIdMap.set(info.typeId, created.id);
+            typeIdMap.set(appId, created.id);
+            console.log(`[spe-sync] Auto-created container type for ${info.name}`);
+          } catch (err: any) {
+            if (err.message?.includes("duplicate key")) {
+              const refreshed = await storage.getSpeContainerTypes(conn.id);
+              const found = refreshed.find(ct => ct.azureAppId === appId || ct.containerTypeId === info.typeId);
+              if (found) {
+                typeIdMap.set(info.typeId, found.id);
+                typeIdMap.set(appId, found.id);
+              }
+            } else {
+              throw err;
+            }
+          }
         }
       }
     }
