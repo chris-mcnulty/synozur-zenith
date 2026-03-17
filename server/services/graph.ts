@@ -1052,23 +1052,71 @@ export async function fetchAllSpeContainers(
     console.warn(`[spe] Graph beta error: ${err.message}`);
   }
 
-  console.log(`[spe] Graph APIs returned 0, trying SPO Admin REST for containers...`);
-  try {
-    const res = await fetch(`https://${adminHost}/_api/SPO.Tenant/GetSPODeletedContainers`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${adminToken}`,
-        Accept: "application/json;odata=verbose",
-        "Content-Type": "application/json;odata=verbose",
-      },
-      body: JSON.stringify({}),
-    });
-    console.log(`[spe] SPO Admin GetSPODeletedContainers responded: ${res.status}`);
-    if (res.ok) {
-      const data = await res.json();
-      console.log(`[spe] SPO Admin response keys: ${JSON.stringify(Object.keys(data?.d || data || {})).slice(0, 300)}`);
+  if (!adminToken) {
+    console.log(`[spe] No admin token available, cannot try SPO Admin REST`);
+    return allContainers;
+  }
+
+  console.log(`[spe] Graph APIs returned 0, probing SPO Admin REST endpoints for containers...`);
+
+  const adminEndpoints = [
+    { name: "EnumAllContainers", method: "POST", path: "/_api/SPO.Tenant/EnumAllContainers", body: {} },
+    { name: "GetSPOContainersByApplicationId (Loop)", method: "POST", path: "/_api/SPO.Tenant/GetSPOContainersByApplicationId", body: { owningApplicationId: "a187e399-0c36-4b98-8f04-1edc167a0996" } },
+    { name: "GetSPOContainersByApplicationId (Whiteboard)", method: "POST", path: "/_api/SPO.Tenant/GetSPOContainersByApplicationId", body: { owningApplicationId: "95de633a-083e-42f5-b444-a4295d8e9314" } },
+    { name: "GetSPOContainersByApplicationId (Designer)", method: "POST", path: "/_api/SPO.Tenant/GetSPOContainersByApplicationId", body: { owningApplicationId: "5e2795e3-ce8c-4cfb-b302-35fe5cd01597" } },
+    { name: "GetSPOContainers", method: "POST", path: "/_api/SPO.Tenant/GetSPOContainers", body: {} },
+    { name: "ContainerProperties", method: "GET", path: "/_api/SPO.Tenant/ContainerProperties", body: null },
+    { name: "GetSPOContainersByContainerTypeId (trial-type)", method: "POST", path: "/_api/SPO.Tenant/GetSPOContainersByContainerTypeId", body: { containerTypeId: "00000000-0000-0000-0000-000000000000" } },
+  ];
+
+  for (const ep of adminEndpoints) {
+    try {
+      const fetchOpts: any = {
+        method: ep.method,
+        headers: {
+          Authorization: `Bearer ${adminToken}`,
+          Accept: "application/json;odata=verbose",
+        },
+      };
+      if (ep.body !== null) {
+        fetchOpts.headers["Content-Type"] = "application/json;odata=verbose";
+        fetchOpts.body = JSON.stringify(ep.body);
+      }
+      const res = await fetch(`https://${adminHost}${ep.path}`, fetchOpts);
+      const text = await res.text();
+      const preview = text.slice(0, 500);
+      console.log(`[spe] ${ep.name}: ${res.status} — ${preview}`);
+
+      if (res.ok) {
+        try {
+          const data = JSON.parse(text);
+          const items = data?.d?.results || data?.d?.EnumAllContainers?.results ||
+            data?.d?.GetSPOContainersByApplicationId?.results ||
+            data?.d?.GetSPOContainers?.results ||
+            data?.value || [];
+          if (Array.isArray(items) && items.length > 0) {
+            console.log(`[spe] SUCCESS: ${ep.name} returned ${items.length} items! First item keys: ${JSON.stringify(Object.keys(items[0])).slice(0, 300)}`);
+            for (const item of items) {
+              allContainers.push({
+                id: item.ContainerId || item.Id || item.id || "",
+                displayName: item.ContainerName || item.Title || item.DisplayName || item.displayName || "",
+                containerTypeId: item.ContainerTypeId || item.containerTypeId || "",
+                description: item.Description || "",
+                status: item.Status || "active",
+                createdDateTime: item.CreatedOn || item.Created || "",
+              });
+            }
+          }
+        } catch {}
+      }
+    } catch (err: any) {
+      console.warn(`[spe] ${ep.name} error: ${err.message}`);
     }
-  } catch {}
+  }
+
+  if (allContainers.length > 0) {
+    console.log(`[spe] SPO Admin REST found ${allContainers.length} total containers`);
+  }
 
   return allContainers;
 }
