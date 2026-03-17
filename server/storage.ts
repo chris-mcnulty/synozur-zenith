@@ -1,36 +1,58 @@
-import { eq, desc, ilike, or, and, inArray } from "drizzle-orm";
+import { eq, desc, ilike, or, and, sql, gt } from "drizzle-orm";
 import { db } from "./db";
 import {
   workspaces,
   provisioningRequests,
   copilotRules,
+  governancePolicies,
+  policyOutcomes,
   tenantConnections,
   organizations,
   users,
+  organizationUsers,
   graphTokens,
   auditLog,
   domainBlocklist,
-  workspaceTelemetry,
+  tenantDataDictionaries,
+  sensitivityLabels,
+  retentionLabels,
   type Workspace,
   type InsertWorkspace,
   type ProvisioningRequest,
   type InsertProvisioningRequest,
   type CopilotRule,
   type InsertCopilotRule,
+  type GovernancePolicy,
+  type InsertGovernancePolicy,
+  type PolicyOutcome,
+  type InsertPolicyOutcome,
   type TenantConnection,
   type InsertTenantConnection,
   type Organization,
   type InsertOrganization,
   type User,
   type InsertUser,
+  type OrganizationUser,
+  type InsertOrganizationUser,
   type GraphToken,
   type InsertGraphToken,
   type AuditLog,
   type InsertAuditLog,
   type DomainBlocklist,
   type InsertDomainBlocklist,
-  type WorkspaceTelemetry,
-  type InsertWorkspaceTelemetry,
+  type TenantDataDictionary,
+  type InsertTenantDataDictionary,
+  type SensitivityLabel,
+  type InsertSensitivityLabel,
+  type RetentionLabel,
+  type InsertRetentionLabel,
+  customFieldDefinitions,
+  type CustomFieldDefinition,
+  type InsertCustomFieldDefinition,
+  documentLibraries,
+  type DocumentLibrary,
+  type InsertDocumentLibrary,
+  tenantDepartments,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -50,8 +72,23 @@ export interface IStorage {
   getCopilotRules(workspaceId: string): Promise<CopilotRule[]>;
   setCopilotRules(workspaceId: string, rules: InsertCopilotRule[]): Promise<CopilotRule[]>;
 
-  getTenantConnections(): Promise<TenantConnection[]>;
-  getTenantConnectionsByOrganization(orgId: string): Promise<TenantConnection[]>;
+  getPolicyOutcomes(organizationId: string): Promise<PolicyOutcome[]>;
+  getPolicyOutcome(id: string): Promise<PolicyOutcome | undefined>;
+  getPolicyOutcomeByKey(organizationId: string, key: string): Promise<PolicyOutcome | undefined>;
+  createPolicyOutcome(outcome: InsertPolicyOutcome): Promise<PolicyOutcome>;
+  updatePolicyOutcome(id: string, updates: Partial<InsertPolicyOutcome>): Promise<PolicyOutcome | undefined>;
+  deletePolicyOutcome(id: string): Promise<void>;
+
+  getGovernancePolicies(organizationId: string): Promise<GovernancePolicy[]>;
+  getGovernancePolicy(id: string): Promise<GovernancePolicy | undefined>;
+  getGovernancePolicyByType(organizationId: string, policyType: string): Promise<GovernancePolicy | undefined>;
+  getGovernancePolicyByOutcome(organizationId: string, outcomeId: string): Promise<GovernancePolicy | undefined>;
+  getActivePoliciesWithOutcomes(organizationId: string): Promise<(GovernancePolicy & { outcome?: PolicyOutcome })[]>;
+  createGovernancePolicy(policy: InsertGovernancePolicy): Promise<GovernancePolicy>;
+  updateGovernancePolicy(id: string, updates: Partial<InsertGovernancePolicy>): Promise<GovernancePolicy | undefined>;
+  deleteGovernancePolicy(id: string): Promise<void>;
+
+  getTenantConnections(organizationId?: string): Promise<TenantConnection[]>;
   getTenantConnection(id: string): Promise<TenantConnection | undefined>;
   createTenantConnection(connection: InsertTenantConnection): Promise<TenantConnection>;
   updateTenantConnection(id: string, updates: Partial<TenantConnection>): Promise<TenantConnection | undefined>;
@@ -73,6 +110,7 @@ export interface IStorage {
   upsertGraphToken(token: InsertGraphToken): Promise<GraphToken>;
   getGraphToken(userId: string, service?: string): Promise<GraphToken | undefined>;
   getDecryptedGraphToken(userId: string, service?: string): Promise<{ token: string; expiresAt: Date | null } | undefined>;
+  getAnyValidDelegatedToken(service?: string, organizationId?: string): Promise<{ token: string; expiresAt: Date | null; userId: string } | undefined>;
 
   createAuditEntry(entry: InsertAuditLog): Promise<AuditLog>;
   getAuditLog(orgId?: string, limit?: number): Promise<AuditLog[]>;
@@ -82,12 +120,40 @@ export interface IStorage {
   removeBlockedDomain(domain: string): Promise<void>;
   isDomainBlocked(domain: string): Promise<boolean>;
 
-  saveWorkspaceTelemetry(snapshot: InsertWorkspaceTelemetry): Promise<WorkspaceTelemetry>;
-  getWorkspaceTelemetry(workspaceId: string, limit?: number): Promise<WorkspaceTelemetry[]>;
-  getLatestWorkspaceTelemetry(workspaceId: string): Promise<WorkspaceTelemetry | undefined>;
-  /** Returns the latest telemetry snapshot for every workspace whose
-   *  tenantConnectionId is in the provided set. */
-  getLatestTelemetryForConnections(tenantConnectionIds: string[]): Promise<WorkspaceTelemetry[]>;
+  getDataDictionary(tenantId: string, category: string): Promise<TenantDataDictionary[]>;
+  getAllDataDictionaries(tenantId: string): Promise<TenantDataDictionary[]>;
+  createDataDictionaryEntry(entry: InsertTenantDataDictionary): Promise<TenantDataDictionary>;
+  deleteDataDictionaryEntry(id: string): Promise<void>;
+
+  getSensitivityLabelsByTenantId(tenantId: string): Promise<SensitivityLabel[]>;
+  upsertSensitivityLabel(label: InsertSensitivityLabel): Promise<SensitivityLabel>;
+  deleteSensitivityLabelsByTenantId(tenantId: string): Promise<void>;
+
+  getRetentionLabelsByTenantId(tenantId: string): Promise<RetentionLabel[]>;
+  upsertRetentionLabel(label: InsertRetentionLabel): Promise<RetentionLabel>;
+  deleteRetentionLabelsByTenantId(tenantId: string): Promise<void>;
+
+  getWorkspaceLabelCoverage(tenantId: string): Promise<{ workspaceId: string; displayName: string; siteUrl: string | null; sensitivityLabelId: string | null; retentionLabelId: string | null; type: string }[]>;
+
+  getCustomFieldDefinitions(tenantId: string): Promise<CustomFieldDefinition[]>;
+  getCustomFieldDefinition(id: string): Promise<CustomFieldDefinition | undefined>;
+  createCustomFieldDefinition(def: InsertCustomFieldDefinition): Promise<CustomFieldDefinition>;
+  updateCustomFieldDefinition(id: string, updates: Partial<InsertCustomFieldDefinition>): Promise<CustomFieldDefinition | undefined>;
+  deleteCustomFieldDefinition(id: string): Promise<void>;
+
+  getDocumentLibraries(workspaceId: string): Promise<DocumentLibrary[]>;
+  getDocumentLibrariesByTenant(tenantConnectionId: string): Promise<DocumentLibrary[]>;
+  getDocumentLibrary(id: string): Promise<DocumentLibrary | undefined>;
+  upsertDocumentLibrary(data: InsertDocumentLibrary): Promise<DocumentLibrary>;
+  deleteDocumentLibrariesForWorkspace(workspaceId: string): Promise<void>;
+
+  getOrgMembership(userId: string, organizationId: string): Promise<OrganizationUser | undefined>;
+  getOrgMemberships(userId: string): Promise<OrganizationUser[]>;
+  getOrgMembers(organizationId: string): Promise<OrganizationUser[]>;
+  createOrgMembership(membership: InsertOrganizationUser): Promise<OrganizationUser>;
+  updateOrgMembership(id: string, updates: Partial<InsertOrganizationUser>): Promise<OrganizationUser | undefined>;
+  deleteOrgMembership(userId: string, organizationId: string): Promise<void>;
+  updateOrganizationSettings(id: string, updates: Partial<InsertOrganization>): Promise<Organization | undefined>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -174,7 +240,93 @@ export class DatabaseStorage implements IStorage {
     return created;
   }
 
-  async getTenantConnections(): Promise<TenantConnection[]> {
+  async getPolicyOutcomes(organizationId: string): Promise<PolicyOutcome[]> {
+    return db.select().from(policyOutcomes)
+      .where(eq(policyOutcomes.organizationId, organizationId))
+      .orderBy(policyOutcomes.sortOrder);
+  }
+
+  async getPolicyOutcome(id: string): Promise<PolicyOutcome | undefined> {
+    const [outcome] = await db.select().from(policyOutcomes).where(eq(policyOutcomes.id, id));
+    return outcome;
+  }
+
+  async getPolicyOutcomeByKey(organizationId: string, key: string): Promise<PolicyOutcome | undefined> {
+    const [outcome] = await db.select().from(policyOutcomes).where(
+      and(eq(policyOutcomes.organizationId, organizationId), eq(policyOutcomes.key, key))
+    );
+    return outcome;
+  }
+
+  async createPolicyOutcome(outcome: InsertPolicyOutcome): Promise<PolicyOutcome> {
+    const [created] = await db.insert(policyOutcomes).values(outcome).returning();
+    return created;
+  }
+
+  async updatePolicyOutcome(id: string, updates: Partial<InsertPolicyOutcome>): Promise<PolicyOutcome | undefined> {
+    const [updated] = await db.update(policyOutcomes).set(updates).where(eq(policyOutcomes.id, id)).returning();
+    return updated;
+  }
+
+  async deletePolicyOutcome(id: string): Promise<void> {
+    await db.delete(policyOutcomes).where(eq(policyOutcomes.id, id));
+  }
+
+  async getGovernancePolicies(organizationId: string): Promise<GovernancePolicy[]> {
+    return db.select().from(governancePolicies).where(eq(governancePolicies.organizationId, organizationId)).orderBy(desc(governancePolicies.createdAt));
+  }
+
+  async getGovernancePolicy(id: string): Promise<GovernancePolicy | undefined> {
+    const [policy] = await db.select().from(governancePolicies).where(eq(governancePolicies.id, id));
+    return policy;
+  }
+
+  async getGovernancePolicyByType(organizationId: string, policyType: string): Promise<GovernancePolicy | undefined> {
+    const [policy] = await db.select().from(governancePolicies).where(
+      and(eq(governancePolicies.organizationId, organizationId), eq(governancePolicies.policyType, policyType), eq(governancePolicies.status, "ACTIVE"))
+    );
+    return policy;
+  }
+
+  async getGovernancePolicyByOutcome(organizationId: string, outcomeId: string): Promise<GovernancePolicy | undefined> {
+    const [policy] = await db.select().from(governancePolicies).where(
+      and(eq(governancePolicies.organizationId, organizationId), eq(governancePolicies.outcomeId, outcomeId), eq(governancePolicies.status, "ACTIVE"))
+    );
+    return policy;
+  }
+
+  async getActivePoliciesWithOutcomes(organizationId: string): Promise<(GovernancePolicy & { outcome?: PolicyOutcome })[]> {
+    const policies = await db.select().from(governancePolicies).where(
+      and(eq(governancePolicies.organizationId, organizationId), eq(governancePolicies.status, "ACTIVE"))
+    );
+    const outcomes = await this.getPolicyOutcomes(organizationId);
+    const outcomeMap = new Map(outcomes.map(o => [o.id, o]));
+    return policies.map(p => ({
+      ...p,
+      outcome: p.outcomeId ? outcomeMap.get(p.outcomeId) : undefined,
+    }));
+  }
+
+  async createGovernancePolicy(policy: InsertGovernancePolicy): Promise<GovernancePolicy> {
+    const [created] = await db.insert(governancePolicies).values(policy).returning();
+    return created;
+  }
+
+  async updateGovernancePolicy(id: string, updates: Partial<InsertGovernancePolicy>): Promise<GovernancePolicy | undefined> {
+    const [updated] = await db.update(governancePolicies).set({ ...updates, updatedAt: new Date() }).where(eq(governancePolicies.id, id)).returning();
+    return updated;
+  }
+
+  async deleteGovernancePolicy(id: string): Promise<void> {
+    await db.delete(governancePolicies).where(eq(governancePolicies.id, id));
+  }
+
+  async getTenantConnections(organizationId?: string): Promise<TenantConnection[]> {
+    if (organizationId) {
+      return db.select().from(tenantConnections)
+        .where(eq(tenantConnections.organizationId, organizationId))
+        .orderBy(desc(tenantConnections.createdAt));
+    }
     return db.select().from(tenantConnections).orderBy(desc(tenantConnections.createdAt));
   }
 
@@ -200,6 +352,24 @@ export class DatabaseStorage implements IStorage {
   }
 
   async deleteTenantConnection(id: string): Promise<void> {
+    const tenantWorkspaces = await db.select({ id: workspaces.id }).from(workspaces).where(eq(workspaces.tenantConnectionId, id));
+    const workspaceIds = tenantWorkspaces.map(w => w.id);
+
+    if (workspaceIds.length > 0) {
+      for (const wId of workspaceIds) {
+        await db.delete(copilotRules).where(eq(copilotRules.workspaceId, wId));
+      }
+      await db.delete(workspaces).where(eq(workspaces.tenantConnectionId, id));
+    }
+
+    const [conn] = await db.select().from(tenantConnections).where(eq(tenantConnections.id, id));
+    if (conn) {
+      const otherConns = await db.select({ id: tenantConnections.id }).from(tenantConnections)
+        .where(and(eq(tenantConnections.tenantId, conn.tenantId), sql`${tenantConnections.id} != ${id}`));
+      if (otherConns.length === 0) {
+        await db.delete(tenantDepartments).where(eq(tenantDepartments.tenantId, conn.tenantId));
+      }
+    }
     await db.delete(tenantConnections).where(eq(tenantConnections.id, id));
   }
 
@@ -295,6 +465,28 @@ export class DatabaseStorage implements IStorage {
     };
   }
 
+  async getAnyValidDelegatedToken(service: string = 'graph', organizationId?: string): Promise<{ token: string; expiresAt: Date | null; userId: string } | undefined> {
+    const conditions = [
+      eq(graphTokens.service, service),
+      gt(graphTokens.expiresAt, new Date())
+    ];
+    if (organizationId) {
+      conditions.push(eq(graphTokens.organizationId, organizationId));
+    }
+    const records = await db.select().from(graphTokens)
+      .where(and(...conditions))
+      .limit(1);
+    
+    if (records.length === 0 || !records[0].accessToken) return undefined;
+    
+    const { decryptToken } = await import('./utils/encryption');
+    return {
+      token: decryptToken(records[0].accessToken),
+      expiresAt: records[0].expiresAt,
+      userId: records[0].userId,
+    };
+  }
+
   async createAuditEntry(entry: InsertAuditLog): Promise<AuditLog> {
     const [created] = await db.insert(auditLog).values(entry).returning();
     return created;
@@ -329,44 +521,231 @@ export class DatabaseStorage implements IStorage {
     return !!result;
   }
 
-  async saveWorkspaceTelemetry(snapshot: InsertWorkspaceTelemetry): Promise<WorkspaceTelemetry> {
-    const [created] = await db.insert(workspaceTelemetry).values(snapshot).returning();
+  async getDataDictionary(tenantId: string, category: string): Promise<TenantDataDictionary[]> {
+    return db.select().from(tenantDataDictionaries)
+      .where(and(
+        eq(tenantDataDictionaries.tenantId, tenantId),
+        eq(tenantDataDictionaries.category, category)
+      ))
+      .orderBy(tenantDataDictionaries.value);
+  }
+
+  async getAllDataDictionaries(tenantId: string): Promise<TenantDataDictionary[]> {
+    return db.select().from(tenantDataDictionaries)
+      .where(eq(tenantDataDictionaries.tenantId, tenantId))
+      .orderBy(tenantDataDictionaries.category, tenantDataDictionaries.value);
+  }
+
+  async createDataDictionaryEntry(entry: InsertTenantDataDictionary): Promise<TenantDataDictionary> {
+    const [created] = await db.insert(tenantDataDictionaries).values(entry).returning();
     return created;
   }
 
-  async getWorkspaceTelemetry(workspaceId: string, limit = 90): Promise<WorkspaceTelemetry[]> {
-    return db.select().from(workspaceTelemetry)
-      .where(eq(workspaceTelemetry.workspaceId, workspaceId))
-      .orderBy(desc(workspaceTelemetry.snapshotAt))
-      .limit(limit);
+  async deleteDataDictionaryEntry(id: string): Promise<void> {
+    await db.delete(tenantDataDictionaries).where(eq(tenantDataDictionaries.id, id));
   }
 
-  async getLatestWorkspaceTelemetry(workspaceId: string): Promise<WorkspaceTelemetry | undefined> {
-    const [row] = await db.select().from(workspaceTelemetry)
-      .where(eq(workspaceTelemetry.workspaceId, workspaceId))
-      .orderBy(desc(workspaceTelemetry.snapshotAt))
-      .limit(1);
-    return row;
+  async getSensitivityLabelsByTenantId(tenantId: string): Promise<SensitivityLabel[]> {
+    return db.select().from(sensitivityLabels)
+      .where(eq(sensitivityLabels.tenantId, tenantId))
+      .orderBy(sensitivityLabels.sensitivity);
   }
 
-  async getLatestTelemetryForConnections(tenantConnectionIds: string[]): Promise<WorkspaceTelemetry[]> {
-    if (tenantConnectionIds.length === 0) return [];
-    // Fetch latest snapshot per workspace scoped to the given connections.
-    // Uses a subquery approach: get all rows for matching connections then
-    // deduplicate in application code (one row per workspaceId, most recent).
-    const rows = await db.select().from(workspaceTelemetry)
-      .where(inArray(workspaceTelemetry.tenantConnectionId, tenantConnectionIds))
-      .orderBy(desc(workspaceTelemetry.snapshotAt));
+  async upsertSensitivityLabel(label: InsertSensitivityLabel): Promise<SensitivityLabel> {
+    const [result] = await db.insert(sensitivityLabels)
+      .values(label)
+      .onConflictDoUpdate({
+        target: [sensitivityLabels.tenantId, sensitivityLabels.labelId],
+        set: {
+          name: label.name,
+          description: label.description,
+          color: label.color,
+          tooltip: label.tooltip,
+          sensitivity: label.sensitivity,
+          isActive: label.isActive,
+          contentFormats: label.contentFormats,
+          hasProtection: label.hasProtection,
+          parentLabelId: label.parentLabelId,
+          appliesToGroupsSites: label.appliesToGroupsSites,
+          syncedAt: new Date(),
+        },
+      })
+      .returning();
+    return result;
+  }
 
-    const seen = new Set<string>();
-    const latest: WorkspaceTelemetry[] = [];
-    for (const row of rows) {
-      if (!seen.has(row.workspaceId)) {
-        seen.add(row.workspaceId);
-        latest.push(row);
-      }
-    }
-    return latest;
+  async deleteSensitivityLabelsByTenantId(tenantId: string): Promise<void> {
+    await db.delete(sensitivityLabels).where(eq(sensitivityLabels.tenantId, tenantId));
+  }
+
+  async getRetentionLabelsByTenantId(tenantId: string): Promise<RetentionLabel[]> {
+    return db.select().from(retentionLabels)
+      .where(eq(retentionLabels.tenantId, tenantId))
+      .orderBy(retentionLabels.name);
+  }
+
+  async upsertRetentionLabel(label: InsertRetentionLabel): Promise<RetentionLabel> {
+    const [result] = await db.insert(retentionLabels)
+      .values(label)
+      .onConflictDoUpdate({
+        target: [retentionLabels.tenantId, retentionLabels.labelId],
+        set: {
+          name: label.name,
+          description: label.description,
+          retentionDuration: label.retentionDuration,
+          retentionAction: label.retentionAction,
+          behaviorDuringRetentionPeriod: label.behaviorDuringRetentionPeriod,
+          actionAfterRetentionPeriod: label.actionAfterRetentionPeriod,
+          isActive: label.isActive,
+          isRecordLabel: label.isRecordLabel,
+          syncedAt: new Date(),
+        },
+      })
+      .returning();
+    return result;
+  }
+
+  async deleteRetentionLabelsByTenantId(tenantId: string): Promise<void> {
+    await db.delete(retentionLabels).where(eq(retentionLabels.tenantId, tenantId));
+  }
+
+  async getWorkspaceLabelCoverage(tenantId: string): Promise<{ workspaceId: string; displayName: string; siteUrl: string | null; sensitivityLabelId: string | null; retentionLabelId: string | null; type: string }[]> {
+    const conns = await db.select().from(tenantConnections).where(eq(tenantConnections.tenantId, tenantId));
+    const connIds = conns.map(c => c.id);
+    if (connIds.length === 0) return [];
+
+    const results = await db.select({
+      workspaceId: workspaces.id,
+      displayName: workspaces.displayName,
+      siteUrl: workspaces.siteUrl,
+      sensitivityLabelId: workspaces.sensitivityLabelId,
+      retentionLabelId: workspaces.retentionLabelId,
+      type: workspaces.type,
+    }).from(workspaces)
+      .where(
+        connIds.length === 1
+          ? eq(workspaces.tenantConnectionId, connIds[0])
+          : sql`${workspaces.tenantConnectionId} IN (${sql.join(connIds.map(id => sql`${id}`), sql`, `)})`
+      )
+      .orderBy(workspaces.displayName);
+
+    return results;
+  }
+
+  async getOrgMembership(userId: string, organizationId: string): Promise<OrganizationUser | undefined> {
+    const [membership] = await db.select().from(organizationUsers)
+      .where(and(eq(organizationUsers.userId, userId), eq(organizationUsers.organizationId, organizationId)));
+    return membership;
+  }
+
+  async getOrgMemberships(userId: string): Promise<OrganizationUser[]> {
+    return db.select().from(organizationUsers)
+      .where(eq(organizationUsers.userId, userId))
+      .orderBy(desc(organizationUsers.isPrimary), organizationUsers.joinedAt);
+  }
+
+  async getOrgMembers(organizationId: string): Promise<OrganizationUser[]> {
+    return db.select().from(organizationUsers)
+      .where(eq(organizationUsers.organizationId, organizationId))
+      .orderBy(organizationUsers.joinedAt);
+  }
+
+  async createOrgMembership(membership: InsertOrganizationUser): Promise<OrganizationUser> {
+    const [created] = await db.insert(organizationUsers).values(membership)
+      .onConflictDoUpdate({
+        target: [organizationUsers.userId, organizationUsers.organizationId],
+        set: { role: membership.role, isPrimary: membership.isPrimary },
+      })
+      .returning();
+    return created;
+  }
+
+  async updateOrgMembership(id: string, updates: Partial<InsertOrganizationUser>): Promise<OrganizationUser | undefined> {
+    const [updated] = await db.update(organizationUsers).set(updates)
+      .where(eq(organizationUsers.id, id)).returning();
+    return updated;
+  }
+
+  async deleteOrgMembership(userId: string, organizationId: string): Promise<void> {
+    await db.delete(organizationUsers)
+      .where(and(eq(organizationUsers.userId, userId), eq(organizationUsers.organizationId, organizationId)));
+  }
+
+  async updateOrganizationSettings(id: string, updates: Partial<InsertOrganization>): Promise<Organization | undefined> {
+    const [updated] = await db.update(organizations).set(updates)
+      .where(eq(organizations.id, id)).returning();
+    return updated;
+  }
+
+  async getCustomFieldDefinitions(tenantId: string): Promise<CustomFieldDefinition[]> {
+    return db.select().from(customFieldDefinitions)
+      .where(eq(customFieldDefinitions.tenantId, tenantId))
+      .orderBy(customFieldDefinitions.sortOrder);
+  }
+
+  async getCustomFieldDefinition(id: string): Promise<CustomFieldDefinition | undefined> {
+    const [def] = await db.select().from(customFieldDefinitions)
+      .where(eq(customFieldDefinitions.id, id));
+    return def;
+  }
+
+  async createCustomFieldDefinition(def: InsertCustomFieldDefinition): Promise<CustomFieldDefinition> {
+    const [created] = await db.insert(customFieldDefinitions).values(def).returning();
+    return created;
+  }
+
+  async updateCustomFieldDefinition(id: string, updates: Partial<InsertCustomFieldDefinition>): Promise<CustomFieldDefinition | undefined> {
+    const [updated] = await db.update(customFieldDefinitions).set(updates)
+      .where(eq(customFieldDefinitions.id, id)).returning();
+    return updated;
+  }
+
+  async deleteCustomFieldDefinition(id: string): Promise<void> {
+    await db.delete(customFieldDefinitions).where(eq(customFieldDefinitions.id, id));
+  }
+
+  async getDocumentLibraries(workspaceId: string): Promise<DocumentLibrary[]> {
+    return db.select().from(documentLibraries)
+      .where(eq(documentLibraries.workspaceId, workspaceId))
+      .orderBy(documentLibraries.displayName);
+  }
+
+  async getDocumentLibrariesByTenant(tenantConnectionId: string): Promise<DocumentLibrary[]> {
+    return db.select().from(documentLibraries)
+      .where(eq(documentLibraries.tenantConnectionId, tenantConnectionId))
+      .orderBy(documentLibraries.displayName);
+  }
+
+  async getDocumentLibrary(id: string): Promise<DocumentLibrary | undefined> {
+    const [lib] = await db.select().from(documentLibraries)
+      .where(eq(documentLibraries.id, id));
+    return lib;
+  }
+
+  async upsertDocumentLibrary(data: InsertDocumentLibrary): Promise<DocumentLibrary> {
+    const [result] = await db.insert(documentLibraries).values(data)
+      .onConflictDoUpdate({
+        target: [documentLibraries.workspaceId, documentLibraries.m365ListId],
+        set: {
+          displayName: data.displayName,
+          description: data.description,
+          webUrl: data.webUrl,
+          template: data.template,
+          itemCount: data.itemCount,
+          storageUsedBytes: data.storageUsedBytes,
+          sensitivityLabelId: data.sensitivityLabelId,
+          isDefaultDocLib: data.isDefaultDocLib,
+          hidden: data.hidden,
+          lastModifiedAt: data.lastModifiedAt,
+          lastSyncAt: data.lastSyncAt,
+        },
+      })
+      .returning();
+    return result;
+  }
+
+  async deleteDocumentLibrariesForWorkspace(workspaceId: string): Promise<void> {
+    await db.delete(documentLibraries).where(eq(documentLibraries.workspaceId, workspaceId));
   }
 }
 

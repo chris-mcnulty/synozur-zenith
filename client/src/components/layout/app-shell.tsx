@@ -1,4 +1,5 @@
-import { Link, useLocation } from "wouter";
+import { useState, useEffect } from "react";
+import { Link, useLocation, Redirect } from "wouter";
 import { 
   LayoutDashboard, 
   FolderPlus, 
@@ -31,7 +32,9 @@ import {
   Users as UsersIcon,
   Server,
   CheckCircle2,
-  KeyRound
+  KeyRound,
+  BookMarked,
+  FlaskConical
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -46,26 +49,59 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
+import SynozurAppSwitcher from "@/components/synozur-app-switcher";
 import { useTenant } from "@/lib/tenant-context";
+import { useQuery, useMutation } from "@tanstack/react-query";
+import { queryClient } from "@/lib/queryClient";
 
 interface AppShellProps {
   children: React.ReactNode;
 }
 
-const navGroups = [
+const ROLE_LEVELS: Record<string, number> = {
+  platform_owner: 100,
+  tenant_admin: 80,
+  governance_admin: 60,
+  operator: 40,
+  viewer: 20,
+  read_only_auditor: 10,
+};
+
+function hasMinRole(userRole: string | undefined, minRole: string): boolean {
+  if (!userRole) return false;
+  return (ROLE_LEVELS[userRole] ?? 0) >= (ROLE_LEVELS[minRole] ?? 999);
+}
+
+type NavItem = {
+  name: string;
+  href: string;
+  icon: any;
+  badge?: string;
+  minRole?: string;
+};
+
+type NavGroup = {
+  label: string;
+  minRole?: string;
+  items: NavItem[];
+};
+
+const navGroups: NavGroup[] = [
   {
     label: "Overview",
     items: [
       { name: "Dashboard", href: "/app/dashboard", icon: LayoutDashboard },
-      { name: "Approvals", href: "/app/approvals", icon: CheckCircle2, badge: "3" },
-      { name: "Provision", href: "/app/provision", icon: FolderPlus },
+      { name: "Approvals", href: "/app/approvals", icon: CheckCircle2, badge: "3", minRole: "operator" },
+      { name: "Provision", href: "/app/provision", icon: FolderPlus, minRole: "operator" },
     ]
   },
   {
     label: "Management",
+    minRole: "operator",
     items: [
       { name: "Site Governance", href: "/app/governance", icon: ShieldCheck },
-      { name: "Policy Builder", href: "/app/admin/policies", icon: ShieldCheck, badge: "Ent+" },
+      { name: "Policy Builder", href: "/app/admin/policies", icon: ShieldCheck, badge: "Ent+", minRole: "governance_admin" },
+      { name: "What-If Planner", href: "/app/admin/policy-whatif", icon: FlaskConical, badge: "Ent+", minRole: "governance_admin" },
       { name: "Structures", href: "/app/structures", icon: Layers },
       { name: "Document Library", href: "/app/document-library", icon: Library },
       { name: "Content Types", href: "/app/content-types", icon: FileText },
@@ -86,127 +122,184 @@ const navGroups = [
   }
 ];
 
+type OrgMembership = {
+  id: string;
+  name: string;
+  domain: string;
+  servicePlan: string;
+  role: string;
+  isPrimary: boolean;
+  membershipId: string | null;
+};
+
 export default function AppShell({ children }: AppShellProps) {
   const [location] = useLocation();
   const { tenants, selectedTenant, setSelectedTenantId } = useTenant();
 
-  const NavLinks = () => (
-    <div className="space-y-6 py-4">
-      {navGroups.map((group, i) => (
-        <div key={i} className="space-y-2">
-          <h4 className="px-4 text-xs font-bold text-muted-foreground uppercase tracking-widest mb-2">
-            {group.label}
-          </h4>
-          <div className="space-y-1">
-            {group.items.map((item) => {
-              const isActive = location.startsWith(item.href);
-              return (
-                <Link key={item.name} href={item.href} className={`flex items-center justify-between px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
-                  isActive 
-                    ? "bg-primary/10 text-primary shadow-sm shadow-primary/5" 
-                    : "text-muted-foreground hover:bg-muted/80 hover:text-foreground"
-                }`}>
-                  <div className="flex items-center gap-3">
-                    <item.icon className={`w-5 h-5 ${isActive ? "text-primary" : "text-muted-foreground/70"}`} />
-                    {item.name}
-                  </div>
-                  {item.badge && (
-                    <span className={`flex h-5 items-center justify-center rounded-full px-2 text-[10px] font-bold ${isActive ? 'bg-primary text-primary-foreground' : 'bg-primary/20 text-primary'}`}>
-                      {item.badge}
-                    </span>
-                  )}
-                </Link>
-              );
-            })}
-          </div>
-        </div>
-      ))}
+  const { data: authData, isLoading: authLoading } = useQuery<{
+    user: { id: string; name: string | null; email: string; role: string; effectiveRole?: string; authProvider: string | null };
+    organization: { id: string; name: string } | null;
+    activeOrganizationId: string | null;
+    membershipCount: number;
+  } | null>({
+    queryKey: ["/api/auth/me"],
+    queryFn: async () => {
+      const r = await fetch("/api/auth/me", { credentials: "include" });
+      if (r.status === 401) return null;
+      if (!r.ok) return null;
+      return r.json();
+    },
+    staleTime: 5 * 60 * 1000,
+    retry: false,
+  });
 
-      <div className="space-y-2 pt-4 border-t border-border/50">
-        <h4 className="px-4 text-xs font-bold text-muted-foreground uppercase tracking-widest mb-2">
-          Administration
-        </h4>
-        <div className="space-y-1">
-          <Link href="/app/admin" className={`flex items-center justify-between px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
-            location === "/app/admin" 
-              ? "bg-primary/10 text-primary shadow-sm shadow-primary/5" 
-              : "text-muted-foreground hover:bg-muted/80 hover:text-foreground"
-          }`}>
-            <div className="flex items-center gap-3">
-              <LayoutTemplate className={`w-5 h-5 ${location === "/app/admin" ? "text-primary" : "text-muted-foreground/70"}`} />
-              Provisioning Templates
+  const { data: myOrgs = [] } = useQuery<OrgMembership[]>({
+    queryKey: ["/api/orgs/mine"],
+    queryFn: () => fetch("/api/orgs/mine", { credentials: "include" }).then(r => r.ok ? r.json() : []),
+    staleTime: 5 * 60 * 1000,
+    enabled: !!authData?.user,
+  });
+
+  const switchOrgMutation = useMutation({
+    mutationFn: async (organizationId: string) => {
+      const res = await fetch("/api/orgs/switch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ organizationId }),
+      });
+      if (!res.ok) throw new Error("Failed to switch organization");
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/orgs/mine"] });
+      queryClient.invalidateQueries();
+    },
+  });
+
+  if (!authLoading && !authData?.user) {
+    return <Redirect to="/login" />;
+  }
+
+  const currentUser = authData?.user;
+  const activeOrg = authData?.organization;
+  const userInitials = currentUser?.name
+    ? currentUser.name.split(" ").map(n => n[0]).join("").toUpperCase().slice(0, 2)
+    : currentUser?.email?.[0]?.toUpperCase() || "?";
+
+  const effectiveRole = currentUser?.effectiveRole || currentUser?.role || "viewer";
+
+  const adminItems: Array<{ name: string; href: string; icon: any; matchExact?: boolean; minRole: string }> = [
+    { name: "Provisioning Templates", href: "/app/admin", icon: LayoutTemplate, matchExact: true, minRole: "tenant_admin" },
+    { name: "User Management", href: "/app/admin/users", icon: UsersIcon, minRole: "tenant_admin" },
+    { name: "Organization Settings", href: "/app/admin/organization", icon: Building2, minRole: "tenant_admin" },
+    { name: "Tenant Connections", href: "/app/admin/tenants", icon: Cloud, minRole: "tenant_admin" },
+    { name: "Data Dictionaries", href: "/app/admin/data-dictionaries", icon: BookMarked, minRole: "tenant_admin" },
+    { name: "Custom Fields", href: "/app/admin/custom-fields", icon: Settings, minRole: "tenant_admin" },
+    { name: "Service Plans", href: "/app/admin/plans", icon: CreditCard, minRole: "tenant_admin" },
+  ];
+
+  const platformAdminItems: Array<{ name: string; href: string; icon: any; minRole: string }> = [
+    { name: "System Administration", href: "/app/admin/system", icon: Server, minRole: "platform_owner" },
+    { name: "Entra ID Setup", href: "/app/admin/entra", icon: KeyRound, minRole: "tenant_admin" },
+  ];
+
+  const NavLinks = () => {
+    const filteredGroups = navGroups
+      .filter(group => !group.minRole || hasMinRole(effectiveRole, group.minRole))
+      .map(group => ({
+        ...group,
+        items: group.items.filter(item => !item.minRole || hasMinRole(effectiveRole, item.minRole)),
+      }))
+      .filter(group => group.items.length > 0);
+
+    const visibleAdminItems = adminItems.filter(item => hasMinRole(effectiveRole, item.minRole));
+    const visiblePlatformItems = platformAdminItems.filter(item => hasMinRole(effectiveRole, item.minRole));
+    const showAdminSection = visibleAdminItems.length > 0 || visiblePlatformItems.length > 0;
+
+    return (
+      <div className="space-y-6 py-4">
+        {filteredGroups.map((group, i) => (
+          <div key={i} className="space-y-2">
+            <h4 className="px-4 text-xs font-bold text-muted-foreground uppercase tracking-widest mb-2">
+              {group.label}
+            </h4>
+            <div className="space-y-1">
+              {group.items.map((item) => {
+                const isActive = location.startsWith(item.href);
+                return (
+                  <Link key={item.name} href={item.href} className={`flex items-center justify-between px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
+                    isActive 
+                      ? "bg-primary/10 text-primary shadow-sm shadow-primary/5" 
+                      : "text-muted-foreground hover:bg-muted/80 hover:text-foreground"
+                  }`}>
+                    <div className="flex items-center gap-3">
+                      <item.icon className={`w-5 h-5 ${isActive ? "text-primary" : "text-muted-foreground/70"}`} />
+                      {item.name}
+                    </div>
+                    {item.badge && (
+                      <span className={`flex h-5 items-center justify-center rounded-full px-2 text-[10px] font-bold ${isActive ? 'bg-primary text-primary-foreground' : 'bg-primary/20 text-primary'}`}>
+                        {item.badge}
+                      </span>
+                    )}
+                  </Link>
+                );
+              })}
             </div>
-          </Link>
-          <Link href="/app/admin/users" className={`flex items-center justify-between px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
-            location.startsWith("/app/admin/users") 
-              ? "bg-primary/10 text-primary shadow-sm shadow-primary/5" 
-              : "text-muted-foreground hover:bg-muted/80 hover:text-foreground"
-          }`}>
-            <div className="flex items-center gap-3">
-              <UsersIcon className={`w-5 h-5 ${location.startsWith("/app/admin/users") ? "text-primary" : "text-muted-foreground/70"}`} />
-              User Management
-            </div>
-          </Link>
-          <Link href="/app/admin/organization" className={`flex items-center justify-between px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
-            location.startsWith("/app/admin/organization") 
-              ? "bg-primary/10 text-primary shadow-sm shadow-primary/5" 
-              : "text-muted-foreground hover:bg-muted/80 hover:text-foreground"
-          }`}>
-            <div className="flex items-center gap-3">
-              <Building2 className={`w-5 h-5 ${location.startsWith("/app/admin/organization") ? "text-primary" : "text-muted-foreground/70"}`} />
-              Organization Settings
-            </div>
-          </Link>
-          <Link href="/app/admin/tenants" className={`flex items-center justify-between px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
-            location.startsWith("/app/admin/tenants") 
-              ? "bg-primary/10 text-primary shadow-sm shadow-primary/5" 
-              : "text-muted-foreground hover:bg-muted/80 hover:text-foreground"
-          }`}>
-            <div className="flex items-center gap-3">
-              <Cloud className={`w-5 h-5 ${location.startsWith("/app/admin/tenants") ? "text-primary" : "text-muted-foreground/70"}`} />
-              Tenant Connections
-            </div>
-          </Link>
-          <Link href="/app/admin/plans" className={`flex items-center justify-between px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
-            location.startsWith("/app/admin/plans") 
-              ? "bg-primary/10 text-primary shadow-sm shadow-primary/5" 
-              : "text-muted-foreground hover:bg-muted/80 hover:text-foreground"
-          }`}>
-            <div className="flex items-center gap-3">
-              <CreditCard className={`w-5 h-5 ${location.startsWith("/app/admin/plans") ? "text-primary" : "text-muted-foreground/70"}`} />
-              Service Plans
-            </div>
-          </Link>
-          
-          <div className="pt-2 mt-2 border-t border-border/50">
-            <div className="px-3 pb-1 flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest text-primary/70">
-              <ShieldCheck className="w-3 h-3" /> Platform Admin Only
-            </div>
-            <Link href="/app/admin/system" className={`flex items-center justify-between px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
-              location.startsWith("/app/admin/system") 
-                ? "bg-primary/10 text-primary shadow-sm shadow-primary/5" 
-                : "text-muted-foreground hover:bg-muted/80 hover:text-foreground"
-            }`}>
-              <div className="flex items-center gap-3">
-                <Server className={`w-5 h-5 ${location.startsWith("/app/admin/system") ? "text-primary" : "text-muted-foreground/70"}`} />
-                System Administration
-              </div>
-            </Link>
-            <Link href="/app/admin/entra" className={`flex items-center justify-between px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
-              location.startsWith("/app/admin/entra") 
-                ? "bg-primary/10 text-primary shadow-sm shadow-primary/5" 
-                : "text-muted-foreground hover:bg-muted/80 hover:text-foreground"
-            }`}>
-              <div className="flex items-center gap-3">
-                <KeyRound className={`w-5 h-5 ${location.startsWith("/app/admin/entra") ? "text-primary" : "text-muted-foreground/70"}`} />
-                Entra ID Setup
-              </div>
-            </Link>
           </div>
-        </div>
+        ))}
+
+        {showAdminSection && (
+          <div className="space-y-2 pt-4 border-t border-border/50">
+            <h4 className="px-4 text-xs font-bold text-muted-foreground uppercase tracking-widest mb-2">
+              Administration
+            </h4>
+            <div className="space-y-1">
+              {visibleAdminItems.map((item) => {
+                const isActive = item.matchExact ? location === item.href : location.startsWith(item.href);
+                return (
+                  <Link key={item.name} href={item.href} className={`flex items-center justify-between px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
+                    isActive 
+                      ? "bg-primary/10 text-primary shadow-sm shadow-primary/5" 
+                      : "text-muted-foreground hover:bg-muted/80 hover:text-foreground"
+                  }`}>
+                    <div className="flex items-center gap-3">
+                      <item.icon className={`w-5 h-5 ${isActive ? "text-primary" : "text-muted-foreground/70"}`} />
+                      {item.name}
+                    </div>
+                  </Link>
+                );
+              })}
+
+              {visiblePlatformItems.length > 0 && (
+                <div className="pt-2 mt-2 border-t border-border/50">
+                  <div className="px-3 pb-1 flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest text-primary/70">
+                    <ShieldCheck className="w-3 h-3" /> Platform Admin Only
+                  </div>
+                  {visiblePlatformItems.map((item) => {
+                    const isActive = location.startsWith(item.href);
+                    return (
+                      <Link key={item.name} href={item.href} className={`flex items-center justify-between px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
+                        isActive 
+                          ? "bg-primary/10 text-primary shadow-sm shadow-primary/5" 
+                          : "text-muted-foreground hover:bg-muted/80 hover:text-foreground"
+                      }`}>
+                        <div className="flex items-center gap-3">
+                          <item.icon className={`w-5 h-5 ${isActive ? "text-primary" : "text-muted-foreground/70"}`} />
+                          {item.name}
+                        </div>
+                      </Link>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
       </div>
-    </div>
-  );
+    );
+  };
 
   return (
     <div className="min-h-screen bg-background flex text-foreground">
@@ -214,9 +307,7 @@ export default function AppShell({ children }: AppShellProps) {
       <aside className="hidden lg:flex w-72 flex-col border-r border-border/40 bg-card/40 backdrop-blur-xl">
         <div className="h-16 flex items-center px-6 border-b border-border/40">
           <Link href="/app/dashboard" className="flex items-center gap-2 cursor-pointer group">
-            <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-primary to-secondary flex items-center justify-center text-primary-foreground shadow-md shadow-primary/20 transition-transform group-hover:scale-105">
-              <ShieldCheck className="w-5 h-5" />
-            </div>
+            <img src="/images/brand/synozur-mark-color.png" alt="Zenith" className="w-8 h-8 transition-transform group-hover:scale-105" />
             <span className="font-bold text-xl tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-foreground to-foreground/80">Zenith</span>
           </Link>
         </div>
@@ -226,11 +317,15 @@ export default function AppShell({ children }: AppShellProps) {
         </div>
 
         <div className="p-4 border-t border-border/40 bg-card/50">
-          <a href="#" className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium text-muted-foreground hover:bg-muted/80 hover:text-foreground transition-all">
-            <BookOpen className="w-5 h-5 text-muted-foreground/70" />
-            Documentation
+          <Link href="/app/support" className={`flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
+            location.startsWith("/app/support")
+              ? "bg-primary/10 text-primary shadow-sm shadow-primary/5"
+              : "text-muted-foreground hover:bg-muted/80 hover:text-foreground"
+          }`}>
+            <BookOpen className={`w-5 h-5 ${location.startsWith("/app/support") ? "text-primary" : "text-muted-foreground/70"}`} />
+            Support & About
             <ChevronRight className="w-4 h-4 ml-auto opacity-50" />
-          </a>
+          </Link>
         </div>
       </aside>
 
@@ -239,6 +334,8 @@ export default function AppShell({ children }: AppShellProps) {
         {/* Top Header */}
         <header className="h-16 border-b border-border/40 bg-background/80 backdrop-blur-md flex items-center justify-between px-4 lg:px-8 sticky top-0 z-30">
           <div className="flex items-center gap-4">
+            <SynozurAppSwitcher currentApp="zenith" />
+            <div className="w-px h-6 bg-border/40 hidden sm:block" />
             <Sheet>
               <SheetTrigger asChild>
                 <Button variant="ghost" size="icon" className="lg:hidden -ml-2">
@@ -248,9 +345,7 @@ export default function AppShell({ children }: AppShellProps) {
               <SheetContent side="left" className="w-72 p-0 border-r-border/40 bg-card/95 backdrop-blur-xl">
                 <div className="h-16 flex items-center px-6 border-b border-border/40">
                   <div className="flex items-center gap-2">
-                    <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-primary to-secondary flex items-center justify-center text-primary-foreground shadow-md shadow-primary/20">
-                      <ShieldCheck className="w-5 h-5" />
-                    </div>
+                    <img src="/images/brand/synozur-mark-color.png" alt="Zenith" className="w-8 h-8" />
                     <span className="font-bold text-xl tracking-tight">Zenith</span>
                   </div>
                 </div>
@@ -259,10 +354,36 @@ export default function AppShell({ children }: AppShellProps) {
                     <div className="flex items-center gap-2.5 px-3 py-2 rounded-xl bg-primary/5">
                       <Building2 className="w-4 h-4 text-primary shrink-0" />
                       <div className="flex flex-col -space-y-0.5">
-                        <span className="text-[9px] font-bold text-muted-foreground uppercase tracking-widest">Platform Org</span>
-                        <span className="font-semibold text-sm leading-none">The Synozur Alliance</span>
+                        <span className="text-[9px] font-bold text-muted-foreground uppercase tracking-widest">Organization</span>
+                        <span className="font-semibold text-sm leading-none">{activeOrg?.name || 'No organization'}</span>
                       </div>
                     </div>
+                    {myOrgs.length > 1 && (
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <button className="flex items-center gap-2.5 px-3 py-2 rounded-xl bg-muted/30 hover:bg-muted/50 transition-colors w-full text-left">
+                            <Building2 className="w-4 h-4 text-muted-foreground shrink-0" />
+                            <span className="text-xs font-medium text-muted-foreground">Switch organization...</span>
+                            <ChevronDown className="w-3 h-3 text-muted-foreground/50 ml-auto" />
+                          </button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="start" className="w-56 rounded-xl p-2">
+                          {myOrgs.filter(o => o.id !== activeOrg?.id).map((org) => (
+                            <DropdownMenuItem
+                              key={org.id}
+                              className="rounded-lg p-2.5 cursor-pointer"
+                              onClick={() => switchOrgMutation.mutate(org.id)}
+                            >
+                              <Building2 className="w-3.5 h-3.5 mr-2 text-muted-foreground" />
+                              <div className="flex flex-col">
+                                <span className="font-medium text-sm">{org.name}</span>
+                                <span className="text-[10px] text-muted-foreground capitalize">{org.role.replace(/_/g, ' ')}</span>
+                              </div>
+                            </DropdownMenuItem>
+                          ))}
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    )}
                     <Link href="/app/admin/tenants" className="flex items-center gap-2.5 px-3 py-2 rounded-xl bg-secondary/5 hover:bg-secondary/10 transition-colors">
                       <Cloud className="w-4 h-4 text-secondary shrink-0" />
                       <div className="flex flex-col -space-y-0.5">
@@ -274,10 +395,14 @@ export default function AppShell({ children }: AppShellProps) {
                   </div>
                   <NavLinks />
                   <div className="mt-8 pt-4 border-t border-border/40">
-                    <a href="#" className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium text-muted-foreground hover:bg-muted/80 hover:text-foreground transition-all">
-                      <BookOpen className="w-5 h-5 text-muted-foreground/70" />
-                      Documentation
-                    </a>
+                    <Link href="/app/support" className={`flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
+                      location.startsWith("/app/support")
+                        ? "bg-primary/10 text-primary shadow-sm shadow-primary/5"
+                        : "text-muted-foreground hover:bg-muted/80 hover:text-foreground"
+                    }`}>
+                      <BookOpen className={`w-5 h-5 ${location.startsWith("/app/support") ? "text-primary" : "text-muted-foreground/70"}`} />
+                      Support & About
+                    </Link>
                   </div>
                 </div>
               </SheetContent>
@@ -289,40 +414,47 @@ export default function AppShell({ children }: AppShellProps) {
               {/* Company/Org Selector */}
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <Button variant="ghost" className="h-9 gap-2 rounded-full px-3 hover:bg-muted/60 data-[state=open]:bg-muted/60 text-left">
+                  <Button variant="ghost" className="h-9 gap-2 rounded-full px-3 hover:bg-muted/60 data-[state=open]:bg-muted/60 text-left" data-testid="button-org-switcher">
                     <Building2 className="w-4 h-4 text-primary shrink-0" />
                     <div className="flex flex-col items-start -space-y-0.5">
-                      <span className="text-[9px] font-bold text-muted-foreground uppercase tracking-widest">Platform Org</span>
-                      <span className="font-semibold text-sm leading-none text-foreground">The Synozur Alliance</span>
+                      <span className="text-[9px] font-bold text-muted-foreground uppercase tracking-widest">Organization</span>
+                      <span className="font-semibold text-sm leading-none text-foreground" data-testid="text-active-org">{activeOrg?.name || 'No organization'}</span>
                     </div>
-                    <ChevronDown className="w-3 h-3 text-muted-foreground opacity-50 ml-1 shrink-0" />
+                    {myOrgs.length > 1 && <ChevronDown className="w-3 h-3 text-muted-foreground opacity-50 ml-1 shrink-0" />}
                   </Button>
                 </DropdownMenuTrigger>
-                <DropdownMenuContent align="start" className="w-60 rounded-xl p-2">
-                  <DropdownMenuLabel className="text-xs text-muted-foreground uppercase tracking-wider">Organization</DropdownMenuLabel>
+                <DropdownMenuContent align="start" className="w-64 rounded-xl p-2">
+                  <DropdownMenuLabel className="text-xs text-muted-foreground uppercase tracking-wider">
+                    {myOrgs.length > 1 ? 'Switch Organization' : 'Organization'}
+                  </DropdownMenuLabel>
                   <DropdownMenuSeparator className="mb-2 mt-1" />
-                  <DropdownMenuItem className="flex justify-between rounded-lg p-2.5 bg-primary/10 cursor-default">
-                    <div className="flex items-center gap-2.5">
-                      <div className="w-6 h-6 rounded bg-primary/20 flex items-center justify-center">
-                        <Building2 className="w-3.5 h-3.5 text-primary" />
-                      </div>
-                      <span className="font-semibold text-primary">The Synozur Alliance</span>
-                    </div>
-                    <Check className="w-4 h-4 text-primary" />
-                  </DropdownMenuItem>
-                  <DropdownMenuItem className="flex items-center gap-2.5 rounded-lg p-2.5 cursor-pointer text-muted-foreground hover:text-foreground mt-1">
-                    <div className="w-6 h-6 rounded bg-muted flex items-center justify-center">
-                      <Building2 className="w-3.5 h-3.5 text-muted-foreground" />
-                    </div>
-                    <span className="font-medium">Contoso Corp</span>
-                  </DropdownMenuItem>
-                  <DropdownMenuSeparator className="my-2" />
-                  <DropdownMenuItem asChild className="rounded-lg p-2.5 cursor-pointer group">
-                    <Link href="/app/add-tenant" className="flex items-center text-primary font-medium">
-                      <FolderPlus className="w-4 h-4 mr-2" />
-                      Register new org...
-                    </Link>
-                  </DropdownMenuItem>
+                  {myOrgs.map((org) => {
+                    const isActive = activeOrg?.id === org.id;
+                    return (
+                      <DropdownMenuItem
+                        key={org.id}
+                        className={`flex justify-between rounded-lg p-2.5 mt-1 ${isActive ? 'bg-primary/10 cursor-default' : 'cursor-pointer text-muted-foreground hover:text-foreground'}`}
+                        onClick={() => !isActive && switchOrgMutation.mutate(org.id)}
+                        data-testid={`button-switch-org-${org.id}`}
+                      >
+                        <div className="flex items-center gap-2.5">
+                          <div className={`w-6 h-6 rounded flex items-center justify-center ${isActive ? 'bg-primary/20' : 'bg-muted'}`}>
+                            <Building2 className={`w-3.5 h-3.5 ${isActive ? 'text-primary' : 'text-muted-foreground'}`} />
+                          </div>
+                          <div className="flex flex-col">
+                            <span className={`font-semibold text-sm ${isActive ? 'text-primary' : ''}`}>{org.name}</span>
+                            <span className="text-[10px] text-muted-foreground capitalize">{org.role.replace(/_/g, ' ')}</span>
+                          </div>
+                        </div>
+                        {isActive && <Check className="w-4 h-4 text-primary shrink-0" />}
+                      </DropdownMenuItem>
+                    );
+                  })}
+                  {myOrgs.length === 0 && (
+                    <DropdownMenuItem className="rounded-lg p-2.5 text-muted-foreground cursor-default">
+                      No organizations
+                    </DropdownMenuItem>
+                  )}
                 </DropdownMenuContent>
               </DropdownMenu>
 
@@ -399,20 +531,27 @@ export default function AppShell({ children }: AppShellProps) {
 
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="ghost" className="relative h-10 w-10 rounded-full p-0">
+                <Button variant="ghost" className="relative h-10 w-10 rounded-full p-0" data-testid="button-user-menu">
                   <Avatar className="h-10 w-10 border-2 border-background shadow-sm hover:border-primary/20 transition-colors">
-                    <AvatarImage src="https://github.com/shadcn.png" alt="User" />
-                    <AvatarFallback className="bg-primary/10 text-primary font-semibold">AD</AvatarFallback>
+                    <AvatarFallback className="bg-primary/10 text-primary font-semibold">{userInitials}</AvatarFallback>
                   </Avatar>
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="w-60 rounded-xl p-2">
                 <DropdownMenuLabel className="font-normal p-3">
                   <div className="flex flex-col space-y-1.5">
-                    <p className="text-sm font-semibold leading-none">Admin User</p>
-                    <p className="text-xs leading-none text-muted-foreground">
-                      admin@synozur.demo
+                    <p className="text-sm font-semibold leading-none" data-testid="text-current-user-name">{currentUser?.name || currentUser?.email || "User"}</p>
+                    <p className="text-xs leading-none text-muted-foreground" data-testid="text-current-user-email">
+                      {currentUser?.email || ""}
                     </p>
+                    {(currentUser?.effectiveRole || currentUser?.role) && (
+                      <p className="text-[10px] leading-none text-muted-foreground/70 capitalize mt-0.5">
+                        {(currentUser.effectiveRole || currentUser.role).replace(/_/g, " ")}
+                        {activeOrg && myOrgs.length > 1 && (
+                          <span className="text-muted-foreground/50"> in {activeOrg.name}</span>
+                        )}
+                      </p>
+                    )}
                   </div>
                 </DropdownMenuLabel>
                 <DropdownMenuSeparator className="mb-2" />

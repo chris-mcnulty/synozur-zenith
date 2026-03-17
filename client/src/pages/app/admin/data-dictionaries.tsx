@@ -1,0 +1,326 @@
+import { useState } from "react";
+import { useQuery, useMutation } from "@tanstack/react-query";
+import { apiRequest, queryClient } from "@/lib/queryClient";
+import { useTenant } from "@/lib/tenant-context";
+import { useToast } from "@/hooks/use-toast";
+import { METADATA_CATEGORIES } from "@shared/schema";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Plus,
+  X,
+  Loader2,
+  Building2,
+  MapPin,
+  Briefcase,
+  Hash,
+  Globe,
+  AlertTriangle,
+  ShieldCheck,
+} from "lucide-react";
+
+type DataDictionaryEntry = {
+  id: string;
+  tenantId: string;
+  category: string;
+  value: string;
+  createdAt: string;
+};
+
+const CATEGORY_CONFIG: Record<string, { label: string; icon: typeof Building2; description: string; placeholder: string }> = {
+  department: {
+    label: "Departments",
+    icon: Building2,
+    description: "Organizational departments that can be assigned to SharePoint sites.",
+    placeholder: "e.g., Finance, Legal, Operations...",
+  },
+  cost_center: {
+    label: "Cost Centers",
+    icon: Hash,
+    description: "Cost center codes for financial tracking and chargeback.",
+    placeholder: "e.g., CC-4100, CC-5200...",
+  },
+  business_unit: {
+    label: "Business Units",
+    icon: Briefcase,
+    description: "Business units or divisions within the organization.",
+    placeholder: "e.g., North America, EMEA...",
+  },
+  region: {
+    label: "Regions",
+    icon: MapPin,
+    description: "Geographic regions for data residency and compliance classification.",
+    placeholder: "e.g., US-East, EU-West...",
+  },
+  project_code: {
+    label: "Project Codes",
+    icon: Globe,
+    description: "Project identifiers for tracking workspace associations.",
+    placeholder: "e.g., PHX-001, DEAL-2026-04...",
+  },
+};
+
+const REQUIRED_METADATA_OPTIONS = [
+  { value: "department", label: "Department" },
+  { value: "costCenter", label: "Cost Center" },
+  { value: "projectCode", label: "Project Code" },
+  { value: "description", label: "Description" },
+  { value: "sensitivityLabelId", label: "Sensitivity Label" },
+];
+
+export default function DataDictionariesPage() {
+  const { toast } = useToast();
+  const { selectedTenant } = useTenant();
+  const [selectedCategory, setSelectedCategory] = useState<string>("department");
+  const [newValue, setNewValue] = useState("");
+
+  const activeTenantId = selectedTenant?.id || "";
+
+  const { data: entries = [], isLoading } = useQuery<DataDictionaryEntry[]>({
+    queryKey: ["/api/admin/tenants", activeTenantId, "data-dictionaries", selectedCategory],
+    queryFn: () =>
+      fetch(`/api/admin/tenants/${activeTenantId}/data-dictionaries?category=${selectedCategory}`)
+        .then(r => r.json()),
+    enabled: !!activeTenantId,
+  });
+
+  const { data: allEntries = [] } = useQuery<DataDictionaryEntry[]>({
+    queryKey: ["/api/admin/tenants", activeTenantId, "data-dictionaries"],
+    queryFn: () =>
+      fetch(`/api/admin/tenants/${activeTenantId}/data-dictionaries`).then(r => r.json()),
+    enabled: !!activeTenantId,
+  });
+
+  const { data: requiredMetadataEntries = [] } = useQuery<DataDictionaryEntry[]>({
+    queryKey: ["/api/admin/tenants", activeTenantId, "data-dictionaries", "required_metadata_field"],
+    queryFn: () =>
+      fetch(`/api/admin/tenants/${activeTenantId}/data-dictionaries?category=required_metadata_field`)
+        .then(r => r.json()),
+    enabled: !!activeTenantId,
+  });
+
+  const addMutation = useMutation({
+    mutationFn: async ({ category, value }: { category: string; value: string }) => {
+      await apiRequest("POST", `/api/admin/tenants/${activeTenantId}/data-dictionaries`, { category, value });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/tenants", activeTenantId, "data-dictionaries"] });
+      setNewValue("");
+      toast({ title: "Value Added", description: "The dictionary entry has been created." });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: async (entryId: string) => {
+      await apiRequest("DELETE", `/api/admin/tenants/${activeTenantId}/data-dictionaries/${entryId}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/tenants", activeTenantId, "data-dictionaries"] });
+      toast({ title: "Value Removed", description: "The dictionary entry has been deleted." });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const toggleRequiredField = async (fieldValue: string) => {
+    const existing = requiredMetadataEntries.find(e => e.value === fieldValue);
+    if (existing) {
+      deleteMutation.mutate(existing.id);
+    } else {
+      addMutation.mutate({ category: "required_metadata_field", value: fieldValue });
+    }
+  };
+
+  const config = CATEGORY_CONFIG[selectedCategory] || CATEGORY_CONFIG.department;
+  const Icon = config.icon;
+
+  const categoryCounts = METADATA_CATEGORIES.reduce((acc, cat) => {
+    acc[cat] = allEntries.filter(e => e.category === cat).length;
+    return acc;
+  }, {} as Record<string, number>);
+
+  const requiredFieldValues = new Set(requiredMetadataEntries.map(e => e.value));
+
+  return (
+    <div className="space-y-6 animate-in fade-in duration-500 pb-12">
+      <div>
+        <h1 className="text-3xl font-bold tracking-tight" data-testid="text-page-title">Data Dictionaries</h1>
+        <p className="text-muted-foreground mt-1">
+          Define allowed values for site metadata fields. These are shared across all organizations connected to the same tenant.
+        </p>
+      </div>
+
+      {!activeTenantId ? (
+        <Card className="glass-panel border-border/50">
+          <CardContent className="flex flex-col items-center justify-center h-48 gap-3 text-center p-6">
+            <AlertTriangle className="w-12 h-12 text-muted-foreground/30" />
+            <div>
+              <p className="font-medium text-foreground">No tenant connected</p>
+              <p className="text-sm text-muted-foreground mt-1">Connect a Microsoft 365 tenant first to manage data dictionaries.</p>
+            </div>
+          </CardContent>
+        </Card>
+      ) : (
+        <>
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+            {METADATA_CATEGORIES.map(cat => {
+              const catConfig = CATEGORY_CONFIG[cat];
+              const CatIcon = catConfig.icon;
+              const count = categoryCounts[cat] || 0;
+              const isActive = selectedCategory === cat;
+              return (
+                <Card
+                  key={cat}
+                  className={`cursor-pointer transition-all hover:shadow-md ${isActive ? 'border-primary/50 bg-primary/5 shadow-md shadow-primary/10' : 'glass-panel border-border/50 hover:border-border'}`}
+                  onClick={() => setSelectedCategory(cat)}
+                  data-testid={`card-category-${cat}`}
+                >
+                  <CardContent className="p-4 flex flex-col items-center text-center gap-2">
+                    <CatIcon className={`w-5 h-5 ${isActive ? 'text-primary' : 'text-muted-foreground'}`} />
+                    <div>
+                      <p className={`text-sm font-medium ${isActive ? 'text-primary' : ''}`}>{catConfig.label}</p>
+                      <p className="text-2xl font-bold mt-0.5" data-testid={`text-count-${cat}`}>{count}</p>
+                    </div>
+                  </CardContent>
+                </Card>
+              );
+            })}
+          </div>
+
+          <Card className="glass-panel border-border/50 shadow-xl">
+            <CardHeader className="pb-4 border-b border-border/40 bg-muted/10">
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle className="text-lg flex items-center gap-2">
+                    <Icon className="w-5 h-5 text-primary" />
+                    {config.label}
+                    {selectedTenant && (
+                      <Badge variant="outline" className="text-[10px] ml-2 text-muted-foreground">{selectedTenant.tenantName}</Badge>
+                    )}
+                  </CardTitle>
+                  <CardDescription className="mt-1">{config.description}</CardDescription>
+                </div>
+                <Badge variant="secondary" className="text-xs">{entries.length} values</Badge>
+              </div>
+            </CardHeader>
+            <CardContent className="p-6">
+              <div className="flex gap-2 mb-6">
+                <Input
+                  placeholder={config.placeholder}
+                  value={newValue}
+                  onChange={(e) => setNewValue(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && newValue.trim()) {
+                      addMutation.mutate({ category: selectedCategory, value: newValue.trim() });
+                    }
+                  }}
+                  className="flex-1"
+                  data-testid="input-new-value"
+                />
+                <Button
+                  onClick={() => {
+                    if (newValue.trim()) {
+                      addMutation.mutate({ category: selectedCategory, value: newValue.trim() });
+                    }
+                  }}
+                  disabled={!newValue.trim() || addMutation.isPending}
+                  className="gap-2"
+                  data-testid="button-add-value"
+                >
+                  {addMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+                  Add
+                </Button>
+              </div>
+
+              <div className="rounded-lg border border-border/50 bg-muted/10 p-4 min-h-[120px]">
+                {isLoading ? (
+                  <div className="flex items-center justify-center h-20">
+                    <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
+                  </div>
+                ) : entries.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center h-20 text-center">
+                    <Icon className="w-8 h-8 text-muted-foreground/30 mb-2" />
+                    <p className="text-sm text-muted-foreground" data-testid="text-no-entries">
+                      No {config.label.toLowerCase()} defined yet. Add your first value above.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="flex flex-wrap gap-2" data-testid="list-entries">
+                    {entries.map((entry) => (
+                      <Badge
+                        key={entry.id}
+                        variant="secondary"
+                        className="gap-1.5 pl-3 pr-1.5 py-1.5 text-sm bg-background/80 border border-border/50"
+                        data-testid={`badge-entry-${entry.id}`}
+                      >
+                        {entry.value}
+                        <button
+                          onClick={() => deleteMutation.mutate(entry.id)}
+                          className="ml-1 rounded-full hover:bg-destructive/20 p-0.5 transition-colors"
+                          data-testid={`button-delete-entry-${entry.id}`}
+                        >
+                          <X className="w-3 h-3 text-muted-foreground hover:text-destructive" />
+                        </button>
+                      </Badge>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="glass-panel border-border/50 shadow-xl">
+            <CardHeader className="pb-4 border-b border-border/40 bg-muted/10">
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle className="text-lg flex items-center gap-2">
+                    <ShieldCheck className="w-5 h-5 text-primary" />
+                    Required Metadata Fields
+                  </CardTitle>
+                  <CardDescription className="mt-1">
+                    Select which metadata fields must be populated for a site to pass the Copilot readiness "Metadata Complete" check. Changes take effect next time policies are evaluated.
+                  </CardDescription>
+                </div>
+                <Badge variant="secondary" className="text-xs">{requiredFieldValues.size} required</Badge>
+              </div>
+            </CardHeader>
+            <CardContent className="p-6">
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3" data-testid="required-metadata-fields">
+                {REQUIRED_METADATA_OPTIONS.map(opt => {
+                  const isRequired = requiredFieldValues.has(opt.value);
+                  return (
+                    <label
+                      key={opt.value}
+                      className={`flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-all ${
+                        isRequired
+                          ? 'border-primary/50 bg-primary/5'
+                          : 'border-border/50 hover:border-border hover:bg-muted/20'
+                      }`}
+                      data-testid={`checkbox-required-${opt.value}`}
+                    >
+                      <Checkbox
+                        checked={isRequired}
+                        onCheckedChange={() => toggleRequiredField(opt.value)}
+                        disabled={addMutation.isPending || deleteMutation.isPending}
+                      />
+                      <span className={`text-sm font-medium ${isRequired ? 'text-primary' : 'text-foreground'}`}>
+                        {opt.label}
+                      </span>
+                    </label>
+                  );
+                })}
+              </div>
+            </CardContent>
+          </Card>
+        </>
+      )}
+    </div>
+  );
+}

@@ -1,5 +1,7 @@
-import { createContext, useContext, useState, ReactNode } from "react";
+import { createContext, useContext, useState, useEffect, useCallback, ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
+
+const STORAGE_KEY = "zenith.selectedTenantId";
 
 interface TenantConnection {
   id: string;
@@ -25,8 +27,23 @@ const TenantContext = createContext<TenantContextType>({
   selectedTenantId: null,
 });
 
+function readStoredTenantId(): string | null {
+  try {
+    return localStorage.getItem(STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
+
 export function TenantProvider({ children }: { children: ReactNode }) {
-  const [selectedTenantId, setSelectedTenantId] = useState<string | null>(null);
+  const [selectedTenantId, setSelectedTenantIdRaw] = useState<string | null>(() => readStoredTenantId());
+
+  const setSelectedTenantId = useCallback((id: string) => {
+    setSelectedTenantIdRaw(id);
+    try {
+      localStorage.setItem(STORAGE_KEY, id);
+    } catch {}
+  }, []);
 
   const { data: tenants = [] } = useQuery<TenantConnection[]>({
     queryKey: ["/api/admin/tenants"],
@@ -37,7 +54,15 @@ export function TenantProvider({ children }: { children: ReactNode }) {
     },
   });
 
-  const selectedTenant = tenants.find(t => t.id === selectedTenantId) || tenants[0];
+  const storedId = selectedTenantId;
+  const matchesStored = storedId ? tenants.find(t => t.id === storedId) : undefined;
+  const selectedTenant = matchesStored || tenants[0];
+
+  useEffect(() => {
+    if (tenants.length > 0 && selectedTenant && selectedTenant.id !== storedId) {
+      setSelectedTenantId(selectedTenant.id);
+    }
+  }, [tenants, selectedTenant, storedId, setSelectedTenantId]);
 
   return (
     <TenantContext.Provider value={{ tenants, selectedTenant, setSelectedTenantId, selectedTenantId }}>

@@ -5,6 +5,7 @@ import { ZENITH_ROLES, type ZenithRole, type User } from '@shared/schema';
 declare module 'express-session' {
   interface SessionData {
     userId?: string;
+    activeOrganizationId?: string;
     pkceVerifier?: string;
     authState?: string;
   }
@@ -12,6 +13,8 @@ declare module 'express-session' {
 
 export interface AuthenticatedRequest extends Request {
   user?: User;
+  effectiveRole?: ZenithRole;
+  activeOrganizationId?: string;
 }
 
 const ROLE_HIERARCHY: Record<ZenithRole, number> = {
@@ -56,6 +59,22 @@ export function loadCurrentUser() {
         const user = await storage.getUser(userId);
         if (user) {
           req.user = user;
+
+          const activeOrgId = req.session?.activeOrganizationId || user.organizationId;
+          req.activeOrganizationId = activeOrgId || undefined;
+
+          if (user.role === ZENITH_ROLES.PLATFORM_OWNER) {
+            req.effectiveRole = ZENITH_ROLES.PLATFORM_OWNER;
+          } else if (activeOrgId) {
+            const membership = await storage.getOrgMembership(userId, activeOrgId);
+            if (membership) {
+              req.effectiveRole = membership.role as ZenithRole;
+            } else {
+              req.effectiveRole = user.role as ZenithRole;
+            }
+          } else {
+            req.effectiveRole = user.role as ZenithRole;
+          }
         }
       } catch (err) {
         console.error('[RBAC] Failed to load user:', err);
@@ -79,7 +98,7 @@ export function requireRole(...roles: ZenithRole[]) {
     if (!req.user) {
       return res.status(401).json({ error: 'Authentication required' });
     }
-    const userRole = req.user.role as ZenithRole;
+    const userRole = (req.effectiveRole || req.user.role) as ZenithRole;
     if (!roles.includes(userRole) && userRole !== ZENITH_ROLES.PLATFORM_OWNER) {
       return res.status(403).json({ error: 'Insufficient permissions' });
     }
@@ -92,7 +111,7 @@ export function requirePermission(permission: string) {
     if (!req.user) {
       return res.status(401).json({ error: 'Authentication required' });
     }
-    const userRole = req.user.role as ZenithRole;
+    const userRole = (req.effectiveRole || req.user.role) as ZenithRole;
     const userPerms = ROLE_PERMISSIONS[userRole] || [];
     if (!userPerms.includes(permission)) {
       return res.status(403).json({ error: 'Insufficient permissions for this action' });

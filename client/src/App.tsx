@@ -34,7 +34,11 @@ import OrganizationSettingsPage from "./pages/app/admin/organization";
 import SystemAdminPage from "./pages/app/admin/system";
 import TenantConnectionsPage from "./pages/app/admin/tenant-connections";
 import PolicyBuilderPage from "./pages/app/admin/policy-builder";
+import PolicyWhatIfPage from "./pages/app/admin/policy-whatif";
 import EntraSetupPage from "./pages/app/admin/entra-setup";
+import DataDictionariesPage from "./pages/app/admin/data-dictionaries";
+import CustomFieldsPage from "./pages/app/admin/custom-fields";
+import SupportPage from "./pages/app/support";
 import AppShell from "./components/layout/app-shell";
 
 const EmptyPage = ({ title }: { title: string }) => (
@@ -89,9 +93,14 @@ function AppRoutes() {
         <Route path="/app/admin/organization" component={OrganizationSettingsPage} />
         <Route path="/app/admin/system" component={SystemAdminPage} />
         <Route path="/app/admin/tenants" component={TenantConnectionsPage} />
+        <Route path="/app/admin/data-dictionaries" component={DataDictionariesPage} />
+        <Route path="/app/admin/custom-fields" component={CustomFieldsPage} />
         <Route path="/app/admin/policies" component={PolicyBuilderPage} />
+        <Route path="/app/admin/policy-whatif" component={PolicyWhatIfPage} />
         <Route path="/app/admin/entra" component={EntraSetupPage} />
         <Route path="/app/admin" component={AdminTemplatesPage} />
+        <Route path="/app/support/:tab" component={SupportPage} />
+        <Route path="/app/support" component={SupportPage} />
         <Route component={NotFound} />
       </Switch>
     </AppShellWrapper>

@@ -3,7 +3,7 @@ import { Link, useParams } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import type { Workspace, CopilotRule } from "@shared/schema";
+import type { Workspace, CustomFieldDefinition, DocumentLibrary } from "@shared/schema";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -37,8 +37,19 @@ import {
   Unlock,
   Pencil,
   Copy,
-  AlertTriangle
+  AlertTriangle,
+  Upload,
+  Network,
+  Unlink,
+  Trash2,
+  RefreshCw,
+  Archive,
+  Library
 } from "lucide-react";
+
+type DataDictEntry = { id: string; tenantId: string; category: string; value: string; createdAt: string };
+type SensitivityLabelEntry = { id: string; tenantId: string; labelId: string; name: string; description: string | null; color: string | null; tooltip: string | null; sensitivity: number | null; isActive: boolean; contentFormats: string[] | null; hasProtection: boolean; parentLabelId: string | null; appliesToGroupsSites: boolean; syncedAt: string | null };
+type RetentionLabelEntry = { id: string; tenantId: string; labelId: string; name: string; description: string | null; isInUse: boolean; retentionDuration: string | null; actionAfterRetention: string | null; syncedAt: string | null };
 
 export default function WorkspaceDetailsPage() {
   const { id } = useParams<{ id: string }>();
@@ -49,10 +60,72 @@ export default function WorkspaceDetailsPage() {
     enabled: !!id,
   });
 
-  const { data: copilotRules = [] } = useQuery<CopilotRule[]>({
-    queryKey: [`/api/workspaces/${id}/copilot-rules`],
+  const { data: policyResults } = useQuery<{
+    policyId: string | null;
+    policyName: string;
+    policyType?: string;
+    policies?: { policyId: string; policyName: string; policyType: string; outcomeId?: string; outcomeName?: string; overallPass: boolean; passCount: number; failCount: number }[];
+    results: { ruleType?: string; ruleName: string; ruleResult: string; ruleDescription: string; policyName?: string }[];
+    overallPass: boolean;
+    passCount?: number;
+    failCount?: number;
+  }>({
+    queryKey: [`/api/workspaces/${id}/policy-results`],
     enabled: !!id,
   });
+
+  const tenantConnectionId = workspace?.tenantConnectionId || "";
+
+  const { data: dictEntries = [] } = useQuery<DataDictEntry[]>({
+    queryKey: ["/api/admin/tenants", tenantConnectionId, "data-dictionaries"],
+    queryFn: () => fetch(`/api/admin/tenants/${tenantConnectionId}/data-dictionaries`).then(r => r.json()),
+    enabled: !!tenantConnectionId,
+  });
+
+  const { data: sensitivityLabelsData = [] } = useQuery<SensitivityLabelEntry[]>({
+    queryKey: ["/api/admin/tenants", tenantConnectionId, "sensitivity-labels"],
+    queryFn: () => fetch(`/api/admin/tenants/${tenantConnectionId}/sensitivity-labels`).then(r => r.json()),
+    enabled: !!tenantConnectionId,
+  });
+
+  const { data: retentionLabelsData = [] } = useQuery<RetentionLabelEntry[]>({
+    queryKey: ["/api/admin/tenants", tenantConnectionId, "retention-labels"],
+    queryFn: () => fetch(`/api/admin/tenants/${tenantConnectionId}/retention-labels`).then(r => r.json()),
+    enabled: !!tenantConnectionId,
+  });
+
+  const { data: customFieldDefs = [] } = useQuery<CustomFieldDefinition[]>({
+    queryKey: ["/api/admin/tenants", tenantConnectionId, "custom-fields"],
+    queryFn: () => fetch(`/api/admin/tenants/${tenantConnectionId}/custom-fields`).then(r => r.json()),
+    enabled: !!tenantConnectionId,
+  });
+
+  const { data: docLibraries = [] } = useQuery<DocumentLibrary[]>({
+    queryKey: ["/api/workspaces", id, "libraries"],
+    queryFn: () => fetch(`/api/workspaces/${id}/libraries`).then(r => r.ok ? r.json() : []),
+    enabled: !!id,
+  });
+
+  const { data: allWorkspaces = [] } = useQuery<Workspace[]>({
+    queryKey: ["/api/workspaces", tenantConnectionId],
+    queryFn: () => {
+      const params = new URLSearchParams();
+      if (tenantConnectionId) params.set("tenantConnectionId", tenantConnectionId);
+      return fetch(`/api/workspaces?${params.toString()}`).then(r => r.json());
+    },
+    enabled: !!tenantConnectionId,
+  });
+
+  const hubSiteWorkspace = workspace?.hubSiteId && !workspace?.isHubSite
+    ? allWorkspaces.find(w => w.isHubSite && w.hubSiteId === workspace.hubSiteId)
+    : null;
+
+  const deptOptions = dictEntries.filter(e => e.category === "department");
+  const costCenterOptions = dictEntries.filter(e => e.category === "cost_center");
+  const projectCodeOptions = dictEntries.filter(e => e.category === "project_code");
+  const requiredMetadataKeys = dictEntries
+    .filter(e => e.category === "required_metadata_field")
+    .map(e => e.value);
 
   const [editMode, setEditMode] = useState(false);
   const [form, setForm] = useState({
@@ -61,14 +134,13 @@ export default function WorkspaceDetailsPage() {
     costCenter: "",
     projectCode: "",
     sensitivity: "",
-    retentionPolicy: "",
+    sensitivityLabelId: "",
     externalSharing: false,
-    primarySteward: "",
-    secondarySteward: "",
     teamsConnected: false,
     type: "",
     projectType: "",
   });
+  const [customFieldValues, setCustomFieldValues] = useState<Record<string, any>>({});
 
   useEffect(() => {
     if (workspace) {
@@ -78,36 +150,115 @@ export default function WorkspaceDetailsPage() {
         costCenter: workspace.costCenter || "",
         projectCode: workspace.projectCode || "",
         sensitivity: workspace.sensitivity || "",
-        retentionPolicy: workspace.retentionPolicy || "",
+        sensitivityLabelId: workspace.sensitivityLabelId || "",
+
         externalSharing: workspace.externalSharing,
-        primarySteward: workspace.primarySteward || "",
-        secondarySteward: workspace.secondarySteward || "",
         teamsConnected: workspace.teamsConnected,
         type: workspace.type || "",
         projectType: workspace.projectType || "",
       });
+      const existingCustom = workspace.customFields || {};
+      const merged: Record<string, any> = { ...existingCustom };
+      if (customFieldDefs.length > 0) {
+        for (const def of customFieldDefs) {
+          if ((merged[def.fieldName] === undefined || merged[def.fieldName] === null || merged[def.fieldName] === "") && def.defaultValue) {
+            merged[def.fieldName] = def.fieldType === "NUMBER" ? Number(def.defaultValue) : def.fieldType === "BOOLEAN" ? def.defaultValue === "true" : def.defaultValue;
+          }
+        }
+      }
+      setCustomFieldValues(merged);
     }
-  }, [workspace]);
+  }, [workspace, customFieldDefs]);
 
   const saveMutation = useMutation({
-    mutationFn: async (data: Partial<typeof form>) => {
+    mutationFn: async (data: Partial<typeof form> & { customFields?: Record<string, any> }) => {
       const res = await apiRequest("PATCH", `/api/workspaces/${id}`, data);
       return res.json();
     },
-    onSuccess: () => {
+    onSuccess: (responseData: any) => {
       queryClient.invalidateQueries({ queryKey: [`/api/workspaces/${id}`] });
-      queryClient.invalidateQueries({ queryKey: [`/api/workspaces/${id}/copilot-rules`] });
+      queryClient.invalidateQueries({ queryKey: [`/api/workspaces/${id}/policy-results`] });
       queryClient.invalidateQueries({ queryKey: ["/api/workspaces"] });
       setEditMode(false);
-      toast({ title: "Changes saved", description: "Workspace properties updated successfully." });
+      if (responseData?.labelSyncResult) {
+        if (responseData.labelSyncResult.pushed) {
+          toast({ title: "Changes saved & label applied", description: "Workspace updated and sensitivity label pushed to M365." });
+        } else {
+          toast({ title: "Changes saved", description: `Workspace updated but label sync note: ${responseData.labelSyncResult.error || "Label could not be applied to SharePoint."}` });
+        }
+      } else {
+        toast({ title: "Changes saved", description: "Workspace properties updated successfully." });
+      }
     },
-    onError: () => {
-      toast({ title: "Save failed", description: "Could not update workspace properties.", variant: "destructive" });
+    onError: (err: any) => {
+      let errMsg = "Could not update workspace properties.";
+      if (err?.message) {
+        const match = err.message.match(/^\d+:\s*([\s\S]+)$/);
+        if (match) {
+          try {
+            const body = JSON.parse(match[1]);
+            errMsg = body?.message || errMsg;
+          } catch {
+            errMsg = match[1];
+          }
+        } else {
+          errMsg = err.message;
+        }
+      }
+      toast({ title: "Save failed", description: errMsg, variant: "destructive" });
+    },
+  });
+
+  const writebackMutation = useMutation({
+    mutationFn: () =>
+      apiRequest("POST", "/api/workspaces/writeback/metadata", { workspaceIds: [id] }).then(r => r.json()),
+    onSuccess: (data: any) => {
+      queryClient.invalidateQueries({ queryKey: [`/api/workspaces/${id}`] });
+      if (data.succeeded > 0) {
+        const fields = data.results?.[0]?.fieldsSynced?.join(", ") || "metadata";
+        toast({ title: "Synced to SharePoint", description: `Successfully wrote ${fields} to the site property bag.` });
+      } else {
+        const errMsg = data.results?.[0]?.error || "Unknown error";
+        toast({ title: "Sync Failed", description: errMsg, variant: "destructive" });
+      }
+    },
+    onError: (err: any) => {
+      const msg = err?.message || "Failed to sync";
+      if (msg.includes("FEATURE_GATED")) {
+        toast({ title: "Plan Required", description: "Writing metadata to SharePoint requires a Standard plan or higher.", variant: "destructive" });
+      } else {
+        toast({ title: "Sync Failed", description: msg, variant: "destructive" });
+      }
+    },
+  });
+
+  const siteSyncMutation = useMutation({
+    mutationFn: () =>
+      apiRequest("POST", `/api/workspaces/${id}/sync`).then(r => r.json()),
+    onSuccess: (data: any) => {
+      queryClient.invalidateQueries({ queryKey: [`/api/workspaces/${id}`] });
+      if (data.siteDeleted) {
+        toast({ title: "Site Deleted", description: data.message || "This site is no longer in Microsoft 365.", variant: "destructive" });
+      } else if (data.success) {
+        toast({ title: "Site Refreshed", description: "Latest data pulled from Microsoft 365." });
+      } else {
+        toast({ title: "Refresh Issue", description: data.error || "Completed with issues.", variant: "destructive" });
+      }
+    },
+    onError: (err: any) => {
+      toast({ title: "Refresh Failed", description: err?.message || "Could not refresh site data.", variant: "destructive" });
     },
   });
 
   const handleSave = () => {
-    saveMutation.mutate(form);
+    const missingCustomRequired = customFieldDefs
+      .filter(f => f.required && (customFieldValues[f.fieldName] === undefined || customFieldValues[f.fieldName] === "" || customFieldValues[f.fieldName] === null))
+      .map(f => f.fieldLabel);
+    if (missingCustomRequired.length > 0) {
+      toast({ title: "Missing Required Custom Fields", description: `Please fill in: ${missingCustomRequired.join(", ")}`, variant: "destructive" });
+      return;
+    }
+    saveMutation.mutate({ ...form, customFields: customFieldValues });
   };
 
   const handleCancel = () => {
@@ -118,14 +269,23 @@ export default function WorkspaceDetailsPage() {
         costCenter: workspace.costCenter || "",
         projectCode: workspace.projectCode || "",
         sensitivity: workspace.sensitivity || "",
-        retentionPolicy: workspace.retentionPolicy || "",
+        sensitivityLabelId: workspace.sensitivityLabelId || "",
+
         externalSharing: workspace.externalSharing,
-        primarySteward: workspace.primarySteward || "",
-        secondarySteward: workspace.secondarySteward || "",
         teamsConnected: workspace.teamsConnected,
         type: workspace.type || "",
         projectType: workspace.projectType || "",
       });
+      const existingCustom2 = workspace.customFields || {};
+      const merged2: Record<string, any> = { ...existingCustom2 };
+      if (customFieldDefs.length > 0) {
+        for (const def of customFieldDefs) {
+          if ((merged2[def.fieldName] === undefined || merged2[def.fieldName] === null || merged2[def.fieldName] === "") && def.defaultValue) {
+            merged2[def.fieldName] = def.fieldType === "NUMBER" ? Number(def.defaultValue) : def.fieldType === "BOOLEAN" ? def.defaultValue === "true" : def.defaultValue;
+          }
+        }
+      }
+      setCustomFieldValues(merged2);
     }
     setEditMode(false);
   };
@@ -173,27 +333,33 @@ export default function WorkspaceDetailsPage() {
   const sensitivityLabel = workspace.sensitivity.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase()).replace(/\B\w+/g, c => c.toLowerCase());
   const sensitivityVariant = workspace.sensitivity === "HIGHLY_CONFIDENTIAL" ? "destructive" : "secondary";
 
-  const computedRules: { ruleName: string; ruleResult: string; ruleDescription: string }[] = copilotRules.length > 0
-    ? copilotRules.map(r => ({ ruleName: r.ruleName, ruleResult: r.ruleResult, ruleDescription: r.ruleDescription }))
-    : [
-        { ruleName: "Sensitivity Labeled", ruleResult: workspace.sensitivity ? "PASS" : "FAIL", ruleDescription: "Workspace must have a Purview sensitivity label applied." },
-        { ruleName: "Metadata Complete", ruleResult: workspace.metadataStatus === "COMPLETE" ? "PASS" : "FAIL", ruleDescription: "All required governance metadata fields must be populated." },
-        { ruleName: "Sharing Policy", ruleResult: (!workspace.externalSharing || workspace.sensitivity !== "HIGHLY_CONFIDENTIAL") ? "PASS" : "FAIL", ruleDescription: "External sharing policy must align with sensitivity classification." },
-        { ruleName: "Dual Ownership", ruleResult: workspace.owners >= 2 ? "PASS" : "FAIL", ruleDescription: "Workspace must have at least two active owners." },
-      ];
+  const resolvedPurviewLabel = workspace.sensitivityLabelId
+    ? sensitivityLabelsData.find(l => l.labelId === workspace.sensitivityLabelId)
+    : null;
+
+  const resolvedRetentionLabel = workspace.retentionLabelId
+    ? retentionLabelsData.find(l => l.labelId === workspace.retentionLabelId)
+    : null;
+
+  const hasPolicyResults = policyResults?.results && policyResults.results.length > 0;
+  const computedRules: { ruleName: string; ruleResult: string; ruleDescription: string; policyName?: string }[] = hasPolicyResults
+    ? policyResults.results.map(r => ({ ruleName: r.ruleName, ruleResult: r.ruleResult, ruleDescription: r.ruleDescription, policyName: r.policyName }))
+    : [];
+
+  const policyName = policyResults?.policies && policyResults.policies.length > 1
+    ? "Policy Evaluation"
+    : (policyResults?.policies?.[0]?.outcomeName || policyResults?.policies?.[0]?.policyName || policyResults?.policyName || "Policy Evaluation");
 
   const rawJson = JSON.stringify(workspace, null, 2);
   const passCount = computedRules.filter(r => r.ruleResult === "PASS").length;
   const failCount = computedRules.filter(r => r.ruleResult === "FAIL").length;
-
-  const primaryInitials = workspace.primarySteward
-    ? workspace.primarySteward.split(" ").map(w => w[0]).join("").toUpperCase().slice(0, 2)
-    : "??";
+  const allRulesPass = computedRules.length > 0 && failCount === 0;
+  const copilotEligible = allRulesPass || workspace.copilotReady;
 
   const metadataFields = [
-    { key: "department", label: "Department", required: true },
-    { key: "costCenter", label: "Cost Center", required: true },
-    { key: "projectCode", label: "Project Code", required: false },
+    { key: "department", label: "Department", required: requiredMetadataKeys.includes("department") },
+    { key: "costCenter", label: "Cost Center", required: requiredMetadataKeys.includes("costCenter") },
+    { key: "projectCode", label: "Project Code", required: requiredMetadataKeys.includes("projectCode") },
   ];
 
   const missingRequired = metadataFields.filter(f => f.required && !form[f.key as keyof typeof form]);
@@ -216,13 +382,39 @@ export default function WorkspaceDetailsPage() {
               {workspace.teamsConnected && (
                 <Badge variant="outline" className="text-[10px] font-semibold text-blue-500 bg-blue-500/10 border-blue-500/20">Teams Connected</Badge>
               )}
+              {workspace.isDeleted && (
+                <Badge variant="destructive" className="text-xs gap-1">
+                  <Trash2 className="w-3 h-3" /> Deleted
+                </Badge>
+              )}
+              {workspace.isArchived && (
+                <Badge variant="outline" className="text-xs text-indigo-600 bg-indigo-500/10 border-indigo-500/20 gap-1" data-testid="badge-archived">
+                  <Archive className="w-3 h-3" /> Archived
+                </Badge>
+              )}
+              {!workspace.isDeleted && !workspace.isArchived && workspace.lockState && workspace.lockState !== "Unlock" && (
+                <Badge variant="outline" className="text-xs text-amber-600 bg-amber-500/10 border-amber-500/20 gap-1">
+                  <Lock className="w-3 h-3" /> {workspace.lockState === "NoAccess" ? "Locked" : workspace.lockState === "ReadOnly" ? "Read-Only" : workspace.lockState}
+                </Badge>
+              )}
+              {workspace.isHubSite && (
+                <Badge variant="outline" className="text-[10px] font-semibold text-purple-500 bg-purple-500/10 border-purple-500/20 gap-1">
+                  <Network className="w-3 h-3" /> Hub Site
+                </Badge>
+              )}
             </div>
             <div className="flex items-center gap-3 mt-1">
               <Globe className={`w-3.5 h-3.5 ${getSiteTypeColor(workspace.type)}`} />
               <span className="text-muted-foreground text-xs">{getSiteTypeLabel(workspace.type)}</span>
               <span className="text-muted-foreground text-xs">|</span>
-              <span className="text-muted-foreground font-mono text-xs" data-testid="text-workspace-id">{workspace.m365ObjectId}</span>
-              <Button variant="ghost" size="icon" className="h-5 w-5" onClick={() => { navigator.clipboard.writeText(workspace.m365ObjectId || ""); toast({ title: "Copied", description: "Object ID copied to clipboard." }); }}>
+              {workspace.siteUrl ? (
+                <a href={workspace.siteUrl} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline font-mono text-xs flex items-center gap-1" data-testid="link-sharepoint-site">
+                  {workspace.siteUrl} <ExternalLink className="w-3 h-3" />
+                </a>
+              ) : (
+                <span className="text-muted-foreground font-mono text-xs" data-testid="text-workspace-id">{workspace.m365ObjectId}</span>
+              )}
+              <Button variant="ghost" size="icon" className="h-5 w-5" onClick={() => { navigator.clipboard.writeText(workspace.siteUrl || workspace.m365ObjectId || ""); toast({ title: "Copied", description: workspace.siteUrl ? "Site URL copied to clipboard." : "Object ID copied to clipboard." }); }}>
                 <Copy className="w-3 h-3 text-muted-foreground" />
               </Button>
             </div>
@@ -240,6 +432,16 @@ export default function WorkspaceDetailsPage() {
             </>
           ) : (
             <>
+              <Button
+                variant="outline"
+                className="gap-2"
+                onClick={() => siteSyncMutation.mutate()}
+                disabled={siteSyncMutation.isPending}
+                data-testid="button-refresh-site"
+              >
+                <RefreshCw className={`w-4 h-4 ${siteSyncMutation.isPending ? 'animate-spin' : ''}`} />
+                {siteSyncMutation.isPending ? "Refreshing..." : "Refresh from M365"}
+              </Button>
               <Button variant="outline" className="gap-2 text-primary border-primary/30 hover:bg-primary/10" data-testid="button-apply-defaults">
                 <Wand2 className="w-4 h-4" /> Apply Defaults
               </Button>
@@ -250,6 +452,46 @@ export default function WorkspaceDetailsPage() {
           )}
         </div>
       </div>
+
+      {workspace.isDeleted && (
+        <div className="flex items-center gap-3 p-4 rounded-xl bg-destructive/10 border border-destructive/20 text-destructive" data-testid="banner-deleted">
+          <Trash2 className="w-5 h-5 shrink-0" />
+          <div>
+            <p className="font-semibold text-sm">This site has been deleted in Microsoft 365</p>
+            <p className="text-xs text-destructive/80 mt-0.5">The site was flagged as deleted during the last tenant sync. It may be in the SharePoint recycle bin and recoverable by a SharePoint administrator.</p>
+          </div>
+        </div>
+      )}
+
+      {workspace.isArchived && (
+        <div className="flex items-center gap-3 p-4 rounded-xl bg-indigo-500/10 border border-indigo-500/20 text-indigo-600 dark:text-indigo-400" data-testid="banner-archived">
+          <Archive className="w-5 h-5 shrink-0" />
+          <div>
+            <p className="font-semibold text-sm">This site is archived (M365 Archive)</p>
+            <p className="text-xs text-indigo-600/80 dark:text-indigo-400/80 mt-0.5">
+              Archived sites are read-only and stored at reduced cost. A SharePoint administrator can reactivate this site from the SharePoint admin center.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {!workspace.isDeleted && !workspace.isArchived && workspace.lockState && workspace.lockState !== "Unlock" && (
+        <div className="flex items-center gap-3 p-4 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-600 dark:text-amber-500" data-testid="banner-locked">
+          <Lock className="w-5 h-5 shrink-0" />
+          <div>
+            <p className="font-semibold text-sm">
+              This site is {workspace.lockState === "NoAccess" ? "locked (no access)" : workspace.lockState === "ReadOnly" ? "read-only" : workspace.lockState}
+            </p>
+            <p className="text-xs text-amber-600/80 dark:text-amber-500/80 mt-0.5">
+              {workspace.lockState === "NoAccess"
+                ? "Users cannot access this site. A SharePoint administrator must unlock it."
+                : workspace.lockState === "ReadOnly"
+                ? "Users can view content but cannot add, edit, or delete anything."
+                : "This site has restricted access. Contact a SharePoint administrator for details."}
+            </p>
+          </div>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <Card className="glass-panel border-border/50">
@@ -304,6 +546,7 @@ export default function WorkspaceDetailsPage() {
             <TabsList className="bg-muted/50 border border-border/50">
               <TabsTrigger value="properties" className="gap-2" data-testid="tab-properties"><Settings2 className="w-4 h-4"/> Properties</TabsTrigger>
               <TabsTrigger value="metadata" className="gap-2" data-testid="tab-metadata"><Tags className="w-4 h-4"/> Metadata & Labels</TabsTrigger>
+              <TabsTrigger value="libraries" className="gap-2" data-testid="tab-libraries"><Library className="w-4 h-4"/> Document Libraries{docLibraries.length > 0 ? ` (${docLibraries.length})` : ""}</TabsTrigger>
               <TabsTrigger value="propertybag" className="gap-2" data-testid="tab-propertybag"><Database className="w-4 h-4"/> Property Bag</TabsTrigger>
               <TabsTrigger value="raw" className="gap-2" data-testid="tab-raw"><FileJson className="w-4 h-4"/> Raw JSON</TabsTrigger>
               <TabsTrigger value="lifecycle" className="gap-2" data-testid="tab-lifecycle"><Activity className="w-4 h-4"/> Lifecycle</TabsTrigger>
@@ -381,6 +624,50 @@ export default function WorkspaceDetailsPage() {
                         </div>
                       )}
                     </div>
+                    <div className="space-y-2">
+                      <Label>Site Status</Label>
+                      <div className="h-10 flex items-center gap-2 px-3 rounded-md bg-muted/50 text-sm" data-testid="text-site-status">
+                        {workspace.isDeleted ? (
+                          <Badge variant="destructive" className="text-xs">Deleted</Badge>
+                        ) : workspace.isArchived ? (
+                          <Badge variant="outline" className="bg-indigo-500/10 text-indigo-600 border-indigo-500/20 text-xs">Archived</Badge>
+                        ) : !workspace.lockState || workspace.lockState === "Unlock" ? (
+                          <Badge variant="outline" className="bg-emerald-500/10 text-emerald-600 border-emerald-500/20 text-xs">Active</Badge>
+                        ) : workspace.lockState === "NoAccess" ? (
+                          <Badge variant="outline" className="bg-destructive/10 text-destructive border-destructive/20 text-xs">Locked (No Access)</Badge>
+                        ) : workspace.lockState === "ReadOnly" ? (
+                          <Badge variant="outline" className="bg-amber-500/10 text-amber-600 border-amber-500/20 text-xs">Read-Only</Badge>
+                        ) : (
+                          <Badge variant="outline" className="bg-amber-500/10 text-amber-600 border-amber-500/20 text-xs">{workspace.lockState}</Badge>
+                        )}
+                      </div>
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Hub Association</Label>
+                      <div className="h-10 flex items-center gap-2 px-3 rounded-md bg-muted/50 text-sm" data-testid="text-hub-association">
+                        {workspace.isHubSite ? (
+                          <>
+                            <Network className="w-4 h-4 text-purple-500" />
+                            <span className="font-medium text-purple-600 dark:text-purple-400">This is a Hub Site</span>
+                          </>
+                        ) : hubSiteWorkspace ? (
+                          <>
+                            <Network className="w-4 h-4 text-purple-500" />
+                            <span>{hubSiteWorkspace.displayName}</span>
+                            {hubSiteWorkspace.siteUrl && (
+                              <a href={hubSiteWorkspace.siteUrl} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline text-xs inline-flex items-center gap-0.5 ml-1">
+                                <ExternalLink className="w-3 h-3" />
+                              </a>
+                            )}
+                          </>
+                        ) : (
+                          <>
+                            <Unlink className="w-4 h-4 text-muted-foreground" />
+                            <span className="text-muted-foreground">Standalone (no hub)</span>
+                          </>
+                        )}
+                      </div>
+                    </div>
                   </div>
 
                   <Separator />
@@ -392,40 +679,61 @@ export default function WorkspaceDetailsPage() {
                     </h3>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-5">
                       <div className="space-y-2">
-                        <Label>Sensitivity Label</Label>
+                        <Label>Sensitivity Label (Purview)</Label>
                         {editMode ? (
-                          <Select value={form.sensitivity} onValueChange={(v) => setForm({...form, sensitivity: v})}>
+                          <Select value={form.sensitivityLabelId || "__none__"} onValueChange={(v) => setForm({...form, sensitivityLabelId: v === "__none__" ? "" : v})}>
                             <SelectTrigger className="bg-background/50" data-testid="select-sensitivity"><SelectValue /></SelectTrigger>
                             <SelectContent>
-                              <SelectItem value="PUBLIC">Public</SelectItem>
-                              <SelectItem value="INTERNAL">Internal</SelectItem>
-                              <SelectItem value="CONFIDENTIAL">Confidential</SelectItem>
-                              <SelectItem value="HIGHLY_CONFIDENTIAL">Highly Confidential</SelectItem>
+                              <SelectItem value="__none__" className="text-muted-foreground">No label</SelectItem>
+                              {sensitivityLabelsData.filter(l => l.appliesToGroupsSites).map((l) => (
+                                <SelectItem key={l.labelId} value={l.labelId} data-testid={`select-label-${l.labelId}`}>
+                                  <span className="flex items-center gap-2">
+                                    {l.color && <span className="w-2 h-2 rounded-full inline-block" style={{ backgroundColor: l.color }} />}
+                                    {l.name}
+                                    {l.hasProtection && <Lock className="w-3 h-3 text-emerald-500" />}
+                                  </span>
+                                </SelectItem>
+                              ))}
+                              {sensitivityLabelsData.filter(l => l.appliesToGroupsSites).length === 0 && (
+                                <SelectItem value="__no_labels__" disabled className="text-muted-foreground text-xs">
+                                  No Purview labels synced
+                                </SelectItem>
+                              )}
                             </SelectContent>
                           </Select>
                         ) : (
                           <div className="h-10 flex items-center px-3 rounded-md bg-muted/50 text-sm">
-                            <Badge variant={sensitivityVariant} className={`${sensitivityVariant === "destructive" ? "bg-destructive/10 text-destructive border-destructive/20" : ""}`}>{sensitivityLabel}</Badge>
+                            {resolvedPurviewLabel ? (
+                              <Badge variant="outline" className="gap-1.5">
+                                {resolvedPurviewLabel.color && <span className="w-2 h-2 rounded-full inline-block" style={{ backgroundColor: resolvedPurviewLabel.color }} />}
+                                {resolvedPurviewLabel.name}
+                                {resolvedPurviewLabel.hasProtection && <Lock className="w-3 h-3 text-emerald-500" />}
+                              </Badge>
+                            ) : (
+                              <span className="text-muted-foreground italic text-sm">No sensitivity label assigned</span>
+                            )}
                           </div>
                         )}
-                        {form.sensitivity === "HIGHLY_CONFIDENTIAL" && editMode && (
-                          <p className="text-[10px] text-amber-500 flex items-center gap-1"><AlertTriangle className="w-3 h-3" /> Blocks external sharing and Copilot indexing by default.</p>
+                        {resolvedPurviewLabel?.hasProtection && editMode && (
+                          <p className="text-[10px] text-amber-500 flex items-center gap-1"><AlertTriangle className="w-3 h-3" /> This label has encryption/protection enabled.</p>
                         )}
                       </div>
                       <div className="space-y-2">
-                        <Label>Retention Policy</Label>
-                        {editMode ? (
-                          <Select value={form.retentionPolicy} onValueChange={(v) => setForm({...form, retentionPolicy: v})}>
-                            <SelectTrigger className="bg-background/50" data-testid="select-retention"><SelectValue /></SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="Default 7 Year">Default 7 Year</SelectItem>
-                              <SelectItem value="Executive 10 Year">Executive 10 Year</SelectItem>
-                              <SelectItem value="Legal Hold">Legal Hold</SelectItem>
-                            </SelectContent>
-                          </Select>
-                        ) : (
-                          <div className="h-10 flex items-center px-3 rounded-md bg-muted/50 text-sm">{workspace.retentionPolicy}</div>
-                        )}
+                        <Label>Retention Label (Purview)</Label>
+                        <div className="h-10 flex items-center px-3 rounded-md bg-muted/30 text-sm text-muted-foreground gap-2" data-testid="text-retention-label">
+                          {resolvedRetentionLabel ? (
+                            <>
+                              <span className="text-foreground">{resolvedRetentionLabel.name}</span>
+                              {resolvedRetentionLabel.retentionDuration && (
+                                <span className="text-[10px] text-muted-foreground">({resolvedRetentionLabel.retentionDuration})</span>
+                              )}
+                            </>
+                          ) : workspace.retentionLabelId ? (
+                            <span className="italic text-xs">ID: {workspace.retentionLabelId.substring(0, 8)}… (sync to resolve)</span>
+                          ) : (
+                            <span className="italic">No retention label assigned</span>
+                          )}
+                        </div>
                       </div>
                       <div className="space-y-2">
                         <Label>External Sharing</Label>
@@ -460,48 +768,36 @@ export default function WorkspaceDetailsPage() {
                   <div>
                     <h3 className="text-sm font-semibold mb-4 flex items-center gap-2">
                       <Users className="w-4 h-4 text-primary" />
-                      Ownership & Stewardship
+                      Ownership ({workspace.owners} {workspace.owners === 1 ? 'owner' : 'owners'})
                     </h3>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-5">
+                    {(workspace as any).siteOwners && (workspace as any).siteOwners.length > 0 ? (
                       <div className="space-y-2">
-                        <Label>Primary Steward <span className="text-destructive">*</span></Label>
-                        {editMode ? (
-                          <Input value={form.primarySteward} onChange={(e) => setForm({...form, primarySteward: e.target.value})} className="bg-background/50" data-testid="input-primary-steward" />
-                        ) : (
-                          <div className="h-10 flex items-center gap-3 px-3 rounded-md bg-muted/50 text-sm">
-                            <div className="w-6 h-6 rounded-full bg-primary/20 flex items-center justify-center text-primary text-[10px] font-bold shrink-0">
-                              {primaryInitials}
+                        {((workspace as any).siteOwners as Array<{ id?: string; displayName: string; mail?: string; userPrincipalName?: string }>).map((owner, idx) => {
+                          const initials = owner.displayName ? owner.displayName.split(" ").map((w: string) => w[0]).join("").toUpperCase().slice(0, 2) : "?";
+                          return (
+                            <div key={owner.id || idx} className="flex items-center gap-3 p-2 rounded-lg bg-muted/30" data-testid={`text-owner-${idx}`}>
+                              <div className="w-8 h-8 rounded-full bg-primary/20 flex items-center justify-center text-primary text-[10px] font-bold shrink-0">
+                                {initials}
+                              </div>
+                              <div className="min-w-0">
+                                <p className="text-sm font-medium truncate">{owner.displayName}</p>
+                                {owner.mail && <p className="text-[10px] text-muted-foreground truncate">{owner.mail}</p>}
+                              </div>
                             </div>
-                            {workspace.primarySteward || <span className="text-muted-foreground italic">Not assigned</span>}
-                          </div>
-                        )}
+                          );
+                        })}
                       </div>
-                      <div className="space-y-2">
-                        <Label>Secondary Owner <span className="text-destructive">*</span></Label>
-                        {editMode ? (
-                          <Input value={form.secondarySteward} onChange={(e) => setForm({...form, secondarySteward: e.target.value})} className="bg-background/50" data-testid="input-secondary-steward" />
-                        ) : (
-                          <div className="h-10 flex items-center gap-3 px-3 rounded-md bg-muted/50 text-sm">
-                            {workspace.secondarySteward ? (
-                              <>
-                                <div className="w-6 h-6 rounded-full bg-primary/20 flex items-center justify-center text-primary text-[10px] font-bold shrink-0">
-                                  {workspace.secondarySteward.split(" ").map(w => w[0]).join("").toUpperCase().slice(0, 2)}
-                                </div>
-                                {workspace.secondarySteward}
-                              </>
-                            ) : (
-                              <span className="text-destructive italic flex items-center gap-1"><ShieldAlert className="w-3 h-3" /> Not assigned — policy violation</span>
-                            )}
-                          </div>
-                        )}
+                    ) : (
+                      <div className="text-sm text-muted-foreground italic">
+                        {workspace.ownerDisplayName || "No owner data available. Run a sync to populate."}
                       </div>
-                    </div>
-                    {!workspace.secondarySteward && !editMode && (
+                    )}
+                    {workspace.owners < 2 && (
                       <div className="mt-3 p-3 rounded-lg bg-destructive/10 border border-destructive/20 flex items-start gap-3" data-testid="alert-policy-violation">
                         <ShieldAlert className="w-4 h-4 text-destructive shrink-0 mt-0.5" />
                         <div className="text-xs text-destructive">
                           <span className="font-semibold block mb-0.5">Dual Ownership Policy Violation</span>
-                          This site requires both a Primary Steward and Secondary Owner to prevent orphaned workspaces.
+                          This site has fewer than 2 owners. Add additional owners in SharePoint to meet governance requirements.
                         </div>
                       </div>
                     )}
@@ -513,78 +809,147 @@ export default function WorkspaceDetailsPage() {
             <TabsContent value="metadata" className="mt-4">
               <Card className="glass-panel border-border/50">
                 <CardHeader>
-                  <div className="flex items-center justify-between">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                     <div>
                       <CardTitle>Governance Metadata</CardTitle>
                       <CardDescription>Required and optional metadata fields for governance compliance.</CardDescription>
                     </div>
-                    <Badge variant={workspace.metadataStatus === "COMPLETE" ? "default" : "destructive"} className={workspace.metadataStatus === "COMPLETE" ? "bg-emerald-500/10 text-emerald-600 border-emerald-500/20" : "bg-destructive/10 text-destructive border-destructive/20"}>
-                      {workspace.metadataStatus === "COMPLETE" ? "Complete" : "Missing Required"}
-                    </Badge>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge variant={missingRequired.length === 0 ? "default" : "destructive"} className={missingRequired.length === 0 ? "bg-emerald-500/10 text-emerald-600 border-emerald-500/20" : "bg-destructive/10 text-destructive border-destructive/20"}>
+                        {missingRequired.length === 0 ? "Complete" : "Missing Required"}
+                      </Badge>
+                      {!editMode && (workspace.department || workspace.costCenter || workspace.projectCode) && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-7 gap-1.5 text-xs border-primary/20 text-primary hover:bg-primary/10"
+                          onClick={() => writebackMutation.mutate()}
+                          disabled={writebackMutation.isPending}
+                          data-testid="button-sync-metadata"
+                        >
+                          {writebackMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />}
+                          Sync to SharePoint
+                        </Button>
+                      )}
+                      {editMode ? (
+                        <div className="flex items-center gap-1.5">
+                          <Button variant="outline" size="sm" className="h-7 text-xs" onClick={handleCancel} data-testid="button-metadata-cancel">Cancel</Button>
+                          <Button size="sm" className="h-7 gap-1.5 text-xs shadow-md shadow-primary/20" onClick={handleSave} disabled={saveMutation.isPending} data-testid="button-metadata-save">
+                            {saveMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+                            Save
+                          </Button>
+                        </div>
+                      ) : (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-7 gap-1.5 text-xs"
+                          onClick={() => setEditMode(true)}
+                          data-testid="button-metadata-edit"
+                        >
+                          <Pencil className="w-3.5 h-3.5" /> Edit
+                        </Button>
+                      )}
+                    </div>
                   </div>
                 </CardHeader>
                 <CardContent className="space-y-5">
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-5">
                     <div className="space-y-2">
                       <Label htmlFor="dept" className="flex justify-between">
-                        Department <span className="text-destructive text-xs">Required</span>
+                        Department {requiredMetadataKeys.includes("department") ? <span className="text-destructive text-xs">Required</span> : <span className="text-muted-foreground text-xs">(Optional)</span>}
                       </Label>
                       {editMode ? (
-                        <Input 
-                          id="dept" 
-                          value={form.department} 
-                          onChange={(e) => setForm({...form, department: e.target.value})}
-                          className={`bg-background/50 ${!form.department ? 'border-amber-500/50 focus-visible:ring-amber-500' : ''}`}
-                          placeholder="Enter department..."
-                          data-testid="input-department"
-                        />
+                        deptOptions.length > 0 ? (
+                          <Select value={form.department || "__none__"} onValueChange={(v) => setForm({...form, department: v === "__none__" ? "" : v})}>
+                            <SelectTrigger className={`bg-background/50 ${!form.department && requiredMetadataKeys.includes("department") ? 'border-amber-500/50 focus-visible:ring-amber-500' : ''}`} data-testid="select-department">
+                              <SelectValue placeholder="Select department..." />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="__none__" className="text-muted-foreground">— None —</SelectItem>
+                              {deptOptions.map(d => (
+                                <SelectItem key={d.id} value={d.value}>{d.value}</SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        ) : (
+                          <Input 
+                            id="dept" 
+                            value={form.department} 
+                            onChange={(e) => setForm({...form, department: e.target.value})}
+                            className={`bg-background/50 ${!form.department && requiredMetadataKeys.includes("department") ? 'border-amber-500/50 focus-visible:ring-amber-500' : ''}`}
+                            placeholder="Enter department (define options in Data Dictionaries)..."
+                            data-testid="input-department"
+                          />
+                        )
                       ) : (
-                        <div className={`h-10 flex items-center px-3 rounded-md bg-muted/50 text-sm ${!workspace.department ? 'border border-amber-500/30 text-amber-500' : ''}`}>
-                          {workspace.department || <span className="italic flex items-center gap-1"><AlertTriangle className="w-3 h-3" /> Missing — required by policy</span>}
+                        <div className={`h-10 flex items-center px-3 rounded-md bg-muted/50 text-sm ${!workspace.department && requiredMetadataKeys.includes("department") ? 'border border-amber-500/30 text-amber-500' : ''}`}>
+                          {workspace.department || (requiredMetadataKeys.includes("department") ? <span className="italic flex items-center gap-1"><AlertTriangle className="w-3 h-3" /> Missing — required by policy</span> : <span className="text-muted-foreground">—</span>)}
                         </div>
                       )}
                     </div>
                     <div className="space-y-2">
                       <Label htmlFor="cc" className="flex justify-between">
-                        Cost Center <span className="text-destructive text-xs">Required</span>
+                        Cost Center {requiredMetadataKeys.includes("costCenter") ? <span className="text-destructive text-xs">Required</span> : <span className="text-muted-foreground text-xs">(Optional)</span>}
                       </Label>
                       {editMode ? (
-                        <Input 
-                          id="cc" 
-                          placeholder="e.g., CC-4100"
-                          value={form.costCenter} 
-                          onChange={(e) => setForm({...form, costCenter: e.target.value})}
-                          className={`bg-background/50 ${!form.costCenter ? 'border-amber-500/50 focus-visible:ring-amber-500' : ''}`}
-                          data-testid="input-cost-center"
-                        />
+                        costCenterOptions.length > 0 ? (
+                          <Select value={form.costCenter || "__none__"} onValueChange={(v) => setForm({...form, costCenter: v === "__none__" ? "" : v})}>
+                            <SelectTrigger className={`bg-background/50 ${!form.costCenter && requiredMetadataKeys.includes("costCenter") ? 'border-amber-500/50 focus-visible:ring-amber-500' : ''}`} data-testid="select-cost-center">
+                              <SelectValue placeholder="Select cost center..." />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="__none__" className="text-muted-foreground">— None —</SelectItem>
+                              {costCenterOptions.map(d => (
+                                <SelectItem key={d.id} value={d.value}>{d.value}</SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        ) : (
+                          <Input 
+                            id="cc" 
+                            placeholder="e.g., CC-4100 (define options in Data Dictionaries)"
+                            value={form.costCenter} 
+                            onChange={(e) => setForm({...form, costCenter: e.target.value})}
+                            className={`bg-background/50 ${!form.costCenter && requiredMetadataKeys.includes("costCenter") ? 'border-amber-500/50 focus-visible:ring-amber-500' : ''}`}
+                            data-testid="input-cost-center"
+                          />
+                        )
                       ) : (
-                        <div className={`h-10 flex items-center px-3 rounded-md bg-muted/50 text-sm ${!workspace.costCenter ? 'border border-amber-500/30 text-amber-500' : ''}`}>
-                          {workspace.costCenter || <span className="italic flex items-center gap-1"><AlertTriangle className="w-3 h-3" /> Missing — required by policy</span>}
+                        <div className={`h-10 flex items-center px-3 rounded-md bg-muted/50 text-sm ${!workspace.costCenter && requiredMetadataKeys.includes("costCenter") ? 'border border-amber-500/30 text-amber-500' : ''}`}>
+                          {workspace.costCenter || (requiredMetadataKeys.includes("costCenter") ? <span className="italic flex items-center gap-1"><AlertTriangle className="w-3 h-3" /> Missing — required by policy</span> : <span className="text-muted-foreground">—</span>)}
                         </div>
                       )}
                     </div>
                     <div className="space-y-2">
-                      <Label>Project Code <span className="text-muted-foreground text-xs">(Optional)</span></Label>
+                      <Label className="flex justify-between">Project Code {requiredMetadataKeys.includes("projectCode") ? <span className="text-destructive text-xs">Required</span> : <span className="text-muted-foreground text-xs">(Optional)</span>}</Label>
                       {editMode ? (
-                        <Input 
-                          value={form.projectCode} 
-                          onChange={(e) => setForm({...form, projectCode: e.target.value})}
-                          className="bg-background/50"
-                          placeholder="e.g., PHX-001"
-                          data-testid="input-project-code"
-                        />
+                        projectCodeOptions.length > 0 ? (
+                          <Select value={form.projectCode || "__none__"} onValueChange={(v) => setForm({...form, projectCode: v === "__none__" ? "" : v})}>
+                            <SelectTrigger className="bg-background/50" data-testid="select-project-code">
+                              <SelectValue placeholder="Select project code..." />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="__none__" className="text-muted-foreground">— None —</SelectItem>
+                              {projectCodeOptions.map(d => (
+                                <SelectItem key={d.id} value={d.value}>{d.value}</SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        ) : (
+                          <Input 
+                            value={form.projectCode} 
+                            onChange={(e) => setForm({...form, projectCode: e.target.value})}
+                            className="bg-background/50"
+                            placeholder="e.g., PHX-001"
+                            data-testid="input-project-code"
+                          />
+                        )
                       ) : (
                         <div className="h-10 flex items-center px-3 rounded-md bg-muted/50 text-sm text-muted-foreground">
                           {workspace.projectCode || "—"}
                         </div>
                       )}
-                    </div>
-                    <div className="space-y-2">
-                      <Label>Data Classification</Label>
-                      <div className="h-10 flex items-center px-3 rounded-md bg-muted/30 text-sm text-muted-foreground">
-                        <Badge variant={sensitivityVariant} className={`${sensitivityVariant === "destructive" ? "bg-destructive/10 text-destructive border-destructive/20" : ""}`}>{sensitivityLabel}</Badge>
-                        <span className="text-[10px] text-muted-foreground ml-2">Derived from sensitivity label</span>
-                      </div>
                     </div>
                   </div>
 
@@ -597,10 +962,190 @@ export default function WorkspaceDetailsPage() {
                       </div>
                     </div>
                   )}
+
+                  {customFieldDefs.length > 0 && (
+                    <>
+                      <Separator />
+                      <div>
+                        <h3 className="text-sm font-semibold mb-4 flex items-center gap-2">
+                          <Tags className="w-4 h-4 text-primary" />
+                          Custom Fields
+                        </h3>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-5">
+                          {[...customFieldDefs].sort((a, b) => a.sortOrder - b.sortOrder).map((field) => {
+                            const value = customFieldValues[field.fieldName];
+                            const isEmpty = value === undefined || value === null || value === "";
+                            return (
+                              <div key={field.id} className="space-y-2" data-testid={`custom-field-${field.fieldName}`}>
+                                <Label className="flex justify-between">
+                                  {field.fieldLabel} {field.required ? <span className="text-destructive text-xs">Required *</span> : <span className="text-muted-foreground text-xs">(Optional)</span>}
+                                </Label>
+                                {editMode ? (
+                                  field.fieldType === "TEXT" ? (
+                                    <Input
+                                      value={value || ""}
+                                      onChange={(e) => setCustomFieldValues({ ...customFieldValues, [field.fieldName]: e.target.value })}
+                                      className={`bg-background/50 ${isEmpty && field.required ? 'border-amber-500/50 focus-visible:ring-amber-500' : ''}`}
+                                      placeholder={`Enter ${field.fieldLabel.toLowerCase()}...`}
+                                      data-testid={`input-custom-${field.fieldName}`}
+                                    />
+                                  ) : field.fieldType === "SELECT" ? (
+                                    <Select
+                                      value={value || "__none__"}
+                                      onValueChange={(v) => setCustomFieldValues({ ...customFieldValues, [field.fieldName]: v === "__none__" ? "" : v })}
+                                    >
+                                      <SelectTrigger className={`bg-background/50 ${isEmpty && field.required ? 'border-amber-500/50 focus-visible:ring-amber-500' : ''}`} data-testid={`select-custom-${field.fieldName}`}>
+                                        <SelectValue placeholder={`Select ${field.fieldLabel.toLowerCase()}...`} />
+                                      </SelectTrigger>
+                                      <SelectContent>
+                                        <SelectItem value="__none__" className="text-muted-foreground">— None —</SelectItem>
+                                        {(field.options || []).map((opt) => (
+                                          <SelectItem key={opt} value={opt}>{opt}</SelectItem>
+                                        ))}
+                                      </SelectContent>
+                                    </Select>
+                                  ) : field.fieldType === "NUMBER" ? (
+                                    <Input
+                                      type="number"
+                                      value={value ?? ""}
+                                      onChange={(e) => setCustomFieldValues({ ...customFieldValues, [field.fieldName]: e.target.value === "" ? "" : Number(e.target.value) })}
+                                      className={`bg-background/50 ${isEmpty && field.required ? 'border-amber-500/50 focus-visible:ring-amber-500' : ''}`}
+                                      placeholder={`Enter ${field.fieldLabel.toLowerCase()}...`}
+                                      data-testid={`input-custom-${field.fieldName}`}
+                                    />
+                                  ) : field.fieldType === "BOOLEAN" ? (
+                                    <div className="h-10 flex items-center gap-3 px-3 rounded-md border border-input bg-background/50">
+                                      <Switch
+                                        checked={!!value}
+                                        onCheckedChange={(v) => setCustomFieldValues({ ...customFieldValues, [field.fieldName]: v })}
+                                        data-testid={`switch-custom-${field.fieldName}`}
+                                      />
+                                      <span className="text-sm">{value ? "Yes" : "No"}</span>
+                                    </div>
+                                  ) : field.fieldType === "DATE" ? (
+                                    <Input
+                                      type="date"
+                                      value={value || ""}
+                                      onChange={(e) => setCustomFieldValues({ ...customFieldValues, [field.fieldName]: e.target.value })}
+                                      className={`bg-background/50 ${isEmpty && field.required ? 'border-amber-500/50 focus-visible:ring-amber-500' : ''}`}
+                                      data-testid={`input-custom-${field.fieldName}`}
+                                    />
+                                  ) : (
+                                    <Input
+                                      value={value || ""}
+                                      onChange={(e) => setCustomFieldValues({ ...customFieldValues, [field.fieldName]: e.target.value })}
+                                      className="bg-background/50"
+                                      data-testid={`input-custom-${field.fieldName}`}
+                                    />
+                                  )
+                                ) : (
+                                  <div className={`h-10 flex items-center px-3 rounded-md bg-muted/50 text-sm ${isEmpty && field.required ? 'border border-amber-500/30 text-amber-500' : ''}`}>
+                                    {field.fieldType === "BOOLEAN" ? (
+                                      <span>{value ? "Yes" : "No"}</span>
+                                    ) : isEmpty ? (
+                                      field.required ? (
+                                        <span className="italic flex items-center gap-1"><AlertTriangle className="w-3 h-3" /> Missing — required</span>
+                                      ) : (
+                                        <span className="text-muted-foreground">—</span>
+                                      )
+                                    ) : (
+                                      <span>{String(value)}</span>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </>
+                  )}
                 </CardContent>
               </Card>
             </TabsContent>
             
+            <TabsContent value="libraries" className="mt-4">
+              <Card className="glass-panel border-border/50">
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <Library className="w-5 h-5 text-primary" />
+                    Document Libraries
+                  </CardTitle>
+                  <CardDescription>
+                    {docLibraries.length > 0
+                      ? `${docLibraries.length} document ${docLibraries.length === 1 ? "library" : "libraries"} — ${docLibraries.reduce((s, l) => s + (l.itemCount || 0), 0).toLocaleString()} total items`
+                      : "No libraries synced yet. Sync this workspace to discover document libraries."}
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  {docLibraries.length === 0 ? (
+                    <div className="text-center py-8 text-muted-foreground text-sm">
+                      <Library className="w-10 h-10 mx-auto mb-3 opacity-30" />
+                      <p>No document libraries found.</p>
+                      <p className="text-xs mt-1">Use the Sync button to discover libraries for this site.</p>
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      {docLibraries.filter(l => !l.hidden).map((lib) => {
+                        const storageStr = lib.storageUsedBytes != null
+                          ? lib.storageUsedBytes > 1073741824 ? `${(lib.storageUsedBytes / 1073741824).toFixed(1)} GB`
+                            : lib.storageUsedBytes > 1048576 ? `${(lib.storageUsedBytes / 1048576).toFixed(0)} MB`
+                            : `${(lib.storageUsedBytes / 1024).toFixed(0)} KB`
+                          : null;
+                        return (
+                          <div key={lib.id} className="flex items-center justify-between p-3 rounded-lg border border-border/40 hover:bg-muted/10 transition-colors" data-testid={`lib-row-${lib.id}`}>
+                            <div className="flex items-center gap-3">
+                              <div className="w-8 h-8 rounded-lg bg-primary/10 border border-primary/20 flex items-center justify-center shrink-0">
+                                <Library className="w-4 h-4 text-primary" />
+                              </div>
+                              <div>
+                                <div className="flex items-center gap-2">
+                                  {lib.webUrl ? (
+                                    <a href={lib.webUrl} target="_blank" rel="noopener noreferrer" className="font-medium text-sm hover:text-primary transition-colors flex items-center gap-1">
+                                      {lib.displayName}
+                                      <ExternalLink className="w-3 h-3" />
+                                    </a>
+                                  ) : (
+                                    <span className="font-medium text-sm">{lib.displayName}</span>
+                                  )}
+                                  {lib.isDefaultDocLib && <Badge variant="outline" className="text-[10px]">Default</Badge>}
+                                </div>
+                                {lib.description && <p className="text-xs text-muted-foreground mt-0.5">{lib.description}</p>}
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-4 text-xs text-muted-foreground">
+                              <span title="Items">{(lib.itemCount || 0).toLocaleString()} items</span>
+                              {storageStr && <span title="Storage">{storageStr}</span>}
+                              {lib.sensitivityLabelId && <Badge variant="secondary" className="text-[10px]">Labeled</Badge>}
+                              {lib.lastModifiedAt && <span title="Last modified">{new Date(lib.lastModifiedAt).toLocaleDateString()}</span>}
+                            </div>
+                          </div>
+                        );
+                      })}
+                      {docLibraries.some(l => l.hidden) && (
+                        <details className="mt-3">
+                          <summary className="text-xs text-muted-foreground cursor-pointer hover:text-foreground">
+                            {docLibraries.filter(l => l.hidden).length} hidden {docLibraries.filter(l => l.hidden).length === 1 ? "library" : "libraries"}
+                          </summary>
+                          <div className="space-y-2 mt-2 opacity-60">
+                            {docLibraries.filter(l => l.hidden).map((lib) => (
+                              <div key={lib.id} className="flex items-center justify-between p-2 rounded-lg border border-border/20" data-testid={`lib-row-hidden-${lib.id}`}>
+                                <div className="flex items-center gap-2">
+                                  <Library className="w-3.5 h-3.5 text-muted-foreground" />
+                                  <span className="text-xs">{lib.displayName}</span>
+                                </div>
+                                <span className="text-[10px] text-muted-foreground">{(lib.itemCount || 0)} items</span>
+                              </div>
+                            ))}
+                          </div>
+                        </details>
+                      )}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            </TabsContent>
+
             <TabsContent value="propertybag" className="mt-4">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <Card className="glass-panel border-border/50">
@@ -612,26 +1157,35 @@ export default function WorkspaceDetailsPage() {
                     <CardDescription>Raw key-value pairs stored directly on the underlying SharePoint site.</CardDescription>
                   </CardHeader>
                   <CardContent>
-                    <div className="space-y-1">
-                      <div className="grid grid-cols-3 gap-2 py-2 border-b border-border/50">
-                        <span className="font-semibold text-xs text-muted-foreground col-span-1">Key</span>
-                        <span className="font-semibold text-xs text-muted-foreground col-span-2">Value</span>
-                      </div>
-                      {[
-                        { key: "vti_extenderversion", value: "16.0.0.2612", zenith: false },
-                        { key: "vti_defaultlanguage", value: "en-us", zenith: false },
-                        { key: "Zenith_DataClass", value: sensitivityLabel, zenith: true },
-                        { key: "Zenith_DeptId", value: workspace.department || "—", zenith: true },
-                        { key: "Zenith_CostCenter", value: workspace.costCenter || "—", zenith: true },
-                        { key: "Zenith_ProjectType", value: workspace.projectType, zenith: true },
-                        { key: "vti_siteusagedata", value: "391024;1024", zenith: false },
-                      ].map((prop, idx) => (
-                        <div key={idx} className={`grid grid-cols-3 gap-2 py-1.5 ${prop.zenith ? 'bg-primary/5 rounded px-2 -mx-2' : ''}`}>
-                          <span className="font-mono text-xs col-span-1 break-all text-primary">{prop.key}</span>
-                          <span className={`font-mono text-xs col-span-2 break-all ${prop.zenith ? 'font-medium text-foreground' : 'text-muted-foreground'}`}>{prop.value}</span>
+                    {workspace.propertyBag && Object.keys(workspace.propertyBag).length > 0 ? (
+                      <div className="space-y-1">
+                        <div className="grid grid-cols-3 gap-2 py-2 border-b border-border/50">
+                          <span className="font-semibold text-xs text-muted-foreground col-span-1">Key</span>
+                          <span className="font-semibold text-xs text-muted-foreground col-span-2">Value</span>
                         </div>
-                      ))}
-                    </div>
+                        {Object.entries(workspace.propertyBag as Record<string, string>)
+                          .sort(([a], [b]) => {
+                            const aZenith = a.startsWith('Zenith_');
+                            const bZenith = b.startsWith('Zenith_');
+                            if (aZenith && !bZenith) return -1;
+                            if (!aZenith && bZenith) return 1;
+                            return a.localeCompare(b);
+                          })
+                          .map(([key, value]) => {
+                            const isZenith = key.startsWith('Zenith_');
+                            return (
+                              <div key={key} className={`grid grid-cols-3 gap-2 py-1.5 ${isZenith ? 'bg-primary/5 rounded px-2 -mx-2' : ''}`}>
+                                <span className="font-mono text-xs col-span-1 break-all text-primary">{key}</span>
+                                <span className={`font-mono text-xs col-span-2 break-all ${isZenith ? 'font-medium text-foreground' : 'text-muted-foreground'}`}>{value}</span>
+                              </div>
+                            );
+                          })}
+                      </div>
+                    ) : (
+                      <div className="text-sm text-muted-foreground py-4 text-center">
+                        No property bag data available. Sync this site to retrieve property bag entries from SharePoint.
+                      </div>
+                    )}
                   </CardContent>
                 </Card>
 
@@ -701,7 +1255,7 @@ export default function WorkspaceDetailsPage() {
                 <CardContent>
                   <div className="space-y-4">
                     {[
-                      { date: "Feb 21, 2026", action: "Workspace provisioned", by: workspace.primarySteward || "System", type: "created" },
+                      { date: "Feb 21, 2026", action: "Workspace provisioned", by: workspace.ownerDisplayName || "System", type: "created" },
                       { date: "Feb 21, 2026", action: "Sensitivity label applied: " + sensitivityLabel, by: "Governance Policy Engine", type: "security" },
                       { date: "Feb 21, 2026", action: "Copilot eligibility evaluated", by: "Zenith Compliance", type: workspace.copilotReady ? "pass" : "blocked" },
                       { date: "Feb 21, 2026", action: workspace.teamsConnected ? "Microsoft Teams connected" : "Teams connectivity skipped", by: "Provisioning Engine", type: "info" },
@@ -731,90 +1285,100 @@ export default function WorkspaceDetailsPage() {
         </div>
 
         <div className="space-y-6">
-          <Card className={`border-border/50 ${workspace.copilotReady ? 'bg-gradient-to-br from-emerald-500/5 to-card' : 'bg-gradient-to-br from-card to-card/50'}`}>
+          <Card className={`border-border/50 ${copilotEligible ? 'bg-gradient-to-br from-emerald-500/5 to-card' : 'bg-gradient-to-br from-card to-card/50'}`}>
             <CardHeader className="pb-2">
               <CardTitle className="text-base flex items-center justify-between">
-                Copilot Eligibility
-                <Badge variant={workspace.copilotReady ? "default" : "destructive"} className={workspace.copilotReady ? "bg-emerald-500/10 text-emerald-600 border-emerald-500/20" : "bg-destructive/10 text-destructive border-destructive/20"}>
-                  {passCount}/{computedRules.length} Passed
-                </Badge>
+                {policyName}
+                {hasPolicyResults && (
+                  <Badge variant={copilotEligible ? "default" : "destructive"} className={copilotEligible ? "bg-emerald-500/10 text-emerald-600 border-emerald-500/20" : "bg-destructive/10 text-destructive border-destructive/20"}>
+                    {passCount}/{computedRules.length} Passed
+                  </Badge>
+                )}
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="flex items-center gap-3 mb-4">
-                <div className={`w-12 h-12 rounded-full flex items-center justify-center shrink-0 ${workspace.copilotReady ? 'bg-emerald-500/10' : 'bg-muted'}`}>
-                  {workspace.copilotReady 
-                    ? <ShieldCheck className="w-6 h-6 text-emerald-500" />
-                    : <ShieldAlert className="w-6 h-6 text-muted-foreground" />
-                  }
-                </div>
-                <div>
-                  <h4 className="font-semibold text-sm" data-testid="text-copilot-status">{workspace.copilotReady ? "Eligible for Copilot" : "Not Eligible"}</h4>
-                  <p className="text-xs text-muted-foreground">{workspace.copilotReady ? "All governance rules passed" : `${failCount} rule${failCount > 1 ? 's' : ''} failed — resolve to enable`}</p>
-                </div>
-              </div>
-              <div className="space-y-2">
-                {computedRules.map((rule, idx) => {
-                  const pass = rule.ruleResult === "PASS";
-                  return (
-                    <div key={idx} className={`flex items-start gap-2 text-xs p-2 rounded-lg ${pass ? 'bg-emerald-500/5' : 'bg-destructive/5'}`} data-testid={`copilot-rule-${idx}`}>
-                      {pass 
-                        ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 shrink-0 mt-0.5"/>
-                        : <ShieldAlert className="w-3.5 h-3.5 text-destructive shrink-0 mt-0.5"/>
-                      }
-                      <div>
-                        <span className={`font-medium block ${pass ? '' : 'text-destructive'}`}>{rule.ruleName}</span>
-                        <span className="text-muted-foreground">{rule.ruleDescription}</span>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card className="glass-panel border-border/50">
-            <CardHeader className="pb-3">
-              <CardTitle className="text-base flex items-center gap-2">
-                <Users className="w-4 h-4 text-muted-foreground" />
-                Ownership
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              {workspace.primarySteward && (
-                <div className="flex items-center gap-3 p-3 rounded-lg bg-muted/30" data-testid="text-primary-steward">
-                  <div className="w-10 h-10 rounded-full bg-primary/20 flex items-center justify-center text-primary font-bold text-sm">
-                    {primaryInitials}
+              {!hasPolicyResults ? (
+                <div className="flex items-center gap-3 py-4">
+                  <div className="w-12 h-12 rounded-full flex items-center justify-center shrink-0 bg-muted">
+                    <ShieldAlert className="w-6 h-6 text-muted-foreground" />
                   </div>
                   <div>
-                    <p className="text-sm font-medium">{workspace.primarySteward}</p>
-                    <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-semibold">Primary Steward</p>
-                  </div>
-                </div>
-              )}
-              {workspace.secondarySteward ? (
-                <div className="flex items-center gap-3 p-3 rounded-lg bg-muted/30" data-testid="text-secondary-steward">
-                  <div className="w-10 h-10 rounded-full bg-primary/20 flex items-center justify-center text-primary font-bold text-sm">
-                    {workspace.secondarySteward.split(" ").map(w => w[0]).join("").toUpperCase().slice(0, 2)}
-                  </div>
-                  <div>
-                    <p className="text-sm font-medium">{workspace.secondarySteward}</p>
-                    <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-semibold">Secondary Owner</p>
+                    <h4 className="font-semibold text-sm text-muted-foreground" data-testid="text-copilot-status">No policies evaluated</h4>
+                    <p className="text-xs text-muted-foreground">No governance policies have been configured or applied to this workspace yet.</p>
                   </div>
                 </div>
               ) : (
-                <div className="p-3 rounded-lg bg-destructive/10 border border-destructive/20 flex items-start gap-3" data-testid="alert-ownership-violation">
-                  <ShieldAlert className="w-4 h-4 text-destructive shrink-0 mt-0.5" />
-                  <div className="text-xs text-destructive">
-                    <span className="font-semibold block mb-0.5">No Secondary Owner</span>
-                    Assign a secondary owner to meet dual ownership requirements.
+                <>
+                  <div className="flex items-center gap-3 mb-4">
+                    <div className={`w-12 h-12 rounded-full flex items-center justify-center shrink-0 ${copilotEligible ? 'bg-emerald-500/10' : 'bg-muted'}`}>
+                      {copilotEligible 
+                        ? <ShieldCheck className="w-6 h-6 text-emerald-500" />
+                        : <ShieldAlert className="w-6 h-6 text-muted-foreground" />
+                      }
+                    </div>
+                    <div>
+                      <h4 className="font-semibold text-sm" data-testid="text-copilot-status">{copilotEligible ? "All Policies Passed" : "Action Required"}</h4>
+                      <p className="text-xs text-muted-foreground">{copilotEligible ? "All governance rules passed" : `${failCount} rule${failCount > 1 ? 's' : ''} failed — resolve to enable`}</p>
+                    </div>
                   </div>
-                </div>
+                  {policyResults?.policies && policyResults.policies.length > 0 ? (
+                    <div className="space-y-4">
+                      {policyResults.policies.map((pol) => {
+                        const polRules = computedRules.filter(r => r.policyName === pol.policyName);
+                        const displayName = pol.outcomeName || pol.policyName;
+                        return (
+                          <div key={pol.policyId} data-testid={`policy-group-${pol.policyId}`}>
+                            <div className="flex items-center gap-2 mb-2">
+                              <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">{displayName}</span>
+                              <Badge variant={pol.overallPass ? "default" : "secondary"} className={`text-[10px] px-1.5 py-0 ${pol.overallPass ? "bg-emerald-500/10 text-emerald-600 border-emerald-500/20" : "bg-destructive/10 text-destructive border-destructive/20"}`}>
+                                {pol.overallPass ? "PASS" : "FAIL"}
+                              </Badge>
+                              <span className="text-[10px] text-muted-foreground ml-auto">{pol.passCount}/{pol.passCount + pol.failCount} rules</span>
+                            </div>
+                            {polRules.length > 0 && (
+                              <div className="space-y-2">
+                                {polRules.map((rule, idx) => {
+                                  const pass = rule.ruleResult === "PASS";
+                                  return (
+                                    <div key={idx} className={`flex items-start gap-2 text-xs p-2 rounded-lg ${pass ? 'bg-emerald-500/5' : 'bg-destructive/5'}`} data-testid={`copilot-rule-${idx}`}>
+                                      {pass 
+                                        ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 shrink-0 mt-0.5"/>
+                                        : <ShieldAlert className="w-3.5 h-3.5 text-destructive shrink-0 mt-0.5"/>
+                                      }
+                                      <div>
+                                        <span className={`font-medium block ${pass ? '' : 'text-destructive'}`}>{rule.ruleName}</span>
+                                        <span className="text-muted-foreground">{rule.ruleDescription}</span>
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      {computedRules.map((rule, idx) => {
+                        const pass = rule.ruleResult === "PASS";
+                        return (
+                          <div key={idx} className={`flex items-start gap-2 text-xs p-2 rounded-lg ${pass ? 'bg-emerald-500/5' : 'bg-destructive/5'}`} data-testid={`copilot-rule-${idx}`}>
+                            {pass 
+                              ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 shrink-0 mt-0.5"/>
+                              : <ShieldAlert className="w-3.5 h-3.5 text-destructive shrink-0 mt-0.5"/>
+                            }
+                            <div>
+                              <span className={`font-medium block ${pass ? '' : 'text-destructive'}`}>{rule.ruleName}</span>
+                              <span className="text-muted-foreground">{rule.ruleDescription}</span>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </>
               )}
-              <div className="flex items-center justify-between text-xs text-muted-foreground pt-2 border-t border-border/30">
-                <span>Total Owners</span>
-                <span className="font-semibold text-foreground">{workspace.owners}</span>
-              </div>
             </CardContent>
           </Card>
 

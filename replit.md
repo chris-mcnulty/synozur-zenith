@@ -1,44 +1,42 @@
 # Zenith - Microsoft 365 Governance Platform
 
 ## Overview
-Zenith is an MVP Microsoft 365 governance platform designed for The Synozur Alliance. Its primary purpose is to provide governed SharePoint site provisioning, incorporating Deal and Portfolio Company context. Key capabilities include site inventory tracking, sensitivity label enforcement, and explainability for Copilot eligibility. All managed workspaces are SharePoint sites (TEAM_SITE, COMMUNICATION_SITE, HUB_SITE) with optional Microsoft Teams connectivity. The business vision is to streamline M365 governance, enhance security, and improve operational efficiency for organizations managing multiple M365 tenants.
+Zenith is an MVP Microsoft 365 governance platform for The Synozur Alliance, focusing on governed SharePoint site provisioning with Deal and Portfolio Company context. It tracks site inventory, enforces sensitivity labels, and provides Copilot eligibility explainability. It manages SharePoint sites (TEAM_SITE, COMMUNICATION_SITE, HUB_SITE) with optional Microsoft Teams connectivity. The platform aims to streamline M365 governance, enhance security, and improve operational efficiency across multiple M365 tenants, sharing UI/UX and multitenant architecture with other Synozur applications like Constellation, Orbit, and Vega.
 
 ## User Preferences
-I prefer clear and direct communication. When making changes, please explain the reasoning and impact before proceeding. I value iterative development and would like to be involved in key decision points. Do not make changes to the `shared/schema.ts` file without explicit approval.
+I prefer clear and direct communication. When making changes, please explain the reasoning and impact before proceeding. I value iterative development and would like to be involved in key decision points. Do not make changes to the `shared/schema.ts` file without explicit approval. Always keep the Entra App Registration permissions documented in this file.
 
 ## System Architecture
 
 ### UI/UX Decisions
-The frontend is built with React, Vite, TanStack Query, shadcn/ui for components, and wouter for routing, aiming for a modern and responsive user experience.
+The frontend uses React, Vite, TanStack Query, shadcn/ui, and wouter for a modern, responsive user experience consistent with the Synozur design language.
 
 ### Technical Implementations
 - **Frontend**: React + Vite + TanStack Query + shadcn/ui + wouter
 - **Backend**: Express.js + Drizzle ORM
 - **Database**: PostgreSQL
-- **Authentication**: Microsoft Entra ID (SSO) with Zenith-managed RBAC. Dual authentication with email/password login is also supported. Tokens are encrypted at rest using AES-256-GCM.
-- **Multi-Tenancy**: Primary multi-tenancy is at the Organization level, providing isolated Zenith experiences. Organizations can connect multiple M365 tenants.
-- **Security Model**: Zenith acts as the system of authorization, while Entra ID handles authentication. It employs four layers of separation: Microsoft Entra ID (authentication), Zenith Control Plane (authorization), Zenith Data Plane (inventory), and Zenith RBAC (permissions). A single multi-tenant Entra app registration is used, requiring admin consent per tenant for application-level permissions.
-- **Tenant Ownership**: Each M365 tenant has exactly one owning Zenith organization with defined ownership types (MSP, Customer, Hybrid). No auto-registration; tenants must be explicitly claimed.
-- **RBAC**: Zenith implements a robust Role-Based Access Control system with roles like Platform Owner, Tenant Admin, Governance Admin, Operator, Viewer, and Read-Only Auditor. Access is visibility-scoped, ensuring zero existence leakage where users only see data relevant to their authorized tenants and scopes.
-- **Service Plan Gating**: Features are gated by service plans (TRIAL, STANDARD, PROFESSIONAL, ENTERPRISE), enforced both server-side and client-side.
-- **Key Design Decisions**:
-    - All workspaces are SharePoint sites (TEAM_SITE, COMMUNICATION_SITE, HUB_SITE) with an optional `teamsConnected` flag.
-    - Automated `DEAL-` and `PORTCO-` prefixes for site naming conventions.
-    - Enforcement of "Highly Confidential" sensitivity labels to block external sharing and Copilot indexing by default.
-    - Requirement of dual ownership (Primary Steward + Secondary Owner) for workspaces to prevent orphaned sites.
-    - Clear display of Copilot eligibility criteria.
-
-### System Design Choices
-- **Database Schema**: Core tables include `workspaces`, `provisioning_requests`, `copilot_rules`, `tenant_connections`, `organizations`, `users`, `graph_tokens`, and `audit_log`.
-- **Audit Trail**: All significant actions are logged with details on WHO, WHAT, WHERE, WHEN, and RESULT, stored in PostgreSQL for auditing and compliance.
-- **API Endpoints**: A comprehensive set of RESTful APIs are provided for managing workspaces, provisioning requests, tenant connections, user authentication, and organization settings.
+- **Authentication**: Microsoft Entra ID (SSO) with Zenith-managed RBAC. Dual email/password login is also supported. Tokens are encrypted at rest. Frontend auth guard redirects to `/login` when session expires. Production uses `REPLIT_DOMAINS` with custom domain preference for redirect URI construction.
+- **Multi-Tenancy**: Primarily organization-level, allowing organizations to connect multiple M365 tenants. Users can belong to multiple organizations with distinct roles.
+- **Security Model**: Zenith manages authorization and RBAC, while Entra ID handles authentication. It employs a four-layer separation: Entra ID (authentication), Zenith Control Plane (authorization), Zenith Data Plane (inventory), and Zenith RBAC (permissions).
+- **Tenant Ownership**: Each M365 tenant is owned by one Zenith organization with defined ownership types (MSP, Customer, Hybrid). Self-service tenant onboarding flow: enter domain → validate → Microsoft admin consent → auto-discover tenant name → link to org. Select-tenant page shows real org memberships and tenant connections from API.
+- **RBAC**: A robust Role-Based Access Control system (Platform Owner, Tenant Admin, Governance Admin, Operator, Viewer, Read-Only Auditor) gates access and write operations. All API routes enforce authentication. Sidebar nav items are filtered by role — admin sections hidden from non-admin users. Entra configure/test routes require Tenant Admin role.
+- **Service Plan Gating**: Features are gated by service plans (TRIAL, STANDARD, PROFESSIONAL, ENTERPRISE) server-side and client-side.
+- **Hash-Based Writeback Dirty Checking**: Uses `spoSyncHash` and `localHash` to detect and manage changes requiring writeback to SharePoint, optimizing bulk updates.
+- **Policy Status Writeback**: Governance policy evaluation results can be written back to SharePoint property bags. Property bag keys are automatically added to `vti_indexedpropertykeys` (Base64 UTF-16LE encoded, pipe-delimited) so they become crawled properties for SharePoint search. **Auto-writeback**: Single workspace PATCH and single-sync auto-write changed policy bag keys immediately using the user's delegated SPO token. Bulk update and full tenant sync flag workspaces as writeback-pending (localHash ≠ spoSyncHash) and return a `writebackPending` count in the API response. A `GET /api/workspaces/writeback-pending` endpoint returns workspaces needing writeback. **Auto re-index**: After every successful property bag write, `requestSiteReindex()` increments `vti_searchversion` on the site to trigger a priority SharePoint crawl, reducing the delay from value change to Purview Adaptive Scope visibility from 1-3 days to potentially hours. **Search Schema Mapping**: The crawled property `ZenithCopilotReady` is mapped to managed property `RefinableString101` with alias `ZenithCopilotReady` in the SPO Admin Center search schema. This is a one-time manual setup. Purview Adaptive Scopes query this managed property (e.g., `RefinableString101:PASS` or `ZenithCopilotReady:PASS`).
+- **What-If Scenario Planner**: Simulate policy rule changes against all workspaces before applying, with diff view showing newly passing/failing workspaces.
+- **Sync-Safe Governance Fields**: Preserves locally-set governance fields during full tenant sync to prevent overwriting by stale usage reports.
+- **Policy Outcomes System**: Replaces hardcoded COPILOT_READINESS policy type. The `policy_outcomes` table defines what each policy controls (Copilot Eligible, External Sharing, PII Approved, etc.). Each outcome can optionally map to a workspace field (`workspaceField`) and/or a SharePoint property bag key. Outcomes are configurable as visible/filterable columns in the workspace catalog via `showAsColumn`/`showAsFilter` flags. Five built-in outcomes are seeded per organization on startup. Policies reference outcomes via `outcomeId`. The governance page dynamically renders outcome columns and filters. The workspace detail panel groups policy results by outcome.
+- **Key Design Decisions**: SharePoint sites are the primary managed workspaces, with automated `DEAL-` and `PORTCO-` prefixes for naming. Enforces "Highly Confidential" sensitivity labels. Tracks site owners by merging Graph group owners and SharePoint site collection admins. Auto-evaluates policies after sync (outcome-driven). Detects Hub site hierarchy.
+- **System Design Choices**: Custom field definitions are tenant-owned. Document libraries are tracked as first-class inventory entities with a three-tier sync strategy. The database schema includes core tables for workspaces, policies, policy outcomes, users, and organizations. A multi-policy engine evaluates workspaces against customizable governance policies with configurable outcomes. All significant actions are logged for audit. Comprehensive RESTful APIs are provided.
+- **CSV Export/Import**: Tenant-level workspace export to CSV includes all inventory fields plus custom fields (prefixed `CF:`). Import matches on Site URL and supports updating Zenith-editable fields (Department, Cost Center, Project Code, Stewards, Project Type, Sensitivity, Description) and custom fields. Import uses a dry-run preview step before applying changes.
+- **Document Library Detail View**: Clicking a library row in the Document Libraries page opens a slide-over panel showing Content Types, Custom Columns, Syntex/AI models, and All Columns fetched live from Graph API (`/sites/{id}/lists/{id}/contentTypes` and `/columns`).
 
 ## External Dependencies
-- **Microsoft 365 / SharePoint**: Core platform for workspace management and governance.
-- **Microsoft Entra ID (formerly Azure Active Directory)**: Used for Single Sign-On (SSO) authentication and identity management.
-- **PostgreSQL**: Primary database for storing application data, including user information, workspace inventory, and audit logs.
+- **Microsoft 365 / SharePoint**: Core platform for M365 governance.
+- **Microsoft Entra ID**: For SSO authentication and identity management.
+- **PostgreSQL**: Primary application database.
 - **Neon**: Managed PostgreSQL service.
-- **Microsoft Graph API**: Utilized for interacting with Microsoft 365 services, such as reading site information (`Sites.Read.All`), group details (`Group.Read.All`), and directory information (`Directory.Read.All`).
-- **connect-pg-simple**: PostgreSQL-backed session store.
-- **bcryptjs**: Used for password hashing.
-- **MSAL-node**: Microsoft Authentication Library for Node.js, used for handling PKCE authorization code flow for SSO.
+- **Microsoft Graph API**: For interacting with Microsoft 365 services, requiring specific application and delegated permissions. Notably, retention labels and sensitivity label updates for M365 Groups require delegated user tokens. All SharePoint operations currently use delegated user tokens.
+- **connect-pg-simple**: PostgreSQL session store.
+- **bcryptjs**: For password hashing.
+- **MSAL-node**: Microsoft Authentication Library for Node.js, handling PKCE authorization code flow.

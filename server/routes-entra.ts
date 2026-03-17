@@ -3,14 +3,22 @@ import { ConfidentialClientApplication, CryptoProvider, AuthorizationCodeRequest
 import { storage } from './storage';
 import { encryptToken, isEncryptionConfigured } from './utils/encryption';
 import type { AuthenticatedRequest } from './middleware/rbac';
+import { requireAuth, requireRole } from './middleware/rbac';
 import { ZENITH_ROLES } from '@shared/schema';
+import { isPublicEmailDomain } from './utils/publicDomains';
 
 const router = Router();
 const cryptoProvider = new CryptoProvider();
 
-const SCOPES = ['openid', 'profile', 'email', 'User.Read'];
+const SCOPES = ['openid', 'profile', 'email', 'User.Read', 'offline_access', 'RecordsManagement.Read.All', 'Group.ReadWrite.All'];
 
 function getBaseUrl(): string {
+  if (process.env.REPLIT_DOMAINS) {
+    const domains = process.env.REPLIT_DOMAINS.split(',');
+    const customDomain = domains.find(d => !d.endsWith('.replit.dev') && !d.endsWith('.replit.app'));
+    if (customDomain) return `https://${customDomain}`;
+    return `https://${domains[0]}`;
+  }
   if (process.env.REPLIT_DEV_DOMAIN) {
     return `https://${process.env.REPLIT_DEV_DOMAIN}`;
   }
@@ -45,6 +53,86 @@ function getMsalClient(): ConfidentialClientApplication | null {
   return msalClient;
 }
 
+export async function refreshDelegatedToken(userId: string): Promise<string | null> {
+  const client = getMsalClient();
+  if (!client) return null;
+
+  const tokenRecord = await storage.getGraphToken(userId, 'graph');
+  if (!tokenRecord?.refreshToken) return null;
+
+  try {
+    const { decryptToken } = await import('./utils/encryption');
+    const refreshToken = decryptToken(tokenRecord.refreshToken);
+
+    const result = await (client as any).acquireTokenByRefreshToken({
+      refreshToken,
+      scopes: SCOPES.filter(s => s !== 'openid' && s !== 'profile' && s !== 'email' && s !== 'offline_access'),
+    });
+
+    if (result?.accessToken) {
+      const tokenToStore = encryptToken(result.accessToken);
+      const newRefreshToken = (result as any).refreshToken;
+      const refreshTokenToStore = newRefreshToken ? encryptToken(newRefreshToken) : tokenRecord.refreshToken;
+
+      await storage.upsertGraphToken({
+        userId,
+        organizationId: tokenRecord.organizationId,
+        service: 'graph',
+        accessToken: tokenToStore,
+        refreshToken: refreshTokenToStore,
+        expiresAt: result.expiresOn || null,
+        scopes: result.scopes || SCOPES,
+      });
+
+      console.log(`[Entra] Refreshed delegated token for user ${userId}`);
+      return result.accessToken;
+    }
+  } catch (err: any) {
+    console.warn(`[Entra] Token refresh failed for user ${userId}: ${err.message}`);
+  }
+
+  return null;
+}
+
+export async function getDelegatedSpoToken(userId: string, spoHost: string): Promise<string | null> {
+  const client = getMsalClient();
+  if (!client) return null;
+
+  const tokenRecord = await storage.getGraphToken(userId, 'graph');
+  if (!tokenRecord?.refreshToken) return null;
+
+  try {
+    const { decryptToken } = await import('./utils/encryption');
+    const refreshToken = decryptToken(tokenRecord.refreshToken);
+
+    const result = await (client as any).acquireTokenByRefreshToken({
+      refreshToken,
+      scopes: [`https://${spoHost}/AllSites.FullControl`],
+    });
+
+    if (result?.accessToken) {
+      if ((result as any).refreshToken) {
+        const refreshTokenToStore = encryptToken((result as any).refreshToken);
+        await storage.upsertGraphToken({
+          userId,
+          organizationId: tokenRecord.organizationId,
+          service: 'graph',
+          accessToken: tokenRecord.accessToken,
+          refreshToken: refreshTokenToStore,
+          expiresAt: tokenRecord.expiresAt,
+          scopes: tokenRecord.scopes || SCOPES,
+        });
+      }
+      console.log(`[Entra] Acquired delegated SPO token for user ${userId} on ${spoHost}`);
+      return result.accessToken;
+    }
+  } catch (err: any) {
+    console.warn(`[Entra] SPO token acquisition failed for user ${userId}: ${err.message}`);
+  }
+
+  return null;
+}
+
 router.get('/status', (_req: Request, res: Response) => {
   const configured = !!(process.env.AZURE_CLIENT_ID && process.env.AZURE_CLIENT_SECRET);
   return res.json({
@@ -56,7 +144,7 @@ router.get('/status', (_req: Request, res: Response) => {
   });
 });
 
-router.post('/configure', async (req: AuthenticatedRequest, res: Response) => {
+router.post('/configure', requireAuth(), requireRole(ZENITH_ROLES.TENANT_ADMIN), async (req: AuthenticatedRequest, res: Response) => {
   try {
     const { clientId, clientSecret, tenantId, tokenEncryptionSecret } = req.body;
 
@@ -87,7 +175,7 @@ router.post('/configure', async (req: AuthenticatedRequest, res: Response) => {
   }
 });
 
-router.post('/test', async (_req: Request, res: Response) => {
+router.post('/test', requireAuth(), requireRole(ZENITH_ROLES.TENANT_ADMIN), async (_req: Request, res: Response) => {
   try {
     const clientId = process.env.AZURE_CLIENT_ID;
     const clientSecret = process.env.AZURE_CLIENT_SECRET;
@@ -207,6 +295,7 @@ router.get('/callback', async (req: AuthenticatedRequest, res: Response) => {
     }
 
     if (state !== req.session.authState) {
+      console.error('[Entra] State mismatch - received:', state, 'session:', req.session.authState, 'sessionID:', req.sessionID);
       return res.redirect('/login?error=state_mismatch');
     }
 
@@ -237,6 +326,11 @@ router.get('/callback', async (req: AuthenticatedRequest, res: Response) => {
     let user = await storage.getUserByEmail(email);
 
     if (user) {
+      if (!user.emailVerified) {
+        console.warn(`[Entra] Deactivated user attempted SSO login: ${email}`);
+        return res.redirect('/login?error=account_deactivated');
+      }
+
       const updates: Record<string, any> = {
         authProvider: 'entra',
         lastLoginAt: new Date(),
@@ -251,20 +345,42 @@ router.get('/callback', async (req: AuthenticatedRequest, res: Response) => {
       user = (await storage.getUser(user.id))!;
     } else {
       const domain = email.split('@')[1].toLowerCase();
+      const isPublicDomain = isPublicEmailDomain(email);
       const orgs = await storage.getOrganizations();
       let org = orgs.find(o => o.azureTenantId === azureTenantId) ||
-                orgs.find(o => o.domain === domain);
+                (!isPublicDomain ? orgs.find(o => o.domain === domain) : undefined);
       let isFirstUser = false;
 
       if (!org) {
-        org = await storage.upsertOrganization({
-          name: domain.split('.')[0].charAt(0).toUpperCase() + domain.split('.')[0].slice(1),
-          domain,
-          servicePlan: 'TRIAL',
-          azureTenantId: azureTenantId || undefined,
-        });
+        if (isPublicDomain) {
+          const personalOrgName = name
+            ? `${name}'s Workspace`
+            : `${email.split('@')[0]}'s Workspace`;
+          org = await storage.upsertOrganization({
+            name: personalOrgName,
+            domain: `personal-${email.split('@')[0].replace(/[^a-z0-9]/gi, '')}-${Date.now()}`,
+            servicePlan: 'TRIAL',
+          });
+        } else {
+          org = await storage.upsertOrganization({
+            name: domain.split('.')[0].charAt(0).toUpperCase() + domain.split('.')[0].slice(1),
+            domain,
+            servicePlan: 'TRIAL',
+            azureTenantId: azureTenantId || undefined,
+          });
+        }
         isFirstUser = true;
       } else {
+        if (org.inviteOnly) {
+          return res.redirect('/login?error=invite_only');
+        }
+
+        if (org.allowedDomains && org.allowedDomains.length > 0) {
+          if (!org.allowedDomains.includes(domain)) {
+            return res.redirect('/login?error=domain_not_allowed');
+          }
+        }
+
         const orgUsers = await storage.getUsersByOrganization(org.id);
         isFirstUser = orgUsers.length === 0;
       }
@@ -282,19 +398,41 @@ router.get('/callback', async (req: AuthenticatedRequest, res: Response) => {
         azureObjectId: azureObjectId || null,
         azureTenantId: azureTenantId || null,
       });
+
+      await storage.createOrgMembership({
+        userId: user.id,
+        organizationId: org.id,
+        role,
+        isPrimary: true,
+      });
     }
 
     if (tokenResponse.accessToken && user.organizationId) {
       try {
         const tokenToStore = encryptToken(tokenResponse.accessToken);
         const encrypted = isEncryptionConfigured();
-        console.log(`[Entra] Storing Graph token for user ${user.id} (encrypted: ${encrypted})`);
+
+        let refreshTokenRaw: string | null = null;
+        try {
+          const cacheContents = client.getTokenCache().serialize();
+          const cacheData = JSON.parse(cacheContents);
+          const refreshTokens = cacheData.RefreshToken || {};
+          const refreshTokenKeys = Object.keys(refreshTokens);
+          if (refreshTokenKeys.length > 0) {
+            refreshTokenRaw = refreshTokens[refreshTokenKeys[refreshTokenKeys.length - 1]]?.secret || null;
+          }
+        } catch (cacheErr) {
+          console.warn('[Entra] Could not extract refresh token from cache:', cacheErr);
+        }
+
+        const refreshTokenToStore = refreshTokenRaw ? encryptToken(refreshTokenRaw) : null;
+        console.log(`[Entra] Storing Graph token for user ${user.id} (encrypted: ${encrypted}, hasRefresh: ${!!refreshTokenRaw}, scopes: ${(tokenResponse.scopes || []).join(',')})`);
         await storage.upsertGraphToken({
           userId: user.id,
           organizationId: user.organizationId,
           service: 'graph',
           accessToken: tokenToStore,
-          refreshToken: null,
+          refreshToken: refreshTokenToStore,
           expiresAt: tokenResponse.expiresOn || null,
           scopes: tokenResponse.scopes || SCOPES,
         });
@@ -306,6 +444,12 @@ router.get('/callback', async (req: AuthenticatedRequest, res: Response) => {
     req.session.userId = user.id;
     delete req.session.pkceVerifier;
     delete req.session.authState;
+
+    if (user.organizationId) {
+      const memberships = await storage.getOrgMemberships(user.id);
+      const primaryMembership = memberships.find(m => m.isPrimary) || memberships[0];
+      req.session.activeOrganizationId = primaryMembership?.organizationId || user.organizationId;
+    }
 
     await storage.createAuditEntry({
       userId: user.id,

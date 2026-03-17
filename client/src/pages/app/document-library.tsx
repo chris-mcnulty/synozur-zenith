@@ -1,248 +1,425 @@
-import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
-import type { Workspace } from "@shared/schema";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { useState, useMemo } from "react";
+import { useQuery, useMutation } from "@tanstack/react-query";
+import { queryClient } from "@/lib/queryClient";
+import { useToast } from "@/hooks/use-toast";
+import { useTenant } from "@/lib/tenant-context";
+import type { DocumentLibrary } from "@shared/schema";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "@/components/ui/sheet";
 import {
   Search,
   Library,
-  MoreVertical,
   Globe,
-  Settings2,
-  Columns3,
-  RefreshCcw,
-  ShieldCheck,
-  ShieldAlert,
-  ChevronRight,
-  Eye,
-  Lock,
-  Unlock,
+  RefreshCw,
   FileText,
+  HardDrive,
+  ExternalLink,
+  Loader2,
+  ArrowUpDown,
+  Eye,
+  EyeOff,
+  Columns3,
+  FileType,
+  Sparkles,
+  ChevronRight,
+  X,
+  Tag,
   Hash,
   Calendar,
-  User,
   ToggleLeft,
-  Type,
   List,
-  CheckCircle2,
-  AlertCircle,
-  Loader2
+  Type,
+  Link2,
+  User,
+  Calculator,
+  Image,
+  MapPin,
 } from "lucide-react";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 
-const libraryData = [
-  {
-    id: "LIB-001",
-    name: "Documents",
-    siteName: "DEAL-Project Phoenix",
-    siteType: "TEAM_SITE",
-    type: "Document Library",
-    itemCount: 342,
-    size: "285 MB",
-    versioning: true,
-    maxVersions: 500,
-    contentTypes: ["Document", "Corporate Policy", "Project Charter"],
-    customColumns: 6,
-    lastModified: "2 hours ago",
-    sensitivity: "CONFIDENTIAL",
-    checkoutRequired: false,
-    irm: false,
-  },
-  {
-    id: "LIB-002",
-    name: "Shared Documents",
-    siteName: "Marketing Q3 Campaign",
-    siteType: "TEAM_SITE",
-    type: "Document Library",
-    itemCount: 1204,
-    size: "2.1 GB",
-    versioning: true,
-    maxVersions: 100,
-    contentTypes: ["Document", "Marketing Asset"],
-    customColumns: 4,
-    lastModified: "Just now",
-    sensitivity: "INTERNAL",
-    checkoutRequired: false,
-    irm: false,
-  },
-  {
-    id: "LIB-003",
-    name: "Legal Hold Archive",
-    siteName: "Legal Contract Review",
-    siteType: "HUB_SITE",
-    type: "Document Library",
-    itemCount: 89,
-    size: "540 MB",
-    versioning: true,
-    maxVersions: 500,
-    contentTypes: ["Document", "Vendor Contract", "NDA"],
-    customColumns: 12,
-    lastModified: "4 hours ago",
-    sensitivity: "HIGHLY_CONFIDENTIAL",
-    checkoutRequired: true,
-    irm: true,
-  },
-  {
-    id: "LIB-004",
-    name: "Site Assets",
-    siteName: "All Company Updates",
-    siteType: "COMMUNICATION_SITE",
-    type: "Asset Library",
-    itemCount: 56,
-    size: "1.8 GB",
-    versioning: false,
-    maxVersions: 0,
-    contentTypes: ["Image", "Video"],
-    customColumns: 2,
-    lastModified: "1 day ago",
-    sensitivity: "PUBLIC",
-    checkoutRequired: false,
-    irm: false,
-  },
-  {
-    id: "LIB-005",
-    name: "Deal Room Files",
-    siteName: "DEAL-Titan Acquisition",
-    siteType: "TEAM_SITE",
-    type: "Document Library",
-    itemCount: 78,
-    size: "156 MB",
-    versioning: true,
-    maxVersions: 500,
-    contentTypes: ["Document", "Due Diligence Report"],
-    customColumns: 8,
-    lastModified: "3 days ago",
-    sensitivity: "HIGHLY_CONFIDENTIAL",
-    checkoutRequired: true,
-    irm: true,
-  },
-  {
-    id: "LIB-006",
-    name: "Onboarding Materials",
-    siteName: "PORTCO-Acme Corp Integration",
-    siteType: "TEAM_SITE",
-    type: "Document Library",
-    itemCount: 215,
-    size: "420 MB",
-    versioning: true,
-    maxVersions: 100,
-    contentTypes: ["Document", "Onboarding Checklist"],
-    customColumns: 5,
-    lastModified: "3 hours ago",
-    sensitivity: "CONFIDENTIAL",
-    checkoutRequired: false,
-    irm: false,
-  },
-  {
-    id: "LIB-007",
-    name: "Form Templates",
-    siteName: "HR Leadership",
-    siteType: "COMMUNICATION_SITE",
-    type: "Form Library",
-    itemCount: 34,
-    size: "12 MB",
-    versioning: true,
-    maxVersions: 50,
-    contentTypes: ["Form", "HR Form Template"],
-    customColumns: 3,
-    lastModified: "5 hours ago",
-    sensitivity: "HIGHLY_CONFIDENTIAL",
-    checkoutRequired: false,
-    irm: false,
-  },
-];
-
-const siteColumnDefinitions = [
-  { id: "COL-01", name: "Zenith_DataClass", displayName: "Data Classification", type: "Choice", group: "Zenith Governance", scope: "Site Collection", usedIn: 12, required: true, status: "Active" },
-  { id: "COL-02", name: "Zenith_DeptId", displayName: "Department ID", type: "Text", group: "Zenith Governance", scope: "Site Collection", usedIn: 12, required: true, status: "Active" },
-  { id: "COL-03", name: "Zenith_CostCenter", displayName: "Cost Center", type: "Text", group: "Zenith Governance", scope: "Site Collection", usedIn: 10, required: true, status: "Active" },
-  { id: "COL-04", name: "Zenith_ProjectCode", displayName: "Project Code", type: "Text", group: "Zenith Governance", scope: "Site Collection", usedIn: 8, required: false, status: "Active" },
-  { id: "COL-05", name: "Zenith_ReviewDate", displayName: "Next Review Date", type: "DateTime", group: "Zenith Governance", scope: "Site Collection", usedIn: 6, required: false, status: "Active" },
-  { id: "COL-06", name: "Zenith_Steward", displayName: "Content Steward", type: "Person", group: "Zenith Governance", scope: "Site Collection", usedIn: 12, required: true, status: "Active" },
-  { id: "COL-07", name: "DealStage", displayName: "Deal Stage", type: "Choice", group: "Deal Management", scope: "Content Type", usedIn: 3, required: false, status: "Active" },
-  { id: "COL-08", name: "PortCoEntity", displayName: "Portfolio Company", type: "Lookup", group: "Deal Management", scope: "Content Type", usedIn: 2, required: false, status: "Active" },
-  { id: "COL-09", name: "LegalHoldFlag", displayName: "Legal Hold", type: "Boolean", group: "Compliance", scope: "Site Collection", usedIn: 4, required: false, status: "Draft" },
-];
-
-const getColumnTypeIcon = (type: string) => {
-  switch(type) {
-    case 'Text': return <Type className="w-3.5 h-3.5 text-blue-500" />;
-    case 'Choice': return <List className="w-3.5 h-3.5 text-purple-500" />;
-    case 'DateTime': return <Calendar className="w-3.5 h-3.5 text-amber-500" />;
-    case 'Person': return <User className="w-3.5 h-3.5 text-teal-500" />;
-    case 'Boolean': return <ToggleLeft className="w-3.5 h-3.5 text-emerald-500" />;
-    case 'Lookup': return <Hash className="w-3.5 h-3.5 text-orange-500" />;
-    default: return <Type className="w-3.5 h-3.5 text-muted-foreground" />;
-  }
+type EnrichedLibrary = DocumentLibrary & {
+  workspaceName: string;
+  workspaceType: string;
+  workspaceSiteUrl: string | null;
 };
 
-const getSensitivityBadge = (sensitivity: string) => {
-  switch(sensitivity) {
-    case 'HIGHLY_CONFIDENTIAL':
-      return <Badge variant="destructive" className="bg-destructive/10 text-destructive border-destructive/20 text-[10px]">Highly Confidential</Badge>;
-    case 'CONFIDENTIAL':
-      return <Badge variant="secondary" className="text-[10px]">Confidential</Badge>;
-    case 'INTERNAL':
-      return <Badge variant="outline" className="text-[10px]">Internal</Badge>;
-    case 'PUBLIC':
-      return <Badge variant="outline" className="bg-emerald-500/10 text-emerald-600 border-emerald-500/20 text-[10px]">Public</Badge>;
-    default:
-      return <Badge variant="secondary" className="text-[10px]">{sensitivity}</Badge>;
-  }
+type LibraryStats = {
+  totalLibraries: number;
+  totalItems: number;
+  totalStorageBytes: number;
+  withSensitivityLabel: number;
+  hiddenCount: number;
+  workspaceCount: number;
 };
+
+type LibraryContentType = {
+  id: string;
+  name: string;
+  description: string | null;
+  hidden: boolean;
+  group: string | null;
+};
+
+type LibraryColumn = {
+  id: string;
+  name: string;
+  displayName: string;
+  description: string | null;
+  type: string;
+  hidden: boolean;
+  readOnly: boolean;
+  sealed: boolean;
+  indexed: boolean;
+  required: boolean;
+  columnGroup: string | null;
+  isSyntexManaged: boolean;
+  isCustom: boolean;
+};
+
+type LibraryDetails = {
+  library: DocumentLibrary;
+  workspaceName: string;
+  workspaceType: string;
+  siteUrl: string | null;
+  contentTypes: LibraryContentType[];
+  columns: LibraryColumn[];
+  error?: string;
+};
+
+function formatBytes(bytes: number | null | undefined): string {
+  if (!bytes) return "—";
+  if (bytes > 1073741824) return `${(bytes / 1073741824).toFixed(1)} GB`;
+  if (bytes > 1048576) return `${(bytes / 1048576).toFixed(0)} MB`;
+  return `${(bytes / 1024).toFixed(0)} KB`;
+}
+
+const COLUMN_TYPE_ICONS: Record<string, React.ReactNode> = {
+  text: <Type className="w-3.5 h-3.5" />,
+  number: <Hash className="w-3.5 h-3.5" />,
+  dateTime: <Calendar className="w-3.5 h-3.5" />,
+  choice: <List className="w-3.5 h-3.5" />,
+  boolean: <ToggleLeft className="w-3.5 h-3.5" />,
+  lookup: <Link2 className="w-3.5 h-3.5" />,
+  personOrGroup: <User className="w-3.5 h-3.5" />,
+  calculated: <Calculator className="w-3.5 h-3.5" />,
+  hyperlinkOrPicture: <Link2 className="w-3.5 h-3.5" />,
+  thumbnail: <Image className="w-3.5 h-3.5" />,
+  term: <Tag className="w-3.5 h-3.5" />,
+  geolocation: <MapPin className="w-3.5 h-3.5" />,
+  currency: <Hash className="w-3.5 h-3.5" />,
+};
+
+function LibraryDetailPanel({ libraryId, onClose }: { libraryId: string; onClose: () => void }) {
+  const { data: details, isLoading, error } = useQuery<LibraryDetails>({
+    queryKey: ["/api/admin/libraries", libraryId, "details"],
+    queryFn: () => fetch(`/api/admin/libraries/${libraryId}/details`, { credentials: "include" }).then(r => {
+      if (!r.ok) throw new Error("Failed to load details");
+      return r.json();
+    }),
+    enabled: !!libraryId,
+  });
+
+  const customColumns = useMemo(() =>
+    (details?.columns || []).filter(c => c.isCustom && !c.hidden),
+    [details?.columns]
+  );
+
+  const syntexColumns = useMemo(() =>
+    (details?.columns || []).filter(c => c.isSyntexManaged),
+    [details?.columns]
+  );
+
+  const allVisibleColumns = useMemo(() =>
+    (details?.columns || []).filter(c => !c.hidden),
+    [details?.columns]
+  );
+
+  const visibleContentTypes = useMemo(() =>
+    (details?.contentTypes || []).filter(ct => !ct.hidden),
+    [details?.contentTypes]
+  );
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center py-20">
+        <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
+        <span className="ml-2 text-sm text-muted-foreground">Loading library details from Graph...</span>
+      </div>
+    );
+  }
+
+  if (error || !details) {
+    return (
+      <div className="text-center py-16 text-muted-foreground">
+        <Library className="w-10 h-10 mx-auto mb-3 opacity-30" />
+        <p className="font-medium">Failed to load library details</p>
+        <p className="text-xs mt-1">{(error as Error)?.message || "Unknown error"}</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <div className="p-3 rounded-lg bg-muted/30 border border-border/30">
+          <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Items</p>
+          <p className="text-lg font-bold" data-testid="text-detail-items">{(details.library.itemCount || 0).toLocaleString()}</p>
+        </div>
+        <div className="p-3 rounded-lg bg-muted/30 border border-border/30">
+          <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Content Types</p>
+          <p className="text-lg font-bold" data-testid="text-detail-content-types">{visibleContentTypes.length}</p>
+        </div>
+        <div className="p-3 rounded-lg bg-muted/30 border border-border/30">
+          <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Custom Columns</p>
+          <p className="text-lg font-bold" data-testid="text-detail-custom-columns">{customColumns.length}</p>
+        </div>
+        <div className="p-3 rounded-lg bg-muted/30 border border-border/30">
+          <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Syntex Models</p>
+          <p className="text-lg font-bold" data-testid="text-detail-syntex">{syntexColumns.length}</p>
+        </div>
+      </div>
+
+      <Tabs defaultValue="content-types" className="w-full">
+        <TabsList className="w-full justify-start border-b rounded-none bg-transparent p-0 h-auto">
+          <TabsTrigger value="content-types" className="gap-1.5 rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent" data-testid="tab-content-types">
+            <FileType className="w-4 h-4" /> Content Types ({visibleContentTypes.length})
+          </TabsTrigger>
+          <TabsTrigger value="custom-columns" className="gap-1.5 rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent" data-testid="tab-custom-columns">
+            <Columns3 className="w-4 h-4" /> Custom Columns ({customColumns.length})
+          </TabsTrigger>
+          <TabsTrigger value="syntex" className="gap-1.5 rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent" data-testid="tab-syntex">
+            <Sparkles className="w-4 h-4" /> Syntex / AI ({syntexColumns.length})
+          </TabsTrigger>
+          <TabsTrigger value="all-columns" className="gap-1.5 rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent" data-testid="tab-all-columns">
+            <List className="w-4 h-4" /> All Columns ({allVisibleColumns.length})
+          </TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="content-types" className="mt-4">
+          {visibleContentTypes.length === 0 ? (
+            <div className="text-center py-10 text-muted-foreground">
+              <FileType className="w-8 h-8 mx-auto mb-2 opacity-30" />
+              <p className="text-sm">No content types found</p>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {visibleContentTypes.map(ct => (
+                <div key={ct.id} className="flex items-start gap-3 p-3 rounded-lg border border-border/30 hover:bg-muted/10 transition-colors" data-testid={`row-ct-${ct.id}`}>
+                  <div className="w-8 h-8 rounded-lg bg-blue-500/10 flex items-center justify-center shrink-0 mt-0.5">
+                    <FileType className="w-4 h-4 text-blue-500" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="font-medium text-sm">{ct.name}</p>
+                    {ct.description && <p className="text-xs text-muted-foreground mt-0.5">{ct.description}</p>}
+                    {ct.group && <Badge variant="outline" className="text-[10px] mt-1">{ct.group}</Badge>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </TabsContent>
+
+        <TabsContent value="custom-columns" className="mt-4">
+          {customColumns.length === 0 ? (
+            <div className="text-center py-10 text-muted-foreground">
+              <Columns3 className="w-8 h-8 mx-auto mb-2 opacity-30" />
+              <p className="text-sm">No custom columns found</p>
+              <p className="text-xs mt-1">Custom columns are user-created columns, excluding system and built-in columns.</p>
+            </div>
+          ) : (
+            <Table>
+              <TableHeader className="bg-muted/30">
+                <TableRow>
+                  <TableHead>Column</TableHead>
+                  <TableHead>Type</TableHead>
+                  <TableHead>Group</TableHead>
+                  <TableHead className="text-center">Indexed</TableHead>
+                  <TableHead className="text-center">Required</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {customColumns.map(col => (
+                  <TableRow key={col.id} data-testid={`row-col-${col.id}`}>
+                    <TableCell>
+                      <div className="flex items-center gap-2">
+                        {COLUMN_TYPE_ICONS[col.type] || <Hash className="w-3.5 h-3.5" />}
+                        <div>
+                          <p className="font-medium text-sm">{col.displayName}</p>
+                          {col.description && <p className="text-[10px] text-muted-foreground">{col.description}</p>}
+                          <p className="text-[10px] text-muted-foreground font-mono">{col.name}</p>
+                        </div>
+                      </div>
+                    </TableCell>
+                    <TableCell><Badge variant="secondary" className="text-[10px]">{col.type}</Badge></TableCell>
+                    <TableCell className="text-xs text-muted-foreground">{col.columnGroup || "—"}</TableCell>
+                    <TableCell className="text-center">{col.indexed ? <Badge variant="outline" className="text-[10px]">Yes</Badge> : "—"}</TableCell>
+                    <TableCell className="text-center">{col.required ? <Badge className="text-[10px] bg-amber-500/20 text-amber-600 border-amber-500/30">Required</Badge> : "—"}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </TabsContent>
+
+        <TabsContent value="syntex" className="mt-4">
+          {syntexColumns.length === 0 ? (
+            <div className="text-center py-10 text-muted-foreground">
+              <Sparkles className="w-8 h-8 mx-auto mb-2 opacity-30" />
+              <p className="text-sm">No Syntex / AI models detected</p>
+              <p className="text-xs mt-1">Syntex-managed columns appear when SharePoint Syntex (AI Builder) models are applied to this library.</p>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {syntexColumns.map(col => (
+                <div key={col.id} className="flex items-start gap-3 p-3 rounded-lg border border-purple-500/20 bg-purple-500/5 hover:bg-purple-500/10 transition-colors" data-testid={`row-syntex-${col.id}`}>
+                  <div className="w-8 h-8 rounded-lg bg-purple-500/10 flex items-center justify-center shrink-0 mt-0.5">
+                    <Sparkles className="w-4 h-4 text-purple-500" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="font-medium text-sm">{col.displayName}</p>
+                    {col.description && <p className="text-xs text-muted-foreground mt-0.5">{col.description}</p>}
+                    <div className="flex items-center gap-2 mt-1">
+                      <Badge variant="secondary" className="text-[10px]">{col.type}</Badge>
+                      <span className="text-[10px] text-muted-foreground font-mono">{col.name}</span>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </TabsContent>
+
+        <TabsContent value="all-columns" className="mt-4">
+          {allVisibleColumns.length === 0 ? (
+            <div className="text-center py-10 text-muted-foreground">
+              <List className="w-8 h-8 mx-auto mb-2 opacity-30" />
+              <p className="text-sm">No columns found</p>
+            </div>
+          ) : (
+            <Table>
+              <TableHeader className="bg-muted/30">
+                <TableRow>
+                  <TableHead>Column</TableHead>
+                  <TableHead>Type</TableHead>
+                  <TableHead>Group</TableHead>
+                  <TableHead className="text-center">Custom</TableHead>
+                  <TableHead className="text-center">Syntex</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {allVisibleColumns.map(col => (
+                  <TableRow key={col.id} className={col.readOnly || col.sealed ? "opacity-50" : ""} data-testid={`row-allcol-${col.id}`}>
+                    <TableCell>
+                      <div className="flex items-center gap-2">
+                        {COLUMN_TYPE_ICONS[col.type] || <Hash className="w-3.5 h-3.5 text-muted-foreground" />}
+                        <div>
+                          <p className="text-sm">{col.displayName}</p>
+                          <p className="text-[10px] text-muted-foreground font-mono">{col.name}</p>
+                        </div>
+                      </div>
+                    </TableCell>
+                    <TableCell><Badge variant="secondary" className="text-[10px]">{col.type}</Badge></TableCell>
+                    <TableCell className="text-xs text-muted-foreground">{col.columnGroup || "—"}</TableCell>
+                    <TableCell className="text-center">{col.isCustom ? <Badge variant="outline" className="text-[10px] border-green-500/30 text-green-600">Custom</Badge> : "—"}</TableCell>
+                    <TableCell className="text-center">{col.isSyntexManaged ? <Badge className="text-[10px] bg-purple-500/20 text-purple-600 border-purple-500/30">Syntex</Badge> : "—"}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </TabsContent>
+      </Tabs>
+    </div>
+  );
+}
 
 export default function DocumentLibraryPage() {
   const [searchTerm, setSearchTerm] = useState("");
-  const [columnSearch, setColumnSearch] = useState("");
+  const [sortBy, setSortBy] = useState<string>("name");
+  const [showHidden, setShowHidden] = useState(false);
+  const [selectedLibraryId, setSelectedLibraryId] = useState<string | null>(null);
+  const { selectedTenant } = useTenant();
+  const { toast } = useToast();
+  const tenantConnectionId = selectedTenant?.id || "";
 
-  const { data: workspaces = [] } = useQuery<Workspace[]>({
-    queryKey: ["/api/workspaces"],
+  const { data: libraries = [], isLoading } = useQuery<EnrichedLibrary[]>({
+    queryKey: ["/api/admin/tenants", tenantConnectionId, "libraries"],
+    queryFn: () => fetch(`/api/admin/tenants/${tenantConnectionId}/libraries`).then(r => r.ok ? r.json() : []),
+    enabled: !!tenantConnectionId,
   });
 
-  const totalLibraries = libraryData.length;
-  const totalItems = libraryData.reduce((sum, l) => sum + l.itemCount, 0);
-  const irmEnabled = libraryData.filter(l => l.irm).length;
-  const noVersioning = libraryData.filter(l => !l.versioning).length;
+  const { data: stats } = useQuery<LibraryStats>({
+    queryKey: ["/api/admin/tenants", tenantConnectionId, "libraries", "stats"],
+    queryFn: () => fetch(`/api/admin/tenants/${tenantConnectionId}/libraries/stats`).then(r => r.ok ? r.json() : null),
+    enabled: !!tenantConnectionId,
+  });
 
-  const filteredLibraries = libraryData.filter(l =>
-    l.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    l.siteName.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  const syncMutation = useMutation({
+    mutationFn: async () => {
+      const res = await fetch(`/api/admin/tenants/${tenantConnectionId}/sync-libraries`, {
+        method: "POST",
+        credentials: "include",
+      });
+      if (!res.ok) throw new Error(await res.text());
+      return res.json();
+    },
+    onSuccess: (data) => {
+      toast({ title: "Library sync complete", description: `${data.librariesSynced} libraries synced across ${data.workspacesSynced} sites (${data.librariesSkipped} unchanged)` });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/tenants", tenantConnectionId, "libraries"] });
+    },
+    onError: (err: any) => {
+      toast({ title: "Sync failed", description: err.message, variant: "destructive" });
+    },
+  });
 
-  const filteredColumns = siteColumnDefinitions.filter(c =>
-    c.name.toLowerCase().includes(columnSearch.toLowerCase()) ||
-    c.displayName.toLowerCase().includes(columnSearch.toLowerCase()) ||
-    c.group.toLowerCase().includes(columnSearch.toLowerCase())
-  );
+  const filtered = useMemo(() => {
+    let result = libraries.filter(l => showHidden || !l.hidden);
+
+    if (searchTerm) {
+      const term = searchTerm.toLowerCase();
+      result = result.filter(l =>
+        l.displayName.toLowerCase().includes(term) ||
+        l.workspaceName.toLowerCase().includes(term)
+      );
+    }
+
+    result.sort((a, b) => {
+      switch (sortBy) {
+        case "items": return (b.itemCount || 0) - (a.itemCount || 0);
+        case "storage": return (b.storageUsedBytes || 0) - (a.storageUsedBytes || 0);
+        case "modified": return (b.lastModifiedAt || "").localeCompare(a.lastModifiedAt || "");
+        case "workspace": return a.workspaceName.localeCompare(b.workspaceName);
+        default: return a.displayName.localeCompare(b.displayName);
+      }
+    });
+
+    return result;
+  }, [libraries, searchTerm, sortBy, showHidden]);
+
+  const selectedLib = selectedLibraryId ? libraries.find(l => l.id === selectedLibraryId) : null;
 
   return (
     <div className="space-y-6 animate-in fade-in duration-500 pb-12">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-3xl font-bold tracking-tight" data-testid="text-page-title">Document Libraries</h1>
-          <p className="text-muted-foreground mt-1">Govern document libraries, custom columns, and versioning policies across SharePoint sites.</p>
+          <p className="text-muted-foreground mt-1">Inventory of document libraries across all SharePoint sites.</p>
         </div>
-        <div className="flex gap-3">
-          <Button variant="outline" className="gap-2">
-            <RefreshCcw className="w-4 h-4" />
-            Sync Inventory
-          </Button>
-          <Button className="gap-2 shadow-md shadow-primary/20">
-            <Columns3 className="w-4 h-4" />
-            Manage Columns
-          </Button>
-        </div>
+        <Button
+          variant="outline"
+          className="gap-2"
+          onClick={() => syncMutation.mutate()}
+          disabled={syncMutation.isPending || !tenantConnectionId}
+          data-testid="button-sync-libraries"
+        >
+          {syncMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+          Sync Libraries
+        </Button>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
@@ -252,8 +429,8 @@ export default function DocumentLibraryPage() {
               <Library className="w-5 h-5 text-primary" />
             </div>
             <div>
-              <p className="text-xs text-muted-foreground">Libraries Tracked</p>
-              <p className="text-2xl font-bold" data-testid="text-total-libraries">{totalLibraries}</p>
+              <p className="text-xs text-muted-foreground">Libraries</p>
+              <p className="text-2xl font-bold" data-testid="text-total-libraries">{stats?.totalLibraries ?? libraries.length}</p>
             </div>
           </CardContent>
         </Card>
@@ -264,269 +441,191 @@ export default function DocumentLibraryPage() {
             </div>
             <div>
               <p className="text-xs text-muted-foreground">Total Items</p>
-              <p className="text-2xl font-bold" data-testid="text-total-items">{totalItems.toLocaleString()}</p>
+              <p className="text-2xl font-bold" data-testid="text-total-items">{(stats?.totalItems ?? 0).toLocaleString()}</p>
             </div>
           </CardContent>
         </Card>
         <Card className="glass-panel border-border/50">
           <CardContent className="p-4 flex items-center gap-3">
             <div className="w-10 h-10 rounded-lg bg-emerald-500/10 flex items-center justify-center shrink-0">
-              <Lock className="w-5 h-5 text-emerald-500" />
+              <HardDrive className="w-5 h-5 text-emerald-500" />
             </div>
             <div>
-              <p className="text-xs text-muted-foreground">IRM Protected</p>
-              <p className="text-2xl font-bold" data-testid="text-irm-count">{irmEnabled}</p>
+              <p className="text-xs text-muted-foreground">Total Storage</p>
+              <p className="text-2xl font-bold" data-testid="text-total-storage">{formatBytes(stats?.totalStorageBytes)}</p>
             </div>
           </CardContent>
         </Card>
-        <Card className={`glass-panel ${noVersioning > 0 ? 'border-amber-500/30' : 'border-border/50'}`}>
+        <Card className="glass-panel border-border/50">
           <CardContent className="p-4 flex items-center gap-3">
-            <div className={`w-10 h-10 rounded-lg flex items-center justify-center shrink-0 ${noVersioning > 0 ? 'bg-amber-500/10' : 'bg-muted/50'}`}>
-              <AlertCircle className={`w-5 h-5 ${noVersioning > 0 ? 'text-amber-500' : 'text-muted-foreground'}`} />
+            <div className="w-10 h-10 rounded-lg bg-amber-500/10 flex items-center justify-center shrink-0">
+              <Globe className="w-5 h-5 text-amber-500" />
             </div>
             <div>
-              <p className="text-xs text-muted-foreground">No Versioning</p>
-              <p className={`text-2xl font-bold ${noVersioning > 0 ? 'text-amber-500' : ''}`} data-testid="text-no-versioning">{noVersioning}</p>
+              <p className="text-xs text-muted-foreground">Across Sites</p>
+              <p className="text-2xl font-bold" data-testid="text-workspace-count">{stats?.workspaceCount ?? 0}</p>
             </div>
           </CardContent>
         </Card>
       </div>
 
-      <Tabs defaultValue="libraries" className="w-full">
-        <TabsList className="bg-muted/50 border border-border/50">
-          <TabsTrigger value="libraries" className="gap-2" data-testid="tab-libraries"><Library className="w-4 h-4"/> Library Inventory</TabsTrigger>
-          <TabsTrigger value="columns" className="gap-2" data-testid="tab-columns"><Columns3 className="w-4 h-4"/> Site Columns</TabsTrigger>
-        </TabsList>
+      <Card className="glass-panel border-border/50 shadow-xl">
+        <CardHeader className="pb-4 border-b border-border/40 bg-muted/10">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <CardTitle className="text-lg flex items-center gap-2">
+              <Library className="w-5 h-5 text-primary" />
+              Libraries Across Sites
+            </CardTitle>
+            <div className="flex items-center gap-3">
+              <Button
+                variant="ghost"
+                size="sm"
+                className="gap-1 text-xs"
+                onClick={() => setShowHidden(!showHidden)}
+                data-testid="button-toggle-hidden"
+              >
+                {showHidden ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                {showHidden ? "Hide Hidden" : "Show Hidden"}
+              </Button>
+              <Select value={sortBy} onValueChange={setSortBy}>
+                <SelectTrigger className="w-[140px] h-8 text-xs" data-testid="select-sort">
+                  <ArrowUpDown className="w-3 h-3 mr-1" />
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="name">Name</SelectItem>
+                  <SelectItem value="items">Item Count</SelectItem>
+                  <SelectItem value="storage">Storage</SelectItem>
+                  <SelectItem value="modified">Last Modified</SelectItem>
+                  <SelectItem value="workspace">Parent Site</SelectItem>
+                </SelectContent>
+              </Select>
+              <div className="relative w-full sm:w-64">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                <Input
+                  placeholder="Search libraries or sites..."
+                  className="pl-9 h-8 text-xs bg-background/50 rounded-lg border-border/50"
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  data-testid="input-search-libraries"
+                />
+              </div>
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent className="p-0">
+          {isLoading ? (
+            <div className="flex items-center justify-center py-16">
+              <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
+            </div>
+          ) : filtered.length === 0 ? (
+            <div className="text-center py-16 text-muted-foreground">
+              <Library className="w-12 h-12 mx-auto mb-3 opacity-30" />
+              <p className="font-medium">No document libraries found</p>
+              <p className="text-xs mt-1">
+                {libraries.length === 0
+                  ? "Run a tenant sync or library sync to discover document libraries."
+                  : "No libraries match your current filters."}
+              </p>
+            </div>
+          ) : (
+            <Table>
+              <TableHeader className="bg-muted/30">
+                <TableRow>
+                  <TableHead className="pl-6">Library</TableHead>
+                  <TableHead>Parent Site</TableHead>
+                  <TableHead className="text-right">Items</TableHead>
+                  <TableHead className="text-right">Storage</TableHead>
+                  <TableHead>Label</TableHead>
+                  <TableHead>Last Modified</TableHead>
+                  <TableHead className="w-8"></TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {filtered.map((lib) => (
+                  <TableRow
+                    key={lib.id}
+                    className={`hover:bg-muted/10 transition-colors cursor-pointer ${lib.hidden ? "opacity-50" : ""} ${selectedLibraryId === lib.id ? "bg-primary/5" : ""}`}
+                    onClick={() => setSelectedLibraryId(lib.id)}
+                    data-testid={`row-library-${lib.id}`}
+                  >
+                    <TableCell className="pl-6">
+                      <div className="flex items-center gap-3">
+                        <div className="w-8 h-8 rounded-lg bg-primary/10 border border-primary/20 flex items-center justify-center shrink-0">
+                          <Library className="w-4 h-4 text-primary" />
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-1.5">
+                            <span className="font-medium text-sm">{lib.displayName}</span>
+                            {lib.isDefaultDocLib && <Badge variant="outline" className="text-[10px]">Default</Badge>}
+                            {lib.hidden && <Badge variant="secondary" className="text-[10px]">Hidden</Badge>}
+                          </div>
+                          {lib.description && <p className="text-[10px] text-muted-foreground mt-0.5 truncate max-w-[250px]">{lib.description}</p>}
+                        </div>
+                      </div>
+                    </TableCell>
+                    <TableCell>
+                      <span className="text-sm">{lib.workspaceName}</span>
+                      <span className="text-[10px] text-muted-foreground block">
+                        {lib.workspaceType === "TEAM_SITE" ? "Team Site" : lib.workspaceType === "COMMUNICATION_SITE" ? "Comm Site" : lib.workspaceType === "HUB_SITE" ? "Hub Site" : lib.workspaceType}
+                      </span>
+                    </TableCell>
+                    <TableCell className="text-sm text-right">{(lib.itemCount || 0).toLocaleString()}</TableCell>
+                    <TableCell className="text-sm text-right text-muted-foreground">{formatBytes(lib.storageUsedBytes)}</TableCell>
+                    <TableCell>
+                      {lib.sensitivityLabelId
+                        ? <Badge variant="secondary" className="text-[10px]">Labeled</Badge>
+                        : <span className="text-xs text-muted-foreground">—</span>}
+                    </TableCell>
+                    <TableCell className="text-xs text-muted-foreground">
+                      {lib.lastModifiedAt ? new Date(lib.lastModifiedAt).toLocaleDateString() : "—"}
+                    </TableCell>
+                    <TableCell>
+                      <ChevronRight className="w-4 h-4 text-muted-foreground" />
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+          {filtered.length > 0 && (
+            <div className="p-4 border-t border-border/50 text-xs text-center text-muted-foreground">
+              Showing {filtered.length} of {libraries.length} libraries across {new Set(filtered.map(l => l.workspaceName)).size} sites
+              {" · "}Click a library to view content types, columns, and Syntex models
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
-        <TabsContent value="libraries" className="mt-4">
-          <Card className="glass-panel border-border/50 shadow-xl">
-            <CardHeader className="pb-4 border-b border-border/40 bg-muted/10">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                <CardTitle className="text-lg flex items-center gap-2">
+      <Sheet open={!!selectedLibraryId} onOpenChange={(open) => { if (!open) setSelectedLibraryId(null); }}>
+        <SheetContent className="w-full sm:max-w-2xl overflow-y-auto" side="right">
+          <SheetHeader className="pb-4 border-b border-border/30">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-lg bg-primary/10 border border-primary/20 flex items-center justify-center shrink-0">
                   <Library className="w-5 h-5 text-primary" />
-                  Libraries Across Sites
-                </CardTitle>
-                <div className="relative w-full sm:w-72">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                  <Input
-                    placeholder="Search by library or site name..."
-                    className="pl-9 h-9 bg-background/50 rounded-lg border-border/50"
-                    value={searchTerm}
-                    onChange={(e) => setSearchTerm(e.target.value)}
-                    data-testid="input-search-libraries"
-                  />
                 </div>
-              </div>
-            </CardHeader>
-            <CardContent className="p-0">
-              <Table>
-                <TableHeader className="bg-muted/30">
-                  <TableRow>
-                    <TableHead className="pl-6">Library</TableHead>
-                    <TableHead>Parent Site</TableHead>
-                    <TableHead>Items</TableHead>
-                    <TableHead>Size</TableHead>
-                    <TableHead>Versioning</TableHead>
-                    <TableHead>Content Types</TableHead>
-                    <TableHead>Columns</TableHead>
-                    <TableHead>Sensitivity</TableHead>
-                    <TableHead>Controls</TableHead>
-                    <TableHead className="w-[50px]"></TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {filteredLibraries.map((lib) => (
-                    <TableRow key={lib.id} className="hover:bg-muted/10 transition-colors" data-testid={`row-library-${lib.id}`}>
-                      <TableCell className="pl-6">
-                        <div className="flex items-center gap-3">
-                          <div className="w-8 h-8 rounded-lg bg-primary/10 border border-primary/20 flex items-center justify-center shrink-0">
-                            <Library className="w-4 h-4 text-primary" />
-                          </div>
-                          <div>
-                            <span className="font-semibold text-sm block">{lib.name}</span>
-                            <span className="text-[10px] text-muted-foreground">{lib.type}</span>
-                          </div>
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex flex-col">
-                          <span className="text-sm">{lib.siteName}</span>
-                          <span className="text-[10px] text-muted-foreground">
-                            {lib.siteType === 'TEAM_SITE' ? 'Team Site' : lib.siteType === 'COMMUNICATION_SITE' ? 'Comm Site' : 'Hub Site'}
-                          </span>
-                        </div>
-                      </TableCell>
-                      <TableCell className="text-sm">{lib.itemCount.toLocaleString()}</TableCell>
-                      <TableCell className="text-sm text-muted-foreground">{lib.size}</TableCell>
-                      <TableCell>
-                        {lib.versioning ? (
-                          <div className="flex items-center gap-1 text-xs">
-                            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" />
-                            <span className="text-emerald-600">{lib.maxVersions}</span>
-                          </div>
-                        ) : (
-                          <div className="flex items-center gap-1 text-xs">
-                            <AlertCircle className="w-3.5 h-3.5 text-amber-500" />
-                            <span className="text-amber-500">Off</span>
-                          </div>
-                        )}
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex flex-wrap gap-1 max-w-[160px]">
-                          {lib.contentTypes.slice(0, 2).map((ct, i) => (
-                            <Badge key={i} variant="outline" className="text-[10px] font-normal">{ct}</Badge>
-                          ))}
-                          {lib.contentTypes.length > 2 && (
-                            <Badge variant="secondary" className="text-[10px]">+{lib.contentTypes.length - 2}</Badge>
-                          )}
-                        </div>
-                      </TableCell>
-                      <TableCell className="text-sm text-center">{lib.customColumns}</TableCell>
-                      <TableCell>{getSensitivityBadge(lib.sensitivity)}</TableCell>
-                      <TableCell>
-                        <div className="flex items-center gap-2">
-                          {lib.checkoutRequired && (
-                            <span title="Checkout required" className="text-blue-500"><Lock className="w-3.5 h-3.5" /></span>
-                          )}
-                          {lib.irm && (
-                            <span title="IRM protected" className="text-emerald-500"><ShieldCheck className="w-3.5 h-3.5" /></span>
-                          )}
-                          {!lib.checkoutRequired && !lib.irm && (
-                            <span className="text-muted-foreground text-xs">—</span>
-                          )}
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        <DropdownMenu>
-                          <DropdownMenuTrigger asChild>
-                            <Button variant="ghost" size="icon" className="h-8 w-8">
-                              <MoreVertical className="w-4 h-4 text-muted-foreground" />
-                            </Button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end" className="w-[180px]">
-                            <DropdownMenuLabel>Library Actions</DropdownMenuLabel>
-                            <DropdownMenuSeparator />
-                            <DropdownMenuItem className="gap-2"><Eye className="w-4 h-4" /> View Columns</DropdownMenuItem>
-                            <DropdownMenuItem className="gap-2"><Settings2 className="w-4 h-4" /> Versioning Settings</DropdownMenuItem>
-                            <DropdownMenuItem className="gap-2"><FileText className="w-4 h-4" /> Content Types</DropdownMenuItem>
-                            <DropdownMenuSeparator />
-                            <DropdownMenuItem className="gap-2"><Globe className="w-4 h-4" /> Open in SharePoint</DropdownMenuItem>
-                          </DropdownMenuContent>
-                        </DropdownMenu>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-              <div className="p-4 border-t border-border/50 text-xs text-center text-muted-foreground">
-                Showing {filteredLibraries.length} of {libraryData.length} libraries across {new Set(libraryData.map(l => l.siteName)).size} sites
-              </div>
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        <TabsContent value="columns" className="mt-4">
-          <Card className="glass-panel border-border/50 shadow-xl">
-            <CardHeader className="pb-4 border-b border-border/40 bg-muted/10">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                 <div>
-                  <CardTitle className="text-lg flex items-center gap-2">
-                    <Columns3 className="w-5 h-5 text-primary" />
-                    Site Column Definitions
-                  </CardTitle>
-                  <CardDescription className="mt-1">Custom columns defined across site collections and content types.</CardDescription>
-                </div>
-                <div className="relative w-full sm:w-72">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                  <Input
-                    placeholder="Search columns..."
-                    className="pl-9 h-9 bg-background/50 rounded-lg border-border/50"
-                    value={columnSearch}
-                    onChange={(e) => setColumnSearch(e.target.value)}
-                    data-testid="input-search-columns"
-                  />
+                  <SheetTitle className="text-lg" data-testid="text-detail-title">{selectedLib?.displayName || "Library Details"}</SheetTitle>
+                  <SheetDescription className="text-xs">
+                    {selectedLib?.workspaceName || ""}
+                    {selectedLib?.webUrl && (
+                      <a href={selectedLib.webUrl} target="_blank" rel="noopener noreferrer" className="ml-2 inline-flex items-center gap-1 text-primary hover:underline">
+                        Open in SharePoint <ExternalLink className="w-3 h-3" />
+                      </a>
+                    )}
+                  </SheetDescription>
                 </div>
               </div>
-            </CardHeader>
-            <CardContent className="p-0">
-              <Table>
-                <TableHeader className="bg-muted/30">
-                  <TableRow>
-                    <TableHead className="pl-6">Column Name</TableHead>
-                    <TableHead>Internal Name</TableHead>
-                    <TableHead>Type</TableHead>
-                    <TableHead>Group</TableHead>
-                    <TableHead>Scope</TableHead>
-                    <TableHead>Used In</TableHead>
-                    <TableHead>Required</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead className="w-[50px]"></TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {filteredColumns.map((col) => (
-                    <TableRow key={col.id} className="hover:bg-muted/10 transition-colors" data-testid={`row-column-${col.id}`}>
-                      <TableCell className="pl-6">
-                        <div className="flex items-center gap-2">
-                          {getColumnTypeIcon(col.type)}
-                          <span className="font-semibold text-sm">{col.displayName}</span>
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        <span className="font-mono text-xs text-primary">{col.name}</span>
-                      </TableCell>
-                      <TableCell>
-                        <Badge variant="outline" className="text-[10px] font-normal">{col.type}</Badge>
-                      </TableCell>
-                      <TableCell className="text-sm text-muted-foreground">{col.group}</TableCell>
-                      <TableCell>
-                        <Badge variant="secondary" className="text-[10px]">{col.scope}</Badge>
-                      </TableCell>
-                      <TableCell className="text-sm">
-                        <span className="flex items-center gap-1">
-                          <Globe className="w-3 h-3 text-muted-foreground" />
-                          {col.usedIn} sites
-                        </span>
-                      </TableCell>
-                      <TableCell>
-                        {col.required ? (
-                          <CheckCircle2 className="w-4 h-4 text-primary" />
-                        ) : (
-                          <span className="text-muted-foreground text-xs">Optional</span>
-                        )}
-                      </TableCell>
-                      <TableCell>
-                        <Badge variant="outline" className={
-                          col.status === 'Active' ? 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20 text-[10px]' :
-                          'bg-amber-500/10 text-amber-600 border-amber-500/20 text-[10px]'
-                        }>{col.status}</Badge>
-                      </TableCell>
-                      <TableCell>
-                        <DropdownMenu>
-                          <DropdownMenuTrigger asChild>
-                            <Button variant="ghost" size="icon" className="h-8 w-8">
-                              <MoreVertical className="w-4 h-4 text-muted-foreground" />
-                            </Button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end">
-                            <DropdownMenuItem>Edit Column</DropdownMenuItem>
-                            <DropdownMenuItem>View Usage</DropdownMenuItem>
-                            <DropdownMenuSeparator />
-                            <DropdownMenuItem className="text-destructive">Deprecate</DropdownMenuItem>
-                          </DropdownMenuContent>
-                        </DropdownMenu>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-              <div className="p-4 border-t border-border/50 text-xs text-center text-muted-foreground">
-                Showing {filteredColumns.length} of {siteColumnDefinitions.length} column definitions
-              </div>
-            </CardContent>
-          </Card>
-        </TabsContent>
-      </Tabs>
+            </div>
+          </SheetHeader>
+          {selectedLibraryId && (
+            <div className="mt-6">
+              <LibraryDetailPanel libraryId={selectedLibraryId} onClose={() => setSelectedLibraryId(null)} />
+            </div>
+          )}
+        </SheetContent>
+      </Sheet>
     </div>
   );
 }

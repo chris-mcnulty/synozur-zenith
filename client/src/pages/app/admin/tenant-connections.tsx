@@ -1,8 +1,9 @@
 import { useState, useEffect } from "react";
-import { useQuery, useMutation } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import type { TenantConnection } from "@shared/schema";
+import { Switch } from "@/components/ui/switch";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -32,6 +33,11 @@ import {
   Trash2,
   Info,
   LogIn,
+  Building2,
+  X,
+  KeyRound,
+  Lock,
+  Play,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -41,12 +47,36 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 
+type PermissionDetail = {
+  roleId: string;
+  name: string;
+  description: string;
+  feature: string;
+  required: boolean;
+  licenseNote?: string;
+  status: "granted" | "missing";
+};
+
+type PermissionCheckResult = {
+  granted: string[];
+  missing: string[];
+  details: PermissionDetail[];
+  allGranted: boolean;
+  permissionsVersion: number;
+};
+
 export default function TenantConnectionsPage() {
   const { toast } = useToast();
   const [searchTerm, setSearchTerm] = useState("");
   const [showAddDialog, setShowAddDialog] = useState(false);
   const [syncingId, setSyncingId] = useState<string | null>(null);
   const [isInitiating, setIsInitiating] = useState(false);
+  const [permDialogTenantId, setPermDialogTenantId] = useState<string | null>(null);
+  const [permResult, setPermResult] = useState<PermissionCheckResult | null>(null);
+  const [permLoading, setPermLoading] = useState(false);
+  const [permError, setPermError] = useState<string | null>(null);
+  const [reconsentingId, setReconsentingId] = useState<string | null>(null);
+  const [metadataDialogTenantId, setMetadataDialogTenantId] = useState<string | null>(null);
 
   const [form, setForm] = useState({
     domain: "",
@@ -82,6 +112,7 @@ export default function TenantConnectionsPage() {
     },
   });
 
+
   const handleInitiateConsent = async () => {
     if (!form.domain.trim()) {
       toast({ title: "Domain Required", description: "Enter the tenant domain to proceed.", variant: "destructive" });
@@ -107,14 +138,99 @@ export default function TenantConnectionsPage() {
     }
   };
 
+  const handleCheckPermissions = async (connId: string) => {
+    setPermDialogTenantId(connId);
+    setPermResult(null);
+    setPermError(null);
+    setPermLoading(true);
+    try {
+      const res = await fetch(`/api/admin/tenants/${connId}/permissions`);
+      const data = await res.json();
+      if (!res.ok) {
+        setPermError(data.error || "Failed to check permissions");
+      } else {
+        setPermResult(data);
+        if (!data.allGranted) {
+          toast({
+            title: "Missing Permissions",
+            description: `${data.missing.length} permission(s) need admin consent for this tenant.`,
+            variant: "destructive",
+          });
+        }
+      }
+    } catch (err: any) {
+      setPermError(err.message);
+    } finally {
+      setPermLoading(false);
+    }
+  };
+
+  const handleReconsent = async (connId: string) => {
+    setReconsentingId(connId);
+    try {
+      const res = await fetch(`/api/admin/tenants/${connId}/reconsent`);
+      const data = await res.json();
+      if (!res.ok) {
+        toast({ title: "Error", description: data.error || "Failed to generate re-consent URL", variant: "destructive" });
+        return;
+      }
+      window.location.href = data.consentUrl;
+    } catch (err: any) {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    } finally {
+      setReconsentingId(null);
+    }
+  };
+
+  const [evaluatingId, setEvaluatingId] = useState<string | null>(null);
+
+  const handleEvaluatePolicies = async (id: string) => {
+    setEvaluatingId(id);
+    try {
+      const res = await apiRequest("POST", `/api/admin/tenants/${id}/evaluate-policies`);
+      const result = await res.json();
+      if (result.error) {
+        toast({ title: "Evaluation Error", description: result.error, variant: "destructive" });
+      } else if (result.message && result.evaluated === 0) {
+        toast({ title: "No Policies", description: result.message });
+      } else {
+        const policyList = result.policies?.join(", ") || result.policyName || "policies";
+        toast({
+          title: "Policies Evaluated",
+          description: `Evaluated ${result.evaluated} workspaces against ${policyList}. ${result.changed} changed.`,
+        });
+        queryClient.invalidateQueries({ queryKey: ["/api/admin/tenants"] });
+      }
+    } catch (err: any) {
+      toast({ title: "Evaluation Failed", description: err.message, variant: "destructive" });
+    } finally {
+      setEvaluatingId(null);
+    }
+  };
+
+  const [syncWarnings, setSyncWarnings] = useState<{ area: string; permission: string; message: string; severity: "error" | "warning" }[]>([]);
+
   const handleSync = async (id: string) => {
     setSyncingId(id);
+    setSyncWarnings([]);
     try {
       const res = await apiRequest("POST", `/api/admin/tenants/${id}/sync`);
       const result = await res.json();
       queryClient.invalidateQueries({ queryKey: ["/api/admin/tenants"] });
       if (result.success) {
-        toast({ title: "Sync Complete", description: `Found ${result.sitesFound} SharePoint sites.` });
+        const warnings = result.permissionWarnings || [];
+        if (warnings.length > 0) {
+          setSyncWarnings(warnings);
+          const errorCount = warnings.filter((w: any) => w.severity === "error").length;
+          const warnCount = warnings.filter((w: any) => w.severity === "warning").length;
+          toast({
+            title: `Sync Complete — ${errorCount + warnCount} Permission Issue${errorCount + warnCount > 1 ? 's' : ''}`,
+            description: `Found ${result.sitesFound} sites. ${errorCount > 0 ? `${errorCount} error(s)` : ''}${errorCount > 0 && warnCount > 0 ? ', ' : ''}${warnCount > 0 ? `${warnCount} warning(s)` : ''} — see details below.`,
+            variant: "default",
+          });
+        } else {
+          toast({ title: "Sync Complete", description: `Found ${result.sitesFound} SharePoint sites. All permissions OK.` });
+        }
       } else {
         toast({ title: "Sync Error", description: result.error, variant: "destructive" });
       }
@@ -164,7 +280,7 @@ export default function TenantConnectionsPage() {
                         <li>Approve the permissions Zenith needs (read-only)</li>
                         <li>You'll be redirected back here once approved</li>
                       </ol>
-                      <p className="mt-2 text-[10px] opacity-70">Zenith requests: Sites.Read.All, Group.Read.All, Directory.Read.All (Application permissions, read-only)</p>
+                      <p className="mt-2 text-[10px] opacity-70">Zenith requests: Sites.Read.All, Group.Read.All, Directory.Read.All, Reports.Read.All, InformationProtectionPolicy.Read.All, RecordsManagement.Read.All (Application permissions, read-only)</p>
                     </div>
                   </div>
                 </CardContent>
@@ -270,6 +386,49 @@ export default function TenantConnectionsPage() {
         </Card>
       </div>
 
+      {syncWarnings.length > 0 && (
+        <Card className="border-amber-500/30 bg-amber-500/5" data-testid="card-sync-warnings">
+          <CardHeader className="pb-2 flex flex-row items-center justify-between">
+            <CardTitle className="text-sm font-medium flex items-center gap-2 text-amber-600 dark:text-amber-400">
+              <AlertTriangle className="w-4 h-4" />
+              Permission Issues Detected During Sync
+            </CardTitle>
+            <Button variant="ghost" size="sm" onClick={() => setSyncWarnings([])} className="h-6 w-6 p-0" data-testid="button-dismiss-warnings">
+              <X className="w-4 h-4" />
+            </Button>
+          </CardHeader>
+          <CardContent className="space-y-2 pt-0">
+            <p className="text-xs text-muted-foreground mb-3">
+              The following permissions may need to be configured in your Entra app registration for full functionality:
+            </p>
+            {syncWarnings.map((w, i) => (
+              <div
+                key={i}
+                className={`flex items-start gap-3 p-3 rounded-lg border text-sm ${
+                  w.severity === "error"
+                    ? "border-red-500/30 bg-red-500/5"
+                    : "border-amber-500/20 bg-amber-500/5"
+                }`}
+                data-testid={`warning-item-${i}`}
+              >
+                {w.severity === "error" ? (
+                  <XCircle className="w-4 h-4 text-red-500 mt-0.5 shrink-0" />
+                ) : (
+                  <AlertTriangle className="w-4 h-4 text-amber-500 mt-0.5 shrink-0" />
+                )}
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="font-medium">{w.area}</span>
+                    <Badge variant="outline" className="text-[10px] h-5 font-mono">{w.permission}</Badge>
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-1">{w.message}</p>
+                </div>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
+
       <Card className="glass-panel border-border/50 shadow-xl">
         <CardHeader className="pb-4 border-b border-border/40 bg-muted/10">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -369,6 +528,18 @@ export default function TenantConnectionsPage() {
                             <span className="text-xs font-medium text-emerald-500">Healthy</span>
                           </>
                         )}
+                        {conn.status === 'ACTIVE' && conn.lastSyncStatus === 'SUCCESS_WITH_WARNINGS' && (
+                          <>
+                            <AlertTriangle className="w-3.5 h-3.5 text-amber-500" />
+                            <span className="text-xs font-medium text-amber-500">Warnings</span>
+                          </>
+                        )}
+                        {conn.status === 'ACTIVE' && conn.lastSyncStatus === 'SUCCESS_WITH_ERRORS' && (
+                          <>
+                            <ShieldAlert className="w-3.5 h-3.5 text-orange-500" />
+                            <span className="text-xs font-medium text-orange-500">Permission Issues</span>
+                          </>
+                        )}
                         {conn.status === 'ACTIVE' && !conn.lastSyncStatus && (
                           <>
                             <ShieldCheck className="w-3.5 h-3.5 text-emerald-500" />
@@ -405,6 +576,20 @@ export default function TenantConnectionsPage() {
                             {syncingId === conn.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCcw className="w-4 h-4" />}
                             {syncingId === conn.id ? "Syncing..." : "Sync Now"}
                           </DropdownMenuItem>
+                          <DropdownMenuItem className="gap-2" onClick={() => handleCheckPermissions(conn.id)}>
+                            <KeyRound className="w-4 h-4" /> Check Permissions
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            className="gap-2"
+                            onClick={() => handleReconsent(conn.id)}
+                            disabled={reconsentingId === conn.id}
+                          >
+                            {reconsentingId === conn.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Lock className="w-4 h-4" />}
+                            Update Permissions
+                          </DropdownMenuItem>
+                          <DropdownMenuItem className="gap-2" onClick={() => setMetadataDialogTenantId(conn.id)}>
+                            <Settings2 className="w-4 h-4" /> Governance Settings
+                          </DropdownMenuItem>
                           <DropdownMenuItem className="gap-2" onClick={() => navigator.clipboard.writeText(conn.tenantId)}>
                             <Copy className="w-4 h-4" /> Copy Tenant ID
                           </DropdownMenuItem>
@@ -429,6 +614,257 @@ export default function TenantConnectionsPage() {
           )}
         </CardContent>
       </Card>
+
+      <Dialog open={permDialogTenantId !== null} onOpenChange={(open) => { if (!open) { setPermDialogTenantId(null); setPermResult(null); setPermError(null); } }}>
+        <DialogContent className="sm:max-w-[600px]">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <KeyRound className="w-5 h-5 text-primary" />
+              Permission Health Check
+            </DialogTitle>
+            <DialogDescription>
+              Shows which Microsoft Graph permissions are consented for this tenant vs. what Zenith requires.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            {permLoading && (
+              <div className="flex items-center justify-center h-32">
+                <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
+                <span className="ml-2 text-sm text-muted-foreground">Checking permissions...</span>
+              </div>
+            )}
+            {permError && (
+              <Card className="border-destructive/30 bg-destructive/5">
+                <CardContent className="p-4">
+                  <div className="flex items-start gap-2">
+                    <XCircle className="w-4 h-4 text-destructive mt-0.5 shrink-0" />
+                    <div>
+                      <p className="text-sm font-medium text-destructive">Permission check failed</p>
+                      <p className="text-xs text-muted-foreground mt-1">{permError}</p>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+            {permResult && (
+              <>
+                <div className="flex items-center gap-3 p-3 rounded-lg bg-muted/30 border border-border/50">
+                  {permResult.allGranted ? (
+                    <>
+                      <ShieldCheck className="w-6 h-6 text-emerald-500" />
+                      <div>
+                        <p className="text-sm font-semibold text-emerald-600" data-testid="text-perm-status">All permissions granted</p>
+                        <p className="text-xs text-muted-foreground">{permResult.granted.length} of {permResult.details.length} permissions consented</p>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <ShieldAlert className="w-6 h-6 text-amber-500" />
+                      <div>
+                        <p className="text-sm font-semibold text-amber-600" data-testid="text-perm-status">{permResult.missing.length} permission(s) missing</p>
+                        <p className="text-xs text-muted-foreground">A tenant admin needs to re-consent to grant the new permissions.</p>
+                      </div>
+                    </>
+                  )}
+                </div>
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Permission</TableHead>
+                      <TableHead>Feature</TableHead>
+                      <TableHead className="w-[90px]">Status</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {permResult.details.map((perm) => (
+                      <TableRow key={perm.roleId} data-testid={`row-perm-${perm.name}`}>
+                        <TableCell>
+                          <div className="flex flex-col">
+                            <span className="text-xs font-mono font-semibold">{perm.name}</span>
+                            <span className="text-[10px] text-muted-foreground">{perm.description}</span>
+                            {perm.licenseNote && (
+                              <span className="text-[10px] text-amber-600 mt-0.5">{perm.licenseNote}</span>
+                            )}
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <span className="text-xs text-muted-foreground">{perm.feature}</span>
+                        </TableCell>
+                        <TableCell>
+                          {perm.status === "granted" ? (
+                            <div className="flex items-center gap-1">
+                              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" />
+                              <span className="text-xs text-emerald-500">Granted</span>
+                            </div>
+                          ) : (
+                            <div className="flex items-center gap-1">
+                              <XCircle className="w-3.5 h-3.5 text-red-500" />
+                              <span className="text-xs text-red-500">Missing</span>
+                            </div>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+                {!permResult.allGranted && permDialogTenantId && (
+                  <div className="flex flex-col gap-2 pt-2 border-t border-border/50">
+                    <p className="text-xs text-muted-foreground">
+                      Click below to redirect to Microsoft's consent page. A Global Administrator of this tenant must approve the updated permissions.
+                    </p>
+                    <Button
+                      onClick={() => handleReconsent(permDialogTenantId)}
+                      disabled={reconsentingId === permDialogTenantId}
+                      className="gap-2"
+                      data-testid="button-reconsent"
+                    >
+                      {reconsentingId === permDialogTenantId ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <LogIn className="w-4 h-4" />
+                      )}
+                      Update Permissions via Admin Consent
+                    </Button>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Governance Settings Dialog */}
+      <Dialog open={metadataDialogTenantId !== null} onOpenChange={(open) => { if (!open) setMetadataDialogTenantId(null); }}>
+        <DialogContent className="sm:max-w-[550px]">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Settings2 className="w-5 h-5 text-primary" />
+              Governance Settings
+            </DialogTitle>
+            <DialogDescription>
+              Configure which metadata fields are required for workspaces in this tenant. Required fields feed into the Metadata Complete policy rule.
+            </DialogDescription>
+          </DialogHeader>
+          {metadataDialogTenantId && (
+            <RequiredMetadataConfig tenantConnectionId={metadataDialogTenantId} />
+          )}
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
+interface MetadataField {
+  field: string;
+  label: string;
+  description: string;
+}
+
+interface RequiredMetadataResponse {
+  availableFields: MetadataField[];
+  requiredFields: string[];
+  entries: Array<{ id: string; value: string }>;
+}
+
+function RequiredMetadataConfig({ tenantConnectionId }: { tenantConnectionId: string }) {
+  const { toast } = useToast();
+  const qc = useQueryClient();
+  const [localRequired, setLocalRequired] = useState<string[]>([]);
+  const [hasChanges, setHasChanges] = useState(false);
+
+  const { data, isLoading } = useQuery<RequiredMetadataResponse>({
+    queryKey: [`/api/admin/tenants/${tenantConnectionId}/required-metadata`],
+    queryFn: () => fetch(`/api/admin/tenants/${tenantConnectionId}/required-metadata`, { credentials: "include" }).then(r => r.ok ? r.json() : null),
+  });
+
+  useEffect(() => {
+    if (data) {
+      setLocalRequired(data.requiredFields);
+      setHasChanges(false);
+    }
+  }, [data]);
+
+  const saveMutation = useMutation({
+    mutationFn: async (requiredFields: string[]) => {
+      const res = await fetch(`/api/admin/tenants/${tenantConnectionId}/required-metadata`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ requiredFields }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      return res.json();
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: [`/api/admin/tenants/${tenantConnectionId}/required-metadata`] });
+      setHasChanges(false);
+      toast({ title: "Saved", description: "Required metadata fields updated. Workspace evaluations will use the new configuration." });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Save failed", description: err.message, variant: "destructive" });
+    },
+  });
+
+  function toggleField(field: string) {
+    setLocalRequired(prev => {
+      const next = prev.includes(field) ? prev.filter(f => f !== field) : [...prev, field];
+      setHasChanges(true);
+      return next;
+    });
+  }
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center py-8">
+        <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+
+  if (!data) {
+    return <p className="text-sm text-muted-foreground py-4">Unable to load metadata configuration.</p>;
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="text-sm text-muted-foreground">
+        Toggle fields on to make them required. The <span className="font-medium text-foreground">Metadata Complete</span> policy rule will check that these fields are populated for every workspace.
+      </div>
+      <div className="space-y-2">
+        {data.availableFields.map((f) => (
+          <div
+            key={f.field}
+            className={`flex items-center justify-between p-3 rounded-lg border transition-all ${
+              localRequired.includes(f.field) ? "bg-primary/5 border-primary/20" : "bg-card/50 border-border/50"
+            }`}
+            data-testid={`metadata-field-${f.field}`}
+          >
+            <div className="min-w-0">
+              <div className="font-medium text-sm">{f.label}</div>
+              <div className="text-xs text-muted-foreground">{f.description}</div>
+            </div>
+            <Switch
+              checked={localRequired.includes(f.field)}
+              onCheckedChange={() => toggleField(f.field)}
+              data-testid={`switch-require-${f.field}`}
+            />
+          </div>
+        ))}
+      </div>
+      <div className="flex items-center justify-between pt-2 border-t border-border/50">
+        <span className="text-xs text-muted-foreground">
+          {localRequired.length} of {data.availableFields.length} fields required
+        </span>
+        <Button
+          onClick={() => saveMutation.mutate(localRequired)}
+          disabled={!hasChanges || saveMutation.isPending}
+          className="gap-2"
+          data-testid="button-save-required-metadata"
+        >
+          {saveMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
+          Save Configuration
+        </Button>
+      </div>
     </div>
   );
 }

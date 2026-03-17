@@ -5,9 +5,13 @@ import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
 import { loadCurrentUser } from "./middleware/rbac";
+import { storage } from "./storage";
+import { BUILT_IN_OUTCOMES } from "@shared/schema";
+import { DEFAULT_COPILOT_READINESS_RULES } from "./services/policy-engine";
 import crypto from "crypto";
 
 const app = express();
+app.set('trust proxy', 1);
 const httpServer = createServer(app);
 
 declare module "http" {
@@ -88,8 +92,101 @@ app.use((req, res, next) => {
   next();
 });
 
+async function seedBuiltInOutcomes() {
+  try {
+    const orgs = await storage.getOrganizations();
+    for (const org of orgs) {
+      const existing = await storage.getPolicyOutcomes(org.id);
+      const existingKeys = new Set(existing.map(o => o.key));
+
+      for (const outcome of BUILT_IN_OUTCOMES) {
+        if (!existingKeys.has(outcome.key)) {
+          await storage.createPolicyOutcome({
+            organizationId: org.id,
+            name: outcome.name,
+            key: outcome.key,
+            description: outcome.description,
+            builtIn: true,
+            workspaceField: outcome.workspaceField,
+            propertyBagKey: outcome.propertyBagKey,
+            showAsColumn: true,
+            showAsFilter: true,
+            sortOrder: outcome.sortOrder,
+          });
+        }
+      }
+
+      const policies = await storage.getGovernancePolicies(org.id);
+      const outcomes = await storage.getPolicyOutcomes(org.id);
+      const copilotOutcome = outcomes.find(o => o.key === "copilot_eligible");
+
+      for (const policy of policies) {
+        if (!policy.outcomeId && copilotOutcome) {
+          const nameMatch = policy.name.toLowerCase().includes("copilot");
+          const typeMatch = policy.policyType === "COPILOT_READINESS";
+          if (nameMatch || typeMatch) {
+            await storage.updateGovernancePolicy(policy.id, { outcomeId: copilotOutcome.id });
+            log(`Linked policy "${policy.name}" to Copilot Eligible outcome`);
+          }
+        }
+      }
+
+      if (copilotOutcome) {
+        const hasCopilotPolicy = policies.some(p => p.outcomeId === copilotOutcome.id || 
+          (p.name.toLowerCase().includes("copilot") || p.policyType === "COPILOT_READINESS"));
+        if (!hasCopilotPolicy) {
+          await storage.createGovernancePolicy({
+            organizationId: org.id,
+            name: "Copilot Readiness",
+            description: "Default policy evaluating workspace readiness for Microsoft 365 Copilot deployment. Checks sensitivity labels, department assignment, dual ownership, metadata completeness, and sharing policies.",
+            policyType: "CUSTOM",
+            status: "ACTIVE",
+            rules: DEFAULT_COPILOT_READINESS_RULES,
+            outcomeId: copilotOutcome.id,
+          });
+          log(`Seeded default Copilot Readiness policy for org "${org.name}"`);
+        }
+      }
+    }
+  } catch (err) {
+    console.error('[Seed] Failed to seed built-in outcomes:', err);
+  }
+}
+
+async function backfillOrgMemberships() {
+  try {
+    const orgs = await storage.getOrganizations();
+    let backfilledCount = 0;
+
+    for (const org of orgs) {
+      const orgUsers = await storage.getUsersByOrganization(org.id);
+      for (const user of orgUsers) {
+        const existing = await storage.getOrgMembership(user.id, org.id);
+        if (!existing) {
+          await storage.createOrgMembership({
+            userId: user.id,
+            organizationId: org.id,
+            role: user.role,
+            isPrimary: true,
+          });
+          backfilledCount++;
+        }
+      }
+    }
+
+    if (backfilledCount > 0) {
+      log(`Backfilled ${backfilledCount} organization memberships`);
+    }
+  } catch (err) {
+    console.error('[Backfill] Failed to backfill org memberships:', err);
+  }
+}
+
 (async () => {
   await registerRoutes(httpServer, app);
+
+  await backfillOrgMemberships();
+  await seedBuiltInOutcomes();
 
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
     const status = err.status || err.statusCode || 500;

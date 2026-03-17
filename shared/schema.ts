@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, integer, bigint, boolean, timestamp, jsonb, unique } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, integer, boolean, timestamp, jsonb, unique, bigint } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -27,6 +27,34 @@ export const workspaces = pgTable("workspaces", {
   tenantConnectionId: varchar("tenant_connection_id"),
   siteUrl: text("site_url"),
   description: text("description"),
+  ownerDisplayName: text("owner_display_name"),
+  ownerPrincipalName: text("owner_principal_name"),
+  template: text("template"),
+  storageUsedBytes: bigint("storage_used_bytes", { mode: "number" }),
+  storageAllocatedBytes: bigint("storage_allocated_bytes", { mode: "number" }),
+  lastActivityDate: text("last_activity_date"),
+  lastContentModifiedDate: text("last_content_modified_date"),
+  fileCount: integer("file_count"),
+  activeFileCount: integer("active_file_count"),
+  pageViewCount: integer("page_view_count"),
+  visitedPageCount: integer("visited_page_count"),
+  sharingCapability: text("sharing_capability"),
+  lockState: text("lock_state"),
+  isHubSite: boolean("is_hub_site"),
+  hubSiteId: text("hub_site_id"),
+  parentHubSiteId: text("parent_hub_site_id"),
+  sensitivityLabelId: text("sensitivity_label_id"),
+  retentionLabelId: text("retention_label_id"),
+  rootWebTemplate: text("root_web_template"),
+  isArchived: boolean("is_archived").default(false),
+  isDeleted: boolean("is_deleted").default(false),
+  siteCreatedDate: text("site_created_date"),
+  reportRefreshDate: text("report_refresh_date"),
+  propertyBag: jsonb("property_bag").$type<Record<string, string>>(),
+  siteOwners: jsonb("site_owners").$type<Array<{ id?: string; displayName: string; mail?: string; userPrincipalName?: string }>>(),
+  customFields: jsonb("custom_fields").$type<Record<string, any>>(),
+  spoSyncHash: text("spo_sync_hash"),
+  localHash: text("local_hash"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -63,9 +91,66 @@ export const insertProvisioningRequestSchema = createInsertSchema(provisioningRe
 export type InsertProvisioningRequest = z.infer<typeof insertProvisioningRequestSchema>;
 export type ProvisioningRequest = typeof provisioningRequests.$inferSelect;
 
+export const policyOutcomes = pgTable("policy_outcomes", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  organizationId: varchar("organization_id").notNull(),
+  name: text("name").notNull(),
+  key: text("key").notNull(),
+  description: text("description"),
+  builtIn: boolean("built_in").notNull().default(false),
+  workspaceField: text("workspace_field"),
+  propertyBagKey: text("property_bag_key"),
+  showAsColumn: boolean("show_as_column").notNull().default(true),
+  showAsFilter: boolean("show_as_filter").notNull().default(true),
+  sortOrder: integer("sort_order").notNull().default(0),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertPolicyOutcomeSchema = createInsertSchema(policyOutcomes).omit({
+  id: true,
+  createdAt: true,
+});
+
+export type InsertPolicyOutcome = z.infer<typeof insertPolicyOutcomeSchema>;
+export type PolicyOutcome = typeof policyOutcomes.$inferSelect;
+
+export const BUILT_IN_OUTCOMES = [
+  { key: "copilot_eligible", name: "Copilot Eligible", description: "Determines whether a workspace meets all governance criteria for Microsoft 365 Copilot eligibility.", workspaceField: "copilotReady", propertyBagKey: "CopilotReady", sortOrder: 0 },
+  { key: "external_sharing", name: "External Sharing Approved", description: "Controls whether a workspace is approved for external sharing based on governance policy.", workspaceField: null, propertyBagKey: "ExternalSharingApproved", sortOrder: 1 },
+  { key: "pii_approved", name: "PII Approved", description: "Validates that a workspace meets requirements for storing personally identifiable information.", workspaceField: null, propertyBagKey: "PIIApproved", sortOrder: 2 },
+  { key: "sensitive_data", name: "Sensitive Data Approved", description: "Validates that a workspace meets requirements for handling classified or sensitive data.", workspaceField: null, propertyBagKey: "SensitiveDataApproved", sortOrder: 3 },
+  { key: "general_compliance", name: "General Compliance", description: "General governance compliance check — informational only, does not update workspace fields.", workspaceField: null, propertyBagKey: null, sortOrder: 4 },
+] as const;
+
+export const governancePolicies = pgTable("governance_policies", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  organizationId: varchar("organization_id").notNull(),
+  name: text("name").notNull(),
+  description: text("description"),
+  policyType: text("policy_type").notNull(),
+  status: text("status").notNull().default("ACTIVE"),
+  rules: jsonb("rules").notNull().default(sql`'[]'::jsonb`),
+  outcomeId: varchar("outcome_id"),
+  propertyBagKey: text("property_bag_key"),
+  propertyBagValueFormat: text("property_bag_value_format").default("PASS_FAIL"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const insertGovernancePolicySchema = createInsertSchema(governancePolicies).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export type InsertGovernancePolicy = z.infer<typeof insertGovernancePolicySchema>;
+export type GovernancePolicy = typeof governancePolicies.$inferSelect;
+
 export const copilotRules = pgTable("copilot_rules", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   workspaceId: varchar("workspace_id").notNull(),
+  policyId: varchar("policy_id"),
+  ruleType: text("rule_type"), // SENSITIVITY_LABEL_REQUIRED, DEPARTMENT_REQUIRED, etc.
   ruleName: text("rule_name").notNull(),
   ruleResult: text("rule_result").notNull(), // PASS, FAIL
   ruleDescription: text("rule_description").notNull(),
@@ -77,6 +162,14 @@ export const insertCopilotRuleSchema = createInsertSchema(copilotRules).omit({
 
 export type InsertCopilotRule = z.infer<typeof insertCopilotRuleSchema>;
 export type CopilotRule = typeof copilotRules.$inferSelect;
+
+export type PolicyRuleDefinition = {
+  ruleType: string;
+  label: string;
+  description: string;
+  enabled: boolean;
+  config?: Record<string, unknown>;
+};
 
 export const tenantConnections = pgTable("tenant_connections", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -106,6 +199,98 @@ export const insertTenantConnectionSchema = createInsertSchema(tenantConnections
 
 export type InsertTenantConnection = z.infer<typeof insertTenantConnectionSchema>;
 export type TenantConnection = typeof tenantConnections.$inferSelect;
+
+export const tenantDepartments = pgTable("tenant_departments", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: text("tenant_id").notNull(),
+  name: text("name").notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertTenantDepartmentSchema = createInsertSchema(tenantDepartments).omit({
+  id: true,
+  createdAt: true,
+});
+
+export type InsertTenantDepartment = z.infer<typeof insertTenantDepartmentSchema>;
+export type TenantDepartment = typeof tenantDepartments.$inferSelect;
+
+export const METADATA_CATEGORIES = [
+  "department",
+  "cost_center",
+  "business_unit",
+  "region",
+  "project_code",
+] as const;
+export type MetadataCategory = typeof METADATA_CATEGORIES[number];
+
+export const tenantDataDictionaries = pgTable("tenant_data_dictionaries", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: text("tenant_id").notNull(),
+  category: text("category").notNull(),
+  value: text("value").notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertTenantDataDictionarySchema = createInsertSchema(tenantDataDictionaries).omit({
+  id: true,
+  createdAt: true,
+});
+
+export type InsertTenantDataDictionary = z.infer<typeof insertTenantDataDictionarySchema>;
+export type TenantDataDictionary = typeof tenantDataDictionaries.$inferSelect;
+
+export const sensitivityLabels = pgTable("sensitivity_labels", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: text("tenant_id").notNull(),
+  labelId: text("label_id").notNull(),
+  name: text("name").notNull(),
+  description: text("description"),
+  color: text("color"),
+  tooltip: text("tooltip"),
+  sensitivity: integer("sensitivity"),
+  isActive: boolean("is_active").notNull().default(true),
+  contentFormats: text("content_formats").array(),
+  hasProtection: boolean("has_protection").notNull().default(false),
+  parentLabelId: text("parent_label_id"),
+  appliesToGroupsSites: boolean("applies_to_groups_sites").notNull().default(false),
+  syncedAt: timestamp("synced_at").defaultNow(),
+}, (table) => [
+  unique("uq_tenant_label").on(table.tenantId, table.labelId),
+]);
+
+export const insertSensitivityLabelSchema = createInsertSchema(sensitivityLabels).omit({
+  id: true,
+  syncedAt: true,
+});
+
+export type InsertSensitivityLabel = z.infer<typeof insertSensitivityLabelSchema>;
+export type SensitivityLabel = typeof sensitivityLabels.$inferSelect;
+
+export const retentionLabels = pgTable("retention_labels", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: text("tenant_id").notNull(),
+  labelId: text("label_id").notNull(),
+  name: text("name").notNull(),
+  description: text("description"),
+  retentionDuration: text("retention_duration"),
+  retentionAction: text("retention_action"),
+  behaviorDuringRetentionPeriod: text("behavior_during_retention_period"),
+  actionAfterRetentionPeriod: text("action_after_retention_period"),
+  isActive: boolean("is_active").notNull().default(true),
+  isRecordLabel: boolean("is_record_label").notNull().default(false),
+  syncedAt: timestamp("synced_at").defaultNow(),
+}, (table) => [
+  unique("uq_tenant_retention_label").on(table.tenantId, table.labelId),
+]);
+
+export const insertRetentionLabelSchema = createInsertSchema(retentionLabels).omit({
+  id: true,
+  syncedAt: true,
+});
+
+export type InsertRetentionLabel = z.infer<typeof insertRetentionLabelSchema>;
+export type RetentionLabel = typeof retentionLabels.$inferSelect;
 
 export const SERVICE_PLANS = ["TRIAL", "STANDARD", "PROFESSIONAL", "ENTERPRISE"] as const;
 export type ServicePlanTier = typeof SERVICE_PLANS[number];
@@ -177,6 +362,8 @@ export const organizations = pgTable("organizations", {
   azureTenantId: text("azure_tenant_id"),
   enforceSso: boolean("enforce_sso").default(false),
   allowLocalAuth: boolean("allow_local_auth").default(true),
+  allowedDomains: text("allowed_domains").array(),
+  inviteOnly: boolean("invite_only").default(false),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -225,6 +412,25 @@ export const insertUserSchema = createInsertSchema(users).omit({
 export type InsertUser = z.infer<typeof insertUserSchema>;
 export type User = typeof users.$inferSelect;
 
+export const organizationUsers = pgTable("organization_users", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: 'cascade' }),
+  organizationId: varchar("organization_id").notNull().references(() => organizations.id, { onDelete: 'cascade' }),
+  role: text("role").notNull().default("viewer"),
+  isPrimary: boolean("is_primary").notNull().default(false),
+  joinedAt: timestamp("joined_at").defaultNow(),
+}, (table) => [
+  unique("uq_user_org").on(table.userId, table.organizationId),
+]);
+
+export const insertOrganizationUserSchema = createInsertSchema(organizationUsers).omit({
+  id: true,
+  joinedAt: true,
+});
+
+export type InsertOrganizationUser = z.infer<typeof insertOrganizationUserSchema>;
+export type OrganizationUser = typeof organizationUsers.$inferSelect;
+
 export const graphTokens = pgTable("graph_tokens", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   userId: varchar("user_id").notNull().references(() => users.id, { onDelete: 'cascade' }),
@@ -270,6 +476,60 @@ export const insertAuditLogSchema = createInsertSchema(auditLog).omit({
 
 export type InsertAuditLog = z.infer<typeof insertAuditLogSchema>;
 export type AuditLog = typeof auditLog.$inferSelect;
+
+export const customFieldDefinitions = pgTable("custom_field_definitions", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: text("tenant_id").notNull(),
+  fieldName: text("field_name").notNull(),
+  fieldLabel: text("field_label").notNull(),
+  fieldType: text("field_type").notNull(),
+  options: jsonb("options").$type<string[]>(),
+  defaultValue: text("default_value"),
+  required: boolean("required").notNull().default(false),
+  filterable: boolean("filterable").notNull().default(true),
+  sortOrder: integer("sort_order").notNull().default(0),
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => [
+  unique("uq_tenant_field_name").on(table.tenantId, table.fieldName),
+]);
+
+export const insertCustomFieldDefinitionSchema = createInsertSchema(customFieldDefinitions).omit({
+  id: true,
+  createdAt: true,
+});
+
+export type InsertCustomFieldDefinition = z.infer<typeof insertCustomFieldDefinitionSchema>;
+export type CustomFieldDefinition = typeof customFieldDefinitions.$inferSelect;
+
+export const documentLibraries = pgTable("document_libraries", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  workspaceId: varchar("workspace_id").notNull(),
+  tenantConnectionId: varchar("tenant_connection_id").notNull(),
+  m365ListId: text("m365_list_id").notNull(),
+  displayName: text("display_name").notNull(),
+  description: text("description"),
+  webUrl: text("web_url"),
+  template: text("template"),
+  itemCount: integer("item_count").default(0),
+  storageUsedBytes: bigint("storage_used_bytes", { mode: "number" }),
+  sensitivityLabelId: text("sensitivity_label_id"),
+  isDefaultDocLib: boolean("is_default_doc_lib").default(false),
+  hidden: boolean("hidden").default(false),
+  lastModifiedAt: text("last_modified_at"),
+  createdGraphAt: text("created_graph_at"),
+  lastSyncAt: timestamp("last_sync_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => [
+  unique("uq_workspace_list").on(table.workspaceId, table.m365ListId),
+]);
+
+export const insertDocumentLibrarySchema = createInsertSchema(documentLibraries).omit({
+  id: true,
+  createdAt: true,
+});
+
+export type InsertDocumentLibrary = z.infer<typeof insertDocumentLibrarySchema>;
+export type DocumentLibrary = typeof documentLibraries.$inferSelect;
 
 export const domainBlocklist = pgTable("domain_blocklist", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
