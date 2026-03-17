@@ -2321,80 +2321,123 @@ export async function fetchSiteDocumentLibraries(
     const docLibs = allLists.filter((l: any) => l.list?.template === "documentLibrary");
     console.log(`[graph] fetchSiteDocumentLibraries ${graphSiteId}: ${docLibs.length} doc libs found`);
 
-    // Graph delegated SPO tokens don't return list.itemCount in the list facet.
-    // Use drives API to get item counts via /drives/{id}/list/items?$top=1&$count=true
-    // and per-drive storage via quota.used (only meaningful when drives > 1)
-    const driveItemCounts = new Map<string, number>();
-    const driveStorage = new Map<string, number>();
+    interface DriveInfo {
+      listId: string | null;
+      name: string;
+      itemCount: number;
+      storageUsedBytes: number | null;
+      sensitivityLabelId: string | null;
+    }
+    const driveByListId = new Map<string, DriveInfo>();
+    const driveByName = new Map<string, DriveInfo>();
+
     try {
       const drivesRes = await fetch(
-        `https://graph.microsoft.com/v1.0/sites/${graphSiteId}/drives?$select=id,name,quota`,
+        `https://graph.microsoft.com/v1.0/sites/${graphSiteId}/drives?$select=id,name,quota,webUrl`,
         { headers: { Authorization: `Bearer ${token}` } }
       );
       if (drivesRes.ok) {
         const drivesData = await drivesRes.json();
-        const drives = drivesData.value || [];
-        
+        const drives: any[] = drivesData.value || [];
+
         for (const drive of drives) {
-          // Get item count via the drive's list items with $count
+          const info: DriveInfo = {
+            listId: null,
+            name: drive.name || "",
+            itemCount: 0,
+            storageUsedBytes: drive.quota?.used ?? null,
+            sensitivityLabelId: null,
+          };
+
+          try {
+            const listRes = await fetch(
+              `https://graph.microsoft.com/v1.0/drives/${drive.id}/list?$select=id`,
+              { headers: { Authorization: `Bearer ${token}` } }
+            );
+            if (listRes.ok) {
+              const listData = await listRes.json();
+              info.listId = listData.id || null;
+            }
+          } catch {}
+
           try {
             const itemsRes = await fetch(
-              `https://graph.microsoft.com/v1.0/drives/${drive.id}/list/items?$top=1&$select=id`,
-              { headers: { Authorization: `Bearer ${token}`, 'ConsistencyLevel': 'eventual' } }
+              `https://graph.microsoft.com/v1.0/drives/${drive.id}/list/items?$top=1&$select=id&$count=true`,
+              { headers: { Authorization: `Bearer ${token}`, ConsistencyLevel: "eventual" } }
             );
             if (itemsRes.ok) {
               const itemsData = await itemsRes.json();
-              // If @odata.count is present, use it; otherwise page through
-              if (itemsData['@odata.count'] != null) {
-                driveItemCounts.set(drive.name, itemsData['@odata.count']);
+              if (itemsData["@odata.count"] != null) {
+                info.itemCount = itemsData["@odata.count"];
               } else {
-                // Page through /drives/{id}/root/search(q='') to count all items recursively
-                let totalCount = 0;
-                let searchUrl: string | null = `https://graph.microsoft.com/v1.0/drives/${drive.id}/root/search(q='')?$select=id&$top=999`;
-                while (searchUrl) {
-                  const countRes = await fetch(searchUrl, { headers: { Authorization: `Bearer ${token}` } });
-                  if (!countRes.ok) break;
-                  const countData = await countRes.json();
-                  totalCount += (countData.value || []).length;
-                  searchUrl = countData['@odata.nextLink'] || null;
-                }
-                driveItemCounts.set(drive.name, totalCount);
-                console.log(`[graph] drive "${drive.name}" search count: ${totalCount} items`);
+                info.itemCount = (itemsData.value || []).length > 0 ? -1 : 0;
               }
             }
           } catch {}
-          
-          if (drive.quota?.used != null) {
-            driveStorage.set(drive.name, drive.quota.used);
-          }
-        }
-        console.log(`[graph] drives for ${graphSiteId}: ${drives.length} drives.`,
-          [...driveItemCounts.entries()].map(([n, c]) => `${n}: ${c} items`).join(', '));
-      }
-    } catch {}
 
-    // Determine if storage values are per-drive or site-level duplicates
-    const storageValues = [...driveStorage.values()];
-    const allSameStorage = storageValues.length > 1 && storageValues.every(v => v === storageValues[0]);
+          if (info.itemCount <= 0) {
+            try {
+              const childrenRes = await fetch(
+                `https://graph.microsoft.com/v1.0/drives/${drive.id}/root/children?$select=id&$top=999&$count=true`,
+                { headers: { Authorization: `Bearer ${token}`, ConsistencyLevel: "eventual" } }
+              );
+              if (childrenRes.ok) {
+                const childrenData = await childrenRes.json();
+                const count = childrenData["@odata.count"] ?? (childrenData.value || []).length;
+                if (count > 0) info.itemCount = count;
+              }
+            } catch {}
+          }
+
+          try {
+            const driveDetailRes = await fetch(
+              `https://graph.microsoft.com/beta/drives/${drive.id}?$select=sensitivityLabel`,
+              { headers: { Authorization: `Bearer ${token}` } }
+            );
+            if (driveDetailRes.ok) {
+              const driveDetail = await driveDetailRes.json();
+              info.sensitivityLabelId = driveDetail.sensitivityLabel?.labelId || null;
+            }
+          } catch {}
+
+          if (info.listId) driveByListId.set(info.listId, info);
+          driveByName.set(info.name.toLowerCase(), info);
+
+          console.log(`[graph] drive "${drive.name}" → listId=${info.listId}, items=${info.itemCount}, storage=${info.storageUsedBytes}, label=${info.sensitivityLabelId}`);
+        }
+      }
+    } catch (err: any) {
+      console.log(`[graph] drives API error for ${graphSiteId}: ${err.message}`);
+    }
 
     const DEFAULT_LIB_NAMES = ["documents", "shared documents", "site assets", "style library", "form templates"];
 
-    const libraries: SiteDocumentLibrary[] = docLibs.map((lib: any) => ({
-      listId: lib.id,
-      displayName: lib.displayName || "Untitled",
-      description: lib.description || null,
-      webUrl: lib.webUrl || null,
-      template: lib.list?.template || "documentLibrary",
-      itemCount: driveItemCounts.get(lib.displayName) ?? 0,
-      sensitivityLabelId: lib.sensitivityLabel?.labelId || null,
-      isDefaultDocLib: DEFAULT_LIB_NAMES.includes((lib.displayName || "").toLowerCase()),
-      hidden: lib.list?.hidden || false,
-      lastModifiedAt: lib.lastModifiedDateTime || null,
-      createdAt: lib.createdDateTime || null,
-      storageUsedBytes: allSameStorage ? null : (driveStorage.get(lib.displayName) ?? null),
-    }));
+    const libraries: SiteDocumentLibrary[] = docLibs.map((lib: any) => {
+      const driveInfo = driveByListId.get(lib.id)
+        || driveByName.get((lib.displayName || "").toLowerCase())
+        || null;
 
-    console.log(`[graph] fetchSiteDocumentLibraries result:`, libraries.map(l => `${l.displayName}: ${l.itemCount} items`).join(', '));
+      const listItemCount = lib.list?.itemCount ?? 0;
+      const driveItemCount = driveInfo?.itemCount ?? 0;
+      const finalItemCount = driveItemCount > 0 ? driveItemCount : listItemCount;
+
+      return {
+        listId: lib.id,
+        displayName: lib.displayName || "Untitled",
+        description: lib.description || null,
+        webUrl: lib.webUrl || null,
+        template: lib.list?.template || "documentLibrary",
+        itemCount: finalItemCount,
+        sensitivityLabelId: driveInfo?.sensitivityLabelId || null,
+        isDefaultDocLib: DEFAULT_LIB_NAMES.includes((lib.displayName || "").toLowerCase()),
+        hidden: lib.list?.hidden || false,
+        lastModifiedAt: lib.lastModifiedDateTime || null,
+        createdAt: lib.createdDateTime || null,
+        storageUsedBytes: driveInfo?.storageUsedBytes ?? null,
+      };
+    });
+
+    console.log(`[graph] fetchSiteDocumentLibraries result:`, libraries.map(l => `${l.displayName}: items=${l.itemCount}, storage=${l.storageUsedBytes}, label=${l.sensitivityLabelId}`).join(' | '));
     return { libraries };
   } catch (err: any) {
     console.error(`[graph] fetchSiteDocumentLibraries error for ${graphSiteId}:`, err.message);
