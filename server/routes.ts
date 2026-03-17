@@ -2,11 +2,37 @@ import type { Express } from "express";
 import { createServer, type Server } from "http";
 import crypto from "crypto";
 import { storage } from "./storage";
-import { insertWorkspaceSchema, insertProvisioningRequestSchema, insertTenantConnectionSchema, PLAN_FEATURES, SERVICE_PLANS, type ServicePlanTier } from "@shared/schema";
+import { insertWorkspaceSchema, insertProvisioningRequestSchema, insertTenantConnectionSchema, PLAN_FEATURES, SERVICE_PLANS, ZENITH_ROLES, type ServicePlanTier } from "@shared/schema";
 import { testConnection, fetchSharePointSites, clearTokenCache } from "./services/graph";
 import { requireFeature, getPlanFeatures } from "./services/feature-gate";
+import { requireAuth, requirePermission, requireAnyPermission, type AuthenticatedRequest } from "./middleware/rbac";
+import { encryptToken, decryptToken } from "./utils/encryption";
 import authRouter from "./routes-auth";
 import entraRouter from "./routes-entra";
+
+/**
+ * Returns the set of tenant connection IDs that the current user may access.
+ * Returns null for PLATFORM_OWNER (unrestricted) or users without an org.
+ */
+async function getOrgTenantConnectionIds(user: AuthenticatedRequest["user"]): Promise<string[] | null> {
+  if (!user?.organizationId) return null;
+  if (user.role === ZENITH_ROLES.PLATFORM_OWNER) return null;
+  const connections = await storage.getTenantConnectionsByOrganization(user.organizationId);
+  return connections.map(c => c.id);
+}
+
+/**
+ * Checks whether a tenant connection belongs to the requesting user's org.
+ * Returns false (denied) when the connection is owned by a different org.
+ */
+async function canAccessTenantConnection(user: AuthenticatedRequest["user"], connectionId: string): Promise<boolean> {
+  if (!user) return false;
+  if (user.role === ZENITH_ROLES.PLATFORM_OWNER) return true;
+  if (!user.organizationId) return false;
+  const connection = await storage.getTenantConnection(connectionId);
+  if (!connection) return false;
+  return connection.organizationId === user.organizationId;
+}
 
 export async function registerRoutes(
   httpServer: Server,
@@ -17,66 +43,136 @@ export async function registerRoutes(
   app.use("/auth/entra", entraRouter);
 
   // ── Workspaces ──
-  app.get("/api/workspaces", async (req, res) => {
+  app.get("/api/workspaces", requireAuth(), requirePermission('inventory:read'), async (req, res) => {
+    const user = (req as AuthenticatedRequest).user;
     const search = req.query.search as string | undefined;
     const tenantConnectionId = req.query.tenantConnectionId as string | undefined;
-    const workspaces = await storage.getWorkspaces(search, tenantConnectionId);
-    res.json(workspaces);
+
+    const orgTenantIds = await getOrgTenantConnectionIds(user);
+
+    // If a specific tenantConnectionId is requested, verify the user may access it
+    if (tenantConnectionId && orgTenantIds !== null && !orgTenantIds.includes(tenantConnectionId)) {
+      return res.json([]);
+    }
+
+    const allWorkspaces = await storage.getWorkspaces(search, tenantConnectionId);
+
+    // Apply org-level isolation: only include workspaces whose tenantConnectionId
+    // is in the user's org. Workspaces with no tenantConnectionId are unscoped and
+    // excluded for non-platform-owner users (they cannot be attributed to an org).
+    const filtered = orgTenantIds !== null
+      ? allWorkspaces.filter(w => w.tenantConnectionId && orgTenantIds.includes(w.tenantConnectionId))
+      : allWorkspaces;
+
+    res.json(filtered);
   });
 
-  app.get("/api/workspaces/:id", async (req, res) => {
+  app.get("/api/workspaces/:id", requireAuth(), requirePermission('inventory:read'), async (req, res) => {
     const workspace = await storage.getWorkspace(req.params.id);
     if (!workspace) return res.status(404).json({ message: "Workspace not found" });
+
+    const user = (req as AuthenticatedRequest).user;
+    const orgTenantIds = await getOrgTenantConnectionIds(user);
+    if (orgTenantIds !== null && (!workspace.tenantConnectionId || !orgTenantIds.includes(workspace.tenantConnectionId))) {
+      // Return 404 to avoid leaking existence of cross-org workspaces
+      return res.status(404).json({ message: "Workspace not found" });
+    }
+
     res.json(workspace);
   });
 
-  app.post("/api/workspaces", async (req, res) => {
+  app.post("/api/workspaces", requireAuth(), requirePermission('workspaces:manage'), async (req, res) => {
     const parsed = insertWorkspaceSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ message: parsed.error.message });
+
+    // Ensure the tenantConnectionId (if provided) belongs to the user's org
+    if (parsed.data.tenantConnectionId) {
+      const user = (req as AuthenticatedRequest).user;
+      const allowed = await canAccessTenantConnection(user, parsed.data.tenantConnectionId);
+      if (!allowed) return res.status(403).json({ message: "Tenant connection not accessible" });
+    }
+
     const workspace = await storage.createWorkspace(parsed.data);
     res.status(201).json(workspace);
   });
 
-  app.patch("/api/workspaces/:id", async (req, res) => {
+  app.patch("/api/workspaces/:id", requireAuth(), requireAnyPermission('workspaces:manage', 'workspaces:update'), async (req, res) => {
+    const existing = await storage.getWorkspace(req.params.id);
+    if (!existing) return res.status(404).json({ message: "Workspace not found" });
+
+    const user = (req as AuthenticatedRequest).user;
+    const orgTenantIds = await getOrgTenantConnectionIds(user);
+    if (orgTenantIds !== null && (!existing.tenantConnectionId || !orgTenantIds.includes(existing.tenantConnectionId))) {
+      return res.status(404).json({ message: "Workspace not found" });
+    }
+
     const workspace = await storage.updateWorkspace(req.params.id, req.body);
-    if (!workspace) return res.status(404).json({ message: "Workspace not found" });
     res.json(workspace);
   });
 
-  app.delete("/api/workspaces/:id", async (req, res) => {
+  app.delete("/api/workspaces/:id", requireAuth(), requirePermission('workspaces:manage'), async (req, res) => {
+    const existing = await storage.getWorkspace(req.params.id);
+    if (!existing) return res.status(404).send();
+
+    const user = (req as AuthenticatedRequest).user;
+    const orgTenantIds = await getOrgTenantConnectionIds(user);
+    if (orgTenantIds !== null && (!existing.tenantConnectionId || !orgTenantIds.includes(existing.tenantConnectionId))) {
+      return res.status(404).send();
+    }
+
     await storage.deleteWorkspace(req.params.id);
     res.status(204).send();
   });
 
-  app.patch("/api/workspaces/bulk/update", async (req, res) => {
+  app.patch("/api/workspaces/bulk/update", requireAuth(), requirePermission('workspaces:manage'), async (req, res) => {
     const { ids, updates } = req.body;
     if (!Array.isArray(ids) || ids.length === 0) {
       return res.status(400).json({ message: "ids array is required" });
     }
+
+    // Verify all requested workspace IDs are accessible by this user's org
+    const user = (req as AuthenticatedRequest).user;
+    const orgTenantIds = await getOrgTenantConnectionIds(user);
+    if (orgTenantIds !== null) {
+      for (const id of ids) {
+        const ws = await storage.getWorkspace(id);
+        if (!ws || !ws.tenantConnectionId || !orgTenantIds.includes(ws.tenantConnectionId)) {
+          return res.status(403).json({ message: `Workspace ${id} is not accessible` });
+        }
+      }
+    }
+
     await storage.bulkUpdateWorkspaces(ids, updates);
     res.json({ message: "Bulk update complete", count: ids.length });
   });
 
   // ── Provisioning Requests ──
-  app.get("/api/provisioning-requests", async (_req, res) => {
+  // NOTE: provisioningRequests has no organizationId column, so full org-level
+  // isolation is not possible without a schema migration. Auth enforcement is
+  // applied here; full isolation is tracked as a P1 gap (schema migration required).
+  app.get("/api/provisioning-requests", requireAuth(), requireAnyPermission('provisioning:read', 'provisioning:manage'), async (_req, res) => {
     const requests = await storage.getProvisioningRequests();
     res.json(requests);
   });
 
-  app.get("/api/provisioning-requests/:id", async (req, res) => {
+  app.get("/api/provisioning-requests/:id", requireAuth(), requireAnyPermission('provisioning:read', 'provisioning:manage'), async (req, res) => {
     const request = await storage.getProvisioningRequest(req.params.id);
     if (!request) return res.status(404).json({ message: "Request not found" });
     res.json(request);
   });
 
-  app.post("/api/provisioning-requests", async (req, res) => {
+  app.post("/api/provisioning-requests", requireAuth(), requireAnyPermission('provisioning:create', 'provisioning:manage'), async (req, res) => {
     const parsed = insertProvisioningRequestSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ message: parsed.error.message });
-    const request = await storage.createProvisioningRequest(parsed.data);
+    const user = (req as AuthenticatedRequest).user!;
+    const request = await storage.createProvisioningRequest({
+      ...parsed.data,
+      requestedBy: user.email,
+    });
     res.status(201).json(request);
   });
 
-  app.patch("/api/provisioning-requests/:id/status", async (req, res) => {
+  app.patch("/api/provisioning-requests/:id/status", requireAuth(), requirePermission('provisioning:manage'), async (req, res) => {
     const { status } = req.body;
     if (!["PENDING", "APPROVED", "PROVISIONED", "REJECTED"].includes(status)) {
       return res.status(400).json({ message: "Invalid status" });
@@ -100,12 +196,12 @@ export async function registerRoutes(
   });
 
   // ── Copilot Rules ──
-  app.get("/api/workspaces/:id/copilot-rules", async (req, res) => {
+  app.get("/api/workspaces/:id/copilot-rules", requireAuth(), requirePermission('inventory:read'), async (req, res) => {
     const rules = await storage.getCopilotRules(req.params.id);
     res.json(rules);
   });
 
-  app.put("/api/workspaces/:id/copilot-rules", async (req, res) => {
+  app.put("/api/workspaces/:id/copilot-rules", requireAuth(), requirePermission('copilot:manage'), async (req, res) => {
     const { rules } = req.body;
     if (!Array.isArray(rules)) {
       return res.status(400).json({ message: "rules array is required" });
@@ -115,13 +211,21 @@ export async function registerRoutes(
   });
 
   // ── Dashboard Stats ──
-  app.get("/api/stats", async (_req, res) => {
+  app.get("/api/stats", requireAuth(), requirePermission('inventory:read'), async (req, res) => {
+    const user = (req as AuthenticatedRequest).user;
+    const orgTenantIds = await getOrgTenantConnectionIds(user);
+
     const allWorkspaces = await storage.getWorkspaces();
-    const total = allWorkspaces.length;
-    const copilotReady = allWorkspaces.filter(w => w.copilotReady).length;
-    const metadataComplete = allWorkspaces.filter(w => w.metadataStatus === "COMPLETE").length;
-    const metadataMissing = allWorkspaces.filter(w => w.metadataStatus === "MISSING_REQUIRED").length;
-    const highlyConfidential = allWorkspaces.filter(w => w.sensitivity === "HIGHLY_CONFIDENTIAL").length;
+    const scopedWorkspaces = orgTenantIds !== null
+      ? allWorkspaces.filter(w => w.tenantConnectionId && orgTenantIds.includes(w.tenantConnectionId))
+      : allWorkspaces;
+
+    const total = scopedWorkspaces.length;
+    const copilotReady = scopedWorkspaces.filter(w => w.copilotReady).length;
+    const metadataComplete = scopedWorkspaces.filter(w => w.metadataStatus === "COMPLETE").length;
+    const metadataMissing = scopedWorkspaces.filter(w => w.metadataStatus === "MISSING_REQUIRED").length;
+    const highlyConfidential = scopedWorkspaces.filter(w => w.sensitivity === "HIGHLY_CONFIDENTIAL").length;
+
     const requests = await storage.getProvisioningRequests();
     const pendingRequests = requests.filter(r => r.status === "PENDING").length;
 
@@ -138,7 +242,7 @@ export async function registerRoutes(
   });
 
   // ── Organization & Service Plan ──
-  app.get("/api/organization", async (req, res) => {
+  app.get("/api/organization", requireAuth(), async (req, res) => {
     const id = req.query.id as string | undefined;
     let org = await storage.getOrganization(id);
     if (!org) {
@@ -154,7 +258,7 @@ export async function registerRoutes(
     res.json({ ...org, features });
   });
 
-  app.get("/api/organizations", async (_req, res) => {
+  app.get("/api/organizations", requireAuth(), requirePermission('platform:manage'), async (_req, res) => {
     const orgs = await storage.getOrganizations();
     const withFeatures = orgs.map(org => ({
       ...org,
@@ -163,7 +267,7 @@ export async function registerRoutes(
     res.json(withFeatures);
   });
 
-  app.patch("/api/organization/plan", async (req, res) => {
+  app.patch("/api/organization/plan", requireAuth(), requirePermission('settings:manage'), async (req, res) => {
     const { plan } = req.body;
     if (!SERVICE_PLANS.includes(plan)) {
       return res.status(400).json({ message: `Invalid plan. Must be one of: ${SERVICE_PLANS.join(", ")}` });
@@ -176,7 +280,7 @@ export async function registerRoutes(
     res.json({ ...updated, features });
   });
 
-  app.get("/api/feature-check/:feature", async (req, res) => {
+  app.get("/api/feature-check/:feature", requireAuth(), async (req, res) => {
     const org = await storage.getOrganization();
     const plan = (org?.servicePlan || "TRIAL") as ServicePlanTier;
     const features = getPlanFeatures(plan);
@@ -193,8 +297,13 @@ export async function registerRoutes(
   });
 
   // ── Tenant Connections ──
-  app.get("/api/admin/tenants", async (_req, res) => {
-    const connections = await storage.getTenantConnections();
+  app.get("/api/admin/tenants", requireAuth(), requirePermission('tenants:manage'), async (req, res) => {
+    const user = (req as AuthenticatedRequest).user!;
+    // PLATFORM_OWNER sees all; org admins see only their org's connections
+    const connections = user.role === ZENITH_ROLES.PLATFORM_OWNER || !user.organizationId
+      ? await storage.getTenantConnections()
+      : await storage.getTenantConnectionsByOrganization(user.organizationId);
+
     const safe = connections.map(c => ({
       ...c,
       clientSecret: undefined,
@@ -203,19 +312,14 @@ export async function registerRoutes(
     res.json(safe);
   });
 
-  app.get("/api/admin/tenants/consent/initiate", async (req, res) => {
+  app.get("/api/admin/tenants/consent/initiate", requireAuth(), requirePermission('tenants:manage'), async (req, res) => {
     const clientId = process.env.AZURE_CLIENT_ID;
     if (!clientId) {
       return res.status(503).json({ error: "Zenith Entra app is not configured. Set AZURE_CLIENT_ID first." });
     }
 
-    const userId = req.session?.userId;
-    if (!userId) {
-      return res.status(401).json({ error: "You must be logged in to connect a tenant." });
-    }
-
-    const user = await storage.getUser(userId);
-    if (!user || !user.organizationId) {
+    const user = (req as AuthenticatedRequest).user!;
+    if (!user.organizationId) {
       return res.status(403).json({ error: "You must belong to an organization to connect a tenant." });
     }
 
@@ -248,6 +352,7 @@ export async function registerRoutes(
     res.json({ consentUrl });
   });
 
+  // OAuth redirect — no requireAuth() here; session is validated via nonce
   app.get("/api/admin/tenants/consent/callback", async (req, res) => {
     const { admin_consent, tenant, state, error, error_description } = req.query;
 
@@ -316,43 +421,71 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/admin/tenants/:id", async (req, res) => {
+  app.get("/api/admin/tenants/:id", requireAuth(), requirePermission('tenants:manage'), async (req, res) => {
     const connection = await storage.getTenantConnection(req.params.id);
     if (!connection) return res.status(404).json({ message: "Tenant connection not found" });
+
+    const user = (req as AuthenticatedRequest).user!;
+    if (user.role !== ZENITH_ROLES.PLATFORM_OWNER && user.organizationId && connection.organizationId !== user.organizationId) {
+      return res.status(404).json({ message: "Tenant connection not found" });
+    }
+
     res.json({ ...connection, clientSecret: undefined });
   });
 
-  app.post("/api/admin/tenants", async (req, res) => {
-    const { tenantId, tenantName, domain, ownershipType, organizationId } = req.body;
+  app.post("/api/admin/tenants", requireAuth(), requirePermission('tenants:manage'), async (req, res) => {
+    const { tenantId, tenantName, domain, ownershipType } = req.body;
     if (!tenantId || !domain) {
       return res.status(400).json({ message: "tenantId and domain are required" });
     }
+    // Always scope new connections to the requesting user's org
+    const user = (req as AuthenticatedRequest).user!;
     const connection = await storage.createTenantConnection({
       tenantId,
       tenantName: tenantName || domain.split('.')[0],
       domain,
       ownershipType: ownershipType || 'MSP',
-      organizationId: organizationId || null,
+      organizationId: user.organizationId || null,
       status: 'PENDING',
       consentGranted: false,
     });
     res.status(201).json({ ...connection, clientSecret: undefined });
   });
 
-  app.patch("/api/admin/tenants/:id", async (req, res) => {
-    const connection = await storage.updateTenantConnection(req.params.id, req.body);
+  app.patch("/api/admin/tenants/:id", requireAuth(), requirePermission('tenants:manage'), async (req, res) => {
+    const connection = await storage.getTenantConnection(req.params.id);
     if (!connection) return res.status(404).json({ message: "Tenant connection not found" });
-    res.json({ ...connection, clientSecret: undefined });
+
+    const user = (req as AuthenticatedRequest).user!;
+    if (user.role !== ZENITH_ROLES.PLATFORM_OWNER && user.organizationId && connection.organizationId !== user.organizationId) {
+      return res.status(404).json({ message: "Tenant connection not found" });
+    }
+
+    const updates = { ...req.body };
+    // P0 fix: encrypt client secret at rest before persisting
+    if (updates.clientSecret) {
+      updates.clientSecret = encryptToken(updates.clientSecret);
+    }
+
+    const updated = await storage.updateTenantConnection(req.params.id, updates);
+    res.json({ ...updated, clientSecret: undefined });
   });
 
-  app.delete("/api/admin/tenants/:id", async (req, res) => {
+  app.delete("/api/admin/tenants/:id", requireAuth(), requirePermission('tenants:manage'), async (req, res) => {
     const conn = await storage.getTenantConnection(req.params.id);
-    if (conn && conn.clientId) clearTokenCache(conn.tenantId, conn.clientId);
+    if (!conn) return res.status(404).json({ message: "Tenant connection not found" });
+
+    const user = (req as AuthenticatedRequest).user!;
+    if (user.role !== ZENITH_ROLES.PLATFORM_OWNER && user.organizationId && conn.organizationId !== user.organizationId) {
+      return res.status(404).json({ message: "Tenant connection not found" });
+    }
+
+    if (conn.clientId) clearTokenCache(conn.tenantId, conn.clientId);
     await storage.deleteTenantConnection(req.params.id);
     res.status(204).send();
   });
 
-  app.post("/api/admin/tenants/test", async (req, res) => {
+  app.post("/api/admin/tenants/test", requireAuth(), requirePermission('tenants:manage'), async (req, res) => {
     const { tenantId } = req.body;
     const clientId = req.body.clientId || process.env.AZURE_CLIENT_ID;
     const clientSecret = req.body.clientSecret || process.env.AZURE_CLIENT_SECRET;
@@ -363,12 +496,19 @@ export async function registerRoutes(
     res.json(result);
   });
 
-  app.post("/api/admin/tenants/:id/sync", async (req, res) => {
+  app.post("/api/admin/tenants/:id/sync", requireAuth(), requirePermission('tenants:manage'), async (req, res) => {
     const connection = await storage.getTenantConnection(req.params.id);
     if (!connection) return res.status(404).json({ message: "Tenant connection not found" });
 
+    const user = (req as AuthenticatedRequest).user!;
+    if (user.role !== ZENITH_ROLES.PLATFORM_OWNER && user.organizationId && connection.organizationId !== user.organizationId) {
+      return res.status(404).json({ message: "Tenant connection not found" });
+    }
+
     const clientId = connection.clientId || process.env.AZURE_CLIENT_ID;
-    const clientSecret = connection.clientSecret || process.env.AZURE_CLIENT_SECRET;
+    // P0 fix: decrypt stored secret before passing to Graph service
+    const rawSecret = connection.clientSecret || process.env.AZURE_CLIENT_SECRET;
+    const clientSecret = rawSecret ? decryptToken(rawSecret) : undefined;
 
     if (!clientId || !clientSecret) {
       return res.status(503).json({ success: false, error: "Zenith app credentials not configured. Set AZURE_CLIENT_ID and AZURE_CLIENT_SECRET." });
@@ -436,7 +576,7 @@ export async function registerRoutes(
   });
 
   // ── Domain Blocklist (Admin) ──
-  app.get("/api/admin/domain-blocklist", async (_req, res) => {
+  app.get("/api/admin/domain-blocklist", requireAuth(), requirePermission('tenants:manage'), async (_req, res) => {
     try {
       const domains = await storage.getBlockedDomains();
       res.json(domains);
@@ -445,7 +585,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/admin/domain-blocklist", async (req, res) => {
+  app.post("/api/admin/domain-blocklist", requireAuth(), requirePermission('tenants:manage'), async (req, res) => {
     try {
       const { domain, reason } = req.body;
       if (!domain) {
@@ -456,10 +596,11 @@ export async function registerRoutes(
       if (!domainRegex.test(normalizedDomain)) {
         return res.status(400).json({ error: "Invalid domain format" });
       }
+      const user = (req as AuthenticatedRequest).user!;
       const entry = await storage.addBlockedDomain({
         domain: normalizedDomain,
         reason: reason || null,
-        createdBy: null,
+        createdBy: user.id,
       });
       res.status(201).json(entry);
     } catch (err: any) {
@@ -470,7 +611,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/admin/domain-blocklist/:domain", async (req, res) => {
+  app.delete("/api/admin/domain-blocklist/:domain", requireAuth(), requirePermission('tenants:manage'), async (req, res) => {
     try {
       await storage.removeBlockedDomain(decodeURIComponent(req.params.domain));
       res.json({ success: true });

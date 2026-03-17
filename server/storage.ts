@@ -48,6 +48,7 @@ export interface IStorage {
   setCopilotRules(workspaceId: string, rules: InsertCopilotRule[]): Promise<CopilotRule[]>;
 
   getTenantConnections(): Promise<TenantConnection[]>;
+  getTenantConnectionsByOrganization(orgId: string): Promise<TenantConnection[]>;
   getTenantConnection(id: string): Promise<TenantConnection | undefined>;
   createTenantConnection(connection: InsertTenantConnection): Promise<TenantConnection>;
   updateTenantConnection(id: string, updates: Partial<TenantConnection>): Promise<TenantConnection | undefined>;
@@ -165,6 +166,12 @@ export class DatabaseStorage implements IStorage {
 
   async getTenantConnections(): Promise<TenantConnection[]> {
     return db.select().from(tenantConnections).orderBy(desc(tenantConnections.createdAt));
+  }
+
+  async getTenantConnectionsByOrganization(orgId: string): Promise<TenantConnection[]> {
+    return db.select().from(tenantConnections)
+      .where(eq(tenantConnections.organizationId, orgId))
+      .orderBy(desc(tenantConnections.createdAt));
   }
 
   async getTenantConnection(id: string): Promise<TenantConnection | undefined> {

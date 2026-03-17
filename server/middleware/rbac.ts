@@ -101,6 +101,21 @@ export function requirePermission(permission: string) {
   };
 }
 
+export function requireAnyPermission(...permissions: string[]) {
+  return (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+    if (!req.user) {
+      return res.status(401).json({ error: 'Authentication required' });
+    }
+    const userRole = req.user.role as ZenithRole;
+    const userPerms = ROLE_PERMISSIONS[userRole] || [];
+    const hasAny = permissions.some(p => userPerms.includes(p));
+    if (!hasAny) {
+      return res.status(403).json({ error: 'Insufficient permissions for this action' });
+    }
+    next();
+  };
+}
+
 export function hasPermission(role: ZenithRole, permission: string): boolean {
   const perms = ROLE_PERMISSIONS[role] || [];
   return perms.includes(permission);
