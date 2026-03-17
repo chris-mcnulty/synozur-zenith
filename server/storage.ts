@@ -330,6 +330,12 @@ export class DatabaseStorage implements IStorage {
     return db.select().from(tenantConnections).orderBy(desc(tenantConnections.createdAt));
   }
 
+  async getTenantConnectionsByOrganization(orgId: string): Promise<TenantConnection[]> {
+    return db.select().from(tenantConnections)
+      .where(eq(tenantConnections.organizationId, orgId))
+      .orderBy(desc(tenantConnections.createdAt));
+  }
+
   async getTenantConnection(id: string): Promise<TenantConnection | undefined> {
     const [connection] = await db.select().from(tenantConnections).where(eq(tenantConnections.id, id));
     return connection;

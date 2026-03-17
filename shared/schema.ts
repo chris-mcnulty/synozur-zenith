@@ -546,3 +546,46 @@ export const insertDomainBlocklistSchema = createInsertSchema(domainBlocklist).o
 
 export type InsertDomainBlocklist = z.infer<typeof insertDomainBlocklistSchema>;
 export type DomainBlocklist = typeof domainBlocklist.$inferSelect;
+
+// ── Workspace Telemetry ──────────────────────────────────────────────────────
+// One row per sync snapshot per workspace. Retaining multiple snapshots enables
+// growth-trend analysis (storage, file count, content-type drift over time).
+export const workspaceTelemetry = pgTable("workspace_telemetry", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  workspaceId: varchar("workspace_id").notNull().references(() => workspaces.id, { onDelete: 'cascade' }),
+  tenantConnectionId: varchar("tenant_connection_id"),
+
+  // ── Storage ──
+  storageUsedBytes: bigint("storage_used_bytes", { mode: "number" }),
+  storageTotalBytes: bigint("storage_total_bytes", { mode: "number" }),
+
+  // ── Content counts ──
+  fileCount: integer("file_count"),
+  // folderCount = number of items directly under the drive root (top-level structure proxy)
+  folderCount: integer("folder_count"),
+  listCount: integer("list_count"),
+  documentLibraryCount: integer("document_library_count"),
+
+  // ── Content classification ──
+  // Array of { id: string, name: string } — content types defined on this site
+  contentTypes: jsonb("content_types").$type<{ id: string; name: string }[]>(),
+
+  // ── Sensitivity / labelling ──
+  sensitivityLabel: text("sensitivity_label"),     // e.g. "Highly Confidential"
+  sensitivityLabelId: text("sensitivity_label_id"), // M365 label GUID
+
+  // ── Activity ──
+  lastActivityDate: timestamp("last_activity_date"),
+
+  snapshotAt: timestamp("snapshot_at").defaultNow().notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertWorkspaceTelemetrySchema = createInsertSchema(workspaceTelemetry).omit({
+  id: true,
+  createdAt: true,
+  snapshotAt: true,
+});
+
+export type InsertWorkspaceTelemetry = z.infer<typeof insertWorkspaceTelemetrySchema>;
+export type WorkspaceTelemetry = typeof workspaceTelemetry.$inferSelect;
