@@ -300,6 +300,9 @@ router.post("/api/spe/tenants/:id/sync", requireRole(ZENITH_ROLES.TENANT_ADMIN),
       }
     }
 
+    const existingContainersList = await storage.getSpeContainers(undefined, conn.id);
+    const existingContainersMap = new Map(existingContainersList.map(c => [c.m365ContainerId, c]));
+
     let syncedCount = 0;
     let errorCount = 0;
     const BATCH_SIZE = 5;
@@ -343,8 +346,7 @@ router.post("/api/spe/tenants/:id/sync", requireRole(ZENITH_ROLES.TENANT_ADMIN),
             lastSyncAt: new Date(),
           };
 
-          const existingContainers = await storage.getSpeContainers(undefined, conn.id);
-          const existing = existingContainers.find(c => c.m365ContainerId === gc.id);
+          const existing = existingContainersMap.get(gc.id);
 
           let savedContainer;
           if (existing) {
@@ -361,7 +363,7 @@ router.post("/api/spe/tenants/:id/sync", requireRole(ZENITH_ROLES.TENANT_ADMIN),
               storageTotalBytes: containerData.storageAllocatedBytes,
               fileCount: containerData.fileCount,
               activeFileCount: containerData.activeFileCount,
-              activeUsers: details.owners?.length ?? null,
+              activeUsers: null,
               apiCallCount: null,
               lastActivityDate: containerData.lastActivityDate,
             });
