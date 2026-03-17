@@ -140,6 +140,100 @@ export async function fetchSharePointSites(tenantId: string, clientId: string, c
   }
 }
 
+// ── Per-site telemetry ────────────────────────────────────────────────────────
+
+export interface SiteTelemetry {
+  siteId: string;
+  storageUsedBytes?: number;
+  storageTotalBytes?: number;
+  fileCount?: number;
+  /** Number of items immediately under the drive root — top-level structure proxy */
+  folderCount?: number;
+  listCount?: number;
+  documentLibraryCount?: number;
+  contentTypes?: { id: string; name: string }[];
+  sensitivityLabel?: string;
+  sensitivityLabelId?: string;
+  lastActivityDate?: string;
+  error?: string;
+}
+
+/**
+ * Fetches governance telemetry for a single SharePoint site via MS Graph.
+ * All sub-calls are made concurrently; individual failures degrade gracefully
+ * rather than aborting the whole snapshot.
+ */
+export async function fetchSiteTelemetry(
+  tenantId: string,
+  clientId: string,
+  clientSecret: string,
+  siteId: string,
+): Promise<SiteTelemetry> {
+  const result: SiteTelemetry = { siteId };
+
+  try {
+    const token = await getAppToken(tenantId, clientId, clientSecret);
+    const h = { Authorization: `Bearer ${token}` };
+    const v1 = "https://graph.microsoft.com/v1.0";
+
+    // Fan-out: drive quota, content types, lists, sensitivity label (beta)
+    const [driveResult, ctResult, listsResult, rootResult, betaResult] =
+      await Promise.allSettled([
+        fetch(`${v1}/sites/${siteId}/drive?$select=id,quota,lastModifiedDateTime`, { headers: h }),
+        fetch(`${v1}/sites/${siteId}/contentTypes?$select=id,name&$top=100`, { headers: h }),
+        fetch(`${v1}/sites/${siteId}/lists?$select=id,displayName,list&$top=100`, { headers: h }),
+        fetch(`${v1}/sites/${siteId}/drive/root?$select=id,folder`, { headers: h }),
+        fetch(`https://graph.microsoft.com/beta/sites/${siteId}?$select=id,sensitivity`, { headers: h }),
+      ]);
+
+    // Drive quota → storage bytes, file count, last-activity
+    if (driveResult.status === "fulfilled" && driveResult.value.ok) {
+      const d = await driveResult.value.json();
+      result.storageUsedBytes = d.quota?.used ?? undefined;
+      result.storageTotalBytes = d.quota?.total ?? undefined;
+      result.fileCount = d.quota?.fileCount ?? undefined;
+      if (d.lastModifiedDateTime) result.lastActivityDate = d.lastModifiedDateTime;
+    }
+
+    // Drive root folder — childCount = total items at root (top-level structure proxy)
+    if (rootResult.status === "fulfilled" && rootResult.value.ok) {
+      const r = await rootResult.value.json();
+      result.folderCount = r.folder?.childCount ?? undefined;
+    }
+
+    // Content types — filter out low-signal built-in system types
+    if (ctResult.status === "fulfilled" && ctResult.value.ok) {
+      const ct = await ctResult.value.json();
+      result.contentTypes = (ct.value ?? [])
+        .filter((c: any) => c.name && !/^0x/.test(c.id))  // skip hidden system types
+        .map((c: any) => ({ id: c.id as string, name: c.name as string }));
+    }
+
+    // Lists → total list count + document library count
+    if (listsResult.status === "fulfilled" && listsResult.value.ok) {
+      const ls = await listsResult.value.json();
+      const lists: any[] = ls.value ?? [];
+      result.listCount = lists.length;
+      result.documentLibraryCount = lists.filter(
+        (l) => l.list?.template === "documentLibrary",
+      ).length;
+    }
+
+    // Sensitivity label — beta API, best-effort; may not be available in all tenants
+    if (betaResult.status === "fulfilled" && betaResult.value.ok) {
+      const beta = await betaResult.value.json();
+      if (beta.sensitivity && typeof beta.sensitivity === "object") {
+        result.sensitivityLabel = beta.sensitivity.displayName ?? undefined;
+        result.sensitivityLabelId = beta.sensitivity.id ?? undefined;
+      }
+    }
+  } catch (err: any) {
+    result.error = err.message;
+  }
+
+  return result;
+}
+
 export function clearTokenCache(tenantId?: string, clientId?: string) {
   if (tenantId && clientId) {
     tokenCache.delete(`${tenantId}:${clientId}`);

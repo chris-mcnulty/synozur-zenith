@@ -1,4 +1,4 @@
-import { eq, desc, ilike, or, and } from "drizzle-orm";
+import { eq, desc, ilike, or, and, inArray } from "drizzle-orm";
 import { db } from "./db";
 import {
   workspaces,
@@ -10,6 +10,7 @@ import {
   graphTokens,
   auditLog,
   domainBlocklist,
+  workspaceTelemetry,
   type Workspace,
   type InsertWorkspace,
   type ProvisioningRequest,
@@ -28,6 +29,8 @@ import {
   type InsertAuditLog,
   type DomainBlocklist,
   type InsertDomainBlocklist,
+  type WorkspaceTelemetry,
+  type InsertWorkspaceTelemetry,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -78,6 +81,13 @@ export interface IStorage {
   addBlockedDomain(entry: InsertDomainBlocklist): Promise<DomainBlocklist>;
   removeBlockedDomain(domain: string): Promise<void>;
   isDomainBlocked(domain: string): Promise<boolean>;
+
+  saveWorkspaceTelemetry(snapshot: InsertWorkspaceTelemetry): Promise<WorkspaceTelemetry>;
+  getWorkspaceTelemetry(workspaceId: string, limit?: number): Promise<WorkspaceTelemetry[]>;
+  getLatestWorkspaceTelemetry(workspaceId: string): Promise<WorkspaceTelemetry | undefined>;
+  /** Returns the latest telemetry snapshot for every workspace whose
+   *  tenantConnectionId is in the provided set. */
+  getLatestTelemetryForConnections(tenantConnectionIds: string[]): Promise<WorkspaceTelemetry[]>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -317,6 +327,46 @@ export class DatabaseStorage implements IStorage {
     const [result] = await db.select().from(domainBlocklist)
       .where(eq(domainBlocklist.domain, domain.toLowerCase()));
     return !!result;
+  }
+
+  async saveWorkspaceTelemetry(snapshot: InsertWorkspaceTelemetry): Promise<WorkspaceTelemetry> {
+    const [created] = await db.insert(workspaceTelemetry).values(snapshot).returning();
+    return created;
+  }
+
+  async getWorkspaceTelemetry(workspaceId: string, limit = 90): Promise<WorkspaceTelemetry[]> {
+    return db.select().from(workspaceTelemetry)
+      .where(eq(workspaceTelemetry.workspaceId, workspaceId))
+      .orderBy(desc(workspaceTelemetry.snapshotAt))
+      .limit(limit);
+  }
+
+  async getLatestWorkspaceTelemetry(workspaceId: string): Promise<WorkspaceTelemetry | undefined> {
+    const [row] = await db.select().from(workspaceTelemetry)
+      .where(eq(workspaceTelemetry.workspaceId, workspaceId))
+      .orderBy(desc(workspaceTelemetry.snapshotAt))
+      .limit(1);
+    return row;
+  }
+
+  async getLatestTelemetryForConnections(tenantConnectionIds: string[]): Promise<WorkspaceTelemetry[]> {
+    if (tenantConnectionIds.length === 0) return [];
+    // Fetch latest snapshot per workspace scoped to the given connections.
+    // Uses a subquery approach: get all rows for matching connections then
+    // deduplicate in application code (one row per workspaceId, most recent).
+    const rows = await db.select().from(workspaceTelemetry)
+      .where(inArray(workspaceTelemetry.tenantConnectionId, tenantConnectionIds))
+      .orderBy(desc(workspaceTelemetry.snapshotAt));
+
+    const seen = new Set<string>();
+    const latest: WorkspaceTelemetry[] = [];
+    for (const row of rows) {
+      if (!seen.has(row.workspaceId)) {
+        seen.add(row.workspaceId);
+        latest.push(row);
+      }
+    }
+    return latest;
   }
 }
 

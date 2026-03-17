@@ -3,7 +3,7 @@ import { createServer, type Server } from "http";
 import crypto from "crypto";
 import { storage } from "./storage";
 import { insertWorkspaceSchema, insertProvisioningRequestSchema, insertTenantConnectionSchema, PLAN_FEATURES, SERVICE_PLANS, ZENITH_ROLES, type ServicePlanTier } from "@shared/schema";
-import { testConnection, fetchSharePointSites, clearTokenCache } from "./services/graph";
+import { testConnection, fetchSharePointSites, fetchSiteTelemetry, clearTokenCache } from "./services/graph";
 import { requireFeature, getPlanFeatures } from "./services/feature-gate";
 import { requireAuth, requirePermission, requireAnyPermission, type AuthenticatedRequest } from "./middleware/rbac";
 import { encryptToken, decryptToken } from "./utils/encryption";
@@ -530,7 +530,10 @@ export async function registerRoutes(
         });
       }
 
+      // ── Phase 1: upsert workspace records ──────────────────────────────────
       let upsertedCount = 0;
+      const workspaceIds: { workspaceId: string; m365SiteId: string }[] = [];
+
       for (const site of result.sites) {
         const existing = await storage.getWorkspaceByM365ObjectId(site.id);
         if (existing) {
@@ -540,8 +543,9 @@ export async function registerRoutes(
             description: site.description || existing.description,
             tenantConnectionId: req.params.id,
           });
+          workspaceIds.push({ workspaceId: existing.id, m365SiteId: site.id });
         } else {
-          await storage.createWorkspace({
+          const created = await storage.createWorkspace({
             displayName: site.displayName || 'Untitled Site',
             type: 'TEAM_SITE',
             m365ObjectId: site.id,
@@ -549,6 +553,7 @@ export async function registerRoutes(
             description: site.description || null,
             tenantConnectionId: req.params.id,
           });
+          workspaceIds.push({ workspaceId: created.id, m365SiteId: site.id });
         }
         upsertedCount++;
       }
@@ -561,11 +566,84 @@ export async function registerRoutes(
         consentGranted: true,
       });
 
+      // Respond immediately so the caller isn't blocked by telemetry collection
       res.json({
         success: true,
         sitesFound: result.sites.length,
         upserted: upsertedCount,
       });
+
+      // ── Phase 2: collect per-site telemetry (async, non-blocking) ──────────
+      // Fan-out all sites concurrently; individual failures are swallowed so
+      // one misbehaving site never aborts the rest of the batch.
+      Promise.allSettled(
+        workspaceIds.map(async ({ workspaceId, m365SiteId }) => {
+          try {
+            const telemetry = await fetchSiteTelemetry(
+              connection.tenantId, clientId, clientSecret, m365SiteId,
+            );
+
+            // Persist snapshot
+            await storage.saveWorkspaceTelemetry({
+              workspaceId,
+              tenantConnectionId: req.params.id,
+              storageUsedBytes: telemetry.storageUsedBytes ?? null,
+              storageTotalBytes: telemetry.storageTotalBytes ?? null,
+              fileCount: telemetry.fileCount ?? null,
+              folderCount: telemetry.folderCount ?? null,
+              listCount: telemetry.listCount ?? null,
+              documentLibraryCount: telemetry.documentLibraryCount ?? null,
+              contentTypes: telemetry.contentTypes ?? null,
+              sensitivityLabel: telemetry.sensitivityLabel ?? null,
+              sensitivityLabelId: telemetry.sensitivityLabelId ?? null,
+              lastActivityDate: telemetry.lastActivityDate
+                ? new Date(telemetry.lastActivityDate)
+                : null,
+            });
+
+            // Back-fill workspace fields derived from live M365 signals
+            const workspaceUpdates: Record<string, any> = {};
+
+            if (telemetry.storageUsedBytes != null) {
+              const mb = telemetry.storageUsedBytes / 1_048_576;
+              workspaceUpdates.size = mb >= 1024
+                ? `${(mb / 1024).toFixed(1)} GB`
+                : `${mb.toFixed(1)} MB`;
+            }
+
+            if (telemetry.lastActivityDate) {
+              const d = new Date(telemetry.lastActivityDate);
+              const diffDays = Math.floor((Date.now() - d.getTime()) / 86_400_000);
+              workspaceUpdates.lastActive = diffDays === 0
+                ? "Today"
+                : diffDays === 1 ? "Yesterday"
+                : diffDays < 30 ? `${diffDays} days ago`
+                : diffDays < 365 ? `${Math.floor(diffDays / 30)} months ago`
+                : `${Math.floor(diffDays / 365)} years ago`;
+            }
+
+            // Map M365 sensitivity label → Zenith sensitivity enum
+            if (telemetry.sensitivityLabel) {
+              const label = telemetry.sensitivityLabel.toLowerCase();
+              if (label.includes("highly") || label.includes("restricted")) {
+                workspaceUpdates.sensitivity = "HIGHLY_CONFIDENTIAL";
+              } else if (label.includes("confidential")) {
+                workspaceUpdates.sensitivity = "CONFIDENTIAL";
+              } else if (label.includes("internal") || label.includes("general")) {
+                workspaceUpdates.sensitivity = "INTERNAL";
+              } else if (label.includes("public")) {
+                workspaceUpdates.sensitivity = "PUBLIC";
+              }
+            }
+
+            if (Object.keys(workspaceUpdates).length > 0) {
+              await storage.updateWorkspace(workspaceId, workspaceUpdates);
+            }
+          } catch (err) {
+            console.warn(`[Telemetry] Failed for workspace ${workspaceId}:`, err);
+          }
+        }),
+      ).catch(() => { /* Promise.allSettled never rejects, but be safe */ });
     } catch (err: any) {
       await storage.updateTenantConnection(req.params.id, {
         lastSyncAt: new Date(),
@@ -573,6 +651,80 @@ export async function registerRoutes(
       });
       res.status(500).json({ success: false, error: err.message });
     }
+  });
+
+  // ── Workspace Telemetry ──
+  app.get("/api/workspaces/:id/telemetry", requireAuth(), requirePermission('inventory:read'), async (req, res) => {
+    const workspace = await storage.getWorkspace(req.params.id);
+    if (!workspace) return res.status(404).json({ message: "Workspace not found" });
+
+    const user = (req as AuthenticatedRequest).user;
+    const orgTenantIds = await getOrgTenantConnectionIds(user);
+    if (orgTenantIds !== null && (!workspace.tenantConnectionId || !orgTenantIds.includes(workspace.tenantConnectionId))) {
+      return res.status(404).json({ message: "Workspace not found" });
+    }
+
+    const limit = Math.min(Number(req.query.limit) || 90, 365);
+    const snapshots = await storage.getWorkspaceTelemetry(req.params.id, limit);
+    res.json(snapshots);
+  });
+
+  // Org-level telemetry aggregate — latest snapshot per workspace
+  app.get("/api/telemetry/org", requireAuth(), requirePermission('inventory:read'), async (req, res) => {
+    const user = (req as AuthenticatedRequest).user;
+    const orgTenantIds = await getOrgTenantConnectionIds(user);
+
+    // Resolve the tenantConnectionIds to query against
+    let connectionIds: string[];
+    if (orgTenantIds !== null) {
+      connectionIds = orgTenantIds;
+    } else {
+      // PLATFORM_OWNER: scope to requested orgId query param, or all connections
+      const orgId = req.query.orgId as string | undefined;
+      const connections = orgId
+        ? await storage.getTenantConnectionsByOrganization(orgId)
+        : await storage.getTenantConnections();
+      connectionIds = connections.map(c => c.id);
+    }
+
+    const latestSnapshots = await storage.getLatestTelemetryForConnections(connectionIds);
+
+    // Aggregate across all workspaces
+    const workspaceCount = latestSnapshots.length;
+    const totalStorageBytes = latestSnapshots.reduce((s, t) => s + (t.storageUsedBytes ?? 0), 0);
+    const totalFiles = latestSnapshots.reduce((s, t) => s + (t.fileCount ?? 0), 0);
+    const totalLists = latestSnapshots.reduce((s, t) => s + (t.listCount ?? 0), 0);
+    const totalDocLibs = latestSnapshots.reduce((s, t) => s + (t.documentLibraryCount ?? 0), 0);
+
+    // Sensitivity label distribution
+    const labelCounts: Record<string, number> = {};
+    for (const t of latestSnapshots) {
+      const label = t.sensitivityLabel ?? "Unlabelled";
+      labelCounts[label] = (labelCounts[label] ?? 0) + 1;
+    }
+
+    // Content-type frequency across the org
+    const ctCounts: Record<string, number> = {};
+    for (const t of latestSnapshots) {
+      for (const ct of (t.contentTypes ?? [])) {
+        ctCounts[ct.name] = (ctCounts[ct.name] ?? 0) + 1;
+      }
+    }
+    const topContentTypes = Object.entries(ctCounts)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 20)
+      .map(([name, count]) => ({ name, count }));
+
+    res.json({
+      workspaceCount,
+      totalStorageBytes,
+      totalFiles,
+      totalLists,
+      totalDocumentLibraries: totalDocLibs,
+      sensitivityLabelDistribution: labelCounts,
+      topContentTypes,
+      snapshotCoverage: latestSnapshots.length,
+    });
   });
 
   // ── Domain Blocklist (Admin) ──
