@@ -67,8 +67,8 @@ type QuickFilter = "all" | "active" | "warning" | "no-label" | "external-sharing
 
 export default function EmbeddedContainersPage() {
   const { toast } = useToast();
-  const { activeTenant } = useTenant();
-  const tenantConnectionId = activeTenant?.id;
+  const { selectedTenant } = useTenant();
+  const tenantConnectionId = selectedTenant?.id;
 
   const [searchTerm, setSearchTerm] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
