@@ -1,4 +1,9 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
+import { useQuery, useMutation } from "@tanstack/react-query";
+import { apiRequest, queryClient } from "@/lib/queryClient";
+import { useTenant } from "@/lib/tenant-context";
+import { useToast } from "@/hooks/use-toast";
+import type { SpeContainer, SpeContainerType } from "@shared/schema";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -6,84 +11,228 @@ import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Progress } from "@/components/ui/progress";
-import { 
-  Box, 
-  Search, 
-  Plus, 
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
+import {
+  Box,
+  Search,
   Database,
-  ArrowUpRight,
   Settings2,
   HardDrive,
-  Users,
   Activity,
   ShieldAlert,
-  MoreVertical,
-  Link as LinkIcon
+  ShieldCheck,
+  Tag,
+  Filter,
+  ArrowUpDown,
+  ArrowUp,
+  ArrowDown,
+  ExternalLink,
+  FileText,
+  Users,
+  Clock,
+  Loader2,
+  ChevronRight,
+  X,
 } from "lucide-react";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 
-const containerTypes = [
-  { id: "CTYPE-01", name: "Client Portal Application", appId: "c8a4...", containers: 142, storageLimit: "100 GB" },
-  { id: "CTYPE-02", name: "Internal HR Knowledge Base", appId: "f9b2...", containers: 1, storageLimit: "500 GB" },
-  { id: "CTYPE-03", name: "Partner Extranet", appId: "3e7d...", containers: 45, storageLimit: "250 GB" },
-  { id: "CTYPE-04", name: "Custom CRM Integration", appId: "a1c9...", containers: 812, storageLimit: "50 GB" },
-];
+function formatBytes(bytes: number | null | undefined): string {
+  if (!bytes || bytes === 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  const i = Math.floor(Math.log(bytes) / Math.log(1024));
+  return `${(bytes / Math.pow(1024, i)).toFixed(i > 1 ? 1 : 0)} ${units[i]}`;
+}
 
-const activeContainers = [
-  { id: "CONT-8492", name: "Acme Corp Portal", type: "Client Portal Application", storage: 42.5, limit: 100, status: "Active", permissions: "Custom App Role" },
-  { id: "CONT-8493", name: "Stark Ind Portal", type: "Client Portal Application", storage: 98.1, limit: 100, status: "Warning", permissions: "Custom App Role" },
-  { id: "CONT-1004", name: "Q1 Benefits Docs", type: "Internal HR Knowledge Base", storage: 12.4, limit: 500, status: "Active", permissions: "Inherited" },
-  { id: "CONT-3391", name: "Alpha Partners", type: "Partner Extranet", storage: 210.5, limit: 250, status: "Active", permissions: "Custom App Role" },
-  { id: "CONT-9912", name: "CRM-OPP-1482", type: "Custom CRM Integration", storage: 2.1, limit: 50, status: "Active", permissions: "System Account" },
-];
+function formatDate(dateStr: string | null | undefined): string {
+  if (!dateStr) return "—";
+  const d = new Date(dateStr);
+  const now = new Date();
+  const diffMs = now.getTime() - d.getTime();
+  const diffDays = Math.floor(diffMs / 86400000);
+  if (diffDays === 0) return "Today";
+  if (diffDays === 1) return "Yesterday";
+  if (diffDays < 7) return `${diffDays}d ago`;
+  if (diffDays < 30) return `${Math.floor(diffDays / 7)}w ago`;
+  return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: d.getFullYear() !== now.getFullYear() ? "numeric" : undefined });
+}
+
+type SortField = "displayName" | "storage" | "fileCount" | "lastActivity" | "sensitivityLabel";
+type SortDir = "asc" | "desc";
+type QuickFilter = "all" | "active" | "warning" | "no-label" | "external-sharing";
 
 export default function EmbeddedContainersPage() {
+  const { toast } = useToast();
+  const { activeTenant } = useTenant();
+  const tenantConnectionId = activeTenant?.id;
+
   const [searchTerm, setSearchTerm] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [sortField, setSortField] = useState<SortField>("displayName");
+  const [sortDir, setSortDir] = useState<SortDir>("asc");
+  const [quickFilter, setQuickFilter] = useState<QuickFilter>("all");
+  const [selectedContainerId, setSelectedContainerId] = useState<string | null>(null);
+  const [filterType, setFilterType] = useState<string | null>(null);
+
+  useState(() => {
+    const timer = setTimeout(() => setDebouncedSearch(searchTerm), 300);
+    return () => clearTimeout(timer);
+  });
+
+  const { data: containers = [], isLoading: containersLoading } = useQuery<SpeContainer[]>({
+    queryKey: ["/api/spe/containers", tenantConnectionId, debouncedSearch],
+    queryFn: async () => {
+      const params = new URLSearchParams();
+      if (tenantConnectionId) params.set("tenantConnectionId", tenantConnectionId);
+      if (debouncedSearch) params.set("search", debouncedSearch);
+      const res = await fetch(`/api/spe/containers?${params}`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch containers");
+      return res.json();
+    },
+    enabled: !!tenantConnectionId,
+  });
+
+  const { data: containerTypes = [], isLoading: typesLoading } = useQuery<SpeContainerType[]>({
+    queryKey: ["/api/spe/container-types", tenantConnectionId],
+    queryFn: async () => {
+      const params = new URLSearchParams();
+      if (tenantConnectionId) params.set("tenantConnectionId", tenantConnectionId);
+      const res = await fetch(`/api/spe/container-types?${params}`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch container types");
+      return res.json();
+    },
+    enabled: !!tenantConnectionId,
+  });
+
+  const seedMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/spe/seed-demo", { tenantConnectionId });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/spe/containers"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/spe/container-types"] });
+      toast({ title: "Demo data seeded", description: "SPE containers and types have been populated." });
+    },
+    onError: (err: any) => {
+      toast({ title: "Seed failed", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const selectedContainer = useMemo(() =>
+    containers.find(c => c.id === selectedContainerId),
+    [containers, selectedContainerId]
+  );
+
+  const typeNameMap = useMemo(() => {
+    const m = new Map<string, string>();
+    containerTypes.forEach(ct => m.set(ct.id, ct.displayName));
+    return m;
+  }, [containerTypes]);
+
+  const filteredContainers = useMemo(() => {
+    let list = [...containers];
+
+    if (quickFilter === "active") list = list.filter(c => c.status === "Active");
+    else if (quickFilter === "warning") list = list.filter(c => c.status === "Warning" || (c.storageUsedBytes && c.storageAllocatedBytes && c.storageUsedBytes / c.storageAllocatedBytes > 0.9));
+    else if (quickFilter === "no-label") list = list.filter(c => !c.sensitivityLabel);
+    else if (quickFilter === "external-sharing") list = list.filter(c => c.externalSharing);
+
+    if (filterType) list = list.filter(c => c.containerTypeId === filterType);
+
+    list.sort((a, b) => {
+      let cmp = 0;
+      switch (sortField) {
+        case "displayName": cmp = (a.displayName || "").localeCompare(b.displayName || ""); break;
+        case "storage": cmp = (a.storageUsedBytes || 0) - (b.storageUsedBytes || 0); break;
+        case "fileCount": cmp = (a.fileCount || 0) - (b.fileCount || 0); break;
+        case "lastActivity": cmp = (a.lastActivityDate || "").localeCompare(b.lastActivityDate || ""); break;
+        case "sensitivityLabel": cmp = (a.sensitivityLabel || "").localeCompare(b.sensitivityLabel || ""); break;
+      }
+      return sortDir === "asc" ? cmp : -cmp;
+    });
+
+    return list;
+  }, [containers, quickFilter, filterType, sortField, sortDir]);
+
+  const toggleSort = (field: SortField) => {
+    if (sortField === field) setSortDir(d => d === "asc" ? "desc" : "asc");
+    else { setSortField(field); setSortDir("asc"); }
+  };
+
+  const SortIcon = ({ field }: { field: SortField }) => {
+    if (sortField !== field) return <ArrowUpDown className="w-3 h-3 text-muted-foreground/50" />;
+    return sortDir === "asc" ? <ArrowUp className="w-3 h-3 text-primary" /> : <ArrowDown className="w-3 h-3 text-primary" />;
+  };
+
+  const totalStorage = useMemo(() => containers.reduce((sum, c) => sum + (c.storageUsedBytes || 0), 0), [containers]);
+  const totalAllocated = useMemo(() => containers.reduce((sum, c) => sum + (c.storageAllocatedBytes || 0), 0), [containers]);
+  const totalFiles = useMemo(() => containers.reduce((sum, c) => sum + (c.fileCount || 0), 0), [containers]);
+  const labeledCount = useMemo(() => containers.filter(c => c.sensitivityLabel).length, [containers]);
+
+  const getLabelColor = (label: string | null | undefined) => {
+    if (!label) return "";
+    const l = label.toLowerCase();
+    if (l.includes("highly confidential")) return "bg-red-500/10 text-red-600 border-red-500/20";
+    if (l.includes("confidential")) return "bg-orange-500/10 text-orange-600 border-orange-500/20";
+    if (l.includes("internal")) return "bg-blue-500/10 text-blue-600 border-blue-500/20";
+    if (l.includes("public")) return "bg-green-500/10 text-green-600 border-green-500/20";
+    return "bg-muted/50 text-muted-foreground border-border/50";
+  };
+
+  const isEmpty = !containersLoading && containers.length === 0;
+
+  if (!tenantConnectionId) {
+    return (
+      <div className="flex items-center justify-center min-h-[400px]">
+        <div className="text-center text-muted-foreground space-y-2">
+          <Box className="w-12 h-12 mx-auto text-muted-foreground/40" />
+          <p className="font-medium">Select a tenant to view SharePoint Embedded containers</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-8 animate-in fade-in duration-500 pb-12">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">SharePoint Embedded</h1>
-          <p className="text-muted-foreground mt-1">Manage headless SharePoint containers, custom applications, and API consumption.</p>
+          <h1 className="text-3xl font-bold tracking-tight" data-testid="heading-spe">SharePoint Embedded</h1>
+          <p className="text-muted-foreground mt-1">Manage headless SharePoint containers, usage, and Purview labeling.</p>
         </div>
-        <div className="flex gap-3">
-          <Button variant="outline" className="gap-2">
-            <LinkIcon className="w-4 h-4" />
-            Register App ID
+        {isEmpty && (
+          <Button
+            onClick={() => seedMutation.mutate()}
+            disabled={seedMutation.isPending}
+            className="gap-2 shadow-md shadow-primary/20"
+            data-testid="button-seed-demo"
+          >
+            {seedMutation.isPending && <Loader2 className="w-4 h-4 animate-spin" />}
+            <Database className="w-4 h-4" />
+            Load Demo Data
           </Button>
-          <Button className="gap-2 shadow-md shadow-primary/20">
-            <Plus className="w-4 h-4" />
-            New Container Type
-          </Button>
-        </div>
+        )}
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         {[
-          { title: "Total Containers", value: "1,000+", change: "+124 this month", icon: <Box className="w-5 h-5 text-blue-500" /> },
-          { title: "Total Storage", value: "8.4 TB", change: "64% of quota", icon: <HardDrive className="w-5 h-5 text-purple-500" /> },
-          { title: "API Calls (30d)", value: "2.4M", change: "+12% vs last month", icon: <Activity className="w-5 h-5 text-emerald-500" /> },
-          { title: "Registered Apps", value: "4", change: "All healthy", icon: <Database className="w-5 h-5 text-orange-500" /> },
+          { title: "Total Containers", value: containers.length.toLocaleString(), sub: `${containerTypes.length} type${containerTypes.length !== 1 ? "s" : ""} registered`, icon: <Box className="w-5 h-5 text-blue-500" /> },
+          { title: "Total Storage", value: formatBytes(totalStorage), sub: totalAllocated ? `${Math.round(totalStorage / totalAllocated * 100)}% of ${formatBytes(totalAllocated)}` : "—", icon: <HardDrive className="w-5 h-5 text-purple-500" /> },
+          { title: "Total Files", value: totalFiles.toLocaleString(), sub: `Across all containers`, icon: <FileText className="w-5 h-5 text-emerald-500" /> },
+          { title: "Purview Labels", value: `${labeledCount}/${containers.length}`, sub: containers.length > 0 ? `${Math.round(labeledCount / containers.length * 100)}% labeled` : "—", icon: <Tag className="w-5 h-5 text-orange-500" /> },
         ].map((stat, i) => (
-          <Card key={i} className="glass-panel border-border/50">
+          <Card key={i} className="glass-panel border-border/50" data-testid={`card-stat-${i}`}>
             <CardHeader className="pb-2 flex flex-row items-center justify-between">
               <CardTitle className="text-sm font-medium text-muted-foreground">{stat.title}</CardTitle>
-              <div className="w-8 h-8 rounded-full bg-muted/50 flex items-center justify-center">
-                {stat.icon}
-              </div>
+              <div className="w-8 h-8 rounded-full bg-muted/50 flex items-center justify-center">{stat.icon}</div>
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold">{stat.value}</div>
-              <div className="flex items-center gap-1 mt-1 text-xs font-medium text-muted-foreground">
-                {stat.change}
-              </div>
+              <div className="text-xs font-medium text-muted-foreground mt-1">{stat.sub}</div>
             </CardContent>
           </Card>
         ))}
@@ -91,17 +240,13 @@ export default function EmbeddedContainersPage() {
 
       <Tabs defaultValue="containers" className="w-full">
         <TabsList className="bg-muted/50 p-1 w-full justify-start rounded-xl h-auto">
-          <TabsTrigger value="containers" className="rounded-lg px-6 py-2.5 data-[state=active]:bg-background data-[state=active]:shadow-sm">
+          <TabsTrigger value="containers" className="rounded-lg px-6 py-2.5 data-[state=active]:bg-background data-[state=active]:shadow-sm" data-testid="tab-containers">
             <Box className="w-4 h-4 mr-2" />
-            Active Containers
+            Containers ({filteredContainers.length})
           </TabsTrigger>
-          <TabsTrigger value="types" className="rounded-lg px-6 py-2.5 data-[state=active]:bg-background data-[state=active]:shadow-sm">
+          <TabsTrigger value="types" className="rounded-lg px-6 py-2.5 data-[state=active]:bg-background data-[state=active]:shadow-sm" data-testid="tab-types">
             <Settings2 className="w-4 h-4 mr-2" />
-            Container Types
-          </TabsTrigger>
-          <TabsTrigger value="billing" className="rounded-lg px-6 py-2.5 data-[state=active]:bg-background data-[state=active]:shadow-sm">
-            <Activity className="w-4 h-4 mr-2" />
-            Consumption & Billing
+            Container Types ({containerTypes.length})
           </TabsTrigger>
         </TabsList>
 
@@ -109,99 +254,211 @@ export default function EmbeddedContainersPage() {
           <TabsContent value="containers" className="m-0">
             <Card className="glass-panel border-border/50 shadow-xl">
               <CardHeader className="pb-4 border-b border-border/40 bg-muted/10">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                  <CardTitle className="text-xl flex items-center gap-2">
-                    <Box className="w-5 h-5 text-primary" />
-                    Embedded Containers
-                  </CardTitle>
-                  <div className="flex gap-2">
+                <div className="flex flex-col gap-4">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                    <CardTitle className="text-xl flex items-center gap-2">
+                      <Box className="w-5 h-5 text-primary" />
+                      Embedded Containers
+                    </CardTitle>
                     <div className="relative w-full sm:w-72">
                       <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                       <Input
-                        placeholder="Search container ID or name..."
+                        placeholder="Search containers..."
                         className="pl-9 h-9 bg-background/50 rounded-lg border-border/50"
                         value={searchTerm}
-                        onChange={(e) => setSearchTerm(e.target.value)}
+                        onChange={(e) => { setSearchTerm(e.target.value); setDebouncedSearch(e.target.value); }}
+                        data-testid="input-search-containers"
                       />
                     </div>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {([
+                      { key: "all", label: "All Containers" },
+                      { key: "active", label: "Active" },
+                      { key: "warning", label: "Near Limit" },
+                      { key: "no-label", label: "No Label" },
+                      { key: "external-sharing", label: "External Sharing" },
+                    ] as { key: QuickFilter; label: string }[]).map(f => (
+                      <Button
+                        key={f.key}
+                        variant={quickFilter === f.key ? "default" : "outline"}
+                        size="sm"
+                        className="h-7 text-xs rounded-full"
+                        onClick={() => setQuickFilter(f.key)}
+                        data-testid={`filter-${f.key}`}
+                      >
+                        {f.label}
+                      </Button>
+                    ))}
+                    {filterType && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-7 text-xs rounded-full gap-1"
+                        onClick={() => setFilterType(null)}
+                      >
+                        Type: {typeNameMap.get(filterType) || "Unknown"}
+                        <X className="w-3 h-3" />
+                      </Button>
+                    )}
                   </div>
                 </div>
               </CardHeader>
               <CardContent className="p-0">
-                <Table>
-                  <TableHeader className="bg-muted/30">
-                    <TableRow>
-                      <TableHead className="pl-6">Container ID / Name</TableHead>
-                      <TableHead>Type</TableHead>
-                      <TableHead className="w-[200px]">Storage Used</TableHead>
-                      <TableHead>Permissions</TableHead>
-                      <TableHead>Status</TableHead>
-                      <TableHead className="w-[50px]"></TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {activeContainers.map((container) => {
-                      const percentUsed = (container.storage / container.limit) * 100;
-                      const isNearLimit = percentUsed > 90;
-                      
-                      return (
-                        <TableRow key={container.id} className="hover:bg-muted/10 transition-colors">
-                          <TableCell className="pl-6">
-                            <div className="font-semibold text-sm">{container.name}</div>
-                            <div className="text-xs text-muted-foreground font-mono mt-0.5">{container.id}</div>
-                          </TableCell>
-                          <TableCell className="text-muted-foreground text-sm">{container.type}</TableCell>
-                          <TableCell>
-                            <div className="space-y-1.5">
-                              <div className="flex justify-between text-xs">
-                                <span className={isNearLimit ? "text-red-500 font-medium" : "text-muted-foreground"}>
-                                  {container.storage} GB
-                                </span>
-                                <span className="text-muted-foreground">{container.limit} GB</span>
+                {containersLoading ? (
+                  <div className="flex items-center justify-center py-20">
+                    <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
+                  </div>
+                ) : filteredContainers.length === 0 ? (
+                  <div className="flex items-center justify-center py-20 text-muted-foreground">
+                    <div className="text-center space-y-2">
+                      <Box className="w-10 h-10 mx-auto text-muted-foreground/40" />
+                      <p className="font-medium">No containers found</p>
+                      {containers.length === 0 && <p className="text-sm">Click "Load Demo Data" to populate sample SPE containers.</p>}
+                    </div>
+                  </div>
+                ) : (
+                  <Table>
+                    <TableHeader className="bg-muted/30">
+                      <TableRow>
+                        <TableHead className="pl-6 cursor-pointer select-none" onClick={() => toggleSort("displayName")}>
+                          <span className="inline-flex items-center gap-1">Container <SortIcon field="displayName" /></span>
+                        </TableHead>
+                        <TableHead>Type</TableHead>
+                        <TableHead>Owner</TableHead>
+                        <TableHead className="w-[180px] cursor-pointer select-none" onClick={() => toggleSort("storage")}>
+                          <span className="inline-flex items-center gap-1">Storage <SortIcon field="storage" /></span>
+                        </TableHead>
+                        <TableHead className="cursor-pointer select-none" onClick={() => toggleSort("fileCount")}>
+                          <span className="inline-flex items-center gap-1">Files <SortIcon field="fileCount" /></span>
+                        </TableHead>
+                        <TableHead className="cursor-pointer select-none" onClick={() => toggleSort("lastActivity")}>
+                          <span className="inline-flex items-center gap-1">Activity <SortIcon field="lastActivity" /></span>
+                        </TableHead>
+                        <TableHead className="cursor-pointer select-none" onClick={() => toggleSort("sensitivityLabel")}>
+                          <span className="inline-flex items-center gap-1">Sensitivity <SortIcon field="sensitivityLabel" /></span>
+                        </TableHead>
+                        <TableHead>Retention</TableHead>
+                        <TableHead>Status</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {filteredContainers.map((container) => {
+                        const pctUsed = container.storageAllocatedBytes
+                          ? ((container.storageUsedBytes || 0) / container.storageAllocatedBytes) * 100
+                          : 0;
+                        const isNearLimit = pctUsed > 90;
+                        const typeName = container.containerTypeId ? typeNameMap.get(container.containerTypeId) : null;
+
+                        return (
+                          <TableRow
+                            key={container.id}
+                            className="group hover:bg-muted/10 transition-colors cursor-pointer"
+                            onClick={() => setSelectedContainerId(container.id)}
+                            data-testid={`row-container-${container.id}`}
+                          >
+                            <TableCell className="pl-6">
+                              <div className="flex items-center gap-3">
+                                <div className="w-8 h-8 rounded-lg bg-background border border-border/50 flex items-center justify-center shadow-sm shrink-0">
+                                  <Box className="w-4 h-4 text-blue-500" />
+                                </div>
+                                <div className="flex flex-col min-w-0">
+                                  <span className="text-sm font-medium truncate">{container.displayName}</span>
+                                  <span className="text-[10px] text-muted-foreground font-mono">{container.m365ContainerId || container.id.slice(0, 12)}</span>
+                                </div>
                               </div>
-                              <Progress 
-                                value={percentUsed} 
-                                className="h-1.5" 
-                                indicatorColor={isNearLimit ? "bg-red-500" : "bg-primary"}
-                              />
-                            </div>
-                          </TableCell>
-                          <TableCell>
-                            <div className="flex items-center gap-1.5">
-                              <Users className="w-3.5 h-3.5 text-muted-foreground" />
-                              <span className="text-sm">{container.permissions}</span>
-                            </div>
-                          </TableCell>
-                          <TableCell>
-                            <Badge variant="outline" className={
-                              container.status === 'Active' ? 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20' :
-                              'bg-orange-500/10 text-orange-600 border-orange-500/20'
-                            }>
-                              {container.status === 'Warning' && <ShieldAlert className="w-3 h-3 mr-1" />}
-                              {container.status}
-                            </Badge>
-                          </TableCell>
-                          <TableCell>
-                            <DropdownMenu>
-                              <DropdownMenuTrigger asChild>
-                                <Button variant="ghost" size="icon" className="h-8 w-8">
-                                  <MoreVertical className="w-4 h-4 text-muted-foreground" />
+                            </TableCell>
+                            <TableCell>
+                              {typeName ? (
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-auto p-0 text-xs text-muted-foreground hover:text-primary font-normal"
+                                  onClick={(e) => { e.stopPropagation(); setFilterType(container.containerTypeId); }}
+                                >
+                                  {typeName}
                                 </Button>
-                              </DropdownMenuTrigger>
-                              <DropdownMenuContent align="end">
-                                <DropdownMenuItem>Manage Permissions</DropdownMenuItem>
-                                <DropdownMenuItem>Increase Quota</DropdownMenuItem>
-                                <DropdownMenuItem>View API Logs</DropdownMenuItem>
-                                <DropdownMenuSeparator />
-                                <DropdownMenuItem className="text-destructive">Delete Container</DropdownMenuItem>
-                              </DropdownMenuContent>
-                            </DropdownMenu>
-                          </TableCell>
-                        </TableRow>
-                      );
-                    })}
-                  </TableBody>
-                </Table>
+                              ) : (
+                                <span className="text-xs text-muted-foreground">—</span>
+                              )}
+                            </TableCell>
+                            <TableCell>
+                              {container.ownerDisplayName ? (
+                                <div className="flex flex-col min-w-0">
+                                  <span className="text-sm truncate max-w-[120px]">{container.ownerDisplayName}</span>
+                                  {container.ownerPrincipalName && (
+                                    <span className="text-[10px] text-muted-foreground truncate max-w-[120px]">{container.ownerPrincipalName}</span>
+                                  )}
+                                </div>
+                              ) : <span className="text-muted-foreground">—</span>}
+                            </TableCell>
+                            <TableCell>
+                              <div className="space-y-1.5 w-[160px]">
+                                <div className="flex justify-between text-xs">
+                                  <span className={isNearLimit ? "text-red-500 font-medium" : "text-muted-foreground"}>
+                                    {formatBytes(container.storageUsedBytes)}
+                                  </span>
+                                  <span className="text-muted-foreground">{formatBytes(container.storageAllocatedBytes)}</span>
+                                </div>
+                                <Progress
+                                  value={pctUsed}
+                                  className="h-1.5"
+                                  indicatorColor={isNearLimit ? "bg-red-500" : pctUsed > 70 ? "bg-amber-500" : "bg-primary"}
+                                />
+                              </div>
+                            </TableCell>
+                            <TableCell>
+                              <div className="flex flex-col">
+                                <span className="text-sm">{(container.fileCount || 0).toLocaleString()}</span>
+                                {container.activeFileCount != null && (
+                                  <span className="text-[10px] text-muted-foreground">{container.activeFileCount.toLocaleString()} active</span>
+                                )}
+                              </div>
+                            </TableCell>
+                            <TableCell>
+                              <div className="flex items-center gap-1.5">
+                                <Clock className="w-3.5 h-3.5 text-muted-foreground" />
+                                <span className="text-sm text-muted-foreground">{formatDate(container.lastActivityDate)}</span>
+                              </div>
+                            </TableCell>
+                            <TableCell>
+                              {container.sensitivityLabel ? (
+                                <Badge variant="outline" className={`text-[10px] ${getLabelColor(container.sensitivityLabel)}`}>
+                                  <ShieldCheck className="w-3 h-3 mr-1" />
+                                  {container.sensitivityLabel}
+                                </Badge>
+                              ) : (
+                                <Badge variant="outline" className="text-[10px] bg-muted/30 text-muted-foreground border-border/50">
+                                  No Label
+                                </Badge>
+                              )}
+                            </TableCell>
+                            <TableCell>
+                              {container.retentionLabel ? (
+                                <Badge variant="outline" className="text-[10px] bg-indigo-500/10 text-indigo-600 border-indigo-500/20">
+                                  {container.retentionLabel}
+                                </Badge>
+                              ) : (
+                                <span className="text-xs text-muted-foreground">—</span>
+                              )}
+                            </TableCell>
+                            <TableCell>
+                              <Badge variant="outline" className={
+                                container.status === "Active" ? "bg-emerald-500/10 text-emerald-500 border-emerald-500/20" :
+                                container.status === "Warning" ? "bg-orange-500/10 text-orange-600 border-orange-500/20" :
+                                container.status === "Inactive" ? "bg-gray-500/10 text-gray-500 border-gray-500/20" :
+                                "bg-muted/50 text-muted-foreground border-border/50"
+                              }>
+                                {container.status === "Warning" && <ShieldAlert className="w-3 h-3 mr-1" />}
+                                {container.status}
+                              </Badge>
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })}
+                    </TableBody>
+                  </Table>
+                )}
               </CardContent>
             </Card>
           </TabsContent>
@@ -213,65 +470,263 @@ export default function EmbeddedContainersPage() {
                   <Settings2 className="w-5 h-5 text-primary" />
                   Container Types
                 </CardTitle>
-                <CardDescription>Logical groupings that define default storage quotas and billing meters.</CardDescription>
+                <CardDescription>Registered container type definitions with default storage quotas and owning applications.</CardDescription>
               </CardHeader>
               <CardContent className="p-0">
-                <Table>
-                  <TableHeader className="bg-muted/30">
-                    <TableRow>
-                      <TableHead className="pl-6">Type Name</TableHead>
-                      <TableHead>Associated App ID</TableHead>
-                      <TableHead>Active Containers</TableHead>
-                      <TableHead>Default Quota</TableHead>
-                      <TableHead className="w-[50px]"></TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {containerTypes.map((type) => (
-                      <TableRow key={type.id} className="hover:bg-muted/10 transition-colors">
-                        <TableCell className="pl-6 font-medium">{type.name}</TableCell>
-                        <TableCell>
-                          <div className="flex items-center gap-2 text-muted-foreground font-mono text-sm">
-                            {type.appId}
-                            <ArrowUpRight className="w-3 h-3 hover:text-primary cursor-pointer" />
-                          </div>
-                        </TableCell>
-                        <TableCell>{type.containers}</TableCell>
-                        <TableCell>{type.storageLimit}</TableCell>
-                        <TableCell>
-                          <Button variant="ghost" size="sm">Edit</Button>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </CardContent>
-            </Card>
-          </TabsContent>
-
-          <TabsContent value="billing" className="m-0">
-            <Card className="glass-panel border-border/50 shadow-xl">
-              <CardHeader className="pb-4 border-b border-border/40">
-                <CardTitle className="text-xl flex items-center gap-2">
-                  <Activity className="w-5 h-5 text-primary" />
-                  Consumption Overview
-                </CardTitle>
-                <CardDescription>Track SharePoint Embedded storage and API usage against Azure billing meters.</CardDescription>
-              </CardHeader>
-              <CardContent className="flex items-center justify-center min-h-[300px]">
-                <div className="text-center text-muted-foreground space-y-4 max-w-md">
-                  <div className="w-20 h-20 rounded-full bg-primary/5 border border-primary/10 flex items-center justify-center mx-auto mb-6">
-                    <Database className="w-8 h-8 text-primary/60" />
+                {typesLoading ? (
+                  <div className="flex items-center justify-center py-20">
+                    <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
                   </div>
-                  <h3 className="text-lg font-semibold text-foreground">Billing Data Integration Required</h3>
-                  <p className="text-sm">In a full implementation, this dashboard would display an interactive graph linking SharePoint Embedded API consumption directly to your configured Azure Subscription.</p>
-                  <Button variant="outline" className="mt-4">Configure Billing Meter</Button>
-                </div>
+                ) : containerTypes.length === 0 ? (
+                  <div className="flex items-center justify-center py-20 text-muted-foreground">
+                    <div className="text-center space-y-2">
+                      <Settings2 className="w-10 h-10 mx-auto text-muted-foreground/40" />
+                      <p className="font-medium">No container types registered</p>
+                    </div>
+                  </div>
+                ) : (
+                  <Table>
+                    <TableHeader className="bg-muted/30">
+                      <TableRow>
+                        <TableHead className="pl-6">Type Name</TableHead>
+                        <TableHead>Azure App ID</TableHead>
+                        <TableHead>Active Containers</TableHead>
+                        <TableHead>Default Quota</TableHead>
+                        <TableHead>Status</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {containerTypes.map((ct) => (
+                        <TableRow key={ct.id} className="hover:bg-muted/10 transition-colors" data-testid={`row-type-${ct.id}`}>
+                          <TableCell className="pl-6">
+                            <div className="flex flex-col">
+                              <span className="font-medium text-sm">{ct.displayName}</span>
+                              {ct.description && <span className="text-[10px] text-muted-foreground">{ct.description}</span>}
+                            </div>
+                          </TableCell>
+                          <TableCell>
+                            <span className="font-mono text-xs text-muted-foreground">
+                              {ct.azureAppId || "—"}
+                            </span>
+                          </TableCell>
+                          <TableCell>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-auto p-0 text-sm font-medium hover:text-primary"
+                              onClick={() => setFilterType(ct.id)}
+                            >
+                              {ct.containerCount || 0}
+                              <ChevronRight className="w-3 h-3 ml-1" />
+                            </Button>
+                          </TableCell>
+                          <TableCell className="text-sm">{ct.defaultStorageLimitBytes ? formatBytes(ct.defaultStorageLimitBytes) : "—"}</TableCell>
+                          <TableCell>
+                            <Badge variant="outline" className={
+                              ct.status === "ACTIVE" ? "bg-emerald-500/10 text-emerald-500 border-emerald-500/20" :
+                              "bg-gray-500/10 text-gray-500 border-gray-500/20"
+                            }>
+                              {ct.status}
+                            </Badge>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                )}
               </CardContent>
             </Card>
           </TabsContent>
         </div>
       </Tabs>
+
+      <Sheet open={!!selectedContainer} onOpenChange={(open) => { if (!open) setSelectedContainerId(null); }}>
+        <SheetContent className="sm:max-w-lg overflow-y-auto">
+          {selectedContainer && (
+            <>
+              <SheetHeader>
+                <SheetTitle className="flex items-center gap-2">
+                  <Box className="w-5 h-5 text-blue-500" />
+                  {selectedContainer.displayName}
+                </SheetTitle>
+              </SheetHeader>
+              <ContainerDetailPanel container={selectedContainer} typeNameMap={typeNameMap} />
+            </>
+          )}
+        </SheetContent>
+      </Sheet>
+    </div>
+  );
+}
+
+function ContainerDetailPanel({ container, typeNameMap }: { container: SpeContainer; typeNameMap: Map<string, string> }) {
+  const { data: usageHistory = [] } = useQuery({
+    queryKey: ["/api/spe/containers", container.id, "usage"],
+    queryFn: async () => {
+      const res = await fetch(`/api/spe/containers/${container.id}/usage?limit=10`, { credentials: "include" });
+      if (!res.ok) return [];
+      return res.json();
+    },
+  });
+
+  const pctUsed = container.storageAllocatedBytes
+    ? ((container.storageUsedBytes || 0) / container.storageAllocatedBytes) * 100
+    : 0;
+  const isNearLimit = pctUsed > 90;
+
+  const getLabelColor = (label: string | null | undefined) => {
+    if (!label) return "";
+    const l = label.toLowerCase();
+    if (l.includes("highly confidential")) return "bg-red-500/10 text-red-600 border-red-500/20";
+    if (l.includes("confidential")) return "bg-orange-500/10 text-orange-600 border-orange-500/20";
+    if (l.includes("internal")) return "bg-blue-500/10 text-blue-600 border-blue-500/20";
+    return "bg-muted/50 text-muted-foreground border-border/50";
+  };
+
+  return (
+    <div className="space-y-6 mt-6">
+      <div className="grid grid-cols-2 gap-4">
+        <Card className="border-border/50">
+          <CardContent className="pt-4 pb-3">
+            <div className="text-xs text-muted-foreground mb-1">Status</div>
+            <Badge variant="outline" className={
+              container.status === "Active" ? "bg-emerald-500/10 text-emerald-500 border-emerald-500/20" :
+              container.status === "Warning" ? "bg-orange-500/10 text-orange-600 border-orange-500/20" :
+              "bg-gray-500/10 text-gray-500 border-gray-500/20"
+            }>
+              {container.status}
+            </Badge>
+          </CardContent>
+        </Card>
+        <Card className="border-border/50">
+          <CardContent className="pt-4 pb-3">
+            <div className="text-xs text-muted-foreground mb-1">Type</div>
+            <span className="text-sm font-medium">{container.containerTypeId ? typeNameMap.get(container.containerTypeId) || "—" : "—"}</span>
+          </CardContent>
+        </Card>
+      </div>
+
+      <Card className="border-border/50">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm flex items-center gap-2"><HardDrive className="w-4 h-4" /> Storage</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="space-y-2">
+            <div className="flex justify-between text-sm">
+              <span className={isNearLimit ? "text-red-500 font-medium" : ""}>
+                {formatBytes(container.storageUsedBytes)}
+              </span>
+              <span className="text-muted-foreground">{formatBytes(container.storageAllocatedBytes)}</span>
+            </div>
+            <Progress
+              value={pctUsed}
+              className="h-2"
+              indicatorColor={isNearLimit ? "bg-red-500" : pctUsed > 70 ? "bg-amber-500" : "bg-primary"}
+            />
+            <div className="text-xs text-muted-foreground text-right">{Math.round(pctUsed)}% used</div>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card className="border-border/50">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm flex items-center gap-2"><FileText className="w-4 h-4" /> Content</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="grid grid-cols-2 gap-y-3 text-sm">
+            <div><span className="text-muted-foreground">Total Files</span></div>
+            <div className="text-right font-medium">{(container.fileCount || 0).toLocaleString()}</div>
+            <div><span className="text-muted-foreground">Active Files</span></div>
+            <div className="text-right font-medium">{(container.activeFileCount || 0).toLocaleString()}</div>
+            <div><span className="text-muted-foreground">Last Activity</span></div>
+            <div className="text-right">{formatDate(container.lastActivityDate)}</div>
+            <div><span className="text-muted-foreground">Created</span></div>
+            <div className="text-right">{formatDate(container.containerCreatedDate)}</div>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card className="border-border/50">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm flex items-center gap-2"><ShieldCheck className="w-4 h-4" /> Purview Labels</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="space-y-3">
+            <div>
+              <div className="text-xs text-muted-foreground mb-1">Sensitivity Label</div>
+              {container.sensitivityLabel ? (
+                <Badge variant="outline" className={getLabelColor(container.sensitivityLabel)}>
+                  <ShieldCheck className="w-3 h-3 mr-1" />
+                  {container.sensitivityLabel}
+                </Badge>
+              ) : (
+                <Badge variant="outline" className="bg-muted/30 text-muted-foreground border-border/50">No Label</Badge>
+              )}
+            </div>
+            <div>
+              <div className="text-xs text-muted-foreground mb-1">Retention Label</div>
+              {container.retentionLabel ? (
+                <Badge variant="outline" className="bg-indigo-500/10 text-indigo-600 border-indigo-500/20">
+                  {container.retentionLabel}
+                </Badge>
+              ) : (
+                <span className="text-sm text-muted-foreground">None assigned</span>
+              )}
+            </div>
+            <div>
+              <div className="text-xs text-muted-foreground mb-1">External Sharing</div>
+              <Badge variant="outline" className={container.externalSharing ? "bg-amber-500/10 text-amber-600 border-amber-500/20" : "bg-muted/30 text-muted-foreground border-border/50"}>
+                {container.externalSharing ? "Enabled" : "Disabled"}
+              </Badge>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card className="border-border/50">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm flex items-center gap-2"><Users className="w-4 h-4" /> Owner & Permissions</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="grid grid-cols-2 gap-y-3 text-sm">
+            <div><span className="text-muted-foreground">Owner</span></div>
+            <div className="text-right font-medium">{container.ownerDisplayName || "—"}</div>
+            {container.ownerPrincipalName && (
+              <>
+                <div><span className="text-muted-foreground">UPN</span></div>
+                <div className="text-right text-xs text-muted-foreground">{container.ownerPrincipalName}</div>
+              </>
+            )}
+            <div><span className="text-muted-foreground">Permissions</span></div>
+            <div className="text-right">{container.permissions || "—"}</div>
+          </div>
+        </CardContent>
+      </Card>
+
+      {usageHistory.length > 0 && (
+        <Card className="border-border/50">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm flex items-center gap-2"><Activity className="w-4 h-4" /> Usage Trend</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-2">
+              {usageHistory.slice(0, 5).map((u: any, i: number) => (
+                <div key={i} className="flex items-center justify-between text-sm py-1 border-b border-border/20 last:border-0">
+                  <span className="text-xs text-muted-foreground">
+                    {new Date(u.snapshotAt).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+                  </span>
+                  <div className="flex items-center gap-4">
+                    <span className="text-xs">{formatBytes(u.storageUsedBytes)}</span>
+                    <span className="text-xs text-muted-foreground">{(u.fileCount || 0).toLocaleString()} files</span>
+                    {u.activeUsers != null && <span className="text-xs text-muted-foreground">{u.activeUsers} users</span>}
+                    {u.apiCallCount != null && <span className="text-xs text-muted-foreground">{u.apiCallCount.toLocaleString()} API calls</span>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }

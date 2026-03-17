@@ -56,6 +56,15 @@ import {
   workspaceTelemetry,
   type WorkspaceTelemetry,
   type InsertWorkspaceTelemetry,
+  speContainerTypes,
+  type SpeContainerType,
+  type InsertSpeContainerType,
+  speContainers,
+  type SpeContainer,
+  type InsertSpeContainer,
+  speContainerUsage,
+  type SpeContainerUsage,
+  type InsertSpeContainerUsage,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -152,6 +161,21 @@ export interface IStorage {
 
   createWorkspaceTelemetry(data: InsertWorkspaceTelemetry): Promise<WorkspaceTelemetry>;
   getWorkspaceTelemetry(workspaceId: string, limit?: number): Promise<WorkspaceTelemetry[]>;
+
+  getSpeContainerTypes(tenantConnectionId?: string): Promise<SpeContainerType[]>;
+  getSpeContainerType(id: string): Promise<SpeContainerType | undefined>;
+  createSpeContainerType(data: InsertSpeContainerType): Promise<SpeContainerType>;
+  updateSpeContainerType(id: string, updates: Partial<InsertSpeContainerType>): Promise<SpeContainerType | undefined>;
+  deleteSpeContainerType(id: string): Promise<void>;
+
+  getSpeContainers(search?: string, tenantConnectionId?: string): Promise<SpeContainer[]>;
+  getSpeContainer(id: string): Promise<SpeContainer | undefined>;
+  createSpeContainer(data: InsertSpeContainer): Promise<SpeContainer>;
+  updateSpeContainer(id: string, updates: Partial<InsertSpeContainer>): Promise<SpeContainer | undefined>;
+  deleteSpeContainer(id: string): Promise<void>;
+
+  getSpeContainerUsage(containerId: string, limit?: number): Promise<SpeContainerUsage[]>;
+  createSpeContainerUsage(data: InsertSpeContainerUsage): Promise<SpeContainerUsage>;
 
   getOrgMembership(userId: string, organizationId: string): Promise<OrganizationUser | undefined>;
   getOrgMemberships(userId: string): Promise<OrganizationUser[]>;
@@ -764,6 +788,84 @@ export class DatabaseStorage implements IStorage {
       .where(eq(workspaceTelemetry.workspaceId, workspaceId))
       .orderBy(desc(workspaceTelemetry.snapshotAt))
       .limit(limit);
+  }
+
+  async getSpeContainerTypes(tenantConnectionId?: string): Promise<SpeContainerType[]> {
+    if (tenantConnectionId) {
+      return db.select().from(speContainerTypes)
+        .where(eq(speContainerTypes.tenantConnectionId, tenantConnectionId))
+        .orderBy(speContainerTypes.displayName);
+    }
+    return db.select().from(speContainerTypes).orderBy(speContainerTypes.displayName);
+  }
+
+  async getSpeContainerType(id: string): Promise<SpeContainerType | undefined> {
+    const [result] = await db.select().from(speContainerTypes).where(eq(speContainerTypes.id, id));
+    return result;
+  }
+
+  async createSpeContainerType(data: InsertSpeContainerType): Promise<SpeContainerType> {
+    const [result] = await db.insert(speContainerTypes).values(data).returning();
+    return result;
+  }
+
+  async updateSpeContainerType(id: string, updates: Partial<InsertSpeContainerType>): Promise<SpeContainerType | undefined> {
+    const [result] = await db.update(speContainerTypes).set(updates).where(eq(speContainerTypes.id, id)).returning();
+    return result;
+  }
+
+  async deleteSpeContainerType(id: string): Promise<void> {
+    await db.delete(speContainerTypes).where(eq(speContainerTypes.id, id));
+  }
+
+  async getSpeContainers(search?: string, tenantConnectionId?: string): Promise<SpeContainer[]> {
+    const conditions = [];
+    if (tenantConnectionId) {
+      conditions.push(eq(speContainers.tenantConnectionId, tenantConnectionId));
+    }
+    if (search) {
+      conditions.push(
+        or(
+          ilike(speContainers.displayName, `%${search}%`),
+          ilike(speContainers.ownerDisplayName, `%${search}%`),
+        )!
+      );
+    }
+    if (conditions.length > 0) {
+      return db.select().from(speContainers).where(and(...conditions)).orderBy(speContainers.displayName);
+    }
+    return db.select().from(speContainers).orderBy(speContainers.displayName);
+  }
+
+  async getSpeContainer(id: string): Promise<SpeContainer | undefined> {
+    const [result] = await db.select().from(speContainers).where(eq(speContainers.id, id));
+    return result;
+  }
+
+  async createSpeContainer(data: InsertSpeContainer): Promise<SpeContainer> {
+    const [result] = await db.insert(speContainers).values(data).returning();
+    return result;
+  }
+
+  async updateSpeContainer(id: string, updates: Partial<InsertSpeContainer>): Promise<SpeContainer | undefined> {
+    const [result] = await db.update(speContainers).set(updates).where(eq(speContainers.id, id)).returning();
+    return result;
+  }
+
+  async deleteSpeContainer(id: string): Promise<void> {
+    await db.delete(speContainers).where(eq(speContainers.id, id));
+  }
+
+  async getSpeContainerUsage(containerId: string, limit = 30): Promise<SpeContainerUsage[]> {
+    return db.select().from(speContainerUsage)
+      .where(eq(speContainerUsage.containerId, containerId))
+      .orderBy(desc(speContainerUsage.snapshotAt))
+      .limit(limit);
+  }
+
+  async createSpeContainerUsage(data: InsertSpeContainerUsage): Promise<SpeContainerUsage> {
+    const [result] = await db.insert(speContainerUsage).values(data).returning();
+    return result;
   }
 }
 

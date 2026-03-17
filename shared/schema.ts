@@ -547,6 +547,89 @@ export const insertDomainBlocklistSchema = createInsertSchema(domainBlocklist).o
 export type InsertDomainBlocklist = z.infer<typeof insertDomainBlocklistSchema>;
 export type DomainBlocklist = typeof domainBlocklist.$inferSelect;
 
+// ── SharePoint Embedded ─────────────────────────────────────────────────────
+export const speContainerTypes = pgTable("spe_container_types", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantConnectionId: varchar("tenant_connection_id").notNull(),
+  containerTypeId: text("container_type_id"),
+  displayName: text("display_name").notNull(),
+  description: text("description"),
+  azureAppId: text("azure_app_id"),
+  owningTenantId: text("owning_tenant_id"),
+  defaultStorageLimitBytes: bigint("default_storage_limit_bytes", { mode: "number" }),
+  containerCount: integer("container_count").default(0),
+  status: text("status").notNull().default("ACTIVE"),
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => [
+  unique("uq_tenant_container_type").on(table.tenantConnectionId, table.containerTypeId),
+]);
+
+export const insertSpeContainerTypeSchema = createInsertSchema(speContainerTypes).omit({
+  id: true,
+  createdAt: true,
+});
+export type InsertSpeContainerType = z.infer<typeof insertSpeContainerTypeSchema>;
+export type SpeContainerType = typeof speContainerTypes.$inferSelect;
+
+export const speContainers = pgTable("spe_containers", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantConnectionId: varchar("tenant_connection_id").notNull(),
+  containerTypeId: varchar("container_type_id"),
+  m365ContainerId: text("m365_container_id"),
+  displayName: text("display_name").notNull(),
+  description: text("description"),
+  status: text("status").notNull().default("ACTIVE"),
+  storageUsedBytes: bigint("storage_used_bytes", { mode: "number" }),
+  storageAllocatedBytes: bigint("storage_allocated_bytes", { mode: "number" }),
+  fileCount: integer("file_count"),
+  activeFileCount: integer("active_file_count"),
+  lastActivityDate: text("last_activity_date"),
+  sensitivityLabelId: text("sensitivity_label_id"),
+  sensitivityLabel: text("sensitivity_label"),
+  retentionLabelId: text("retention_label_id"),
+  retentionLabel: text("retention_label"),
+  sharingCapability: text("sharing_capability"),
+  externalSharing: boolean("external_sharing").default(false),
+  ownerDisplayName: text("owner_display_name"),
+  ownerPrincipalName: text("owner_principal_name"),
+  permissions: text("permissions").default("Inherited"),
+  containerCreatedDate: text("container_created_date"),
+  lastSyncAt: timestamp("last_sync_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => [
+  unique("uq_tenant_spe_container").on(table.tenantConnectionId, table.m365ContainerId),
+]);
+
+export const insertSpeContainerSchema = createInsertSchema(speContainers).omit({
+  id: true,
+  createdAt: true,
+});
+export type InsertSpeContainer = z.infer<typeof insertSpeContainerSchema>;
+export type SpeContainer = typeof speContainers.$inferSelect;
+
+export const speContainerUsage = pgTable("spe_container_usage", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  containerId: varchar("container_id").notNull().references(() => speContainers.id, { onDelete: 'cascade' }),
+  tenantConnectionId: varchar("tenant_connection_id"),
+  storageUsedBytes: bigint("storage_used_bytes", { mode: "number" }),
+  storageTotalBytes: bigint("storage_total_bytes", { mode: "number" }),
+  fileCount: integer("file_count"),
+  activeFileCount: integer("active_file_count"),
+  activeUsers: integer("active_users"),
+  apiCallCount: integer("api_call_count"),
+  lastActivityDate: text("last_activity_date"),
+  snapshotAt: timestamp("snapshot_at").defaultNow().notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertSpeContainerUsageSchema = createInsertSchema(speContainerUsage).omit({
+  id: true,
+  createdAt: true,
+  snapshotAt: true,
+});
+export type InsertSpeContainerUsage = z.infer<typeof insertSpeContainerUsageSchema>;
+export type SpeContainerUsage = typeof speContainerUsage.$inferSelect;
+
 // ── Workspace Telemetry ──────────────────────────────────────────────────────
 // One row per sync snapshot per workspace. Retaining multiple snapshots enables
 // growth-trend analysis (storage, file count, content-type drift over time).
