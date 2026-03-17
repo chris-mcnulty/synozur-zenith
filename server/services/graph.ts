@@ -1199,8 +1199,15 @@ export async function fetchAllSpeContainers(
     }
   }
 
+  const addDiscoveredApp = (name: string, appId: string) => {
+    if (appId && !KNOWN_SPE_APPS.some(k => k.appId === appId)) {
+      console.log(`[spe] Discovered app: ${name} (${appId})`);
+      KNOWN_SPE_APPS.push({ name, appId });
+    }
+  };
+
   try {
-    console.log(`[spe] Auto-discovering SPE apps via Graph service principal role assignments...`);
+    console.log(`[spe] Auto-discovering SPE apps...`);
     const spoSpRes = await fetch(
       `https://graph.microsoft.com/v1.0/servicePrincipals?$filter=appId eq '00000003-0000-0ff1-ce00-000000000000'&$select=id`,
       { headers: { Authorization: `Bearer ${graphToken}` } }
@@ -1210,50 +1217,83 @@ export async function fetchAllSpeContainers(
       const spoSpId = spoSpData?.value?.[0]?.id;
       if (spoSpId) {
         let nextLink: string | null = `https://graph.microsoft.com/v1.0/servicePrincipals/${spoSpId}/appRoleAssignedTo?$select=principalId,principalDisplayName,appRoleId&$top=999`;
-        const discoveredPrincipalIds: Array<{ id: string; name: string }> = [];
-
         while (nextLink) {
           const roleRes = await fetch(nextLink, { headers: { Authorization: `Bearer ${graphToken}` } });
           if (!roleRes.ok) break;
           const roleData = await roleRes.json();
-          const assignments = roleData?.value || [];
-          for (const a of assignments) {
+          for (const a of (roleData?.value || [])) {
             if (a.principalId && a.principalDisplayName) {
-              discoveredPrincipalIds.push({ id: a.principalId, name: a.principalDisplayName });
+              if (!KNOWN_SPE_APPS.some(k => k.name === a.principalDisplayName)) {
+                try {
+                  const spRes = await fetch(
+                    `https://graph.microsoft.com/v1.0/servicePrincipals/${a.principalId}?$select=appId,displayName`,
+                    { headers: { Authorization: `Bearer ${graphToken}` } }
+                  );
+                  if (spRes.ok) {
+                    const sp = await spRes.json();
+                    if (sp?.appId) addDiscoveredApp(sp.displayName || a.principalDisplayName, sp.appId);
+                  }
+                } catch {}
+              }
             }
           }
           nextLink = roleData?.["@odata.nextLink"] || null;
         }
 
-        console.log(`[spe] Found ${discoveredPrincipalIds.length} apps with SPO role assignments`);
-
-        const uniquePrincipals = new Map<string, string>();
-        for (const p of discoveredPrincipalIds) {
-          if (!uniquePrincipals.has(p.id)) uniquePrincipals.set(p.id, p.name);
-        }
-
-        for (const [principalId, displayName] of uniquePrincipals) {
-          if (KNOWN_SPE_APPS.some(k => k.name === displayName)) continue;
-
-          try {
-            const spDetailRes = await fetch(
-              `https://graph.microsoft.com/v1.0/servicePrincipals/${principalId}?$select=appId,displayName`,
-              { headers: { Authorization: `Bearer ${graphToken}` } }
-            );
-            if (spDetailRes.ok) {
-              const spDetail = await spDetailRes.json();
-              const appId = spDetail?.appId;
-              if (appId && !KNOWN_SPE_APPS.some(k => k.appId === appId)) {
-                console.log(`[spe] Discovered app: ${spDetail.displayName} (${appId})`);
-                KNOWN_SPE_APPS.push({ name: spDetail.displayName || displayName, appId });
+        try {
+          let grantLink: string | null = `https://graph.microsoft.com/v1.0/oauth2PermissionGrants?$filter=resourceId eq '${spoSpId}'&$top=999&$select=clientId,scope`;
+          while (grantLink) {
+            const grantRes = await fetch(grantLink, { headers: { Authorization: `Bearer ${graphToken}` } });
+            if (!grantRes.ok) {
+              console.log(`[spe] oauth2PermissionGrants: ${grantRes.status}`);
+              break;
+            }
+            const grantData = await grantRes.json();
+            for (const g of (grantData?.value || [])) {
+              const scopes = (g.scope || "").toLowerCase();
+              if (scopes.includes("container") || scopes.includes("filestorage") || scopes.includes("allsites") || scopes.includes("sites.")) {
+                try {
+                  const spRes = await fetch(
+                    `https://graph.microsoft.com/v1.0/servicePrincipals/${g.clientId}?$select=appId,displayName`,
+                    { headers: { Authorization: `Bearer ${graphToken}` } }
+                  );
+                  if (spRes.ok) {
+                    const sp = await spRes.json();
+                    if (sp?.appId) addDiscoveredApp(sp.displayName || `App-${g.clientId}`, sp.appId);
+                  }
+                } catch {}
               }
             }
-          } catch {}
+            grantLink = grantData?.["@odata.nextLink"] || null;
+          }
+        } catch (err: any) {
+          console.log(`[spe] oauth2PermissionGrants error: ${err.message}`);
         }
-
-        console.log(`[spe] Total apps to probe: ${KNOWN_SPE_APPS.length}`);
       }
     }
+
+    const searchTerms = ["agent", "copilot", "constellation", "container", "embedded", "declarative"];
+    for (const term of searchTerms) {
+      try {
+        const searchRes = await fetch(
+          `https://graph.microsoft.com/v1.0/servicePrincipals?$search="displayName:${term}"&$select=appId,displayName&$top=50`,
+          {
+            headers: {
+              Authorization: `Bearer ${graphToken}`,
+              ConsistencyLevel: "eventual",
+            },
+          }
+        );
+        if (searchRes.ok) {
+          const searchData = await searchRes.json();
+          for (const sp of (searchData?.value || [])) {
+            if (sp?.appId) addDiscoveredApp(sp.displayName, sp.appId);
+          }
+        }
+      } catch {}
+    }
+
+    console.log(`[spe] Total apps to probe after discovery: ${KNOWN_SPE_APPS.length}`);
   } catch (err: any) {
     console.warn(`[spe] Auto-discovery error: ${err.message}`);
   }
