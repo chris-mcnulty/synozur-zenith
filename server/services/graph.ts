@@ -998,7 +998,8 @@ export async function fetchAllSpeContainerTypes(
 export async function fetchAllSpeContainers(
   graphToken: string,
   adminToken: string,
-  adminHost: string
+  adminHost: string,
+  customApps?: Array<{ name: string; appId: string }>
 ): Promise<SpeContainerFromGraph[]> {
   const allContainers: SpeContainerFromGraph[] = [];
 
@@ -1073,6 +1074,14 @@ export async function fetchAllSpeContainers(
     { name: "Microsoft Places", appId: "95e5571f-aec6-4c27-863a-0e1e35e9b78c" },
     { name: "SharePoint Online", appId: "00000003-0000-0ff1-ce00-000000000000" },
   ];
+
+  if (customApps && customApps.length > 0) {
+    for (const ca of customApps) {
+      if (ca.appId && !KNOWN_SPE_APPS.some(k => k.appId === ca.appId)) {
+        KNOWN_SPE_APPS.push({ name: ca.name, appId: ca.appId });
+      }
+    }
+  }
 
   const seenContainerIds = new Set<string>();
 

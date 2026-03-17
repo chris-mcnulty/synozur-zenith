@@ -101,6 +101,60 @@ router.get("/api/spe/containers/:id/usage", requireAuth(), async (req: Authentic
   res.json(usage);
 });
 
+router.post("/api/spe/container-types", requireRole(ZENITH_ROLES.TENANT_ADMIN), async (req: AuthenticatedRequest, res) => {
+  try {
+    const { tenantConnectionId, displayName, azureAppId, description } = req.body;
+    if (!tenantConnectionId || !displayName || !azureAppId) {
+      return res.status(400).json({ error: "tenantConnectionId, displayName, and azureAppId are required" });
+    }
+
+    const guidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!guidRegex.test(azureAppId)) {
+      return res.status(400).json({ error: "azureAppId must be a valid GUID" });
+    }
+
+    const allowedIds = await getOrgTenantConnectionIds(req.user);
+    if (allowedIds && !allowedIds.includes(tenantConnectionId)) {
+      return res.status(404).json({ error: "Tenant connection not found" });
+    }
+
+    const existing = (await storage.getSpeContainerTypes(tenantConnectionId))
+      .find(ct => ct.azureAppId === azureAppId);
+    if (existing) {
+      return res.status(409).json({ error: "An application with this App ID is already registered", existing });
+    }
+
+    const created = await storage.createSpeContainerType({
+      tenantConnectionId,
+      containerTypeId: azureAppId,
+      displayName,
+      description: description || `${displayName} containers`,
+      azureAppId,
+      status: "ACTIVE",
+    });
+
+    res.status(201).json(created);
+  } catch (err: any) {
+    console.error("[spe] Error creating container type:", err);
+    res.status(500).json({ error: err.message || "Failed to register application" });
+  }
+});
+
+router.delete("/api/spe/container-types/:id", requireRole(ZENITH_ROLES.TENANT_ADMIN), async (req: AuthenticatedRequest, res) => {
+  try {
+    const ct = (await storage.getSpeContainerTypes()).find(t => t.id === req.params.id);
+    if (!ct) return res.status(404).json({ error: "Container type not found" });
+    const allowedIds = await getOrgTenantConnectionIds(req.user);
+    if (allowedIds && !allowedIds.includes(ct.tenantConnectionId)) {
+      return res.status(404).json({ error: "Container type not found" });
+    }
+    await storage.deleteSpeContainerType(req.params.id);
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.post("/api/spe/tenants/:id/sync", requireRole(ZENITH_ROLES.TENANT_ADMIN), async (req: AuthenticatedRequest, res) => {
   const conn = await storage.getTenantConnection(req.params.id);
   if (!conn) return res.status(404).json({ message: "Tenant connection not found" });
@@ -183,10 +237,16 @@ router.post("/api/spe/tenants/:id/sync", requireRole(ZENITH_ROLES.TENANT_ADMIN),
       }
     }
 
+    const existingTypesForApps = await storage.getSpeContainerTypes(conn.id);
+    const customApps = existingTypesForApps
+      .filter(ct => ct.azureAppId)
+      .map(ct => ({ name: ct.displayName, appId: ct.azureAppId! }));
+
     const graphContainers = await fetchAllSpeContainers(
       graphToken || "",
       adminToken || "",
-      adminHost
+      adminHost,
+      customApps
     );
     console.log(`[spe-sync] Found ${graphContainers.length} containers`);
 

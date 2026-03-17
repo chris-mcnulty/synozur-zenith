@@ -19,6 +19,16 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
+import {
   Box,
   Search,
   Database,
@@ -38,6 +48,8 @@ import {
   Clock,
   Loader2,
   ChevronRight,
+  Plus,
+  Trash2,
   X,
 } from "lucide-react";
 
@@ -77,6 +89,10 @@ export default function EmbeddedContainersPage() {
   const [quickFilter, setQuickFilter] = useState<QuickFilter>("all");
   const [selectedContainerId, setSelectedContainerId] = useState<string | null>(null);
   const [filterType, setFilterType] = useState<string | null>(null);
+  const [addAppOpen, setAddAppOpen] = useState(false);
+  const [newAppName, setNewAppName] = useState("");
+  const [newAppId, setNewAppId] = useState("");
+  const [newAppDesc, setNewAppDesc] = useState("");
 
   useState(() => {
     const timer = setTimeout(() => setDebouncedSearch(searchTerm), 300);
@@ -123,6 +139,43 @@ export default function EmbeddedContainersPage() {
     },
     onError: (err: any) => {
       toast({ title: "SPE Sync Failed", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const addAppMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/spe/container-types", {
+        tenantConnectionId,
+        displayName: newAppName.trim(),
+        azureAppId: newAppId.trim().toLowerCase(),
+        description: newAppDesc.trim() || undefined,
+      });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/spe/container-types"] });
+      toast({ title: "Application Registered", description: `${newAppName} has been added. Run Sync to discover its containers.` });
+      setAddAppOpen(false);
+      setNewAppName("");
+      setNewAppId("");
+      setNewAppDesc("");
+    },
+    onError: (err: any) => {
+      toast({ title: "Registration Failed", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const deleteTypeMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const res = await apiRequest("DELETE", `/api/spe/container-types/${id}`);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/spe/container-types"] });
+      toast({ title: "Application Removed" });
+    },
+    onError: (err: any) => {
+      toast({ title: "Delete Failed", description: err.message, variant: "destructive" });
     },
   });
 
@@ -467,11 +520,75 @@ export default function EmbeddedContainersPage() {
           <TabsContent value="types" className="m-0">
             <Card className="glass-panel border-border/50 shadow-xl">
               <CardHeader className="pb-4 border-b border-border/40 bg-muted/10">
-                <CardTitle className="text-xl flex items-center gap-2">
-                  <Settings2 className="w-5 h-5 text-primary" />
-                  Container Types
-                </CardTitle>
-                <CardDescription>Registered container type definitions with default storage quotas and owning applications.</CardDescription>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <CardTitle className="text-xl flex items-center gap-2">
+                      <Settings2 className="w-5 h-5 text-primary" />
+                      Container Types
+                    </CardTitle>
+                    <CardDescription className="mt-1">Register SPE applications by their Entra App ID. Known Microsoft apps are synced automatically. Add third-party or custom apps here.</CardDescription>
+                  </div>
+                  <Dialog open={addAppOpen} onOpenChange={setAddAppOpen}>
+                    <DialogTrigger asChild>
+                      <Button variant="outline" size="sm" className="gap-2" data-testid="button-add-app">
+                        <Plus className="w-4 h-4" />
+                        Add Application
+                      </Button>
+                    </DialogTrigger>
+                    <DialogContent>
+                      <DialogHeader>
+                        <DialogTitle>Register SPE Application</DialogTitle>
+                        <DialogDescription>
+                          Add a third-party or custom SPE application by entering its Entra App Registration ID (GUID). Its containers will be discovered on the next sync.
+                        </DialogDescription>
+                      </DialogHeader>
+                      <div className="space-y-4 py-2">
+                        <div className="space-y-2">
+                          <Label htmlFor="app-name">Application Name</Label>
+                          <Input
+                            id="app-name"
+                            placeholder="e.g. Constellation, Acme Document Manager"
+                            value={newAppName}
+                            onChange={(e) => setNewAppName(e.target.value)}
+                            data-testid="input-app-name"
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <Label htmlFor="app-id">Entra App ID (GUID)</Label>
+                          <Input
+                            id="app-id"
+                            placeholder="e.g. a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+                            className="font-mono text-sm"
+                            value={newAppId}
+                            onChange={(e) => setNewAppId(e.target.value)}
+                            data-testid="input-app-id"
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <Label htmlFor="app-desc">Description (optional)</Label>
+                          <Input
+                            id="app-desc"
+                            placeholder="e.g. Portfolio company document containers"
+                            value={newAppDesc}
+                            onChange={(e) => setNewAppDesc(e.target.value)}
+                            data-testid="input-app-desc"
+                          />
+                        </div>
+                      </div>
+                      <DialogFooter>
+                        <Button variant="outline" onClick={() => setAddAppOpen(false)}>Cancel</Button>
+                        <Button
+                          onClick={() => addAppMutation.mutate()}
+                          disabled={!newAppName.trim() || !newAppId.trim() || addAppMutation.isPending}
+                          data-testid="button-confirm-add-app"
+                        >
+                          {addAppMutation.isPending && <Loader2 className="w-4 h-4 animate-spin mr-2" />}
+                          Register Application
+                        </Button>
+                      </DialogFooter>
+                    </DialogContent>
+                  </Dialog>
+                </div>
               </CardHeader>
               <CardContent className="p-0">
                 {typesLoading ? (
@@ -480,58 +597,79 @@ export default function EmbeddedContainersPage() {
                   </div>
                 ) : containerTypes.length === 0 ? (
                   <div className="flex items-center justify-center py-20 text-muted-foreground">
-                    <div className="text-center space-y-2">
+                    <div className="text-center space-y-3">
                       <Settings2 className="w-10 h-10 mx-auto text-muted-foreground/40" />
-                      <p className="font-medium">No container types registered</p>
+                      <p className="font-medium">No applications registered</p>
+                      <p className="text-sm">Click "Add Application" to register a third-party SPE app, then sync to discover its containers.</p>
                     </div>
                   </div>
                 ) : (
                   <Table>
                     <TableHeader className="bg-muted/30">
                       <TableRow>
-                        <TableHead className="pl-6">Type Name</TableHead>
-                        <TableHead>Azure App ID</TableHead>
-                        <TableHead>Active Containers</TableHead>
+                        <TableHead className="pl-6">Application Name</TableHead>
+                        <TableHead>Entra App ID</TableHead>
+                        <TableHead>Containers</TableHead>
                         <TableHead>Default Quota</TableHead>
                         <TableHead>Status</TableHead>
+                        <TableHead className="w-12"></TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {containerTypes.map((ct) => (
-                        <TableRow key={ct.id} className="hover:bg-muted/10 transition-colors" data-testid={`row-type-${ct.id}`}>
-                          <TableCell className="pl-6">
-                            <div className="flex flex-col">
-                              <span className="font-medium text-sm">{ct.displayName}</span>
-                              {ct.description && <span className="text-[10px] text-muted-foreground">{ct.description}</span>}
-                            </div>
-                          </TableCell>
-                          <TableCell>
-                            <span className="font-mono text-xs text-muted-foreground">
-                              {ct.azureAppId || "—"}
-                            </span>
-                          </TableCell>
-                          <TableCell>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="h-auto p-0 text-sm font-medium hover:text-primary"
-                              onClick={() => setFilterType(ct.id)}
-                            >
-                              {ct.containerCount || 0}
-                              <ChevronRight className="w-3 h-3 ml-1" />
-                            </Button>
-                          </TableCell>
-                          <TableCell className="text-sm">{ct.defaultStorageLimitBytes ? formatBytes(ct.defaultStorageLimitBytes) : "—"}</TableCell>
-                          <TableCell>
-                            <Badge variant="outline" className={
-                              ct.status === "ACTIVE" ? "bg-emerald-500/10 text-emerald-500 border-emerald-500/20" :
-                              "bg-gray-500/10 text-gray-500 border-gray-500/20"
-                            }>
-                              {ct.status}
-                            </Badge>
-                          </TableCell>
-                        </TableRow>
-                      ))}
+                      {containerTypes.map((ct) => {
+                        const containerCount = containers.filter(c => c.containerTypeId === ct.id).length;
+                        return (
+                          <TableRow key={ct.id} className="hover:bg-muted/10 transition-colors" data-testid={`row-type-${ct.id}`}>
+                            <TableCell className="pl-6">
+                              <div className="flex flex-col">
+                                <span className="font-medium text-sm">{ct.displayName}</span>
+                                {ct.description && <span className="text-[10px] text-muted-foreground">{ct.description}</span>}
+                              </div>
+                            </TableCell>
+                            <TableCell>
+                              <span className="font-mono text-xs text-muted-foreground">
+                                {ct.azureAppId || "—"}
+                              </span>
+                            </TableCell>
+                            <TableCell>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-auto p-0 text-sm font-medium hover:text-primary"
+                                onClick={() => { setFilterType(ct.id); }}
+                              >
+                                {containerCount}
+                                <ChevronRight className="w-3 h-3 ml-1" />
+                              </Button>
+                            </TableCell>
+                            <TableCell className="text-sm">{ct.defaultStorageLimitBytes ? formatBytes(ct.defaultStorageLimitBytes) : "—"}</TableCell>
+                            <TableCell>
+                              <Badge variant="outline" className={
+                                ct.status === "ACTIVE" ? "bg-emerald-500/10 text-emerald-500 border-emerald-500/20" :
+                                "bg-gray-500/10 text-gray-500 border-gray-500/20"
+                              }>
+                                {ct.status}
+                              </Badge>
+                            </TableCell>
+                            <TableCell>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                                    onClick={() => deleteTypeMutation.mutate(ct.id)}
+                                    data-testid={`button-delete-type-${ct.id}`}
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </Button>
+                                </TooltipTrigger>
+                                <TooltipContent>Remove application</TooltipContent>
+                              </Tooltip>
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })}
                     </TableBody>
                   </Table>
                 )}
