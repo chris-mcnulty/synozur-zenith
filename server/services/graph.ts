@@ -1057,67 +1057,81 @@ export async function fetchAllSpeContainers(
     return allContainers;
   }
 
-  console.log(`[spe] Graph APIs returned 0, probing SPO Admin REST endpoints for containers...`);
+  console.log(`[spe] Graph APIs returned 0, using SPO Admin GetSPOContainersByApplicationId...`);
 
-  const adminEndpoints = [
-    { name: "EnumAllContainers", method: "POST", path: "/_api/SPO.Tenant/EnumAllContainers", body: {} },
-    { name: "GetSPOContainersByApplicationId (Loop)", method: "POST", path: "/_api/SPO.Tenant/GetSPOContainersByApplicationId", body: { owningApplicationId: "a187e399-0c36-4b98-8f04-1edc167a0996" } },
-    { name: "GetSPOContainersByApplicationId (Whiteboard)", method: "POST", path: "/_api/SPO.Tenant/GetSPOContainersByApplicationId", body: { owningApplicationId: "95de633a-083e-42f5-b444-a4295d8e9314" } },
-    { name: "GetSPOContainersByApplicationId (Designer)", method: "POST", path: "/_api/SPO.Tenant/GetSPOContainersByApplicationId", body: { owningApplicationId: "5e2795e3-ce8c-4cfb-b302-35fe5cd01597" } },
-    { name: "GetSPOContainers", method: "POST", path: "/_api/SPO.Tenant/GetSPOContainers", body: {} },
-    { name: "ContainerProperties", method: "GET", path: "/_api/SPO.Tenant/ContainerProperties", body: null },
-    { name: "GetSPOContainersByContainerTypeId (trial-type)", method: "POST", path: "/_api/SPO.Tenant/GetSPOContainersByContainerTypeId", body: { containerTypeId: "00000000-0000-0000-0000-000000000000" } },
+  const KNOWN_SPE_APPS: Array<{ name: string; appId: string }> = [
+    { name: "Microsoft Loop", appId: "a187e399-0c36-4b98-8f04-1edc167a0996" },
+    { name: "Microsoft Designer", appId: "5e2795e3-ce8c-4cfb-b302-35fe5cd01597" },
+    { name: "Microsoft Whiteboard", appId: "95de633a-083e-42f5-b444-a4295d8e9314" },
+    { name: "Microsoft Copilot", appId: "fb8d773d-7ef8-4ec0-a117-179f88add510" },
+    { name: "Microsoft Stream", appId: "cf53fce8-def6-4aeb-8d30-b158e7b1cf83" },
+    { name: "Microsoft Clipchamp", appId: "1d34b7f4-45ac-40c3-a21c-309fdd0c6722" },
+    { name: "Microsoft OneNote", appId: "0d4a2b35-7abf-4a8b-9c40-2f7e90f31c1e" },
+    { name: "Microsoft Planner", appId: "09abbdfd-ed23-44ee-a2d9-a627aa1c90f3" },
+    { name: "Microsoft Forms", appId: "c9a559d2-7aab-4f13-a6ed-e7e9c52aec87" },
+    { name: "Microsoft ToDo", appId: "c44b4083-3bb0-49c1-b47d-974e53cbdf3c" },
+    { name: "Microsoft Places", appId: "95e5571f-aec6-4c27-863a-0e1e35e9b78c" },
+    { name: "SharePoint Online", appId: "00000003-0000-0ff1-ce00-000000000000" },
   ];
 
-  for (const ep of adminEndpoints) {
+  const seenContainerIds = new Set<string>();
+
+  for (const app of KNOWN_SPE_APPS) {
     try {
-      const fetchOpts: any = {
-        method: ep.method,
+      const res = await fetch(`https://${adminHost}/_api/SPO.Tenant/GetSPOContainersByApplicationId`, {
+        method: "POST",
         headers: {
           Authorization: `Bearer ${adminToken}`,
           Accept: "application/json;odata=verbose",
+          "Content-Type": "application/json;odata=verbose",
         },
-      };
-      if (ep.body !== null) {
-        fetchOpts.headers["Content-Type"] = "application/json;odata=verbose";
-        fetchOpts.body = JSON.stringify(ep.body);
-      }
-      const res = await fetch(`https://${adminHost}${ep.path}`, fetchOpts);
-      const text = await res.text();
-      const preview = text.slice(0, 500);
-      console.log(`[spe] ${ep.name}: ${res.status} — ${preview}`);
+        body: JSON.stringify({ owningApplicationId: app.appId }),
+      });
 
-      if (res.ok) {
-        try {
-          const data = JSON.parse(text);
-          const items = data?.d?.results || data?.d?.EnumAllContainers?.results ||
-            data?.d?.GetSPOContainersByApplicationId?.results ||
-            data?.d?.GetSPOContainers?.results ||
-            data?.value || [];
-          if (Array.isArray(items) && items.length > 0) {
-            console.log(`[spe] SUCCESS: ${ep.name} returned ${items.length} items! First item keys: ${JSON.stringify(Object.keys(items[0])).slice(0, 300)}`);
-            for (const item of items) {
-              allContainers.push({
-                id: item.ContainerId || item.Id || item.id || "",
-                displayName: item.ContainerName || item.Title || item.DisplayName || item.displayName || "",
-                containerTypeId: item.ContainerTypeId || item.containerTypeId || "",
-                description: item.Description || "",
-                status: item.Status || "active",
-                createdDateTime: item.CreatedOn || item.Created || "",
-              });
-            }
-          }
-        } catch {}
+      if (!res.ok) {
+        if (res.status === 500) {
+          continue;
+        }
+        const errText = await res.text();
+        console.warn(`[spe] ${app.name} (${app.appId}): ${res.status} — ${errText.slice(0, 200)}`);
+        continue;
+      }
+
+      const data = await res.json();
+      const containerCollection = data?.d?.GetSPOContainersByApplicationId?.ContainerCollection?.results || [];
+
+      if (containerCollection.length > 0) {
+        console.log(`[spe] ${app.name}: found ${containerCollection.length} containers`);
+        for (const item of containerCollection) {
+          const containerId = item.ContainerId || "";
+          if (!containerId || seenContainerIds.has(containerId)) continue;
+          seenContainerIds.add(containerId);
+
+          allContainers.push({
+            id: containerId,
+            displayName: item.ContainerName || item.Title || `${app.name} Container`,
+            containerTypeId: item.ContainerTypeId || "",
+            description: item.Description || "",
+            status: item.Status === 1 ? "active" : item.Status === 2 ? "inactive" : String(item.Status || "active"),
+            createdDateTime: item.CreatedOn || "",
+            _owningAppName: app.name,
+            _owningAppId: app.appId,
+            _storageUsed: item.StorageUsedInBytes ?? item.StorageUsed ?? null,
+            _storageTotal: item.StorageQuota ?? null,
+            _sensitivityLabel: item.SensitivityLabel || null,
+            _sharingCapability: item.SharingCapability ?? null,
+            _lockState: item.LockState ?? null,
+            _siteUrl: item.ContainerSiteUrl || item.SiteUrl || null,
+            _owners: item.Owners || item.OwnerLoginName || null,
+          } as any);
+        }
       }
     } catch (err: any) {
-      console.warn(`[spe] ${ep.name} error: ${err.message}`);
+      console.warn(`[spe] ${app.name} error: ${err.message}`);
     }
   }
 
-  if (allContainers.length > 0) {
-    console.log(`[spe] SPO Admin REST found ${allContainers.length} total containers`);
-  }
-
+  console.log(`[spe] SPO Admin REST found ${allContainers.length} total containers across ${KNOWN_SPE_APPS.length} app probes`);
   return allContainers;
 }
 

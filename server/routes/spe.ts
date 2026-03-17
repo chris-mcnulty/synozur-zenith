@@ -190,6 +190,39 @@ router.post("/api/spe/tenants/:id/sync", requireRole(ZENITH_ROLES.TENANT_ADMIN),
     );
     console.log(`[spe-sync] Found ${graphContainers.length} containers`);
 
+    if (containerTypes.length === 0 && graphContainers.length > 0) {
+      const appGroups = new Map<string, { name: string; appId: string; typeId: string }>();
+      for (const gc of graphContainers) {
+        const ext = gc as any;
+        const appId = ext._owningAppId;
+        const appName = ext._owningAppName;
+        if (appId && !appGroups.has(appId)) {
+          appGroups.set(appId, { name: appName || appId, appId, typeId: gc.containerTypeId || appId });
+        }
+      }
+
+      for (const [appId, info] of appGroups) {
+        const existingTypes = await storage.getSpeContainerTypes(conn.id);
+        const existing = existingTypes.find(ct => ct.azureAppId === appId);
+        if (existing) {
+          typeIdMap.set(info.typeId, existing.id);
+          typeIdMap.set(appId, existing.id);
+        } else {
+          const created = await storage.createSpeContainerType({
+            tenantConnectionId: conn.id,
+            containerTypeId: info.typeId,
+            displayName: info.name,
+            description: `${info.name} containers`,
+            azureAppId: appId,
+            status: "ACTIVE",
+          });
+          typeIdMap.set(info.typeId, created.id);
+          typeIdMap.set(appId, created.id);
+          console.log(`[spe-sync] Auto-created container type for ${info.name}`);
+        }
+      }
+    }
+
     let syncedCount = 0;
     let errorCount = 0;
     const BATCH_SIZE = 5;
@@ -199,14 +232,14 @@ router.post("/api/spe/tenants/:id/sync", requireRole(ZENITH_ROLES.TENANT_ADMIN),
 
       await Promise.all(batch.map(async (gc) => {
         try {
-          let details: any = {};
-          if (graphToken) {
-            try {
-              details = await fetchSpeContainerDriveDetails(graphToken, gc.id);
-            } catch {}
-          }
+          const ext = gc as any;
 
-          const zenithTypeId = gc.containerTypeId ? typeIdMap.get(gc.containerTypeId) : undefined;
+          const zenithTypeId = (gc.containerTypeId ? typeIdMap.get(gc.containerTypeId) : undefined)
+            || (ext._owningAppId ? typeIdMap.get(ext._owningAppId) : undefined);
+
+          const sharingCap = ext._sharingCapability != null ? String(ext._sharingCapability) : null;
+          const isExternal = sharingCap === "1" || sharingCap === "2" ||
+            sharingCap === "ExternalUserSharingOnly" || sharingCap === "ExternalUserAndGuestSharing";
 
           const containerData = {
             tenantConnectionId: conn.id,
@@ -215,20 +248,20 @@ router.post("/api/spe/tenants/:id/sync", requireRole(ZENITH_ROLES.TENANT_ADMIN),
             displayName: gc.displayName || `Container ${gc.id}`,
             description: gc.description || null,
             status: gc.status === "active" ? "Active" : gc.status === "inactive" ? "Inactive" : (gc.status || "Active"),
-            storageUsedBytes: details.storageUsedInBytes ?? null,
-            storageAllocatedBytes: null as number | null,
-            fileCount: details.itemCount ?? null,
+            storageUsedBytes: ext._storageUsed ?? null,
+            storageAllocatedBytes: ext._storageTotal ?? null,
+            fileCount: null as number | null,
             activeFileCount: null as number | null,
-            lastActivityDate: details.lastActivityDate || null,
+            lastActivityDate: null as string | null,
             sensitivityLabelId: null as string | null,
-            sensitivityLabel: null as string | null,
+            sensitivityLabel: ext._sensitivityLabel || null,
             retentionLabelId: null as string | null,
             retentionLabel: null as string | null,
-            sharingCapability: null as string | null,
-            externalSharing: false,
-            ownerDisplayName: details.owners?.[0]?.displayName || null,
-            ownerPrincipalName: details.owners?.[0]?.userPrincipalName || null,
-            permissions: details.owners?.length > 0 ? "Custom" : "System",
+            sharingCapability: sharingCap,
+            externalSharing: isExternal,
+            ownerDisplayName: ext._owningAppName || null,
+            ownerPrincipalName: typeof ext._owners === "string" ? ext._owners : null,
+            permissions: ext._owningAppName || "System",
             containerCreatedDate: gc.createdDateTime || null,
             lastSyncAt: new Date(),
           };
