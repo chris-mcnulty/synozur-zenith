@@ -1199,6 +1199,65 @@ export async function fetchAllSpeContainers(
     }
   }
 
+  try {
+    console.log(`[spe] Auto-discovering SPE apps via Graph service principal role assignments...`);
+    const spoSpRes = await fetch(
+      `https://graph.microsoft.com/v1.0/servicePrincipals?$filter=appId eq '00000003-0000-0ff1-ce00-000000000000'&$select=id`,
+      { headers: { Authorization: `Bearer ${graphToken}` } }
+    );
+    if (spoSpRes.ok) {
+      const spoSpData = await spoSpRes.json();
+      const spoSpId = spoSpData?.value?.[0]?.id;
+      if (spoSpId) {
+        let nextLink: string | null = `https://graph.microsoft.com/v1.0/servicePrincipals/${spoSpId}/appRoleAssignedTo?$select=principalId,principalDisplayName,appRoleId&$top=999`;
+        const discoveredPrincipalIds: Array<{ id: string; name: string }> = [];
+
+        while (nextLink) {
+          const roleRes = await fetch(nextLink, { headers: { Authorization: `Bearer ${graphToken}` } });
+          if (!roleRes.ok) break;
+          const roleData = await roleRes.json();
+          const assignments = roleData?.value || [];
+          for (const a of assignments) {
+            if (a.principalId && a.principalDisplayName) {
+              discoveredPrincipalIds.push({ id: a.principalId, name: a.principalDisplayName });
+            }
+          }
+          nextLink = roleData?.["@odata.nextLink"] || null;
+        }
+
+        console.log(`[spe] Found ${discoveredPrincipalIds.length} apps with SPO role assignments`);
+
+        const uniquePrincipals = new Map<string, string>();
+        for (const p of discoveredPrincipalIds) {
+          if (!uniquePrincipals.has(p.id)) uniquePrincipals.set(p.id, p.name);
+        }
+
+        for (const [principalId, displayName] of uniquePrincipals) {
+          if (KNOWN_SPE_APPS.some(k => k.name === displayName)) continue;
+
+          try {
+            const spDetailRes = await fetch(
+              `https://graph.microsoft.com/v1.0/servicePrincipals/${principalId}?$select=appId,displayName`,
+              { headers: { Authorization: `Bearer ${graphToken}` } }
+            );
+            if (spDetailRes.ok) {
+              const spDetail = await spDetailRes.json();
+              const appId = spDetail?.appId;
+              if (appId && !KNOWN_SPE_APPS.some(k => k.appId === appId)) {
+                console.log(`[spe] Discovered app: ${spDetail.displayName} (${appId})`);
+                KNOWN_SPE_APPS.push({ name: spDetail.displayName || displayName, appId });
+              }
+            }
+          } catch {}
+        }
+
+        console.log(`[spe] Total apps to probe: ${KNOWN_SPE_APPS.length}`);
+      }
+    }
+  } catch (err: any) {
+    console.warn(`[spe] Auto-discovery error: ${err.message}`);
+  }
+
   for (const app of KNOWN_SPE_APPS) {
     try {
       const res = await fetch(`https://${adminHost}/_api/SPO.Tenant/GetSPOContainersByApplicationId`, {
