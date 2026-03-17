@@ -922,188 +922,204 @@ export async function fetchSiteTelemetry(token: string, graphSiteId: string): Pr
   }
 }
 
-export interface SpeContainerFromAdmin {
-  ContainerId: string;
-  ContainerName: string;
-  ContainerTypeId: string;
-  ContainerSiteUrl?: string;
-  OwningApplicationId?: string;
-  OwningApplicationName?: string;
-  Status?: string;
-  CreatedOn?: string;
-  StorageUsedInBytes?: number;
-  StorageTotalInBytes?: number;
-  SensitivityLabel?: string;
-  SensitivityLabelId?: string;
-  SharingCapability?: string;
-  Description?: string;
-  Owners?: string[];
-  LockState?: string;
+export interface SpeContainerFromGraph {
+  id: string;
+  displayName: string;
+  description?: string;
+  containerTypeId: string;
+  status?: string;
+  createdDateTime?: string;
+  settings?: {
+    isOcrEnabled?: boolean;
+  };
 }
 
-export interface SpeContainerTypeFromAdmin {
-  ContainerTypeId: string;
-  DisplayName: string;
-  Description?: string;
-  OwningAppId: string;
-  OwningTenantId?: string;
-  Classification?: string;
-  AzureSubscriptionId?: string;
+export interface SpeContainerTypeFromGraph {
+  containerTypeId: string;
+  displayName: string;
+  description?: string;
+  owningAppId?: string;
 }
 
-export async function fetchSpeContainerTypesViaAdmin(
+export async function fetchAllSpeContainerTypes(
+  graphToken: string,
   adminToken: string,
   adminHost: string
-): Promise<SpeContainerTypeFromAdmin[]> {
-  const adminUrl = `https://${adminHost}`;
+): Promise<SpeContainerTypeFromGraph[]> {
+  console.log(`[spe] Trying Graph API for container types...`);
   try {
-    const csomXml = `<Request SchemaVersion="15.0.0.0" LibraryVersion="16.0.0.0" ApplicationName="Zenith" xmlns="http://schemas.microsoft.com/sharepoint/clientquery/2009"><Actions><ObjectPath Id="2" ObjectPathId="1" /><ObjectPath Id="4" ObjectPathId="3" /><Query Id="5" ObjectPathId="3"><Query SelectAllProperties="true"><Properties /></Query><ChildItemQuery SelectAllProperties="true"><Properties /></ChildItemQuery></Query></Actions><ObjectPaths><Constructor Id="1" TypeId="{268004ae-ef6b-4e9b-8425-127220d84719}" /><Method Id="3" ParentId="1" Name="GetSPOContainerTypes"><Parameters><Parameter Type="Enum">0</Parameter></Parameters></Method></ObjectPaths></Request>`;
-
-    const result = await executeCsomQuery(adminToken, adminUrl, csomXml);
-    if (!result.success) {
-      console.error(`[spe-admin] fetchSpeContainerTypes failed: ${result.error}`);
-
-      const restUrl = `https://${adminHost}/_api/SPO.Tenant/GetSPOContainerTypes`;
-      try {
-        const res = await fetch(restUrl, {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${adminToken}`,
-            Accept: "application/json;odata=verbose",
-            "Content-Type": "application/json;odata=verbose",
-          },
-          body: JSON.stringify({}),
-        });
-        if (res.ok) {
-          const data = await res.json();
-          const items = data?.d?.GetSPOContainerTypes?.results || data?.d?.results || data?.value || [];
-          return items.map((item: any) => ({
-            ContainerTypeId: item.ContainerTypeId || item.containerTypeId,
-            DisplayName: item.DisplayName || item.displayName || "",
-            Description: item.Description || item.description || "",
-            OwningAppId: item.OwningApplicationId || item.owningAppId || "",
-            OwningTenantId: item.OwningTenantId || "",
-          }));
-        }
-        const errText = await res.text();
-        console.error(`[spe-admin] REST fallback for container types failed ${res.status}: ${errText.slice(0, 500)}`);
-      } catch (restErr: any) {
-        console.error(`[spe-admin] REST fallback error:`, restErr.message);
-      }
-
-      return [];
+    const res = await fetch("https://graph.microsoft.com/v1.0/storage/fileStorage/containerTypes", {
+      headers: { Authorization: `Bearer ${graphToken}` },
+    });
+    if (res.ok) {
+      const data = await res.json();
+      const types = data.value || [];
+      console.log(`[spe] Graph API returned ${types.length} container types`);
+      return types;
     }
-
-    if (result.data) {
-      try {
-        const parsed = JSON.parse(result.data);
-        const childItems = parsed?.find?.((item: any) => item?._Child_Items_)
-          ?._Child_Items_ || [];
-        return childItems.map((item: any) => ({
-          ContainerTypeId: item.ContainerTypeId || "",
-          DisplayName: item.DisplayName || "",
-          Description: item.Description || "",
-          OwningAppId: item.OwningApplicationId || "",
-          OwningTenantId: item.OwningTenantId || "",
-        }));
-      } catch {}
-    }
-    return [];
+    const errText = await res.text();
+    console.warn(`[spe] Graph containerTypes ${res.status}: ${errText.slice(0, 300)}`);
   } catch (err: any) {
-    console.error("[spe-admin] fetchSpeContainerTypes error:", err.message);
-    return [];
+    console.warn(`[spe] Graph containerTypes error: ${err.message}`);
   }
+
+  console.log(`[spe] Trying SPO Admin REST for container types...`);
+  try {
+    const restUrl = `https://${adminHost}/_api/SPO.Tenant/GetSPOContainerTypes`;
+    const res = await fetch(restUrl, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${adminToken}`,
+        Accept: "application/json;odata=verbose",
+        "Content-Type": "application/json;odata=verbose",
+      },
+      body: JSON.stringify({}),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      const items = data?.d?.GetSPOContainerTypes?.results || data?.d?.results || data?.value || [];
+      console.log(`[spe] SPO Admin REST returned ${items.length} container types`);
+      return items.map((item: any) => ({
+        containerTypeId: item.ContainerTypeId || item.containerTypeId || "",
+        displayName: item.DisplayName || item.displayName || "",
+        description: item.Description || item.description || "",
+        owningAppId: item.OwningApplicationId || item.owningAppId || "",
+      }));
+    }
+    const errText = await res.text();
+    console.warn(`[spe] SPO Admin REST container types ${res.status}: ${errText.slice(0, 300)}`);
+  } catch (err: any) {
+    console.warn(`[spe] SPO Admin REST error: ${err.message}`);
+  }
+
+  return [];
 }
 
-export async function fetchSpeContainersViaAdmin(
+export async function fetchAllSpeContainers(
+  graphToken: string,
   adminToken: string,
-  adminHost: string,
-  spoHost: string
-): Promise<SpeContainerFromAdmin[]> {
-  const allContainers: SpeContainerFromAdmin[] = [];
+  adminHost: string
+): Promise<SpeContainerFromGraph[]> {
+  const allContainers: SpeContainerFromGraph[] = [];
+
+  console.log(`[spe] Trying Graph API for containers...`);
   try {
-    const restUrl = `https://${adminHost}/_api/SPO.Tenant/GetSPOContainersByContainerTypeId`;
-    const containerTypeIds = await fetchSpeContainerTypesViaAdmin(adminToken, adminHost);
-
-    if (containerTypeIds.length === 0) {
-      console.log(`[spe-admin] No container types found, trying direct enumeration...`);
-      const directUrl = `https://${adminHost}/_api/SPO.Tenant/GetSPOContainers`;
-      try {
-        const res = await fetch(directUrl, {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${adminToken}`,
-            Accept: "application/json;odata=verbose",
-            "Content-Type": "application/json;odata=verbose",
-          },
-          body: JSON.stringify({}),
-        });
-        if (res.ok) {
-          const data = await res.json();
-          const items = data?.d?.GetSPOContainers?.results || data?.d?.results || data?.value || [];
-          return items.map(normalizeAdminContainer);
-        }
-      } catch {}
-      return [];
-    }
-
-    for (const ct of containerTypeIds) {
-      try {
-        const res = await fetch(restUrl, {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${adminToken}`,
-            Accept: "application/json;odata=verbose",
-            "Content-Type": "application/json;odata=verbose",
-          },
-          body: JSON.stringify({
-            containerTypeId: ct.ContainerTypeId,
-          }),
-        });
-        if (res.ok) {
-          const data = await res.json();
-          const items = data?.d?.GetSPOContainersByContainerTypeId?.results || data?.d?.results || data?.value || [];
-          const containers = items.map((item: any) => ({
-            ...normalizeAdminContainer(item),
-            ContainerTypeId: ct.ContainerTypeId,
-            OwningApplicationName: ct.DisplayName,
-          }));
-          allContainers.push(...containers);
-        } else {
-          const errText = await res.text();
-          console.warn(`[spe-admin] Failed to fetch containers for type ${ct.ContainerTypeId}: ${errText.slice(0, 300)}`);
-        }
-      } catch (err: any) {
-        console.warn(`[spe-admin] Error fetching containers for type ${ct.ContainerTypeId}: ${err.message}`);
+    let url: string | null = "https://graph.microsoft.com/v1.0/storage/fileStorage/containers?$top=999";
+    while (url) {
+      const res = await fetch(url, {
+        headers: { Authorization: `Bearer ${graphToken}` },
+      });
+      if (!res.ok) {
+        const errText = await res.text();
+        console.warn(`[spe] Graph containers ${res.status}: ${errText.slice(0, 300)}`);
+        break;
       }
+      const data = await res.json();
+      const containers = data.value || [];
+      allContainers.push(...containers);
+      url = data["@odata.nextLink"] || null;
     }
-
-    return allContainers;
+    if (allContainers.length > 0) {
+      console.log(`[spe] Graph API returned ${allContainers.length} containers`);
+      return allContainers;
+    }
   } catch (err: any) {
-    console.error("[spe-admin] fetchSpeContainers error:", err.message);
-    return allContainers;
+    console.warn(`[spe] Graph containers error: ${err.message}`);
   }
+
+  console.log(`[spe] Graph returned 0 containers, trying beta API...`);
+  try {
+    let url: string | null = "https://graph.microsoft.com/beta/storage/fileStorage/containers?$top=999";
+    while (url) {
+      const res = await fetch(url, {
+        headers: { Authorization: `Bearer ${graphToken}` },
+      });
+      if (!res.ok) {
+        const errText = await res.text();
+        console.warn(`[spe] Graph beta containers ${res.status}: ${errText.slice(0, 300)}`);
+        break;
+      }
+      const data = await res.json();
+      const containers = data.value || [];
+      allContainers.push(...containers);
+      url = data["@odata.nextLink"] || null;
+    }
+    if (allContainers.length > 0) {
+      console.log(`[spe] Graph beta returned ${allContainers.length} containers`);
+      return allContainers;
+    }
+  } catch (err: any) {
+    console.warn(`[spe] Graph beta error: ${err.message}`);
+  }
+
+  console.log(`[spe] Graph APIs returned 0, trying SPO Admin REST for containers...`);
+  try {
+    const res = await fetch(`https://${adminHost}/_api/SPO.Tenant/GetSPODeletedContainers`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${adminToken}`,
+        Accept: "application/json;odata=verbose",
+        "Content-Type": "application/json;odata=verbose",
+      },
+      body: JSON.stringify({}),
+    });
+    console.log(`[spe] SPO Admin GetSPODeletedContainers responded: ${res.status}`);
+    if (res.ok) {
+      const data = await res.json();
+      console.log(`[spe] SPO Admin response keys: ${JSON.stringify(Object.keys(data?.d || data || {})).slice(0, 300)}`);
+    }
+  } catch {}
+
+  return allContainers;
 }
 
-function normalizeAdminContainer(item: any): SpeContainerFromAdmin {
-  return {
-    ContainerId: item.ContainerId || item.Id || item.id || "",
-    ContainerName: item.ContainerName || item.Title || item.DisplayName || item.displayName || "",
-    ContainerTypeId: item.ContainerTypeId || item.containerTypeId || "",
-    ContainerSiteUrl: item.ContainerSiteUrl || item.SiteUrl || item.Url || "",
-    OwningApplicationId: item.OwningApplicationId || item.OwningAppId || "",
-    OwningApplicationName: item.OwningApplicationName || "",
-    Status: item.Status || item.status || "Active",
-    CreatedOn: item.CreatedOn || item.Created || item.createdDateTime || "",
-    StorageUsedInBytes: item.StorageUsedInBytes ?? item.StorageUsed ?? null,
-    StorageTotalInBytes: item.StorageQuota ?? item.StorageTotalInBytes ?? null,
-    SensitivityLabel: item.SensitivityLabel || item.SensitivityLabelName || null,
-    SensitivityLabelId: item.SensitivityLabelId || null,
-    SharingCapability: item.SharingCapability ?? null,
-    Description: item.Description || item.description || null,
-    Owners: item.Owners || [],
-    LockState: item.LockState || null,
-  };
+export async function fetchSpeContainerDriveDetails(graphToken: string, containerId: string): Promise<{
+  storageUsedInBytes?: number;
+  itemCount?: number;
+  owners?: Array<{ displayName?: string; userPrincipalName?: string }>;
+  lastActivityDate?: string;
+}> {
+  const result: any = {};
+
+  try {
+    const driveRes = await fetch(`https://graph.microsoft.com/v1.0/storage/fileStorage/containers/${containerId}/drive`, {
+      headers: { Authorization: `Bearer ${graphToken}` },
+    });
+    if (driveRes.ok) {
+      const driveData = await driveRes.json();
+      result.storageUsedInBytes = driveData?.quota?.used;
+      result.itemCount = driveData?.quota?.fileCount;
+    }
+  } catch {}
+
+  try {
+    const permRes = await fetch(`https://graph.microsoft.com/v1.0/storage/fileStorage/containers/${containerId}/permissions?$top=100`, {
+      headers: { Authorization: `Bearer ${graphToken}` },
+    });
+    if (permRes.ok) {
+      const permData = await permRes.json();
+      const perms = permData.value || [];
+      result.owners = perms
+        .filter((p: any) => p.roles?.includes("owner"))
+        .map((p: any) => ({
+          displayName: p.grantedToV2?.user?.displayName || p.grantedToV2?.group?.displayName,
+          userPrincipalName: p.grantedToV2?.user?.userPrincipalName,
+        }))
+        .filter((o: any) => o.displayName);
+    }
+  } catch {}
+
+  try {
+    const rootRes = await fetch(`https://graph.microsoft.com/v1.0/storage/fileStorage/containers/${containerId}/drive/root`, {
+      headers: { Authorization: `Bearer ${graphToken}` },
+    });
+    if (rootRes.ok) {
+      const rootData = await rootRes.json();
+      result.lastActivityDate = rootData?.lastModifiedDateTime;
+    }
+  } catch {}
+
+  return result;
 }
 
 async function getFormDigest(
