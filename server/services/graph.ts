@@ -964,32 +964,82 @@ export async function fetchAllSpeContainerTypes(
   }
 
   console.log(`[spe] Trying SPO Admin REST for container types...`);
-  try {
-    const restUrl = `https://${adminHost}/_api/SPO.Tenant/GetSPOContainerTypes`;
-    const res = await fetch(restUrl, {
-      method: "POST",
-      headers: {
+
+  const spoEndpoints = [
+    { name: "GetSPOContainerTypes (POST empty)", method: "POST", path: "/_api/SPO.Tenant/GetSPOContainerTypes", body: JSON.stringify({}) },
+    { name: "GetSPOContainerTypes (POST no body)", method: "POST", path: "/_api/SPO.Tenant/GetSPOContainerTypes", body: undefined },
+    { name: "GetSPOContainerTypes (GET)", method: "GET", path: "/_api/SPO.Tenant/GetSPOContainerTypes", body: undefined },
+    { name: "ContainerTypes (GET)", method: "GET", path: "/_api/SPO.Tenant/ContainerTypes", body: undefined },
+    { name: "GetSPOContainerTypes (POST with paging)", method: "POST", path: "/_api/SPO.Tenant/GetSPOContainerTypes", body: JSON.stringify({ "SortOrder": 0, "SortedByColumn": "", "StartIndex": 0, "PageSize": 100 }) },
+  ];
+
+  for (const ep of spoEndpoints) {
+    try {
+      const headers: Record<string, string> = {
         Authorization: `Bearer ${adminToken}`,
         Accept: "application/json;odata=verbose",
-        "Content-Type": "application/json;odata=verbose",
-      },
-      body: JSON.stringify({}),
-    });
-    if (res.ok) {
-      const data = await res.json();
-      const items = data?.d?.GetSPOContainerTypes?.results || data?.d?.results || data?.value || [];
-      console.log(`[spe] SPO Admin REST returned ${items.length} container types`);
-      return items.map((item: any) => ({
-        containerTypeId: item.ContainerTypeId || item.containerTypeId || "",
-        displayName: item.DisplayName || item.displayName || "",
-        description: item.Description || item.description || "",
-        owningAppId: item.OwningApplicationId || item.owningAppId || "",
-      }));
+      };
+      if (ep.body !== undefined) {
+        headers["Content-Type"] = "application/json;odata=verbose";
+      }
+      const res = await fetch(`https://${adminHost}${ep.path}`, {
+        method: ep.method,
+        headers,
+        body: ep.body,
+      });
+      const text = await res.text();
+      console.log(`[spe] ${ep.name}: ${res.status} — ${text.slice(0, 800)}`);
+
+      if (res.ok && text.length > 5) {
+        try {
+          const data = JSON.parse(text);
+
+          const paths = [
+            data?.d?.GetSPOContainerTypes?.ContainerTypeCollection?.results,
+            data?.d?.GetSPOContainerTypes?.results,
+            data?.d?.GetSPOContainerTypes,
+            data?.d?.ContainerTypes?.results,
+            data?.d?.results,
+            data?.value,
+          ];
+
+          for (const items of paths) {
+            if (Array.isArray(items) && items.length > 0) {
+              console.log(`[spe] SUCCESS: ${ep.name} returned ${items.length} container types! First: ${JSON.stringify(items[0]).slice(0, 500)}`);
+              return items.map((item: any) => ({
+                containerTypeId: item.ContainerTypeId || item.containerTypeId || item.SPContainerTypeBillingClassification || "",
+                displayName: item.DisplayName || item.displayName || item.ContainerTypeName || "",
+                description: item.Description || item.description || "",
+                owningAppId: item.OwningApplicationId || item.owningAppId || item.ApplicationId || item.OwningAppId || "",
+              }));
+            }
+          }
+
+          if (typeof data?.d?.GetSPOContainerTypes === "object" && data?.d?.GetSPOContainerTypes !== null) {
+            const obj = data.d.GetSPOContainerTypes;
+            const allKeys = Object.keys(obj).filter(k => k !== "__metadata");
+            console.log(`[spe] GetSPOContainerTypes response keys: ${JSON.stringify(allKeys)}`);
+            for (const key of allKeys) {
+              const val = obj[key];
+              if (val && typeof val === "object" && val.results && Array.isArray(val.results)) {
+                console.log(`[spe] Found array at key "${key}" with ${val.results.length} items`);
+                if (val.results.length > 0) {
+                  console.log(`[spe] First item: ${JSON.stringify(val.results[0]).slice(0, 500)}`);
+                  return val.results.map((item: any) => ({
+                    containerTypeId: item.ContainerTypeId || item.containerTypeId || "",
+                    displayName: item.DisplayName || item.displayName || item.ContainerTypeName || "",
+                    description: item.Description || item.description || "",
+                    owningAppId: item.OwningApplicationId || item.owningAppId || item.ApplicationId || "",
+                  }));
+                }
+              }
+            }
+          }
+        } catch {}
+      }
+    } catch (err: any) {
+      console.warn(`[spe] ${ep.name} error: ${err.message}`);
     }
-    const errText = await res.text();
-    console.warn(`[spe] SPO Admin REST container types ${res.status}: ${errText.slice(0, 300)}`);
-  } catch (err: any) {
-    console.warn(`[spe] SPO Admin REST error: ${err.message}`);
   }
 
   return [];
