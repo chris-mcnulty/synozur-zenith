@@ -55,6 +55,22 @@ router.get("/api/organizations", requireAuth(), async (_req: AuthenticatedReques
   res.json(withFeatures);
 });
 
+router.post("/api/admin/organizations", requireRole(ZENITH_ROLES.PLATFORM_OWNER), async (req: AuthenticatedRequest, res) => {
+  const { name, domain, servicePlan, supportEmail } = req.body;
+  if (!name?.trim()) return res.status(400).json({ error: "Organization name is required." });
+  if (!domain?.trim()) return res.status(400).json({ error: "Primary domain is required." });
+  if (servicePlan && !SERVICE_PLANS.includes(servicePlan)) {
+    return res.status(400).json({ error: `Invalid service plan. Must be one of: ${SERVICE_PLANS.join(", ")}` });
+  }
+  const org = await storage.upsertOrganization({
+    name: name.trim(),
+    domain: domain.trim().toLowerCase(),
+    servicePlan: servicePlan || "TRIAL",
+    supportEmail: supportEmail?.trim() || null,
+  });
+  res.status(201).json(org);
+});
+
 router.patch("/api/organization/plan", requireRole(ZENITH_ROLES.PLATFORM_OWNER, ZENITH_ROLES.TENANT_ADMIN), async (req: AuthenticatedRequest, res) => {
   const { plan } = req.body;
   if (!SERVICE_PLANS.includes(plan)) {

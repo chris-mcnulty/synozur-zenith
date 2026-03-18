@@ -3,9 +3,25 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   Building2,
   Search,
@@ -13,20 +29,11 @@ import {
   Server,
   Activity,
   Globe,
-  Key,
-  MoreVertical,
   Ban,
   Trash2,
   Loader2,
   AlertCircle,
 } from "lucide-react";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { useToast } from "@/hooks/use-toast";
 
 type BlockedDomain = {
@@ -37,18 +44,38 @@ type BlockedDomain = {
   createdAt: string;
 };
 
-const organizations = [
-  { id: "ORG-001", name: "The Synozur Alliance", domain: "synozur.demo", plan: "Professional", status: "Active", tenants: 2 },
-  { id: "ORG-002", name: "Contoso Corp", domain: "contoso.com", plan: "Enterprise", status: "Active", tenants: 4 },
-  { id: "ORG-003", name: "Fabrikam Inc", domain: "fabrikam.local", plan: "Standard", status: "Suspended", tenants: 1 },
-  { id: "ORG-004", name: "Tailspin Toys", domain: "tailspin.net", plan: "Standard", status: "Active", tenants: 1 },
-];
+type OrgRecord = {
+  id: string;
+  name: string;
+  domain: string;
+  servicePlan: string;
+  supportEmail: string | null;
+  createdAt: string;
+};
+
+const PLAN_COLORS: Record<string, string> = {
+  ENTERPRISE: "bg-blue-500/10 text-blue-500 border-blue-500/20",
+  PROFESSIONAL: "bg-purple-500/10 text-purple-500 border-purple-500/20",
+  STANDARD: "bg-emerald-500/10 text-emerald-500 border-emerald-500/20",
+  TRIAL: "bg-muted/50 text-muted-foreground border-border/60",
+};
+
+const SERVICE_PLANS = ["TRIAL", "STANDARD", "PROFESSIONAL", "ENTERPRISE"] as const;
 
 export default function SystemAdminPage() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
+
   const [newBlockedDomain, setNewBlockedDomain] = useState("");
   const [newBlockedReason, setNewBlockedReason] = useState("");
+  const [orgSearch, setOrgSearch] = useState("");
+  const [showCreateOrgDialog, setShowCreateOrgDialog] = useState(false);
+  const [createOrgForm, setCreateOrgForm] = useState({
+    name: "",
+    domain: "",
+    servicePlan: "TRIAL",
+    supportEmail: "",
+  });
 
   const { data: blockedDomains = [], isLoading: blockedLoading } = useQuery<BlockedDomain[]>({
     queryKey: ["/api/admin/domain-blocklist"],
@@ -58,6 +85,20 @@ export default function SystemAdminPage() {
       return res.json();
     },
   });
+
+  const { data: organizations = [], isLoading: orgsLoading } = useQuery<OrgRecord[]>({
+    queryKey: ["/api/organizations"],
+    queryFn: async () => {
+      const res = await fetch("/api/organizations");
+      if (!res.ok) throw new Error("Failed to fetch organizations");
+      return res.json();
+    },
+  });
+
+  const filteredOrgs = organizations.filter(org =>
+    org.name.toLowerCase().includes(orgSearch.toLowerCase()) ||
+    org.domain.toLowerCase().includes(orgSearch.toLowerCase())
+  );
 
   const addBlockedDomainMutation = useMutation({
     mutationFn: async ({ domain, reason }: { domain: string; reason: string }) => {
@@ -100,6 +141,34 @@ export default function SystemAdminPage() {
     },
   });
 
+  const createOrgMutation = useMutation({
+    mutationFn: async (body: typeof createOrgForm) => {
+      const res = await fetch("/api/admin/organizations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || "Failed to create organization");
+      }
+      return res.json();
+    },
+    onSuccess: (org: OrgRecord) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/organizations"] });
+      setShowCreateOrgDialog(false);
+      setCreateOrgForm({ name: "", domain: "", servicePlan: "TRIAL", supportEmail: "" });
+      toast({ title: "Organization created", description: `${org.name} has been added to the platform.` });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const handleCreateOrg = () => {
+    createOrgMutation.mutate(createOrgForm);
+  };
+
   return (
     <div className="space-y-6 animate-in fade-in duration-500 pb-12">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -112,7 +181,11 @@ export default function SystemAdminPage() {
             <Activity className="w-4 h-4" />
             System Health
           </Button>
-          <Button className="gap-2 shadow-md shadow-primary/20" data-testid="button-create-org">
+          <Button
+            className="gap-2 shadow-md shadow-primary/20"
+            data-testid="button-create-org"
+            onClick={() => setShowCreateOrgDialog(true)}
+          >
             <Plus className="w-4 h-4" />
             Create Organization
           </Button>
@@ -126,7 +199,9 @@ export default function SystemAdminPage() {
             <Building2 className="w-4 h-4 text-blue-500" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold" data-testid="text-total-orgs">124</div>
+            <div className="text-2xl font-bold" data-testid="text-total-orgs">
+              {orgsLoading ? <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" /> : organizations.length}
+            </div>
           </CardContent>
         </Card>
         <Card className="glass-panel border-purple-500/20 shadow-lg shadow-purple-500/5 bg-gradient-to-br from-purple-500/5 to-transparent">
@@ -135,7 +210,7 @@ export default function SystemAdminPage() {
             <Globe className="w-4 h-4 text-purple-500" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold" data-testid="text-total-tenants">312</div>
+            <div className="text-2xl font-bold" data-testid="text-total-tenants">—</div>
           </CardContent>
         </Card>
         <Card className="glass-panel border-emerald-500/20 shadow-lg shadow-emerald-500/5 bg-gradient-to-br from-emerald-500/5 to-transparent">
@@ -144,7 +219,7 @@ export default function SystemAdminPage() {
             <Server className="w-4 h-4 text-emerald-500" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">45.2k/min</div>
+            <div className="text-2xl font-bold">—</div>
           </CardContent>
         </Card>
         <Card className="glass-panel border-amber-500/20 shadow-lg shadow-amber-500/5 bg-gradient-to-br from-amber-500/5 to-transparent">
@@ -177,70 +252,55 @@ export default function SystemAdminPage() {
                   <Input
                     placeholder="Search organizations..."
                     className="pl-9 h-9 bg-background/50 rounded-lg border-border/50"
+                    value={orgSearch}
+                    onChange={e => setOrgSearch(e.target.value)}
                     data-testid="input-search-orgs"
                   />
                 </div>
               </div>
             </CardHeader>
             <CardContent className="p-0">
-              <Table>
-                <TableHeader className="bg-muted/30">
-                  <TableRow>
-                    <TableHead className="pl-6">Organization Name</TableHead>
-                    <TableHead>Primary Domain</TableHead>
-                    <TableHead>Service Plan</TableHead>
-                    <TableHead>Connected Tenants</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead className="w-[50px]"></TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {organizations.map((org) => (
-                    <TableRow key={org.id} className="hover:bg-muted/10 transition-colors" data-testid={`row-org-${org.id}`}>
-                      <TableCell className="pl-6 font-medium">{org.name}</TableCell>
-                      <TableCell className="font-mono text-xs text-muted-foreground">{org.domain}</TableCell>
-                      <TableCell>
-                        <Badge variant="outline" className={
-                          org.plan === 'Enterprise' ? 'bg-blue-500/10 text-blue-500 border-blue-500/20' :
-                          org.plan === 'Professional' ? 'bg-purple-500/10 text-purple-500 border-purple-500/20' : ''
-                        }>
-                          {org.plan}
-                        </Badge>
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex items-center gap-1.5 text-sm">
-                          <Globe className="w-3.5 h-3.5 text-muted-foreground" />
-                          {org.tenants}
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        <Badge variant="outline" className={
-                          org.status === 'Active' ? 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20' :
-                          'bg-red-500/10 text-red-500 border-red-500/20'
-                        }>
-                          {org.status}
-                        </Badge>
-                      </TableCell>
-                      <TableCell>
-                        <DropdownMenu>
-                          <DropdownMenuTrigger asChild>
-                            <Button variant="ghost" size="icon" className="h-8 w-8" data-testid={`button-org-menu-${org.id}`}>
-                              <MoreVertical className="w-4 h-4 text-muted-foreground" />
-                            </Button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end">
-                            <DropdownMenuItem>View Details</DropdownMenuItem>
-                            <DropdownMenuItem>Manage Plan</DropdownMenuItem>
-                            <DropdownMenuItem>Impersonate Org Admin</DropdownMenuItem>
-                            <DropdownMenuSeparator />
-                            <DropdownMenuItem className="text-destructive">Suspend Organization</DropdownMenuItem>
-                          </DropdownMenuContent>
-                        </DropdownMenu>
-                      </TableCell>
+              {orgsLoading ? (
+                <div className="flex items-center justify-center py-16">
+                  <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
+                </div>
+              ) : filteredOrgs.length === 0 ? (
+                <div className="text-center py-16 text-muted-foreground">
+                  <Building2 className="w-8 h-8 mx-auto mb-2 opacity-30" />
+                  <p className="text-sm">{orgSearch ? "No organizations match your search." : "No organizations found."}</p>
+                </div>
+              ) : (
+                <Table>
+                  <TableHeader className="bg-muted/30">
+                    <TableRow>
+                      <TableHead className="pl-6">Organization Name</TableHead>
+                      <TableHead>Primary Domain</TableHead>
+                      <TableHead>Service Plan</TableHead>
+                      <TableHead>Support Email</TableHead>
+                      <TableHead>Created</TableHead>
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+                  </TableHeader>
+                  <TableBody>
+                    {filteredOrgs.map((org) => (
+                      <TableRow key={org.id} className="hover:bg-muted/10 transition-colors" data-testid={`row-org-${org.id}`}>
+                        <TableCell className="pl-6 font-medium">{org.name}</TableCell>
+                        <TableCell className="font-mono text-xs text-muted-foreground">{org.domain}</TableCell>
+                        <TableCell>
+                          <Badge variant="outline" className={PLAN_COLORS[org.servicePlan] ?? ""}>
+                            {org.servicePlan.charAt(0) + org.servicePlan.slice(1).toLowerCase()}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="text-sm text-muted-foreground">
+                          {org.supportEmail || "—"}
+                        </TableCell>
+                        <TableCell className="text-sm text-muted-foreground">
+                          {org.createdAt ? new Date(org.createdAt).toLocaleDateString() : "—"}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
             </CardContent>
           </Card>
         </TabsContent>
@@ -352,6 +412,99 @@ export default function SystemAdminPage() {
           </Card>
         </TabsContent>
       </Tabs>
+
+      <Dialog open={showCreateOrgDialog} onOpenChange={open => {
+        setShowCreateOrgDialog(open);
+        if (!open) setCreateOrgForm({ name: "", domain: "", servicePlan: "TRIAL", supportEmail: "" });
+      }}>
+        <DialogContent className="sm:max-w-[480px]">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Building2 className="w-5 h-5 text-primary" />
+              Create Organization
+            </DialogTitle>
+            <DialogDescription>
+              Add a new organization to the Zenith platform. You can configure their service plan and connection settings afterwards.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 py-2">
+            <div className="space-y-2">
+              <Label htmlFor="org-name">Organization Name <span className="text-destructive">*</span></Label>
+              <Input
+                id="org-name"
+                placeholder="e.g. Contoso Corporation"
+                value={createOrgForm.name}
+                onChange={e => setCreateOrgForm(f => ({ ...f, name: e.target.value }))}
+                data-testid="input-create-org-name"
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="org-domain">Primary Domain <span className="text-destructive">*</span></Label>
+              <Input
+                id="org-domain"
+                placeholder="e.g. contoso.onmicrosoft.com"
+                value={createOrgForm.domain}
+                onChange={e => setCreateOrgForm(f => ({ ...f, domain: e.target.value }))}
+                className="font-mono text-sm"
+                data-testid="input-create-org-domain"
+              />
+              <p className="text-[11px] text-muted-foreground">The organization's primary Microsoft 365 or custom domain.</p>
+            </div>
+
+            <div className="space-y-2">
+              <Label>Service Plan</Label>
+              <Select
+                value={createOrgForm.servicePlan}
+                onValueChange={v => setCreateOrgForm(f => ({ ...f, servicePlan: v }))}
+              >
+                <SelectTrigger data-testid="select-create-org-plan">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {SERVICE_PLANS.map(plan => (
+                    <SelectItem key={plan} value={plan}>
+                      {plan.charAt(0) + plan.slice(1).toLowerCase()}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="org-support-email">Support Email <span className="text-xs text-muted-foreground font-normal">(optional)</span></Label>
+              <Input
+                id="org-support-email"
+                type="email"
+                placeholder="e.g. it-support@contoso.com"
+                value={createOrgForm.supportEmail}
+                onChange={e => setCreateOrgForm(f => ({ ...f, supportEmail: e.target.value }))}
+                data-testid="input-create-org-support-email"
+              />
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowCreateOrgDialog(false)} data-testid="button-cancel-create-org">
+              Cancel
+            </Button>
+            <Button
+              onClick={handleCreateOrg}
+              disabled={!createOrgForm.name.trim() || !createOrgForm.domain.trim() || createOrgMutation.isPending}
+              className="gap-2"
+              data-testid="button-submit-create-org"
+            >
+              {createOrgMutation.isPending ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <Plus className="w-4 h-4" />
+              )}
+              Create Organization
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
