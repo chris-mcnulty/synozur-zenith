@@ -1659,7 +1659,12 @@ router.post("/api/admin/tenants/:id/sync-libraries", requireRole(ZENITH_ROLES.TE
 
           for (const lib of libResult.libraries) {
             const existing = existingMap.get(lib.listId);
-            if (existing && existing.lastModifiedAt === lib.lastModifiedAt) {
+            const dataStale = existing && (
+              (existing.itemCount === 0 || existing.itemCount == null) ||
+              existing.storageUsedBytes == null ||
+              existing.webUrl == null
+            );
+            if (existing && !dataStale && existing.lastModifiedAt === lib.lastModifiedAt) {
               skippedCount++;
               continue;
             }
@@ -1730,12 +1735,16 @@ router.get("/api/admin/libraries/:libraryId/details", requireRole(ZENITH_ROLES.V
     const connection = await storage.getTenantConnection(workspace.tenantConnectionId);
     if (!connection) return res.status(400).json({ error: "Tenant connection not found" });
 
+    let token: string | null = null;
     const clientId = connection.clientId;
     const clientSecret = clientId ? getEffectiveClientSecret(connection) : undefined;
-    if (!clientId || !clientSecret) return res.status(400).json({ error: "Tenant connection missing credentials" });
-
-    const token = await getAppToken(connection.tenantId, clientId, clientSecret);
-    if (!token) return res.status(500).json({ error: "Failed to acquire Graph token" });
+    if (clientId && clientSecret) {
+      try { token = await getAppToken(connection.tenantId, clientId, clientSecret); } catch {}
+    }
+    if (!token) {
+      token = await getDelegatedTokenForRetention(req.session?.userId, connection.organizationId);
+    }
+    if (!token) return res.status(500).json({ error: "No Graph token available. Please sign in with SSO." });
 
     const graphSiteId = workspace.m365ObjectId;
     if (!graphSiteId) return res.status(400).json({ error: "Workspace has no M365 object ID" });
