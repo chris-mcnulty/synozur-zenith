@@ -33,8 +33,10 @@ import {
   Trash2,
   Loader2,
   AlertCircle,
+  CheckCircle2,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { useQuery as useAuthQuery } from "@tanstack/react-query";
 
 type BlockedDomain = {
   id: string;
@@ -44,13 +46,14 @@ type BlockedDomain = {
   createdAt: string;
 };
 
-type OrgRecord = {
+type OrgStat = {
   id: string;
   name: string;
   domain: string;
   servicePlan: string;
   supportEmail: string | null;
   createdAt: string;
+  tenantCount: number;
 };
 
 const PLAN_COLORS: Record<string, string> = {
@@ -61,6 +64,10 @@ const PLAN_COLORS: Record<string, string> = {
 };
 
 const SERVICE_PLANS = ["TRIAL", "STANDARD", "PROFESSIONAL", "ENTERPRISE"] as const;
+
+function planLabel(plan: string) {
+  return plan.charAt(0) + plan.slice(1).toLowerCase();
+}
 
 export default function SystemAdminPage() {
   const { toast } = useToast();
@@ -77,6 +84,12 @@ export default function SystemAdminPage() {
     supportEmail: "",
   });
 
+  const { data: authData } = useAuthQuery<{ user: { role: string; effectiveRole?: string } } | null>({
+    queryKey: ["/api/auth/me"],
+  });
+  const effectiveRole = authData?.user?.effectiveRole || authData?.user?.role || "viewer";
+  const isPlatformOwner = effectiveRole === "platform_owner";
+
   const { data: blockedDomains = [], isLoading: blockedLoading } = useQuery<BlockedDomain[]>({
     queryKey: ["/api/admin/domain-blocklist"],
     queryFn: async () => {
@@ -86,19 +99,21 @@ export default function SystemAdminPage() {
     },
   });
 
-  const { data: organizations = [], isLoading: orgsLoading } = useQuery<OrgRecord[]>({
-    queryKey: ["/api/organizations"],
+  const { data: orgStats = [], isLoading: orgsLoading } = useQuery<OrgStat[]>({
+    queryKey: ["/api/admin/platform/org-stats"],
     queryFn: async () => {
-      const res = await fetch("/api/organizations");
-      if (!res.ok) throw new Error("Failed to fetch organizations");
+      const res = await fetch("/api/admin/platform/org-stats");
+      if (!res.ok) throw new Error("Failed to fetch organization stats");
       return res.json();
     },
   });
 
-  const filteredOrgs = organizations.filter(org =>
+  const filteredOrgs = orgStats.filter(org =>
     org.name.toLowerCase().includes(orgSearch.toLowerCase()) ||
     org.domain.toLowerCase().includes(orgSearch.toLowerCase())
   );
+
+  const totalTenants = orgStats.reduce((sum, o) => sum + o.tenantCount, 0);
 
   const addBlockedDomainMutation = useMutation({
     mutationFn: async ({ domain, reason }: { domain: string; reason: string }) => {
@@ -154,8 +169,8 @@ export default function SystemAdminPage() {
       }
       return res.json();
     },
-    onSuccess: (org: OrgRecord) => {
-      queryClient.invalidateQueries({ queryKey: ["/api/organizations"] });
+    onSuccess: (org: OrgStat) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/platform/org-stats"] });
       setShowCreateOrgDialog(false);
       setCreateOrgForm({ name: "", domain: "", servicePlan: "TRIAL", supportEmail: "" });
       toast({ title: "Organization created", description: `${org.name} has been added to the platform.` });
@@ -164,10 +179,6 @@ export default function SystemAdminPage() {
       toast({ title: "Error", description: err.message, variant: "destructive" });
     },
   });
-
-  const handleCreateOrg = () => {
-    createOrgMutation.mutate(createOrgForm);
-  };
 
   return (
     <div className="space-y-6 animate-in fade-in duration-500 pb-12">
@@ -181,14 +192,16 @@ export default function SystemAdminPage() {
             <Activity className="w-4 h-4" />
             System Health
           </Button>
-          <Button
-            className="gap-2 shadow-md shadow-primary/20"
-            data-testid="button-create-org"
-            onClick={() => setShowCreateOrgDialog(true)}
-          >
-            <Plus className="w-4 h-4" />
-            Create Organization
-          </Button>
+          {isPlatformOwner && (
+            <Button
+              className="gap-2 shadow-md shadow-primary/20"
+              data-testid="button-create-org"
+              onClick={() => setShowCreateOrgDialog(true)}
+            >
+              <Plus className="w-4 h-4" />
+              Create Organization
+            </Button>
+          )}
         </div>
       </div>
 
@@ -200,7 +213,7 @@ export default function SystemAdminPage() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold" data-testid="text-total-orgs">
-              {orgsLoading ? <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" /> : organizations.length}
+              {orgsLoading ? <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" /> : orgStats.length}
             </div>
           </CardContent>
         </Card>
@@ -210,16 +223,20 @@ export default function SystemAdminPage() {
             <Globe className="w-4 h-4 text-purple-500" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold" data-testid="text-total-tenants">—</div>
+            <div className="text-2xl font-bold" data-testid="text-total-tenants">
+              {orgsLoading ? <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" /> : totalTenants}
+            </div>
           </CardContent>
         </Card>
         <Card className="glass-panel border-emerald-500/20 shadow-lg shadow-emerald-500/5 bg-gradient-to-br from-emerald-500/5 to-transparent">
           <CardHeader className="pb-2 flex flex-row items-center justify-between">
-            <CardTitle className="text-sm font-medium text-muted-foreground">Platform API Load</CardTitle>
+            <CardTitle className="text-sm font-medium text-muted-foreground">Active Organizations</CardTitle>
             <Server className="w-4 h-4 text-emerald-500" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">—</div>
+            <div className="text-2xl font-bold text-emerald-500" data-testid="text-active-orgs">
+              {orgsLoading ? <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" /> : orgStats.length}
+            </div>
           </CardContent>
         </Card>
         <Card className="glass-panel border-amber-500/20 shadow-lg shadow-amber-500/5 bg-gradient-to-br from-amber-500/5 to-transparent">
@@ -276,8 +293,8 @@ export default function SystemAdminPage() {
                       <TableHead className="pl-6">Organization Name</TableHead>
                       <TableHead>Primary Domain</TableHead>
                       <TableHead>Service Plan</TableHead>
-                      <TableHead>Support Email</TableHead>
-                      <TableHead>Created</TableHead>
+                      <TableHead>Connected Tenants</TableHead>
+                      <TableHead>Status</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -287,14 +304,20 @@ export default function SystemAdminPage() {
                         <TableCell className="font-mono text-xs text-muted-foreground">{org.domain}</TableCell>
                         <TableCell>
                           <Badge variant="outline" className={PLAN_COLORS[org.servicePlan] ?? ""}>
-                            {org.servicePlan.charAt(0) + org.servicePlan.slice(1).toLowerCase()}
+                            {planLabel(org.servicePlan)}
                           </Badge>
                         </TableCell>
-                        <TableCell className="text-sm text-muted-foreground">
-                          {org.supportEmail || "—"}
+                        <TableCell>
+                          <div className="flex items-center gap-1.5 text-sm">
+                            <Globe className="w-3.5 h-3.5 text-muted-foreground" />
+                            {org.tenantCount}
+                          </div>
                         </TableCell>
-                        <TableCell className="text-sm text-muted-foreground">
-                          {org.createdAt ? new Date(org.createdAt).toLocaleDateString() : "—"}
+                        <TableCell>
+                          <Badge variant="outline" className="bg-emerald-500/10 text-emerald-500 border-emerald-500/20 gap-1">
+                            <CheckCircle2 className="w-3 h-3" />
+                            Active
+                          </Badge>
                         </TableCell>
                       </TableRow>
                     ))}
@@ -413,98 +436,98 @@ export default function SystemAdminPage() {
         </TabsContent>
       </Tabs>
 
-      <Dialog open={showCreateOrgDialog} onOpenChange={open => {
-        setShowCreateOrgDialog(open);
-        if (!open) setCreateOrgForm({ name: "", domain: "", servicePlan: "TRIAL", supportEmail: "" });
-      }}>
-        <DialogContent className="sm:max-w-[480px]">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <Building2 className="w-5 h-5 text-primary" />
-              Create Organization
-            </DialogTitle>
-            <DialogDescription>
-              Add a new organization to the Zenith platform. You can configure their service plan and connection settings afterwards.
-            </DialogDescription>
-          </DialogHeader>
+      {isPlatformOwner && (
+        <Dialog open={showCreateOrgDialog} onOpenChange={open => {
+          setShowCreateOrgDialog(open);
+          if (!open) setCreateOrgForm({ name: "", domain: "", servicePlan: "TRIAL", supportEmail: "" });
+        }}>
+          <DialogContent className="sm:max-w-[480px]">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <Building2 className="w-5 h-5 text-primary" />
+                Create Organization
+              </DialogTitle>
+              <DialogDescription>
+                Add a new organization to the Zenith platform. You can configure their service plan and connection settings afterwards.
+              </DialogDescription>
+            </DialogHeader>
 
-          <div className="space-y-4 py-2">
-            <div className="space-y-2">
-              <Label htmlFor="org-name">Organization Name <span className="text-destructive">*</span></Label>
-              <Input
-                id="org-name"
-                placeholder="e.g. Contoso Corporation"
-                value={createOrgForm.name}
-                onChange={e => setCreateOrgForm(f => ({ ...f, name: e.target.value }))}
-                data-testid="input-create-org-name"
-              />
+            <div className="space-y-4 py-2">
+              <div className="space-y-2">
+                <Label htmlFor="org-name">Organization Name <span className="text-destructive">*</span></Label>
+                <Input
+                  id="org-name"
+                  placeholder="e.g. Contoso Corporation"
+                  value={createOrgForm.name}
+                  onChange={e => setCreateOrgForm(f => ({ ...f, name: e.target.value }))}
+                  data-testid="input-create-org-name"
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="org-domain">Primary Domain <span className="text-destructive">*</span></Label>
+                <Input
+                  id="org-domain"
+                  placeholder="e.g. contoso.onmicrosoft.com"
+                  value={createOrgForm.domain}
+                  onChange={e => setCreateOrgForm(f => ({ ...f, domain: e.target.value }))}
+                  className="font-mono text-sm"
+                  data-testid="input-create-org-domain"
+                />
+                <p className="text-[11px] text-muted-foreground">The organization's primary Microsoft 365 or custom domain.</p>
+              </div>
+
+              <div className="space-y-2">
+                <Label>Service Plan</Label>
+                <Select
+                  value={createOrgForm.servicePlan}
+                  onValueChange={v => setCreateOrgForm(f => ({ ...f, servicePlan: v }))}
+                >
+                  <SelectTrigger data-testid="select-create-org-plan">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {SERVICE_PLANS.map(plan => (
+                      <SelectItem key={plan} value={plan}>{planLabel(plan)}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="org-support-email">Support Email <span className="text-xs text-muted-foreground font-normal">(optional)</span></Label>
+                <Input
+                  id="org-support-email"
+                  type="email"
+                  placeholder="e.g. it-support@contoso.com"
+                  value={createOrgForm.supportEmail}
+                  onChange={e => setCreateOrgForm(f => ({ ...f, supportEmail: e.target.value }))}
+                  data-testid="input-create-org-support-email"
+                />
+              </div>
             </div>
 
-            <div className="space-y-2">
-              <Label htmlFor="org-domain">Primary Domain <span className="text-destructive">*</span></Label>
-              <Input
-                id="org-domain"
-                placeholder="e.g. contoso.onmicrosoft.com"
-                value={createOrgForm.domain}
-                onChange={e => setCreateOrgForm(f => ({ ...f, domain: e.target.value }))}
-                className="font-mono text-sm"
-                data-testid="input-create-org-domain"
-              />
-              <p className="text-[11px] text-muted-foreground">The organization's primary Microsoft 365 or custom domain.</p>
-            </div>
-
-            <div className="space-y-2">
-              <Label>Service Plan</Label>
-              <Select
-                value={createOrgForm.servicePlan}
-                onValueChange={v => setCreateOrgForm(f => ({ ...f, servicePlan: v }))}
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setShowCreateOrgDialog(false)} data-testid="button-cancel-create-org">
+                Cancel
+              </Button>
+              <Button
+                onClick={() => createOrgMutation.mutate(createOrgForm)}
+                disabled={!createOrgForm.name.trim() || !createOrgForm.domain.trim() || createOrgMutation.isPending}
+                className="gap-2"
+                data-testid="button-submit-create-org"
               >
-                <SelectTrigger data-testid="select-create-org-plan">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {SERVICE_PLANS.map(plan => (
-                    <SelectItem key={plan} value={plan}>
-                      {plan.charAt(0) + plan.slice(1).toLowerCase()}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="org-support-email">Support Email <span className="text-xs text-muted-foreground font-normal">(optional)</span></Label>
-              <Input
-                id="org-support-email"
-                type="email"
-                placeholder="e.g. it-support@contoso.com"
-                value={createOrgForm.supportEmail}
-                onChange={e => setCreateOrgForm(f => ({ ...f, supportEmail: e.target.value }))}
-                data-testid="input-create-org-support-email"
-              />
-            </div>
-          </div>
-
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setShowCreateOrgDialog(false)} data-testid="button-cancel-create-org">
-              Cancel
-            </Button>
-            <Button
-              onClick={handleCreateOrg}
-              disabled={!createOrgForm.name.trim() || !createOrgForm.domain.trim() || createOrgMutation.isPending}
-              className="gap-2"
-              data-testid="button-submit-create-org"
-            >
-              {createOrgMutation.isPending ? (
-                <Loader2 className="w-4 h-4 animate-spin" />
-              ) : (
-                <Plus className="w-4 h-4" />
-              )}
-              Create Organization
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+                {createOrgMutation.isPending ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Plus className="w-4 h-4" />
+                )}
+                Create Organization
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
     </div>
   );
 }

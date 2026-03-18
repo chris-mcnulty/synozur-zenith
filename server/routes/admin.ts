@@ -55,6 +55,21 @@ router.get("/api/organizations", requireAuth(), async (_req: AuthenticatedReques
   res.json(withFeatures);
 });
 
+router.get("/api/admin/platform/org-stats", requireRole(ZENITH_ROLES.PLATFORM_OWNER, ZENITH_ROLES.TENANT_ADMIN), async (_req: AuthenticatedRequest, res) => {
+  const orgs = await storage.getOrganizations();
+  const allTenants = await storage.getTenantConnections();
+  const countByOrg: Record<string, number> = {};
+  for (const t of allTenants) {
+    if (t.organizationId) countByOrg[t.organizationId] = (countByOrg[t.organizationId] || 0) + 1;
+  }
+  const result = orgs.map(org => ({
+    ...org,
+    features: getPlanFeatures(org.servicePlan as ServicePlanTier),
+    tenantCount: countByOrg[org.id] || 0,
+  }));
+  res.json(result);
+});
+
 router.post("/api/admin/organizations", requireRole(ZENITH_ROLES.PLATFORM_OWNER), async (req: AuthenticatedRequest, res) => {
   const { name, domain, servicePlan, supportEmail } = req.body;
   if (!name?.trim()) return res.status(400).json({ error: "Organization name is required." });
