@@ -86,7 +86,7 @@ router.get("/api/admin/tenants/consent/initiate", requireAuth(), async (req: Aut
     return res.status(403).json({ error: "You must belong to an organization to connect a tenant." });
   }
 
-  const { tenantDomain, ownershipType, adminEmail } = req.query;
+  const { tenantDomain, ownershipType, adminEmail, returnTo } = req.query;
   if (!tenantDomain) {
     return res.status(400).json({ error: "tenantDomain query parameter is required" });
   }
@@ -107,10 +107,16 @@ router.get("/api/admin/tenants/consent/initiate", requireAuth(), async (req: Aut
   }
   const redirectUri = `${baseUrl}/api/admin/tenants/consent/callback`;
 
+  const allowedReturnPaths = ['/app/admin/tenants', '/app/add-tenant'];
+  const safeReturnTo = returnTo && allowedReturnPaths.includes(String(returnTo))
+    ? String(returnTo)
+    : '/app/admin/tenants';
+
   const state = Buffer.from(JSON.stringify({
     tenantDomain,
     ownershipType: ownershipType || 'MSP',
     nonce,
+    returnTo: safeReturnTo,
   })).toString('base64url');
 
   const tenantAuthority = tenantDomain || 'organizations';
@@ -127,20 +133,29 @@ router.get("/api/admin/tenants/consent/callback", async (req, res) => {
 
   if (error) {
     console.error('[Consent] Admin consent error:', error, error_description);
-    return res.redirect(`/app/add-tenant?consent_error=${encodeURIComponent(String(error_description || error))}`);
+    return res.redirect(`/app/admin/tenants?consent_error=${encodeURIComponent(String(error_description || error))}`);
   }
 
   if (admin_consent !== 'True' || !tenant || !state) {
-    return res.redirect('/app/add-tenant?consent_error=Consent+was+not+granted');
+    return res.redirect('/app/admin/tenants?consent_error=Consent+was+not+granted');
   }
 
+  let stateData: any = {};
   try {
-    const stateData = JSON.parse(Buffer.from(String(state), 'base64url').toString());
+    stateData = JSON.parse(Buffer.from(String(state), 'base64url').toString());
+  } catch {
+    return res.redirect('/app/admin/tenants?consent_error=Invalid+state+parameter.+Please+try+again.');
+  }
+
+  const returnTo = stateData.returnTo || '/app/admin/tenants';
+
+  try {
     const sessionNonce = (req.session as any)?.consentNonce;
     const sessionOrgId = (req.session as any)?.consentOrgId;
 
     if (!sessionNonce || sessionNonce !== stateData.nonce) {
-      return res.redirect('/app/add-tenant?consent_error=Invalid+consent+session.+Please+try+again.');
+      console.warn('[Consent] Nonce mismatch — session may have been lost between initiate and callback.');
+      return res.redirect(`${returnTo}?consent_error=Your+session+expired+during+consent.+Please+try+again.`);
     }
 
     delete (req.session as any).consentNonce;
@@ -162,7 +177,7 @@ router.get("/api/admin/tenants/consent/callback", async (req, res) => {
         consentGranted: true,
         status: 'ACTIVE',
       });
-      return res.redirect('/app/add-tenant?consent_success=true');
+      return res.redirect(`${returnTo}?consent_success=true`);
     }
 
     let tenantName = domain.split('.')[0];
@@ -186,10 +201,10 @@ router.get("/api/admin/tenants/consent/callback", async (req, res) => {
       status: 'ACTIVE',
     });
 
-    return res.redirect('/app/add-tenant?consent_success=true');
+    return res.redirect(`${returnTo}?consent_success=true`);
   } catch (err: any) {
     console.error('[Consent] Callback processing error:', err);
-    return res.redirect(`/app/add-tenant?consent_error=${encodeURIComponent(err.message)}`);
+    return res.redirect(`${returnTo}?consent_error=${encodeURIComponent(err.message)}`);
   }
 });
 

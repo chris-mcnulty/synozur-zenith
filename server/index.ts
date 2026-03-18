@@ -31,6 +31,9 @@ app.use(
 app.use(express.urlencoded({ extended: false }));
 
 const PgStore = connectPgSimple(session);
+if (!process.env.SESSION_SECRET) {
+  console.warn('[session] SESSION_SECRET env var is not set — using a random secret that will change on every restart. Set SESSION_SECRET in production to keep sessions alive across deployments.');
+}
 const sessionSecret = process.env.SESSION_SECRET || crypto.randomBytes(64).toString('hex');
 
 app.use(

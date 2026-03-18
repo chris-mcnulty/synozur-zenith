@@ -120,7 +120,7 @@ export default function TenantConnectionsPage() {
     }
     setIsInitiating(true);
     try {
-      let url = `/api/admin/tenants/consent/initiate?tenantDomain=${encodeURIComponent(form.domain)}&ownershipType=${encodeURIComponent(form.ownershipType)}`;
+      let url = `/api/admin/tenants/consent/initiate?tenantDomain=${encodeURIComponent(form.domain)}&ownershipType=${encodeURIComponent(form.ownershipType)}&returnTo=${encodeURIComponent('/app/admin/tenants')}`;
       if (form.adminEmail.trim()) {
         url += `&adminEmail=${encodeURIComponent(form.adminEmail)}`;
       }

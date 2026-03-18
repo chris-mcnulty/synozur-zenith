@@ -32,7 +32,7 @@ export default function AddTenantPage() {
   if (consentSuccess && step !== "success") {
     setTimeout(() => {
       setStep("success");
-      setTimeout(() => setLocation("/app/dashboard"), 2500);
+      setTimeout(() => setLocation("/app/admin/tenants"), 2500);
     }, 0);
   }
   if (consentError && step !== "error") {
@@ -66,6 +66,7 @@ export default function AddTenantPage() {
       const params = new URLSearchParams({
         tenantDomain: domain.trim().toLowerCase(),
         ownershipType,
+        returnTo: '/app/add-tenant',
       });
       if (adminEmail.trim()) {
         params.set("adminEmail", adminEmail.trim());
@@ -124,7 +125,7 @@ export default function AddTenantPage() {
                   <Check className="w-8 h-8" />
                 </div>
                 <h3 className="text-xl font-semibold" data-testid="text-consent-success">Tenant Connected!</h3>
-                <p className="text-muted-foreground">Admin consent granted. Redirecting to dashboard...</p>
+                <p className="text-muted-foreground">Admin consent granted. Redirecting to Tenant Connections...</p>
               </div>
             ) : step === "consent" ? (
               <div className="py-8 flex flex-col items-center justify-center text-center space-y-4 animate-in fade-in duration-300">
