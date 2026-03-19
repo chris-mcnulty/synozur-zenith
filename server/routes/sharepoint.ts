@@ -1861,7 +1861,7 @@ router.get("/api/admin/tenants/:id/export-csv", requireRole(ZENITH_ROLES.VIEWER)
 
     res.setHeader("Content-Type", "text/csv; charset=utf-8");
     res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
-    res.send(csv);
+    res.send("\uFEFF" + csv);
   } catch (err: any) {
     console.error(`[csv-export] Error:`, err.message);
     res.status(500).json({ error: err.message });
