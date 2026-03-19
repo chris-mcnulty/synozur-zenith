@@ -120,20 +120,21 @@ export default function UserManagementPage() {
 
   const { toast } = useToast();
 
-  const { data: authData } = useQuery<{ user: { organizationId: string; role: string }; organization: { name: string } | null }>({
+  const { data: authData } = useQuery<{ user: { organizationId: string; role: string }; organization: { id: string; name: string } | null; activeOrganizationId: string | null }>({
     queryKey: ["/api/auth/me"],
     queryFn: () => fetch("/api/auth/me", { credentials: "include" }).then(r => r.ok ? r.json() : null),
   });
+  const activeOrgId = authData?.activeOrganizationId ?? authData?.organization?.id;
 
   const searchEntraDirectory = useCallback(async (q: string) => {
-    if (!authData?.user?.organizationId || q.length < 2) {
+    if (!activeOrgId || q.length < 2) {
       setEntraResults([]);
       setShowEntraDropdown(false);
       return;
     }
     setEntraLoading(true);
     try {
-      const res = await fetch(`/api/orgs/${authData.user.organizationId}/entra-users?q=${encodeURIComponent(q)}`, { credentials: "include" });
+      const res = await fetch(`/api/orgs/${activeOrgId}/entra-users?q=${encodeURIComponent(q)}`, { credentials: "include" });
       if (res.ok) {
         const data = await res.json();
         setEntraResults(data.users || []);
@@ -148,7 +149,7 @@ export default function UserManagementPage() {
     } finally {
       setEntraLoading(false);
     }
-  }, [authData?.user?.organizationId]);
+  }, [activeOrgId]);
 
   const handleEntraSearchChange = (value: string) => {
     setEntraSearch(value);

@@ -135,7 +135,7 @@ export default function PolicyBuilderPage() {
     queryFn: () => fetch("/api/auth/me", { credentials: "include" }).then(r => r.ok ? r.json() : null),
   });
 
-  const organizationId = authData?.user?.organizationId;
+  const organizationId = authData?.activeOrganizationId ?? authData?.organization?.id;
   const activeTenantId = selectedTenant?.id || "";
 
   const { data: customFieldDefs = [] } = useQuery<CustomFieldDef[]>({

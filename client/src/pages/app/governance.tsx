@@ -133,11 +133,11 @@ export default function GovernancePage() {
 
   const tenantConnectionId = selectedTenant?.id || "";
 
-  const { data: authData } = useQuery<{ user: { organizationId: string } }>({
+  const { data: authData } = useQuery<{ user: { organizationId: string }; organization: { id: string } | null; activeOrganizationId: string | null }>({
     queryKey: ["/api/auth/me"],
     queryFn: () => fetch("/api/auth/me", { credentials: "include" }).then(r => r.ok ? r.json() : null),
   });
-  const organizationId = authData?.user?.organizationId;
+  const organizationId = authData?.activeOrganizationId ?? authData?.organization?.id;
 
   interface PolicyOutcome {
     id: string;

@@ -120,13 +120,15 @@ export default function PolicyWhatIfPage() {
   const [filter, setFilter] = useState<"all" | "changes" | "now_passing" | "now_failing">("changes");
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
 
-  const { data: user } = useQuery<{ organizationId?: string }>({
-    queryKey: ["/api/me"],
+  const { data: authData } = useQuery<{ user: { organizationId: string }; organization: { id: string } | null; activeOrganizationId: string | null }>({
+    queryKey: ["/api/auth/me"],
+    queryFn: () => fetch("/api/auth/me", { credentials: "include" }).then(r => r.ok ? r.json() : null),
   });
+  const organizationId = authData?.activeOrganizationId ?? authData?.organization?.id;
 
   const { data: policies = [] } = useQuery<GovernancePolicy[]>({
-    queryKey: [`/api/policies?organizationId=${user?.organizationId}`],
-    enabled: !!user?.organizationId,
+    queryKey: [`/api/policies?organizationId=${organizationId}`],
+    enabled: !!organizationId,
   });
 
   const { data: customFieldDefs = [] } = useQuery<CustomFieldDef[]>({
