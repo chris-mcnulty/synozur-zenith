@@ -34,9 +34,17 @@ import {
   Loader2,
   AlertCircle,
   CheckCircle2,
+  Settings2,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useQuery as useAuthQuery } from "@tanstack/react-query";
+
+type PlatformSettings = {
+  id: string;
+  defaultSignupPlan: string;
+  updatedAt: string | null;
+  updatedBy: string | null;
+};
 
 type BlockedDomain = {
   id: string;
@@ -76,6 +84,7 @@ export default function SystemAdminPage() {
   const [newBlockedDomain, setNewBlockedDomain] = useState("");
   const [newBlockedReason, setNewBlockedReason] = useState("");
   const [orgSearch, setOrgSearch] = useState("");
+  const [pendingSignupPlan, setPendingSignupPlan] = useState<string | null>(null);
   const [showCreateOrgDialog, setShowCreateOrgDialog] = useState(false);
   const [createOrgForm, setCreateOrgForm] = useState({
     name: "",
@@ -89,6 +98,38 @@ export default function SystemAdminPage() {
   });
   const effectiveRole = authData?.user?.effectiveRole || authData?.user?.role || "viewer";
   const isPlatformOwner = effectiveRole === "platform_owner";
+
+  const { data: platformSettingsData } = useQuery<PlatformSettings>({
+    queryKey: ["/api/admin/platform/settings"],
+    queryFn: async () => {
+      const res = await fetch("/api/admin/platform/settings");
+      if (!res.ok) throw new Error("Failed to fetch platform settings");
+      return res.json();
+    },
+  });
+
+  const savePlatformSettingsMutation = useMutation({
+    mutationFn: async (defaultSignupPlan: string) => {
+      const res = await fetch("/api/admin/platform/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ defaultSignupPlan }),
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || "Failed to save platform settings");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/platform/settings"] });
+      setPendingSignupPlan(null);
+      toast({ title: "Settings saved", description: "Default signup plan has been updated." });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
 
   const { data: blockedDomains = [], isLoading: blockedLoading } = useQuery<BlockedDomain[]>({
     queryKey: ["/api/admin/domain-blocklist"],
@@ -254,6 +295,7 @@ export default function SystemAdminPage() {
         <TabsList data-testid="tabs-admin">
           <TabsTrigger value="organizations">Organizations</TabsTrigger>
           <TabsTrigger value="blocked-domains">Blocked Domains</TabsTrigger>
+          <TabsTrigger value="platform-settings" data-testid="tab-platform-settings">Platform Settings</TabsTrigger>
         </TabsList>
 
         <TabsContent value="organizations">
@@ -431,6 +473,69 @@ export default function SystemAdminPage() {
                   </TableBody>
                 </Table>
               )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="platform-settings">
+          <Card className="glass-panel border-border/50 shadow-xl">
+            <CardHeader className="pb-4 border-b border-border/40 bg-muted/10">
+              <CardTitle className="text-xl flex items-center gap-2">
+                <Settings2 className="w-5 h-5 text-primary" />
+                Platform Settings
+              </CardTitle>
+              <CardDescription>
+                Configure platform-level defaults that apply to all new self-service organization registrations.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="pt-6">
+              <div className="max-w-md space-y-6">
+                <div className="space-y-2">
+                  <Label htmlFor="default-signup-plan">Default Signup Plan</Label>
+                  <p className="text-xs text-muted-foreground">
+                    The service plan automatically assigned to new organizations created via self-service signup (local password or SSO). This does not affect existing organizations.
+                  </p>
+                  <Select
+                    value={pendingSignupPlan ?? platformSettingsData?.defaultSignupPlan ?? "TRIAL"}
+                    onValueChange={v => setPendingSignupPlan(v)}
+                    disabled={!isPlatformOwner}
+                  >
+                    <SelectTrigger data-testid="select-default-signup-plan" className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {SERVICE_PLANS.map(plan => (
+                        <SelectItem key={plan} value={plan} data-testid={`option-signup-plan-${plan}`}>
+                          {planLabel(plan)}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                {isPlatformOwner && (
+                  <Button
+                    onClick={() => {
+                      const planToSave = pendingSignupPlan ?? platformSettingsData?.defaultSignupPlan ?? "TRIAL";
+                      savePlatformSettingsMutation.mutate(planToSave);
+                    }}
+                    disabled={savePlatformSettingsMutation.isPending || (!pendingSignupPlan && !platformSettingsData)}
+                    className="gap-2"
+                    data-testid="button-save-platform-settings"
+                  >
+                    {savePlatformSettingsMutation.isPending ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <CheckCircle2 className="w-4 h-4" />
+                    )}
+                    Save Settings
+                  </Button>
+                )}
+                {platformSettingsData?.updatedAt && (
+                  <p className="text-xs text-muted-foreground" data-testid="text-platform-settings-updated">
+                    Last updated: {new Date(platformSettingsData.updatedAt).toLocaleString()}
+                  </p>
+                )}
+              </div>
             </CardContent>
           </Card>
         </TabsContent>

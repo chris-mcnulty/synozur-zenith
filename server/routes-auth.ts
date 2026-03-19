@@ -4,6 +4,7 @@ import { hashPassword, verifyPassword, generateToken } from './auth';
 import { AuthenticatedRequest, requireAuth, requirePermission } from './middleware/rbac';
 import { type User, ZENITH_ROLES, type ZenithRole } from '@shared/schema';
 import { isPublicEmailDomain } from './utils/publicDomains';
+import { getDefaultSignupPlan } from './utils/platformSettingsCache';
 
 const router = Router();
 
@@ -58,14 +59,14 @@ router.post('/signup', async (req: AuthenticatedRequest, res) => {
       org = await storage.upsertOrganization({
         name: personalOrgName,
         domain: `personal-${email.split('@')[0].replace(/[^a-z0-9]/gi, '')}-${Date.now()}`,
-        servicePlan: 'TRIAL',
+        servicePlan: await getDefaultSignupPlan(),
       });
       isFirstUser = true;
     } else if (!org) {
       org = await storage.upsertOrganization({
         name: domain.split('.')[0].charAt(0).toUpperCase() + domain.split('.')[0].slice(1),
         domain,
-        servicePlan: 'TRIAL',
+        servicePlan: await getDefaultSignupPlan(),
       });
       isFirstUser = true;
     } else {

@@ -3,6 +3,7 @@ import { requireAuth, requireRole, type AuthenticatedRequest } from "../middlewa
 import { ZENITH_ROLES, SERVICE_PLANS, type ServicePlanTier } from "@shared/schema";
 import { storage } from "../storage";
 import { getPlanFeatures } from "../services/feature-gate";
+import { invalidateDefaultSignupPlanCache } from "../utils/platformSettingsCache";
 
 const router = Router();
 
@@ -192,6 +193,33 @@ router.get("/api/feature-check/:feature", requireAuth(), async (req: Authenticat
     currentPlan: plan,
     planLabel: features.label,
   });
+});
+
+// ── Platform Settings ──
+router.get("/api/admin/platform/settings", requireRole(ZENITH_ROLES.TENANT_ADMIN, ZENITH_ROLES.PLATFORM_OWNER), async (_req: AuthenticatedRequest, res) => {
+  try {
+    const settings = await storage.getPlatformSettings();
+    res.json(settings);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.patch("/api/admin/platform/settings", requireRole(ZENITH_ROLES.PLATFORM_OWNER), async (req: AuthenticatedRequest, res) => {
+  try {
+    const { defaultSignupPlan } = req.body;
+    if (!defaultSignupPlan || !SERVICE_PLANS.includes(defaultSignupPlan)) {
+      return res.status(400).json({ error: `Invalid defaultSignupPlan. Must be one of: ${SERVICE_PLANS.join(", ")}` });
+    }
+    const updated = await storage.updatePlatformSettings({
+      defaultSignupPlan,
+      updatedBy: req.user?.id ?? null,
+    });
+    invalidateDefaultSignupPlanCache();
+    res.json(updated);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ── Domain Blocklist ──

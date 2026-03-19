@@ -630,6 +630,21 @@ export const insertSpeContainerUsageSchema = createInsertSchema(speContainerUsag
 export type InsertSpeContainerUsage = z.infer<typeof insertSpeContainerUsageSchema>;
 export type SpeContainerUsage = typeof speContainerUsage.$inferSelect;
 
+// ── Platform Settings ────────────────────────────────────────────────────────
+export const platformSettings = pgTable("platform_settings", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  defaultSignupPlan: text("default_signup_plan").notNull().default("TRIAL"),
+  updatedAt: timestamp("updated_at").defaultNow(),
+  updatedBy: varchar("updated_by"),
+});
+
+export const insertPlatformSettingsSchema = createInsertSchema(platformSettings).omit({
+  id: true,
+});
+
+export type InsertPlatformSettings = z.infer<typeof insertPlatformSettingsSchema>;
+export type PlatformSettings = typeof platformSettings.$inferSelect;
+
 // ── Workspace Telemetry ──────────────────────────────────────────────────────
 // One row per sync snapshot per workspace. Retaining multiple snapshots enables
 // growth-trend analysis (storage, file count, content-type drift over time).

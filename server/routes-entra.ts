@@ -6,6 +6,7 @@ import type { AuthenticatedRequest } from './middleware/rbac';
 import { requireAuth, requireRole } from './middleware/rbac';
 import { ZENITH_ROLES } from '@shared/schema';
 import { isPublicEmailDomain } from './utils/publicDomains';
+import { getDefaultSignupPlan } from './utils/platformSettingsCache';
 
 const router = Router();
 const cryptoProvider = new CryptoProvider();
@@ -359,13 +360,13 @@ router.get('/callback', async (req: AuthenticatedRequest, res: Response) => {
           org = await storage.upsertOrganization({
             name: personalOrgName,
             domain: `personal-${email.split('@')[0].replace(/[^a-z0-9]/gi, '')}-${Date.now()}`,
-            servicePlan: 'TRIAL',
+            servicePlan: await getDefaultSignupPlan(),
           });
         } else {
           org = await storage.upsertOrganization({
             name: domain.split('.')[0].charAt(0).toUpperCase() + domain.split('.')[0].slice(1),
             domain,
-            servicePlan: 'TRIAL',
+            servicePlan: await getDefaultSignupPlan(),
             azureTenantId: azureTenantId || undefined,
           });
         }

@@ -190,6 +190,12 @@ async function backfillOrgMemberships() {
 
   await backfillOrgMemberships();
   await seedBuiltInOutcomes();
+  try {
+    await storage.getPlatformSettings();
+    log('Platform settings initialized');
+  } catch (err) {
+    console.error('[Seed] Failed to initialize platform settings:', err);
+  }
 
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
     const status = err.status || err.statusCode || 500;

@@ -65,6 +65,8 @@ import {
   speContainerUsage,
   type SpeContainerUsage,
   type InsertSpeContainerUsage,
+  platformSettings,
+  type PlatformSettings,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -184,6 +186,9 @@ export interface IStorage {
   updateOrgMembership(id: string, updates: Partial<InsertOrganizationUser>): Promise<OrganizationUser | undefined>;
   deleteOrgMembership(userId: string, organizationId: string): Promise<void>;
   updateOrganizationSettings(id: string, updates: Partial<InsertOrganization>): Promise<Organization | undefined>;
+
+  getPlatformSettings(): Promise<PlatformSettings>;
+  updatePlatformSettings(patch: { defaultSignupPlan: string; updatedBy?: string | null }): Promise<PlatformSettings>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -866,6 +871,22 @@ export class DatabaseStorage implements IStorage {
   async createSpeContainerUsage(data: InsertSpeContainerUsage): Promise<SpeContainerUsage> {
     const [result] = await db.insert(speContainerUsage).values(data).returning();
     return result;
+  }
+
+  async getPlatformSettings(): Promise<PlatformSettings> {
+    const [row] = await db.select().from(platformSettings).limit(1);
+    if (row) return row;
+    const [created] = await db.insert(platformSettings).values({ defaultSignupPlan: 'TRIAL' }).returning();
+    return created;
+  }
+
+  async updatePlatformSettings(patch: { defaultSignupPlan: string; updatedBy?: string | null }): Promise<PlatformSettings> {
+    const existing = await this.getPlatformSettings();
+    const [updated] = await db.update(platformSettings)
+      .set({ defaultSignupPlan: patch.defaultSignupPlan, updatedAt: new Date(), updatedBy: patch.updatedBy ?? null })
+      .where(eq(platformSettings.id, existing.id))
+      .returning();
+    return updated;
   }
 }
 
