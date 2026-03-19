@@ -1,6 +1,6 @@
 import { Link, useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
-import { Building2, ArrowRight, CheckCircle2, Plus, Globe, Loader2, LogOut } from "lucide-react";
+import { Building2, ArrowRight, CheckCircle2, Plus, Globe, Loader2, LogOut, ShieldCheck } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { useQuery, useMutation } from "@tanstack/react-query";
@@ -13,6 +13,7 @@ type OrgMembership = {
   servicePlan: string;
   role: string;
   isPrimary: boolean;
+  platformAccess?: boolean;
 };
 
 type TenantConnection = {
@@ -103,6 +104,66 @@ export default function SelectTenantPage() {
   }
 
   const activeOrgId = authData.activeOrganizationId || authData.organization?.id;
+  const myOrgs = orgs.filter(o => !o.platformAccess);
+  const platformOrgs = orgs.filter(o => o.platformAccess);
+
+  const OrgCard = ({ org }: { org: OrgMembership }) => {
+    const isActive = org.id === activeOrgId;
+    return (
+      <Card
+        key={org.id}
+        className={`cursor-pointer transition-all hover:border-primary/50 hover:shadow-md hover:shadow-primary/5 ${isActive ? 'border-primary/30 bg-primary/5' : ''} ${org.platformAccess ? 'border-dashed' : ''}`}
+        onClick={() => handleSelectOrg(org.id)}
+        data-testid={`card-org-${org.id}`}
+      >
+        <CardContent className="p-6 flex items-center justify-between">
+          <div className="flex items-center gap-4">
+            <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${org.platformAccess ? 'bg-violet-500/10' : 'bg-muted'}`}>
+              {org.platformAccess
+                ? <ShieldCheck className="w-6 h-6 text-violet-500" />
+                : <Building2 className="w-6 h-6 text-muted-foreground" />
+              }
+            </div>
+            <div>
+              <h3 className="font-semibold text-lg flex items-center gap-2" data-testid={`text-org-name-${org.id}`}>
+                {org.name}
+                {isActive && <CheckCircle2 className="w-4 h-4 text-primary" />}
+              </h3>
+              <div className="flex items-center gap-3 mt-1 text-sm text-muted-foreground">
+                <Badge
+                  variant={org.servicePlan === 'ENTERPRISE' ? 'default' : 'secondary'}
+                  className="text-[10px] uppercase font-bold tracking-wider"
+                >
+                  {org.servicePlan || 'TRIAL'}
+                </Badge>
+                {org.domain && (
+                  <span className="flex items-center gap-1">
+                    <Globe className="w-3 h-3" />
+                    {org.domain}
+                  </span>
+                )}
+                {!org.platformAccess && (
+                  <span className="capitalize text-xs">{org.role.replace(/_/g, ' ')}</span>
+                )}
+              </div>
+            </div>
+          </div>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="rounded-full"
+            disabled={switchOrgMutation.isPending}
+          >
+            {switchOrgMutation.isPending ? (
+              <Loader2 className="w-5 h-5 animate-spin" />
+            ) : (
+              <ArrowRight className="w-5 h-5" />
+            )}
+          </Button>
+        </CardContent>
+      </Card>
+    );
+  };
 
   return (
     <div className="min-h-screen bg-background flex flex-col items-center py-24 px-4">
@@ -117,65 +178,29 @@ export default function SelectTenantPage() {
           </p>
         </div>
 
-        <div className="grid gap-4 animate-in fade-in slide-in-from-bottom-8 duration-700 delay-100 fill-mode-both">
-          {orgs.map((org) => {
-            const isActive = org.id === activeOrgId;
-            const orgTenants = tenants.filter(t => true);
-            return (
-              <Card
-                key={org.id}
-                className={`cursor-pointer transition-all hover:border-primary/50 hover:shadow-md hover:shadow-primary/5 ${isActive ? 'border-primary/30 bg-primary/5' : ''}`}
-                onClick={() => handleSelectOrg(org.id)}
-                data-testid={`card-org-${org.id}`}
-              >
-                <CardContent className="p-6 flex items-center justify-between">
-                  <div className="flex items-center gap-4">
-                    <div className="w-12 h-12 rounded-xl bg-muted flex items-center justify-center">
-                      <Building2 className="w-6 h-6 text-muted-foreground" />
-                    </div>
-                    <div>
-                      <h3 className="font-semibold text-lg flex items-center gap-2" data-testid={`text-org-name-${org.id}`}>
-                        {org.name}
-                        {isActive && <CheckCircle2 className="w-4 h-4 text-primary" />}
-                      </h3>
-                      <div className="flex items-center gap-3 mt-1 text-sm text-muted-foreground">
-                        <Badge
-                          variant={org.servicePlan === 'ENTERPRISE' ? 'default' : 'secondary'}
-                          className="text-[10px] uppercase font-bold tracking-wider"
-                        >
-                          {org.servicePlan || 'TRIAL'}
-                        </Badge>
-                        {org.domain && (
-                          <span className="flex items-center gap-1">
-                            <Globe className="w-3 h-3" />
-                            {org.domain}
-                          </span>
-                        )}
-                        <span className="capitalize text-xs">{org.role.replace('_', ' ')}</span>
-                      </div>
-                      {orgTenants.length > 0 && (
-                        <p className="text-xs text-muted-foreground mt-1">
-                          {orgTenants.length} connected tenant{orgTenants.length !== 1 ? 's' : ''}
-                        </p>
-                      )}
-                    </div>
-                  </div>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="rounded-full"
-                    disabled={switchOrgMutation.isPending}
-                  >
-                    {switchOrgMutation.isPending ? (
-                      <Loader2 className="w-5 h-5 animate-spin" />
-                    ) : (
-                      <ArrowRight className="w-5 h-5" />
-                    )}
-                  </Button>
-                </CardContent>
-              </Card>
-            );
-          })}
+        <div className="space-y-6 animate-in fade-in slide-in-from-bottom-8 duration-700 delay-100 fill-mode-both">
+          {myOrgs.length > 0 && (
+            <div className="space-y-3">
+              {platformOrgs.length > 0 && (
+                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-widest px-1">My Organizations</p>
+              )}
+              <div className="grid gap-4">
+                {myOrgs.map(org => <OrgCard key={org.id} org={org} />)}
+              </div>
+            </div>
+          )}
+
+          {platformOrgs.length > 0 && (
+            <div className="space-y-3">
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-widest px-1 flex items-center gap-1.5">
+                <ShieldCheck className="w-3.5 h-3.5 text-violet-500" />
+                Platform Admin Access
+              </p>
+              <div className="grid gap-4">
+                {platformOrgs.map(org => <OrgCard key={org.id} org={org} />)}
+              </div>
+            </div>
+          )}
 
           {orgs.length === 0 && (
             <Card className="border-dashed">

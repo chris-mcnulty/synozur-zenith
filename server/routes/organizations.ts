@@ -24,11 +24,12 @@ router.get('/api/orgs/mine', requireAuth(), async (req: AuthenticatedRequest, re
           role: m.role,
           isPrimary: m.isPrimary,
           membershipId: m.id,
+          platformAccess: false,
         } : null;
       })
     );
 
-    const filtered = orgsWithRoles.filter(Boolean);
+    const filtered = orgsWithRoles.filter(Boolean) as NonNullable<typeof orgsWithRoles[number]>[];
 
     if (filtered.length === 0 && user.organizationId) {
       const org = await storage.getOrganization(user.organizationId);
@@ -40,8 +41,29 @@ router.get('/api/orgs/mine', requireAuth(), async (req: AuthenticatedRequest, re
           servicePlan: org.servicePlan,
           role: user.role,
           isPrimary: true,
-          membershipId: null as string | null,
+          membershipId: null,
+          platformAccess: false,
         });
+      }
+    }
+
+    // Platform owners can see and switch into all orgs they aren't already members of
+    if (user.role === 'platform_owner') {
+      const allOrgs = await storage.getOrganizations();
+      const memberOrgIds = new Set(filtered.map(o => o!.id));
+      for (const org of allOrgs) {
+        if (!memberOrgIds.has(org.id)) {
+          filtered.push({
+            id: org.id,
+            name: org.name,
+            domain: org.domain,
+            servicePlan: org.servicePlan,
+            role: 'platform_owner',
+            isPrimary: false,
+            membershipId: null,
+            platformAccess: true,
+          });
+        }
       }
     }
 
@@ -61,14 +83,19 @@ router.post('/api/orgs/switch', requireAuth(), async (req: AuthenticatedRequest,
       return res.status(400).json({ error: 'organizationId is required' });
     }
 
+    const isPlatformOwner = user.role === 'platform_owner';
     const membership = await storage.getOrgMembership(user.id, organizationId);
-    if (!membership && user.organizationId !== organizationId) {
+
+    if (!isPlatformOwner && !membership && user.organizationId !== organizationId) {
       return res.status(403).json({ error: 'You are not a member of this organization' });
     }
 
-    req.session.activeOrganizationId = organizationId;
-
     const org = await storage.getOrganization(organizationId);
+    if (!org) {
+      return res.status(404).json({ error: 'Organization not found' });
+    }
+
+    req.session.activeOrganizationId = organizationId;
 
     await storage.createAuditEntry({
       userId: user.id,
@@ -77,7 +104,7 @@ router.post('/api/orgs/switch', requireAuth(), async (req: AuthenticatedRequest,
       resource: 'organization',
       resourceId: organizationId,
       organizationId,
-      details: { organizationName: org?.name },
+      details: { organizationName: org.name, platformAdminAccess: isPlatformOwner && !membership },
       result: 'SUCCESS',
       ipAddress: req.ip || null,
     });

@@ -35,7 +35,8 @@ import {
   CheckCircle2,
   KeyRound,
   BookMarked,
-  FlaskConical
+  FlaskConical,
+  ArrowLeft,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -133,6 +134,7 @@ type OrgMembership = {
   role: string;
   isPrimary: boolean;
   membershipId: string | null;
+  platformAccess?: boolean;
 };
 
 export default function AppShell({ children }: AppShellProps) {
@@ -140,7 +142,7 @@ export default function AppShell({ children }: AppShellProps) {
   const { tenants, selectedTenant, setSelectedTenantId } = useTenant();
 
   const { data: authData, isLoading: authLoading } = useQuery<{
-    user: { id: string; name: string | null; email: string; role: string; effectiveRole?: string; authProvider: string | null };
+    user: { id: string; name: string | null; email: string; role: string; effectiveRole?: string; authProvider: string | null; organizationId: string | null };
     organization: { id: string; name: string } | null;
     activeOrganizationId: string | null;
     membershipCount: number;
@@ -192,6 +194,13 @@ export default function AppShell({ children }: AppShellProps) {
     : currentUser?.email?.[0]?.toUpperCase() || "?";
 
   const effectiveRole = currentUser?.effectiveRole || currentUser?.role || "viewer";
+  const homeOrgId = currentUser?.organizationId;
+  const isPlatformAdminVisiting =
+    currentUser?.role === 'platform_owner' &&
+    authData?.activeOrganizationId &&
+    homeOrgId &&
+    authData.activeOrganizationId !== homeOrgId;
+  const homeOrg = myOrgs.find(o => o.id === homeOrgId);
 
   const adminItems: Array<{ name: string; href: string; icon: any; matchExact?: boolean; minRole: string }> = [
     { name: "Provisioning Templates", href: "/app/admin", icon: LayoutTemplate, matchExact: true, minRole: "tenant_admin" },
@@ -590,6 +599,29 @@ export default function AppShell({ children }: AppShellProps) {
         {/* Page Content */}
         <div className="flex-1 overflow-auto bg-background/50 p-4 sm:p-6 lg:p-8">
           <div className="max-w-[1600px] mx-auto">
+            {isPlatformAdminVisiting && (
+              <div className="mb-4 flex items-center justify-between gap-3 rounded-xl border border-violet-500/30 bg-violet-500/10 px-4 py-2.5 text-sm text-violet-400">
+                <div className="flex items-center gap-2">
+                  <ShieldCheck className="w-4 h-4 shrink-0" />
+                  <span>
+                    Viewing <strong className="text-violet-300">{activeOrg?.name}</strong> as Platform Admin
+                  </span>
+                </div>
+                {homeOrg && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 gap-1.5 text-xs text-violet-400 hover:text-violet-200 hover:bg-violet-500/20 shrink-0"
+                    onClick={() => switchOrgMutation.mutate(homeOrgId!)}
+                    disabled={switchOrgMutation.isPending}
+                    data-testid="button-return-home-org"
+                  >
+                    <ArrowLeft className="w-3.5 h-3.5" />
+                    Back to {homeOrg.name}
+                  </Button>
+                )}
+              </div>
+            )}
             {children}
           </div>
         </div>
