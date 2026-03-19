@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { ConfidentialClientApplication, CryptoProvider, AuthorizationCodeRequest } from '@azure/msal-node';
 import { storage } from './storage';
-import { encryptToken, isEncryptionConfigured } from './utils/encryption';
+import { encryptToken, decryptToken, isEncryptionConfigured } from './utils/encryption';
 import type { AuthenticatedRequest } from './middleware/rbac';
 import { requireAuth, requireRole } from './middleware/rbac';
 import { ZENITH_ROLES } from '@shared/schema';
@@ -266,11 +266,16 @@ router.get('/login', async (req: AuthenticatedRequest, res: Response) => {
       return res.status(503).json({ error: 'Azure AD SSO is not configured' });
     }
 
-    const { verifier, challenge } = await cryptoProvider.generatePkceCodes();
-    const state = cryptoProvider.createNewGuid();
+    if (!isEncryptionConfigured()) {
+      console.error('[Entra] TOKEN_ENCRYPTION_SECRET is not configured — SSO state cannot be secured');
+      return res.status(503).json({ error: 'SSO is not properly configured (missing encryption secret)' });
+    }
 
-    req.session.pkceVerifier = verifier;
-    req.session.authState = state;
+    const { verifier, challenge } = await cryptoProvider.generatePkceCodes();
+    const nonce = cryptoProvider.createNewGuid();
+
+    const statePayload = encryptToken(JSON.stringify({ nonce, pkceVerifier: verifier }));
+    const state = Buffer.from(statePayload).toString('base64url');
 
     const authUrl = await client.getAuthCodeUrl({
       scopes: SCOPES,
@@ -295,9 +300,18 @@ router.get('/callback', async (req: AuthenticatedRequest, res: Response) => {
       return res.redirect('/login?error=missing_params');
     }
 
-    if (state !== req.session.authState) {
-      console.error('[Entra] State mismatch - received:', state, 'session:', req.session.authState, 'sessionID:', req.sessionID);
-      return res.redirect('/login?error=state_mismatch');
+    let pkceVerifier: string;
+    try {
+      const stateJson = Buffer.from(state as string, 'base64url').toString('utf8');
+      const statePayload = decryptToken(stateJson);
+      const parsed = JSON.parse(statePayload);
+      if (!parsed.pkceVerifier || typeof parsed.pkceVerifier !== 'string') {
+        throw new Error('Missing pkceVerifier in state');
+      }
+      pkceVerifier = parsed.pkceVerifier;
+    } catch (err) {
+      console.error('[Entra] Failed to decode state:', err);
+      return res.redirect('/login?error=invalid_state');
     }
 
     const client = getMsalClient();
@@ -309,7 +323,7 @@ router.get('/callback', async (req: AuthenticatedRequest, res: Response) => {
       code: code as string,
       scopes: SCOPES,
       redirectUri: getRedirectUri(),
-      codeVerifier: req.session.pkceVerifier,
+      codeVerifier: pkceVerifier,
     };
 
     const tokenResponse = await client.acquireTokenByCode(tokenRequest);
@@ -465,8 +479,6 @@ router.get('/callback', async (req: AuthenticatedRequest, res: Response) => {
     }
 
     req.session.userId = user.id;
-    delete req.session.pkceVerifier;
-    delete req.session.authState;
 
     if (user.organizationId) {
       const memberships = await storage.getOrgMemberships(user.id);
