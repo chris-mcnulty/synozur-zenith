@@ -78,6 +78,7 @@ type NavItem = {
   icon: any;
   badge?: string;
   minRole?: string;
+  isMock?: boolean;
 };
 
 type NavGroup = {
@@ -91,8 +92,8 @@ const navGroups: NavGroup[] = [
     label: "Overview",
     items: [
       { name: "Dashboard", href: "/app/dashboard", icon: LayoutDashboard },
-      { name: "Approvals", href: "/app/approvals", icon: CheckCircle2, badge: "3", minRole: "operator" },
-      { name: "Provision", href: "/app/provision", icon: FolderPlus, minRole: "operator" },
+      { name: "Approvals", href: "/app/approvals", icon: CheckCircle2, badge: "3", minRole: "operator", isMock: true },
+      { name: "Provision", href: "/app/provision", icon: FolderPlus, minRole: "operator", isMock: true },
     ]
   },
   {
@@ -104,20 +105,20 @@ const navGroups: NavGroup[] = [
       { name: "What-If Planner", href: "/app/admin/policy-whatif", icon: FlaskConical, badge: "Ent+", minRole: "governance_admin" },
       { name: "Structures", href: "/app/structures", icon: Layers },
       { name: "Document Library", href: "/app/document-library", icon: Library },
-      { name: "Content Types", href: "/app/content-types", icon: FileText },
+      { name: "Content Types", href: "/app/content-types", icon: FileText, isMock: true },
       { name: "Embedded Containers", href: "/app/embedded-containers", icon: Box },
-      { name: "Discover & Migrate", href: "/app/discover", icon: Search, badge: "Ent+" },
-      { name: "Archive & Backup", href: "/app/archive-backup", icon: Archive },
-      { name: "Lifecycle", href: "/app/lifecycle", icon: Clock },
-      { name: "Syntex", href: "/app/syntex", icon: BrainCircuit },
+      { name: "Discover & Migrate", href: "/app/discover", icon: Search, badge: "Ent+", isMock: true },
+      { name: "Archive & Backup", href: "/app/archive-backup", icon: Archive, isMock: true },
+      { name: "Lifecycle", href: "/app/lifecycle", icon: Clock, isMock: true },
+      { name: "Syntex", href: "/app/syntex", icon: BrainCircuit, isMock: true },
       { name: "Purview", href: "/app/purview", icon: Fingerprint },
     ]
   },
   {
     label: "Insights & Intelligence",
     items: [
-      { name: "AI & Copilot", href: "/app/ai-copilot", icon: BrainCircuit },
-      { name: "Reports", href: "/app/reports", icon: BarChart3 },
+      { name: "AI & Copilot", href: "/app/ai-copilot", icon: BrainCircuit, isMock: true },
+      { name: "Reports", href: "/app/reports", icon: BarChart3, isMock: true },
     ]
   }
 ];
@@ -238,11 +239,18 @@ export default function AppShell({ children }: AppShellProps) {
                       <item.icon className={`w-5 h-5 ${isActive ? "text-primary" : "text-muted-foreground/70"}`} />
                       {item.name}
                     </div>
-                    {item.badge && (
-                      <span className={`flex h-5 items-center justify-center rounded-full px-2 text-[10px] font-bold ${isActive ? 'bg-primary text-primary-foreground' : 'bg-primary/20 text-primary'}`}>
-                        {item.badge}
-                      </span>
-                    )}
+                    <div className="flex items-center gap-1">
+                      {item.isMock && (
+                        <span className="flex h-4 items-center justify-center rounded px-1.5 text-[9px] font-semibold bg-amber-100/80 text-amber-600/80 dark:bg-amber-900/30 dark:text-amber-400/70 opacity-75 tracking-wide">
+                          MOCK
+                        </span>
+                      )}
+                      {item.badge && (
+                        <span className={`flex h-5 items-center justify-center rounded-full px-2 text-[10px] font-bold ${isActive ? 'bg-primary text-primary-foreground' : 'bg-primary/20 text-primary'}`}>
+                          {item.badge}
+                        </span>
+                      )}
+                    </div>
                   </Link>
                 );
               })}
