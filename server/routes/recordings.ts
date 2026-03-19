@@ -21,6 +21,13 @@ async function getOrgTenantConnectionIds(user: AuthenticatedRequest["user"]): Pr
   return connections.map(c => c.id);
 }
 
+// GET /api/teams-channels — aggregated teams & channels summary from discovered recordings
+router.get("/api/teams-channels", requireAuth(), async (req: AuthenticatedRequest, res) => {
+  const allowedIds = await getOrgTenantConnectionIds(req.user);
+  const summary = await storage.getTeamsChannelsSummary(allowedIds ?? undefined);
+  res.json(summary);
+});
+
 // GET /api/recordings — list discovered recordings (filterable by tenantConnectionId)
 router.get("/api/recordings", requireAuth(), async (req: AuthenticatedRequest, res) => {
   const search = req.query.search as string | undefined;
