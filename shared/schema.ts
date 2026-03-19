@@ -645,6 +645,96 @@ export const insertPlatformSettingsSchema = createInsertSchema(platformSettings)
 export type InsertPlatformSettings = z.infer<typeof insertPlatformSettingsSchema>;
 export type PlatformSettings = typeof platformSettings.$inferSelect;
 
+// ── Teams Recordings Discovery ───────────────────────────────────────────────
+// Discovered recording and transcript files from Teams channel SharePoint
+// libraries (SHAREPOINT_CHANNEL) and user OneDrive for Business (ONEDRIVE).
+export const teamsRecordings = pgTable("teams_recordings", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantConnectionId: varchar("tenant_connection_id").notNull(),
+
+  // Meeting context (derived from filename / createdBy; enriched in Phase 3)
+  meetingTitle: text("meeting_title"),
+  meetingDate: text("meeting_date"),
+  organizer: text("organizer"),                   // UPN of file creator / meeting organizer
+  organizerDisplayName: text("organizer_display_name"),
+
+  // Storage location discriminator
+  storageType: text("storage_type").notNull(),    // SHAREPOINT_CHANNEL | ONEDRIVE
+
+  // Teams / SharePoint channel context (SHAREPOINT_CHANNEL only)
+  teamId: text("team_id"),
+  teamDisplayName: text("team_display_name"),
+  channelId: text("channel_id"),
+  channelDisplayName: text("channel_display_name"),
+  channelType: text("channel_type"),              // standard | private | shared
+
+  // OneDrive user context (ONEDRIVE only)
+  userId: text("user_id"),                        // M365 user object ID
+  userDisplayName: text("user_display_name"),
+  userPrincipalName: text("user_principal_name"),
+
+  // Drive file identity
+  driveId: text("drive_id").notNull(),
+  driveItemId: text("drive_item_id").notNull(),
+  fileName: text("file_name").notNull(),
+  fileUrl: text("file_url"),
+  filePath: text("file_path"),
+  fileType: text("file_type").notNull(),          // RECORDING | TRANSCRIPT
+  fileSizeBytes: bigint("file_size_bytes", { mode: "number" }),
+  fileCreatedAt: text("file_created_at"),
+  fileModifiedAt: text("file_modified_at"),
+
+  // Governance metadata (populated where available from Graph)
+  sensitivityLabelId: text("sensitivity_label_id"),
+  sensitivityLabelName: text("sensitivity_label_name"),
+  retentionLabelName: text("retention_label_name"),
+  isShared: boolean("is_shared").default(false),
+
+  // Copilot / AI accessibility (derived at discovery time; Phase 4 refines)
+  copilotAccessible: boolean("copilot_accessible"),
+  accessibilityBlockers: text("accessibility_blockers").array(),
+
+  // Discovery lifecycle
+  lastDiscoveredAt: timestamp("last_discovered_at").defaultNow(),
+  discoveryStatus: text("discovery_status").notNull().default("ACTIVE"), // ACTIVE | DELETED | INACCESSIBLE
+
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => [
+  unique("uq_tenant_drive_item").on(table.tenantConnectionId, table.driveItemId),
+]);
+
+export const insertTeamsRecordingSchema = createInsertSchema(teamsRecordings).omit({
+  id: true,
+  createdAt: true,
+});
+export type InsertTeamsRecording = z.infer<typeof insertTeamsRecordingSchema>;
+export type TeamsRecording = typeof teamsRecordings.$inferSelect;
+
+// One row per discovery sync run per tenant connection.
+export const teamsDiscoveryRuns = pgTable("teams_discovery_runs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantConnectionId: varchar("tenant_connection_id").notNull(),
+  startedAt: timestamp("started_at").defaultNow().notNull(),
+  completedAt: timestamp("completed_at"),
+  status: text("status").notNull().default("RUNNING"), // RUNNING | COMPLETED | FAILED | PARTIAL
+  recordingsFound: integer("recordings_found").default(0),
+  transcriptsFound: integer("transcripts_found").default(0),
+  teamsScanned: integer("teams_scanned").default(0),
+  channelsScanned: integer("channels_scanned").default(0),
+  onedrivesScanned: integer("onedrives_scanned").default(0),
+  onedrivesSkipped: integer("onedrives_skipped").default(0),
+  errors: jsonb("errors").$type<Array<{ context: string; message: string }>>(),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertTeamsDiscoveryRunSchema = createInsertSchema(teamsDiscoveryRuns).omit({
+  id: true,
+  createdAt: true,
+  startedAt: true,
+});
+export type InsertTeamsDiscoveryRun = z.infer<typeof insertTeamsDiscoveryRunSchema>;
+export type TeamsDiscoveryRun = typeof teamsDiscoveryRuns.$inferSelect;
+
 // ── Workspace Telemetry ──────────────────────────────────────────────────────
 // One row per sync snapshot per workspace. Retaining multiple snapshots enables
 // growth-trend analysis (storage, file count, content-type drift over time).
