@@ -936,6 +936,15 @@ export class DatabaseStorage implements IStorage {
           accessibilityBlockers: data.accessibilityBlockers,
           lastDiscoveredAt: data.lastDiscoveredAt,
           discoveryStatus: data.discoveryStatus,
+          // Refresh additional mutable metadata to keep discovery idempotent
+          storageType: data.storageType,
+          teamDisplayName: data.teamDisplayName,
+          channelDisplayName: data.channelDisplayName,
+          channelType: data.channelType,
+          userDisplayName: data.userDisplayName,
+          userPrincipalName: data.userPrincipalName,
+          driveId: data.driveId,
+          fileType: data.fileType,
         },
       })
       .returning();
