@@ -348,7 +348,11 @@ router.get('/callback', async (req: AuthenticatedRequest, res: Response) => {
       const domain = email.split('@')[1].toLowerCase();
       const isPublicDomain = isPublicEmailDomain(email);
       const orgs = await storage.getOrganizations();
-      let org = orgs.find(o => o.azureTenantId === azureTenantId) ||
+      let org = orgs.find(o =>
+                  o.azureTenantId === azureTenantId &&
+                  !isPublicDomain &&
+                  (o.domain === domain || (o.allowedDomains?.includes(domain) ?? false))
+                ) ||
                 (!isPublicDomain ? orgs.find(o => o.domain === domain) : undefined);
       let isFirstUser = false;
 
