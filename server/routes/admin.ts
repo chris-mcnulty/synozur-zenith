@@ -166,6 +166,18 @@ router.post("/api/admin/organizations", requireRole(ZENITH_ROLES.PLATFORM_OWNER)
   res.status(201).json(org);
 });
 
+router.delete("/api/admin/organizations/:id", requireRole(ZENITH_ROLES.PLATFORM_OWNER), async (req: AuthenticatedRequest, res) => {
+  const { id } = req.params;
+  const callerOrg = await storage.getOrganization(req.user!.organizationId!);
+  if (callerOrg?.id === id) {
+    return res.status(400).json({ error: "You cannot delete your own organization." });
+  }
+  const target = await storage.getOrganization(id);
+  if (!target) return res.status(404).json({ error: "Organization not found." });
+  await storage.deleteOrganization(id);
+  res.json({ ok: true });
+});
+
 router.patch("/api/organization/plan", requireRole(ZENITH_ROLES.PLATFORM_OWNER, ZENITH_ROLES.TENANT_ADMIN), async (req: AuthenticatedRequest, res) => {
   const { plan } = req.body;
   if (!SERVICE_PLANS.includes(plan)) {

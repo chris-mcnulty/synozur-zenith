@@ -86,6 +86,7 @@ export default function SystemAdminPage() {
   const [orgSearch, setOrgSearch] = useState("");
   const [pendingSignupPlan, setPendingSignupPlan] = useState<string | null>(null);
   const [showCreateOrgDialog, setShowCreateOrgDialog] = useState(false);
+  const [deleteOrgTarget, setDeleteOrgTarget] = useState<{ id: string; name: string } | null>(null);
   const [createOrgForm, setCreateOrgForm] = useState({
     name: "",
     domain: "",
@@ -93,11 +94,12 @@ export default function SystemAdminPage() {
     supportEmail: "",
   });
 
-  const { data: authData } = useAuthQuery<{ user: { role: string; effectiveRole?: string } } | null>({
+  const { data: authData } = useAuthQuery<{ user: { role: string; effectiveRole?: string; organizationId?: string } } | null>({
     queryKey: ["/api/auth/me"],
   });
   const effectiveRole = authData?.user?.effectiveRole || authData?.user?.role || "viewer";
   const isPlatformOwner = effectiveRole === "platform_owner";
+  const myOrgId = authData?.user?.organizationId;
 
   const { data: platformSettingsData } = useQuery<PlatformSettings>({
     queryKey: ["/api/admin/platform/settings"],
@@ -221,6 +223,26 @@ export default function SystemAdminPage() {
     },
   });
 
+  const deleteOrgMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const res = await fetch(`/api/admin/organizations/${id}`, { method: "DELETE" });
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || "Failed to delete organization");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/platform/org-stats"] });
+      const name = deleteOrgTarget?.name;
+      setDeleteOrgTarget(null);
+      toast({ title: "Organization deleted", description: `${name} and all its data have been permanently removed.` });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+
   return (
     <div className="space-y-6 animate-in fade-in duration-500 pb-12">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -337,6 +359,7 @@ export default function SystemAdminPage() {
                       <TableHead>Service Plan</TableHead>
                       <TableHead>Connected Tenants</TableHead>
                       <TableHead>Status</TableHead>
+                      {isPlatformOwner && <TableHead className="w-[60px]"></TableHead>}
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -361,6 +384,21 @@ export default function SystemAdminPage() {
                             Active
                           </Badge>
                         </TableCell>
+                        {isPlatformOwner && (
+                          <TableCell>
+                            {org.id !== myOrgId && (
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-8 w-8 text-destructive hover:bg-destructive/10"
+                                onClick={() => setDeleteOrgTarget({ id: org.id, name: org.name })}
+                                data-testid={`button-delete-org-${org.id}`}
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </Button>
+                            )}
+                          </TableCell>
+                        )}
                       </TableRow>
                     ))}
                   </TableBody>
@@ -633,6 +671,44 @@ export default function SystemAdminPage() {
           </DialogContent>
         </Dialog>
       )}
+
+      <Dialog open={!!deleteOrgTarget} onOpenChange={open => { if (!open) setDeleteOrgTarget(null); }}>
+        <DialogContent className="sm:max-w-[420px]">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-destructive">
+              <Trash2 className="w-5 h-5" />
+              Delete Organization
+            </DialogTitle>
+            <DialogDescription>
+              This will permanently delete <strong>{deleteOrgTarget?.name}</strong> and all associated data — users, tenant connections, workspaces, and policies. This cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button
+              variant="outline"
+              onClick={() => setDeleteOrgTarget(null)}
+              disabled={deleteOrgMutation.isPending}
+              data-testid="button-cancel-delete-org"
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => deleteOrgTarget && deleteOrgMutation.mutate(deleteOrgTarget.id)}
+              disabled={deleteOrgMutation.isPending}
+              className="gap-2"
+              data-testid="button-confirm-delete-org"
+            >
+              {deleteOrgMutation.isPending ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <Trash2 className="w-4 h-4" />
+              )}
+              Delete Permanently
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

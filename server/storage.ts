@@ -112,6 +112,7 @@ export interface IStorage {
   getOrganizations(): Promise<Organization[]>;
   createOrganization(org: InsertOrganization): Promise<Organization>;
   upsertOrganization(org: InsertOrganization): Promise<Organization>;
+  deleteOrganization(id: string): Promise<void>;
   updateOrganizationPlan(id: string, plan: string): Promise<Organization | undefined>;
 
   getUser(id: string): Promise<User | undefined>;
@@ -435,6 +436,10 @@ export class DatabaseStorage implements IStorage {
     }
     const [created] = await db.insert(organizations).values(org).returning();
     return created;
+  }
+
+  async deleteOrganization(id: string): Promise<void> {
+    await db.delete(organizations).where(eq(organizations.id, id));
   }
 
   async updateOrganizationPlan(id: string, plan: string): Promise<Organization | undefined> {
