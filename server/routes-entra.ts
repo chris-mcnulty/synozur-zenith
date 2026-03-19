@@ -332,6 +332,24 @@ router.get('/callback', async (req: AuthenticatedRequest, res: Response) => {
         return res.redirect('/login?error=account_deactivated');
       }
 
+      // Tenant boundary: if this user was previously authenticated by a
+      // different Azure tenant, block the login to prevent org boundary crossing.
+      if (user.azureTenantId && azureTenantId && user.azureTenantId !== azureTenantId) {
+        console.warn(`[Entra] Tenant boundary violation: ${email} authenticated by ${azureTenantId} but account belongs to tenant ${user.azureTenantId}`);
+        return res.redirect('/login?error=tenant_mismatch');
+      }
+
+      // Tenant boundary: the user's org must belong to the same Azure tenant
+      // (if the org has one recorded). Prevents someone from using SSO to
+      // access an org that belongs to a different Azure tenant.
+      if (azureTenantId && user.organizationId) {
+        const org = await storage.getOrganization(user.organizationId);
+        if (org?.azureTenantId && org.azureTenantId !== azureTenantId) {
+          console.warn(`[Entra] Tenant boundary violation: ${email} org tenant ${org.azureTenantId} does not match token tenant ${azureTenantId}`);
+          return res.redirect('/login?error=tenant_mismatch');
+        }
+      }
+
       const updates: Record<string, any> = {
         authProvider: 'entra',
         lastLoginAt: new Date(),
@@ -361,13 +379,13 @@ router.get('/callback', async (req: AuthenticatedRequest, res: Response) => {
           const personalOrgName = name
             ? `${name}'s Workspace`
             : `${email.split('@')[0]}'s Workspace`;
-          org = await storage.upsertOrganization({
+          org = await storage.createOrganization({
             name: personalOrgName,
             domain: `personal-${email.split('@')[0].replace(/[^a-z0-9]/gi, '')}-${Date.now()}`,
             servicePlan: await getDefaultSignupPlan(),
           });
         } else {
-          org = await storage.upsertOrganization({
+          org = await storage.createOrganization({
             name: domain.split('.')[0].charAt(0).toUpperCase() + domain.split('.')[0].slice(1),
             domain,
             servicePlan: await getDefaultSignupPlan(),

@@ -11,6 +11,16 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import heroBg from "@/assets/images/hero-login-bg.jpeg";
 
+const SSO_ERROR_MESSAGES: Record<string, string> = {
+  tenant_mismatch: "Your account belongs to a different Microsoft tenant. Please contact your administrator.",
+  domain_not_allowed: "Your email domain is not permitted to access this organization. Please contact your administrator.",
+  invite_only: "This organization requires an invitation to join. Please contact your administrator.",
+  account_deactivated: "Your account has been deactivated. Please contact your administrator.",
+  sso_not_configured: "Single sign-on is not configured. Please sign in with email and password.",
+  no_email: "Could not retrieve your email address from Microsoft. Please try again or contact support.",
+  session_expired: "Your session has expired. Please sign in again.",
+};
+
 export default function LoginPage() {
   const [, setLocation] = useLocation();
   const { toast } = useToast();
@@ -18,7 +28,10 @@ export default function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [name, setName] = useState("");
-  const [error, setError] = useState("");
+
+  const ssoErrorCode = new URLSearchParams(window.location.search).get("error");
+  const ssoErrorMessage = ssoErrorCode ? (SSO_ERROR_MESSAGES[ssoErrorCode] ?? `Sign-in failed (${ssoErrorCode}). Please try again.`) : "";
+  const [error, setError] = useState(ssoErrorMessage);
 
   const ssoStatus = useQuery({
     queryKey: ["/auth/entra/status"],
