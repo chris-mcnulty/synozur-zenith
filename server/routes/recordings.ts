@@ -95,43 +95,14 @@ router.post(
     const clientSecret = getEffectiveClientSecret(conn);
 
     // Return immediately and run discovery async so the HTTP call doesn't time out
-    // on large tenants. The client polls /api/recordings/discovery-runs for status.
-    const runPlaceholder = await storage.createTeamsDiscoveryRun({
-      tenantConnectionId: conn.id,
-      status: "RUNNING",
-      recordingsFound: 0,
-      transcriptsFound: 0,
-      teamsScanned: 0,
-      channelsScanned: 0,
-      onedrivesScanned: 0,
-      onedrivesSkipped: 0,
-      errors: [],
-    });
+    // on large tenants. The client polls /api/admin/tenants/:id/recordings/latest-run for status.
+    res.json({ message: "Discovery started" });
 
-    res.json({ runId: runPlaceholder.id, message: "Discovery started" });
-
-    // Run in background — update the run record when complete
+    // Run in background — the discovery service is responsible for creating/updating
+    // the discovery run record.
     runTeamsRecordingsDiscovery(conn.id, conn.tenantId, clientId, clientSecret)
-      .then(async (result) => {
-        await storage.updateTeamsDiscoveryRun(runPlaceholder.id, {
-          completedAt: new Date(),
-          status: result.status,
-          recordingsFound: result.recordingsFound,
-          transcriptsFound: result.transcriptsFound,
-          teamsScanned: result.teamsScanned,
-          channelsScanned: result.channelsScanned,
-          onedrivesScanned: result.onedrivesScanned,
-          onedrivesSkipped: result.onedrivesSkipped,
-          errors: result.errors,
-        });
-      })
-      .catch(async (err) => {
+      .catch((err) => {
         console.error("[recordings] discovery failed:", err);
-        await storage.updateTeamsDiscoveryRun(runPlaceholder.id, {
-          completedAt: new Date(),
-          status: "FAILED",
-          errors: [{ context: "discovery", message: err.message }],
-        });
       });
   },
 );
