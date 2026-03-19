@@ -9,12 +9,105 @@ import {
   Clock, 
   ArrowUpRight,
   Database,
-  Users,
-  Lock
+  Lock,
+  Wifi
 } from "lucide-react";
 import { Link } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { useServicePlan } from "@/hooks/use-service-plan";
+
+type AlertItem = {
+  title: string;
+  count: number;
+  desc: string;
+  urgency: string;
+};
+
+type ActivityEntry = {
+  id: string;
+  action: string;
+  resource: string;
+  resourceId?: string | null;
+  userEmail?: string | null;
+  result: string;
+  createdAt: string | null;
+};
+
+type TenantStatus = {
+  id: string;
+  tenantName: string;
+  domain: string;
+  status: string;
+  lastSyncAt: string | null;
+  lastSyncStatus: string | null;
+};
+
+type DashboardData = {
+  alerts: AlertItem[];
+  recentActivity: ActivityEntry[];
+  serviceStatus: TenantStatus[];
+  activeTenantsCount: number;
+};
+
+type Organization = {
+  id: string;
+  name: string;
+  domain: string;
+  servicePlan: string;
+};
+
+function humaniseAction(action: string): string {
+  return action
+    .replace(/_/g, " ")
+    .toLowerCase()
+    .replace(/\b\w/g, c => c.toUpperCase());
+}
+
+function relativeTime(dateStr: string | null): string {
+  if (!dateStr) return "Unknown time";
+  const date = new Date(dateStr);
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  const diffSecs = Math.floor(diffMs / 1000);
+  const diffMins = Math.floor(diffSecs / 60);
+  const diffHours = Math.floor(diffMins / 60);
+  const diffDays = Math.floor(diffHours / 24);
+  if (diffSecs < 60) return "just now";
+  if (diffMins < 60) return `${diffMins} min${diffMins !== 1 ? "s" : ""} ago`;
+  if (diffHours < 24) return `${diffHours} hour${diffHours !== 1 ? "s" : ""} ago`;
+  return `${diffDays} day${diffDays !== 1 ? "s" : ""} ago`;
+}
+
+function tenantStatusBadge(status: string) {
+  if (status === "ACTIVE") {
+    return (
+      <Badge variant="outline" className="bg-emerald-500/10 text-emerald-500 border-emerald-500/20 gap-1.5 px-2 py-0.5 shadow-sm shadow-emerald-500/10">
+        <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+        Active
+      </Badge>
+    );
+  }
+  if (status === "PENDING") {
+    return (
+      <Badge variant="outline" className="bg-amber-500/10 text-amber-500 border-amber-500/20 gap-1.5 px-2 py-0.5">
+        <div className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+        Pending
+      </Badge>
+    );
+  }
+  return (
+    <Badge variant="outline" className="bg-destructive/10 text-destructive border-destructive/20 gap-1.5 px-2 py-0.5">
+      <div className="w-1.5 h-1.5 rounded-full bg-destructive" />
+      {status}
+    </Badge>
+  );
+}
+
+function activityDotColor(result: string): string {
+  if (result === "SUCCESS") return "bg-emerald-500";
+  if (result === "FAILURE") return "bg-destructive";
+  return "bg-blue-500";
+}
 
 export default function DashboardPage() {
   const { data: stats, isLoading } = useQuery<{
@@ -28,12 +121,23 @@ export default function DashboardPage() {
     totalRequests: number;
   }>({ queryKey: ["/api/stats"] });
 
-  const { plan, isTrial, canWriteBack, features } = useServicePlan();
+  const { data: dashData, isLoading: isDashLoading } = useQuery<DashboardData>({
+    queryKey: ["/api/dashboard"],
+  });
+
+  const { data: org } = useQuery<Organization>({
+    queryKey: ["/api/organization"],
+  });
+
+  const { isTrial } = useServicePlan();
 
   const totalWorkspaces = stats?.totalWorkspaces ?? 0;
   const metadataCompliance = totalWorkspaces > 0 ? Math.round((stats!.metadataComplete / totalWorkspaces) * 100) : 0;
   const copilotReadiness = totalWorkspaces > 0 ? Math.round((stats!.copilotReady / totalWorkspaces) * 100) : 0;
   const pendingApprovals = stats?.pendingRequests ?? 0;
+
+  const orgName = org?.name ?? "your organisation";
+  const activeTenantsCount = dashData?.activeTenantsCount ?? 0;
 
   return (
     <div className="space-y-8 animate-in fade-in duration-500 pb-10">
@@ -59,7 +163,9 @@ export default function DashboardPage() {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Dashboard</h1>
-          <p className="text-muted-foreground mt-1">Governance overview for The Synozur Alliance (PROD)</p>
+          <p className="text-muted-foreground mt-1" data-testid="text-org-subtitle">
+            Governance overview for {orgName}
+          </p>
         </div>
         <div className="flex gap-3">
           <Link href="/app/provision/new">
@@ -80,12 +186,6 @@ export default function DashboardPage() {
           </CardHeader>
           <CardContent>
             <div className="text-3xl font-bold" data-testid="text-total-workspaces">{isLoading ? "..." : totalWorkspaces.toLocaleString()}</div>
-            <p className="text-xs text-muted-foreground mt-1 flex items-center">
-              <span className="text-emerald-500 font-medium flex items-center mr-1">
-                <ArrowUpRight className="w-3 h-3 mr-1"/> 12%
-              </span> 
-              from last month
-            </p>
           </CardContent>
         </Card>
         
@@ -117,13 +217,13 @@ export default function DashboardPage() {
 
         <Card className="glass-panel hover:border-primary/30 transition-colors cursor-default">
           <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">External Guests</CardTitle>
-            <Users className="w-4 h-4 text-muted-foreground" />
+            <CardTitle className="text-sm font-medium text-muted-foreground">Connected Tenants</CardTitle>
+            <Wifi className="w-4 h-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-3xl font-bold">342</div>
+            <div className="text-3xl font-bold" data-testid="text-connected-tenants">{isDashLoading ? "..." : activeTenantsCount}</div>
             <p className="text-xs text-muted-foreground mt-1">
-              Across 56 workspaces
+              Active tenant connections
             </p>
           </CardContent>
         </Card>
@@ -142,21 +242,21 @@ export default function DashboardPage() {
             </CardHeader>
             <CardContent>
               <div className="space-y-4">
-                {[
-                  { title: "Missing Required Metadata", count: 12, desc: "Workspaces missing Department tag", urgency: "High" },
-                  { title: "Inactive Owners", count: 5, desc: "Teams with less than 2 active owners", urgency: "Medium" },
-                  { title: "Naming Policy Violations", count: 3, desc: "Manually created groups violating prefix rule", urgency: "Low" }
-                ].map((alert, i) => (
-                  <div key={i} className="flex items-center justify-between p-4 rounded-xl bg-card border border-border hover:border-destructive/30 transition-colors">
+                {isDashLoading ? (
+                  <p className="text-sm text-muted-foreground p-4">Loading alerts...</p>
+                ) : (dashData?.alerts ?? []).map((alert, i) => (
+                  <div key={i} className="flex items-center justify-between p-4 rounded-xl bg-card border border-border hover:border-destructive/30 transition-colors" data-testid={`alert-item-${i}`}>
                     <div>
                       <h4 className="font-semibold text-sm">{alert.title}</h4>
                       <p className="text-xs text-muted-foreground mt-1">{alert.desc}</p>
                     </div>
                     <div className="flex items-center gap-3">
-                      <Badge variant={alert.urgency === 'High' ? 'destructive' : 'secondary'} className={alert.urgency === 'High' ? 'shadow-sm shadow-destructive/20' : ''}>
+                      <Badge variant={alert.urgency === "High" ? "destructive" : "secondary"} className={alert.urgency === "High" ? "shadow-sm shadow-destructive/20" : ""} data-testid={`badge-alert-count-${i}`}>
                         {alert.count} items
                       </Badge>
-                      <Button variant="ghost" size="sm" className="text-xs h-8">Review</Button>
+                      <Link href="/app/governance">
+                        <Button variant="ghost" size="sm" className="text-xs h-8" data-testid={`button-review-alert-${i}`}>Review</Button>
+                      </Link>
                     </div>
                   </div>
                 ))}
@@ -167,31 +267,33 @@ export default function DashboardPage() {
           <Card className="glass-panel">
             <CardHeader>
               <CardTitle>Recent Activity</CardTitle>
-              <CardDescription>Event-driven updates from Microsoft Graph.</CardDescription>
+              <CardDescription>Latest audit log entries for your organisation.</CardDescription>
             </CardHeader>
             <CardContent>
               <div className="space-y-6">
-                {[
-                  { action: "Workspace Provisioned", target: "Project Phoenix (Teams)", time: "10 mins ago", type: "system", dot: "bg-emerald-500" },
-                  { action: "Sensitivity Label Applied", target: "HR Confidential (SharePoint)", time: "1 hour ago", type: "user", dot: "bg-blue-500" },
-                  { action: "Lifecycle Archived", target: "2023 Marketing Campaign", time: "3 hours ago", type: "system", dot: "bg-purple-500" },
-                ].map((log, i) => (
-                  <div key={i} className="flex items-start gap-4 p-4 rounded-xl border border-border/50 bg-card/50 shadow-sm transition-all hover:bg-card hover:border-border group">
+                {isDashLoading ? (
+                  <p className="text-sm text-muted-foreground p-4">Loading activity...</p>
+                ) : (dashData?.recentActivity ?? []).length === 0 ? (
+                  <p className="text-sm text-muted-foreground p-4">No recent activity found.</p>
+                ) : (dashData?.recentActivity ?? []).map((entry) => (
+                  <div key={entry.id} className="flex items-start gap-4 p-4 rounded-xl border border-border/50 bg-card/50 shadow-sm transition-all hover:bg-card hover:border-border group" data-testid={`activity-entry-${entry.id}`}>
                     <div className="flex items-center justify-center w-8 h-8 rounded-full bg-background border border-border mt-1">
-                      <div className={`w-2 h-2 rounded-full ${log.dot} shadow-[0_0_8px_rgba(var(--primary),0.8)]`} />
+                      <div className={`w-2 h-2 rounded-full ${activityDotColor(entry.result)} shadow-[0_0_8px_rgba(var(--primary),0.8)]`} />
                     </div>
                     <div className="flex-1">
                       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 mb-1">
-                        <div className="font-semibold text-sm">{log.action}</div>
-                        <time className="font-mono text-xs text-muted-foreground">{log.time}</time>
+                        <div className="font-semibold text-sm">{humaniseAction(entry.action)}</div>
+                        <time className="font-mono text-xs text-muted-foreground">{relativeTime(entry.createdAt)}</time>
                       </div>
-                      <div className="text-sm text-muted-foreground">{log.target}</div>
+                      <div className="text-sm text-muted-foreground">{entry.resource}{entry.userEmail ? ` · ${entry.userEmail}` : ""}</div>
                     </div>
                   </div>
                 ))}
               </div>
               <div className="mt-6">
-                <Button variant="outline" className="w-full text-muted-foreground rounded-full">View Full Audit Log</Button>
+                <Link href="/app/reports">
+                  <Button variant="outline" className="w-full text-muted-foreground rounded-full" data-testid="button-view-audit-log">View Full Audit Log</Button>
+                </Link>
               </div>
             </CardContent>
           </Card>
@@ -207,24 +309,24 @@ export default function DashboardPage() {
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="flex items-center justify-between p-3 rounded-lg bg-background/50 border border-border/50">
-                <span className="text-sm font-medium">Graph Webhook</span>
-                <Badge variant="outline" className="bg-emerald-500/10 text-emerald-500 border-emerald-500/20 gap-1.5 px-2 py-0.5 shadow-sm shadow-emerald-500/10">
-                  <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                  Connected
-                </Badge>
-              </div>
-              <div className="flex items-center justify-between p-3 rounded-lg bg-background/50 border border-border/50">
-                <span className="text-sm font-medium">Purview Sync</span>
-                <Badge variant="outline" className="bg-emerald-500/10 text-emerald-500 border-emerald-500/20 gap-1.5 px-2 py-0.5 shadow-sm shadow-emerald-500/10">
-                  <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                  Active
-                </Badge>
-              </div>
-              <div className="flex items-center justify-between p-3 rounded-lg bg-background/50 border border-border/50">
-                <span className="text-sm font-medium">Last Event</span>
-                <span className="text-sm font-mono text-muted-foreground">2 mins ago</span>
-              </div>
+              {isDashLoading ? (
+                <p className="text-sm text-muted-foreground">Loading...</p>
+              ) : (dashData?.serviceStatus ?? []).length === 0 ? (
+                <p className="text-sm text-muted-foreground">No tenant connections configured.</p>
+              ) : (dashData?.serviceStatus ?? []).map((tenant) => (
+                <div key={tenant.id} className="space-y-2" data-testid={`service-tenant-${tenant.id}`}>
+                  <div className="flex items-center justify-between p-3 rounded-lg bg-background/50 border border-border/50">
+                    <span className="text-sm font-medium truncate max-w-[55%]">{tenant.tenantName}</span>
+                    {tenantStatusBadge(tenant.status)}
+                  </div>
+                  {tenant.lastSyncAt && (
+                    <div className="flex items-center justify-between px-3 text-xs text-muted-foreground">
+                      <span>Last sync</span>
+                      <span className="font-mono">{relativeTime(tenant.lastSyncAt)}{tenant.lastSyncStatus ? ` · ${tenant.lastSyncStatus}` : ""}</span>
+                    </div>
+                  )}
+                </div>
+              ))}
             </CardContent>
           </Card>
 
@@ -245,7 +347,9 @@ export default function DashboardPage() {
               <p className="text-sm text-muted-foreground leading-relaxed">
                 Workspaces meeting minimum classification and external sharing policies required for secure Copilot indexing.
               </p>
-              <Button variant="link" className="px-0 mt-4 text-primary font-medium">View detailed report →</Button>
+              <Link href="/app/governance">
+                <Button variant="link" className="px-0 mt-4 text-primary font-medium" data-testid="button-copilot-report">View detailed report →</Button>
+              </Link>
             </CardContent>
           </Card>
         </div>

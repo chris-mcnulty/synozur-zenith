@@ -29,6 +29,85 @@ router.get("/api/stats", requireAuth(), async (_req: AuthenticatedRequest, res) 
   });
 });
 
+// ── Dashboard Data ──
+router.get("/api/dashboard", requireAuth(), async (req: AuthenticatedRequest, res) => {
+  const orgId = req.activeOrganizationId;
+  if (!orgId) {
+    return res.status(403).json({ error: "No active organization context. Please select an organization." });
+  }
+
+  // Service Status — tenant connections for the org (used to scope workspaces too)
+  const tenants = await storage.getTenantConnections(orgId);
+  const tenantIds = tenants.map(t => t.id);
+
+  // Fetch org-scoped workspaces by iterating over org's tenant connections
+  let allWorkspaces: Awaited<ReturnType<typeof storage.getWorkspaces>> = [];
+  if (tenantIds.length > 0) {
+    const perTenantResults = await Promise.all(
+      tenantIds.map(tid => storage.getWorkspaces(undefined, tid))
+    );
+    allWorkspaces = perTenantResults.flat();
+  }
+
+  // Alert 1: Missing required metadata
+  const missingMetadata = allWorkspaces.filter(w => w.metadataStatus === "MISSING_REQUIRED").length;
+
+  // Alert 2: Workspaces with fewer than 2 owners
+  const fewOwners = allWorkspaces.filter(w => {
+    const ownersArr = Array.isArray(w.siteOwners) ? w.siteOwners : [];
+    const ownerCount = ownersArr.length > 0 ? ownersArr.length : (w.owners ?? 0);
+    return ownerCount < 2;
+  }).length;
+
+  // Alert 3: Naming policy violations — DEAL/PORTCO project types without the expected prefix
+  const namingViolations = allWorkspaces.filter(w => {
+    const display = w.displayName || "";
+    const type = (w.projectType || "").toUpperCase();
+    if (type === "DEAL" && !display.startsWith("DEAL-")) return true;
+    if (type === "PORTCO" && !display.startsWith("PORTCO-")) return true;
+    return false;
+  }).length;
+
+  const alerts = [
+    {
+      title: "Missing Required Metadata",
+      count: missingMetadata,
+      desc: "Workspaces missing required metadata fields",
+      urgency: "High",
+    },
+    {
+      title: "Insufficient Owners",
+      count: fewOwners,
+      desc: "Workspaces with fewer than 2 active owners",
+      urgency: "Medium",
+    },
+    {
+      title: "Naming Policy Violations",
+      count: namingViolations,
+      desc: "Workspaces violating the expected naming prefix rule",
+      urgency: "Low",
+    },
+  ];
+
+  // Recent Activity — last 5 audit log entries for the org
+  const recentActivity = await storage.getAuditLog(orgId, 5);
+
+  // Build service status payload
+  const serviceStatus = tenants.map(t => ({
+    id: t.id,
+    tenantName: t.tenantName,
+    domain: t.domain,
+    status: t.status,
+    lastSyncAt: t.lastSyncAt,
+    lastSyncStatus: t.lastSyncStatus,
+  }));
+
+  // Connected tenants count
+  const activeTenantsCount = tenants.filter(t => t.status === "ACTIVE").length;
+
+  res.json({ alerts, recentActivity, serviceStatus, activeTenantsCount });
+});
+
 // ── Organization & Service Plan ──
 router.get("/api/organization", requireAuth(), async (req: AuthenticatedRequest, res) => {
   const id = req.query.id as string | undefined;
