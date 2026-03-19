@@ -2792,8 +2792,14 @@ export async function fetchUserOneDriveRecordingItems(
     return { items: [], skipped: false };
   }
   if (!res.ok) {
-    console.warn(`[graph] fetchUserOneDriveRecordingItems ${userId} ${res.status}`);
-    return { items: [], skipped: true };
+    const bodyText = await res.text();
+    const snippet = bodyText.substring(0, 500);
+    console.error(
+      `[graph] fetchUserOneDriveRecordingItems ${userId} ${res.status}: ${snippet}`,
+    );
+    throw new Error(
+      `fetchUserOneDriveRecordingItems failed for user ${userId} with status ${res.status}`,
+    );
   }
 
   const data = await res.json();
