@@ -67,6 +67,12 @@ import {
   type InsertSpeContainerUsage,
   platformSettings,
   type PlatformSettings,
+  teamsRecordings,
+  type TeamsRecording,
+  type InsertTeamsRecording,
+  teamsDiscoveryRuns,
+  type TeamsDiscoveryRun,
+  type InsertTeamsDiscoveryRun,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -190,6 +196,15 @@ export interface IStorage {
 
   getPlatformSettings(): Promise<PlatformSettings>;
   updatePlatformSettings(patch: { defaultSignupPlan: string; updatedBy?: string | null }): Promise<PlatformSettings>;
+
+  // Teams recordings discovery
+  upsertTeamsRecording(data: InsertTeamsRecording): Promise<TeamsRecording>;
+  getTeamsRecordings(tenantConnectionId?: string, search?: string): Promise<TeamsRecording[]>;
+  getTeamsRecording(id: string): Promise<TeamsRecording | undefined>;
+  createTeamsDiscoveryRun(data: InsertTeamsDiscoveryRun): Promise<TeamsDiscoveryRun>;
+  updateTeamsDiscoveryRun(id: string, updates: Partial<InsertTeamsDiscoveryRun>): Promise<TeamsDiscoveryRun | undefined>;
+  getTeamsDiscoveryRuns(tenantConnectionId?: string, limit?: number): Promise<TeamsDiscoveryRun[]>;
+  getLatestTeamsDiscoveryRun(tenantConnectionId: string): Promise<TeamsDiscoveryRun | undefined>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -893,6 +908,99 @@ export class DatabaseStorage implements IStorage {
       .where(eq(platformSettings.id, existing.id))
       .returning();
     return updated;
+  }
+
+  // ── Teams Recordings Discovery ─────────────────────────────────────────────
+
+  async upsertTeamsRecording(data: InsertTeamsRecording): Promise<TeamsRecording> {
+    const [result] = await db.insert(teamsRecordings)
+      .values(data)
+      .onConflictDoUpdate({
+        target: [teamsRecordings.tenantConnectionId, teamsRecordings.driveItemId],
+        set: {
+          meetingTitle: data.meetingTitle,
+          meetingDate: data.meetingDate,
+          organizer: data.organizer,
+          organizerDisplayName: data.organizerDisplayName,
+          fileName: data.fileName,
+          fileUrl: data.fileUrl,
+          filePath: data.filePath,
+          fileSizeBytes: data.fileSizeBytes,
+          fileCreatedAt: data.fileCreatedAt,
+          fileModifiedAt: data.fileModifiedAt,
+          sensitivityLabelId: data.sensitivityLabelId,
+          sensitivityLabelName: data.sensitivityLabelName,
+          retentionLabelName: data.retentionLabelName,
+          isShared: data.isShared,
+          copilotAccessible: data.copilotAccessible,
+          accessibilityBlockers: data.accessibilityBlockers,
+          lastDiscoveredAt: data.lastDiscoveredAt,
+          discoveryStatus: data.discoveryStatus,
+        },
+      })
+      .returning();
+    return result;
+  }
+
+  async getTeamsRecordings(tenantConnectionId?: string, search?: string): Promise<TeamsRecording[]> {
+    const conditions = [];
+    if (tenantConnectionId) {
+      conditions.push(eq(teamsRecordings.tenantConnectionId, tenantConnectionId));
+    }
+    if (search) {
+      conditions.push(
+        or(
+          ilike(teamsRecordings.fileName, `%${search}%`),
+          ilike(teamsRecordings.teamDisplayName, `%${search}%`),
+          ilike(teamsRecordings.userDisplayName, `%${search}%`),
+          ilike(teamsRecordings.organizer, `%${search}%`),
+        )!,
+      );
+    }
+    if (conditions.length > 0) {
+      return db.select().from(teamsRecordings)
+        .where(and(...conditions))
+        .orderBy(desc(teamsRecordings.lastDiscoveredAt));
+    }
+    return db.select().from(teamsRecordings).orderBy(desc(teamsRecordings.lastDiscoveredAt));
+  }
+
+  async getTeamsRecording(id: string): Promise<TeamsRecording | undefined> {
+    const [result] = await db.select().from(teamsRecordings).where(eq(teamsRecordings.id, id));
+    return result;
+  }
+
+  async createTeamsDiscoveryRun(data: InsertTeamsDiscoveryRun): Promise<TeamsDiscoveryRun> {
+    const [result] = await db.insert(teamsDiscoveryRuns).values(data).returning();
+    return result;
+  }
+
+  async updateTeamsDiscoveryRun(id: string, updates: Partial<InsertTeamsDiscoveryRun>): Promise<TeamsDiscoveryRun | undefined> {
+    const [result] = await db.update(teamsDiscoveryRuns)
+      .set(updates as any)
+      .where(eq(teamsDiscoveryRuns.id, id))
+      .returning();
+    return result;
+  }
+
+  async getTeamsDiscoveryRuns(tenantConnectionId?: string, limit = 20): Promise<TeamsDiscoveryRun[]> {
+    if (tenantConnectionId) {
+      return db.select().from(teamsDiscoveryRuns)
+        .where(eq(teamsDiscoveryRuns.tenantConnectionId, tenantConnectionId))
+        .orderBy(desc(teamsDiscoveryRuns.startedAt))
+        .limit(limit);
+    }
+    return db.select().from(teamsDiscoveryRuns)
+      .orderBy(desc(teamsDiscoveryRuns.startedAt))
+      .limit(limit);
+  }
+
+  async getLatestTeamsDiscoveryRun(tenantConnectionId: string): Promise<TeamsDiscoveryRun | undefined> {
+    const [result] = await db.select().from(teamsDiscoveryRuns)
+      .where(eq(teamsDiscoveryRuns.tenantConnectionId, tenantConnectionId))
+      .orderBy(desc(teamsDiscoveryRuns.startedAt))
+      .limit(1);
+    return result;
   }
 }
 

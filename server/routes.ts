@@ -9,6 +9,7 @@ import docsRouter from "./routes/docs";
 import policiesRouter from "./routes/policies";
 import organizationsRouter from "./routes/organizations";
 import speRouter from "./routes/spe";
+import recordingsRouter from "./routes/recordings";
 
 export async function registerRoutes(
   httpServer: Server,
@@ -25,6 +26,7 @@ export async function registerRoutes(
   app.use(policiesRouter);
   app.use(organizationsRouter);
   app.use(speRouter);
+  app.use(recordingsRouter);
 
   return httpServer;
 }

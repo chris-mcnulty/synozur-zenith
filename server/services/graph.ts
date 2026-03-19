@@ -2598,3 +2598,259 @@ export async function fetchLibraryDetails(
     return { contentTypes: [], columns: [], error: err.message };
   }
 }
+
+// ── Teams Recordings Discovery ────────────────────────────────────────────────
+// New permissions required on the Entra app registration:
+//   Application: Channel.ReadBasic.All, Team.ReadBasic.All
+// Existing permissions that cover the rest:
+//   Application: Group.Read.All, Sites.Read.All, User.Read.All, Files.Read.All
+
+export interface TeamInfo {
+  id: string;
+  displayName: string;
+}
+
+export interface ChannelInfo {
+  id: string;
+  displayName: string;
+  membershipType: string; // standard | private | shared
+}
+
+export interface RecordingFileItem {
+  driveId: string;
+  driveItemId: string;
+  fileName: string;
+  fileUrl: string | null;
+  filePath: string | null;
+  fileType: "RECORDING" | "TRANSCRIPT";
+  fileSizeBytes: number | null;
+  fileCreatedAt: string | null;
+  fileModifiedAt: string | null;
+  sensitivityLabelId: string | null;
+  sensitivityLabelName: string | null;
+  isShared: boolean;
+  organizer: string | null;
+  organizerDisplayName: string | null;
+}
+
+export interface TenantUserInfo {
+  id: string;
+  displayName: string | null;
+  userPrincipalName: string;
+}
+
+function classifyFile(name: string): "RECORDING" | "TRANSCRIPT" | null {
+  const lower = name.toLowerCase();
+  if (lower.endsWith(".vtt") || lower.endsWith(".docx") && lower.includes("transcript")) return "TRANSCRIPT";
+  if (lower.endsWith(".mp4") || lower.endsWith(".m4a") || lower.endsWith(".m4v")) return "RECORDING";
+  return null;
+}
+
+function mapDriveItem(item: any, driveId: string): RecordingFileItem | null {
+  const fileType = classifyFile(item.name || "");
+  if (!fileType) return null;
+
+  return {
+    driveId,
+    driveItemId: item.id,
+    fileName: item.name,
+    fileUrl: item.webUrl ?? null,
+    filePath: item.parentReference?.path ?? null,
+    fileType,
+    fileSizeBytes: item.size ?? null,
+    fileCreatedAt: item.createdDateTime ?? null,
+    fileModifiedAt: item.lastModifiedDateTime ?? null,
+    sensitivityLabelId: item.sensitivityLabel?.id ?? null,
+    sensitivityLabelName: item.sensitivityLabel?.displayName ?? null,
+    isShared: !!item.shared,
+    organizer: item.createdBy?.user?.email ?? item.createdBy?.user?.displayName ?? null,
+    organizerDisplayName: item.createdBy?.user?.displayName ?? null,
+  };
+}
+
+// Enumerate all M365 groups that have Teams provisioned.
+export async function fetchAllTeams(
+  tenantId: string,
+  clientId: string,
+  clientSecret: string,
+): Promise<TeamInfo[]> {
+  const token = await getAppToken(tenantId, clientId, clientSecret);
+  const teams: TeamInfo[] = [];
+  let url = `https://graph.microsoft.com/v1.0/groups?$filter=resourceProvisioningOptions/Any(x:x eq 'Team')&$select=id,displayName&$top=999`;
+
+  while (url) {
+    const res = await fetch(url, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        ConsistencyLevel: "eventual",
+      },
+    });
+    if (!res.ok) {
+      console.error(`[graph] fetchAllTeams ${res.status}: ${(await res.text()).substring(0, 200)}`);
+      break;
+    }
+    const data = await res.json();
+    for (const g of data.value || []) {
+      teams.push({ id: g.id, displayName: g.displayName });
+    }
+    url = data["@odata.nextLink"] ?? null;
+  }
+
+  console.log(`[graph] fetchAllTeams: ${teams.length} teams`);
+  return teams;
+}
+
+// Enumerate channels for a given team.
+export async function fetchTeamChannels(
+  teamId: string,
+  tenantId: string,
+  clientId: string,
+  clientSecret: string,
+): Promise<ChannelInfo[]> {
+  const token = await getAppToken(tenantId, clientId, clientSecret);
+  const res = await fetch(
+    `https://graph.microsoft.com/v1.0/teams/${teamId}/channels?$select=id,displayName,membershipType`,
+    { headers: { Authorization: `Bearer ${token}` } },
+  );
+  if (!res.ok) {
+    console.warn(`[graph] fetchTeamChannels ${teamId} ${res.status}`);
+    return [];
+  }
+  const data = await res.json();
+  return (data.value || []).map((c: any) => ({
+    id: c.id,
+    displayName: c.displayName,
+    membershipType: c.membershipType || "standard",
+  }));
+}
+
+// Return recording/transcript files found inside a channel's /Recordings/ folder.
+// Returns [] if the folder does not exist or is inaccessible.
+export async function fetchChannelRecordingItems(
+  teamId: string,
+  channelId: string,
+  tenantId: string,
+  clientId: string,
+  clientSecret: string,
+): Promise<RecordingFileItem[]> {
+  const token = await getAppToken(tenantId, clientId, clientSecret);
+
+  // Step 1: resolve the channel's files folder to get driveId + itemId
+  const folderRes = await fetch(
+    `https://graph.microsoft.com/v1.0/teams/${teamId}/channels/${channelId}/filesFolder`,
+    { headers: { Authorization: `Bearer ${token}` } },
+  );
+  if (!folderRes.ok) {
+    if (folderRes.status !== 404 && folderRes.status !== 403) {
+      console.warn(`[graph] fetchChannelRecordingItems filesFolder ${channelId} ${folderRes.status}`);
+    }
+    return [];
+  }
+  const folder = await folderRes.json();
+  const driveId: string = folder.parentReference?.driveId ?? folder.id;
+  const folderId: string = folder.id;
+
+  // Step 2: look for /Recordings/ subfolder children
+  const recordingsRes = await fetch(
+    `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${folderId}:/Recordings:/children` +
+    `?$select=id,name,size,createdDateTime,lastModifiedDateTime,webUrl,file,shared,sensitivityLabel,createdBy,parentReference`,
+    { headers: { Authorization: `Bearer ${token}` } },
+  );
+  if (!recordingsRes.ok) {
+    // 404 means no Recordings folder — normal for channels with no recorded meetings
+    return [];
+  }
+  const recordingsData = await recordingsRes.json();
+  const items: RecordingFileItem[] = [];
+  for (const item of recordingsData.value || []) {
+    const mapped = mapDriveItem(item, driveId);
+    if (mapped) items.push(mapped);
+  }
+  return items;
+}
+
+// Return recording/transcript files found in a user's OneDrive /Recordings/ folder.
+// Returns [] if the folder does not exist (404) or if access is denied (403).
+export async function fetchUserOneDriveRecordingItems(
+  userId: string,
+  tenantId: string,
+  clientId: string,
+  clientSecret: string,
+): Promise<{ items: RecordingFileItem[]; skipped: boolean }> {
+  const token = await getAppToken(tenantId, clientId, clientSecret);
+  const res = await fetch(
+    `https://graph.microsoft.com/v1.0/users/${userId}/drive/root:/Recordings:/children` +
+    `?$select=id,name,size,createdDateTime,lastModifiedDateTime,webUrl,file,shared,sensitivityLabel,createdBy,parentReference`,
+    { headers: { Authorization: `Bearer ${token}` } },
+  );
+
+  if (res.status === 403 || res.status === 401) {
+    return { items: [], skipped: true };
+  }
+  if (res.status === 404) {
+    // No Recordings folder — user has no recorded meetings in OneDrive
+    return { items: [], skipped: false };
+  }
+  if (!res.ok) {
+    console.warn(`[graph] fetchUserOneDriveRecordingItems ${userId} ${res.status}`);
+    return { items: [], skipped: true };
+  }
+
+  const data = await res.json();
+  // driveId comes from the parentReference of items; resolve from first item or via drive endpoint
+  let driveId = data.value?.[0]?.parentReference?.driveId ?? "";
+  if (!driveId) {
+    // Fallback: resolve user drive id
+    const driveRes = await fetch(
+      `https://graph.microsoft.com/v1.0/users/${userId}/drive?$select=id`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    if (driveRes.ok) {
+      const driveData = await driveRes.json();
+      driveId = driveData.id ?? "";
+    }
+  }
+
+  const items: RecordingFileItem[] = [];
+  for (const item of data.value || []) {
+    const mapped = mapDriveItem(item, driveId);
+    if (mapped) items.push(mapped);
+  }
+  return { items, skipped: false };
+}
+
+// Enumerate all enabled users in the tenant (for OneDrive scanning).
+// Paginates automatically. Filters out guest accounts.
+export async function fetchTenantUsers(
+  tenantId: string,
+  clientId: string,
+  clientSecret: string,
+): Promise<TenantUserInfo[]> {
+  const token = await getAppToken(tenantId, clientId, clientSecret);
+  const users: TenantUserInfo[] = [];
+  let url =
+    `https://graph.microsoft.com/v1.0/users` +
+    `?$filter=accountEnabled eq true and userType eq 'Member'` +
+    `&$select=id,displayName,userPrincipalName&$top=999`;
+
+  while (url) {
+    const res = await fetch(url, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        ConsistencyLevel: "eventual",
+      },
+    });
+    if (!res.ok) {
+      console.error(`[graph] fetchTenantUsers ${res.status}: ${(await res.text()).substring(0, 200)}`);
+      break;
+    }
+    const data = await res.json();
+    for (const u of data.value || []) {
+      users.push({ id: u.id, displayName: u.displayName ?? null, userPrincipalName: u.userPrincipalName });
+    }
+    url = data["@odata.nextLink"] ?? null;
+  }
+
+  console.log(`[graph] fetchTenantUsers: ${users.length} member users`);
+  return users;
+}
