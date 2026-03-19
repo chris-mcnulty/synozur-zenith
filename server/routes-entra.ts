@@ -346,24 +346,10 @@ router.get('/callback', async (req: AuthenticatedRequest, res: Response) => {
         return res.redirect('/login?error=account_deactivated');
       }
 
-      // Tenant boundary: if this user was previously authenticated by a
-      // different Azure tenant, block the login to prevent org boundary crossing.
-      if (user.azureTenantId && azureTenantId && user.azureTenantId !== azureTenantId) {
-        console.warn(`[Entra] Tenant boundary violation: ${email} authenticated by ${azureTenantId} but account belongs to tenant ${user.azureTenantId}`);
-        return res.redirect('/login?error=tenant_mismatch');
-      }
-
-      // Tenant boundary: the user's org must belong to the same Azure tenant
-      // (if the org has one recorded). Prevents someone from using SSO to
-      // access an org that belongs to a different Azure tenant.
-      if (azureTenantId && user.organizationId) {
-        const org = await storage.getOrganization(user.organizationId);
-        if (org?.azureTenantId && org.azureTenantId !== azureTenantId) {
-          console.warn(`[Entra] Tenant boundary violation: ${email} org tenant ${org.azureTenantId} does not match token tenant ${azureTenantId}`);
-          return res.redirect('/login?error=tenant_mismatch');
-        }
-      }
-
+      // Tenant boundary enforced by email domain — the SSO tid claim is not
+      // used for org routing because Zenith is a single-tenant app registered
+      // in one Azure AD; all users' tokens carry the same tid regardless of
+      // their own domain. Email domain is the sole org discriminator.
       const updates: Record<string, any> = {
         authProvider: 'entra',
         lastLoginAt: new Date(),
@@ -371,21 +357,18 @@ router.get('/callback', async (req: AuthenticatedRequest, res: Response) => {
       if (!user.azureObjectId && azureObjectId) {
         updates.azureObjectId = azureObjectId;
       }
-      if (!user.azureTenantId && azureTenantId) {
-        updates.azureTenantId = azureTenantId;
-      }
       await storage.updateUser(user.id, updates);
       user = (await storage.getUser(user.id))!;
     } else {
       const domain = email.split('@')[1].toLowerCase();
       const isPublicDomain = isPublicEmailDomain(email);
       const orgs = await storage.getOrganizations();
-      let org = orgs.find(o =>
-                  o.azureTenantId === azureTenantId &&
-                  !isPublicDomain &&
-                  (o.domain === domain || (o.allowedDomains?.includes(domain) ?? false))
-                ) ||
-                (!isPublicDomain ? orgs.find(o => o.domain === domain) : undefined);
+      // Match solely on email domain — never on azureTenantId from the SSO
+      // token, which is always the host app's tenant in a single-tenant setup.
+      let org = !isPublicDomain
+        ? orgs.find(o => o.domain === domain ||
+            (o.allowedDomains && o.allowedDomains.includes(domain)))
+        : undefined;
       let isFirstUser = false;
 
       if (!org) {
@@ -403,7 +386,6 @@ router.get('/callback', async (req: AuthenticatedRequest, res: Response) => {
             name: domain.split('.')[0].charAt(0).toUpperCase() + domain.split('.')[0].slice(1),
             domain,
             servicePlan: await getDefaultSignupPlan(),
-            azureTenantId: azureTenantId || undefined,
           });
         }
         isFirstUser = true;
