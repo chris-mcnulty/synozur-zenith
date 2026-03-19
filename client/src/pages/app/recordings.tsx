@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useTenant } from "@/lib/tenant-context";
@@ -184,6 +184,23 @@ export default function RecordingsPage() {
     enabled: !!tenantConnectionId,
     refetchInterval: (data) => (data?.status === "RUNNING" ? 3000 : false),
   });
+
+  // Invalidate the recordings list whenever a discovery run transitions from
+  // RUNNING to a terminal state (COMPLETED, PARTIAL, or FAILED) so the table
+  // reflects newly-discovered files without requiring a manual page refresh.
+  const prevRunStatusRef = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    const currentStatus = latestRun?.status;
+    const prevStatus = prevRunStatusRef.current;
+    if (
+      prevStatus === "RUNNING" &&
+      currentStatus !== undefined &&
+      currentStatus !== "RUNNING"
+    ) {
+      queryClient.invalidateQueries({ queryKey: ["/api/recordings"] });
+    }
+    prevRunStatusRef.current = currentStatus;
+  }, [latestRun?.status]);
 
   const syncMutation = useMutation({
     mutationFn: async () => {
