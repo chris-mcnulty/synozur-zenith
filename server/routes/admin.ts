@@ -157,7 +157,7 @@ router.post("/api/admin/organizations", requireRole(ZENITH_ROLES.PLATFORM_OWNER)
   if (servicePlan && !SERVICE_PLANS.includes(servicePlan)) {
     return res.status(400).json({ error: `Invalid service plan. Must be one of: ${SERVICE_PLANS.join(", ")}` });
   }
-  const org = await storage.upsertOrganization({
+  const org = await storage.createOrganization({
     name: name.trim(),
     domain: domain.trim().toLowerCase(),
     servicePlan: servicePlan || "TRIAL",
