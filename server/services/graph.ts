@@ -2716,8 +2716,13 @@ export async function fetchTeamChannels(
     { headers: { Authorization: `Bearer ${token}` } },
   );
   if (!res.ok) {
-    console.warn(`[graph] fetchTeamChannels ${teamId} ${res.status}`);
-    return [];
+    if (res.status === 403 || res.status === 404) {
+      console.warn(`[graph] fetchTeamChannels ${teamId} ${res.status}`);
+      return [];
+    }
+    const errorText = await res.text();
+    const truncated = errorText.substring(0, 200);
+    throw new Error(`[graph] fetchTeamChannels ${teamId} ${res.status}: ${truncated}`);
   }
   const data = await res.json();
   return (data.value || []).map((c: any) => ({
