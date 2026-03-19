@@ -2686,11 +2686,14 @@ export async function fetchAllTeams(
       },
     });
     if (!res.ok) {
-      console.error(`[graph] fetchAllTeams ${res.status}: ${(await res.text()).substring(0, 200)}`);
-      break;
+      const errorBody = (await res.text()).substring(0, 200);
+      console.error(`[graph] fetchAllTeams ${res.status}: ${errorBody}`);
+      throw new Error(
+        `[graph] fetchAllTeams failed after fetching ${teams.length} teams: HTTP ${res.status} ${res.statusText ?? ""} - ${errorBody}`,
+      );
     }
     const data = await res.json();
-    for (const g of data.value || []) {
+    for (const g of (data.value || [])) {
       teams.push({ id: g.id, displayName: g.displayName });
     }
     url = data["@odata.nextLink"] ?? null;
