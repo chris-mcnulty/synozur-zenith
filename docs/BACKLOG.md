@@ -187,7 +187,52 @@ Gap analysis performed against the authoritative Zenith Engineering Product Spec
 
 ## Medium Priority
 
-### 🟡 BL-009: Job Scheduling & Management System
+### 🟠 BL-028: Recordings Discovery — Meeting Metadata Enrichment (Phase 3)
+**Status:** Backlog | **Depends on:** Teams Recordings Discovery (Phase 1 & 2, ✅ shipped)
+**Description:** Phase 1/2 discover recording/transcript files and capture file-level metadata. Phase 3 enriches each discovered file with authoritative meeting metadata from the Online Meetings API — meeting subject, start time, participant count, and duration — enabling governance by meeting context rather than just filename.
+**Design:** The linkage between a DriveItem and an `onlineMeeting` is not a direct foreign key. The approach is filename-based timestamp parsing to narrow a date window, then querying the organizer's meetings via `GET /users/{organizerId}/onlineMeetings?$filter=startDateTime ge {start} and startDateTime le {end}`. The match is confirmed via `GET /users/{userId}/onlineMeetings/{meetingId}/recordings`.
+**Schema changes needed:**
+- `teams_recordings`: add `meetingId` (text), `meetingDurationSeconds` (integer), `participantCount` (integer), `meetingEnriched` (boolean, default false)
+**New Graph permissions required:**
+- `Application: OnlineMeetings.Read.All, OnlineMeetingRecording.Read.All, OnlineMeetingTranscript.Read.All`
+**Acceptance Criteria:**
+- New service function `enrichRecordingsWithMeetingMetadata()` runs incrementally (only unenriched rows)
+- Groups by organizer UPN to batch meeting lookups per user
+- Fuzzy timestamp match (within 30 min of `fileCreatedAt`)
+- Updates matched rows with meeting subject, start time, participant count, duration
+- Marks all processed rows as `meetingEnriched = true` regardless of match outcome
+- Unmatched rows get `meetingTitle` derived from filename as fallback
+- Meeting metadata surface in recordings table and detail panel on the Recordings Discovery page
+- Enrichment can be triggered as a follow-on step after discovery sync
+
+### 🟠 BL-029: Recordings Discovery — Copilot & AI Accessibility Assessment (Phase 4)
+**Status:** Backlog | **Depends on:** BL-028 (Phase 3 enrichment), BL-006 (Copilot Readiness Dashboard)
+**Description:** Phase 1/2 derive a basic `copilotAccessible` flag by checking for "Highly Confidential" sensitivity labels. Phase 4 implements a rigorous, policy-driven accessibility assessment that mirrors how Microsoft 365 Copilot evaluates access to content — covering label encryption, external permissions, organizer licensing, and tenant-level Copilot deployment.
+**Assessment dimensions:**
+| Dimension | Data source |
+|---|---|
+| Sensitivity label encryption | Join `sensitivityLabelId` → `sensitivity_labels.hasProtection` |
+| Retention hold | `retentionLabelName` → join `retention_labels.behaviorDuringRetentionPeriod` |
+| External sharing | `GET /drives/{id}/items/{id}/permissions` — check for external principals |
+| Organizer Copilot license | `GET /users/{id}/licenseDetails` — check for M365 Copilot SKU |
+| Private channel | `channelType = private` — flag for awareness |
+| Tenant Copilot deployment | Admin confirmation or org-level setting |
+**Schema changes needed:**
+- `teams_recordings`: add `organizerHasCopilotLicense` (boolean), `hasExternalPermissions` (boolean), `accessibilityAssessedAt` (timestamp)
+**New Graph permissions required:** None beyond existing; `User.Read.All` covers `licenseDetails`.
+**Acceptance Criteria:**
+- Re-derive `copilotAccessible` and `accessibilityBlockers` for all recordings post-enrichment
+- Sensitivity label join: mark as blocked if `hasProtection = true` AND label sensitivity score exceeds configurable threshold
+- External permissions check for all `isShared = true` recordings
+- Organizer license check for unique organizer UPNs (batch, not per-recording)
+- Configurable per-org rules (some orgs allow Copilot on HC content)
+- Assessment re-runs automatically after label sync (hook into label sync completion)
+- Recordings page: expose detailed blocker categories (Label Encrypted / External Sharing / No Copilot License / Inaccessible)
+- Summary card: "Fully Assessed" vs "Pending Assessment" coverage indicator
+- Export (CSV) of all recordings with accessibility status for compliance reporting
+- Service plan gated: Professional+ (aligns with BL-006 Copilot Readiness Dashboard)
+
+
 **Status:** Backlog | **Design Doc:** [`docs/design/job-scheduling-system.md`](/docs/design/job-scheduling-system.md)
 **Description:** Background job scheduling system for automating recurring governance operations — tenant syncs, stale site detection, compliance scans, label audits, and notification delivery. Architecture follows the proven Orbit pattern with database-backed audit trail, concurrency guards, abort support, and admin monitoring UI.
 **Reference:** Orbit (`synozur-orbit`) `scheduled-jobs.ts` — best job scheduling implementation in the Synozur portfolio.
