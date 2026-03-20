@@ -1057,10 +1057,11 @@ export class DatabaseStorage implements IStorage {
 
     const rows = await db.select({
       teamId: teamsRecordings.teamId,
-      teamDisplayName: teamsRecordings.teamDisplayName,
+      teamDisplayName: sql<string | null>`max(${teamsRecordings.teamDisplayName})`,
       channelId: teamsRecordings.channelId,
-      channelDisplayName: teamsRecordings.channelDisplayName,
-      channelType: teamsRecordings.channelType,
+      channelDisplayName: sql<string | null>`max(${teamsRecordings.channelDisplayName})`,
+      // max() picks an arbitrary representative; channel type is effectively immutable
+      channelType: sql<string | null>`max(${teamsRecordings.channelType})`,
       recordingCount: sql<number>`count(*)::int`,
       lastActivity: sql<string | null>`max(${teamsRecordings.fileModifiedAt})`,
     })
@@ -1068,10 +1069,7 @@ export class DatabaseStorage implements IStorage {
       .where(and(...conditions))
       .groupBy(
         teamsRecordings.teamId,
-        teamsRecordings.teamDisplayName,
         teamsRecordings.channelId,
-        teamsRecordings.channelDisplayName,
-        teamsRecordings.channelType,
       );
 
     // Aggregate into team → channels hierarchy
