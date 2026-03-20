@@ -107,8 +107,11 @@ router.get("/api/onedrive-inventory/:id", requireAuth(), async (req: Authenticat
 router.get("/api/recordings", requireAuth(), async (req: AuthenticatedRequest, res) => {
   const search = req.query.search as string | undefined;
   const tenantConnectionId = req.query.tenantConnectionId as string | undefined;
-  const page = parseInt(req.query.page as string, 10) || 1;
-  const pageSize = Math.min(parseInt(req.query.pageSize as string, 10) || 50, 200);
+  const rawPage = parseInt(req.query.page as string, 10);
+  const page = Number.isFinite(rawPage) && rawPage > 0 ? rawPage : 1;
+  const rawPageSize = parseInt(req.query.pageSize as string, 10);
+  const clampedPageSize = Number.isFinite(rawPageSize) && rawPageSize > 0 ? rawPageSize : 50;
+  const pageSize = Math.min(clampedPageSize, 200);
   const allowedIds = await getOrgTenantConnectionIds(req.user);
 
   // Determine effective tenant connection IDs
