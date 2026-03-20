@@ -1,13 +1,18 @@
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
+import { queryClient } from "@/lib/queryClient";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
+import { useToast } from "@/hooks/use-toast";
+import { useTenant } from "@/lib/tenant-context";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import {
   HardDrive,
   Search,
   Loader2,
+  RefreshCw,
   Users,
   AlertTriangle,
   CheckCircle2,
@@ -65,6 +70,9 @@ function usagePercent(used: number | null, total: number | null): number | null 
 
 export default function OneDriveInventoryPage() {
   const [search, setSearch] = useState("");
+  const { selectedTenant } = useTenant();
+  const { toast } = useToast();
+  const tenantConnectionId = selectedTenant?.id;
 
   const { data: drives = [], isLoading } = useQuery<OneDriveItem[]>({
     queryKey: ["/api/onedrive-inventory", search],
@@ -74,6 +82,27 @@ export default function OneDriveInventoryPage() {
       const res = await fetch(`/api/onedrive-inventory?${params}`, { credentials: "include" });
       if (!res.ok) throw new Error("Failed to load OneDrive inventory");
       return res.json();
+    },
+  });
+
+  const syncMutation = useMutation({
+    mutationFn: async () => {
+      if (!tenantConnectionId) throw new Error("No tenant selected");
+      const res = await fetch(`/api/admin/tenants/${tenantConnectionId}/onedrive-inventory/sync`, {
+        method: "POST",
+        credentials: "include",
+      });
+      if (!res.ok) throw new Error("Failed to start sync");
+      return res.json();
+    },
+    onSuccess: () => {
+      toast({ title: "OneDrive sync started", description: "Discovering all user drives and quota data…" });
+      setTimeout(() => {
+        queryClient.invalidateQueries({ queryKey: ["/api/onedrive-inventory"] });
+      }, 8000);
+    },
+    onError: (err: any) => {
+      toast({ title: "Sync failed", description: err.message, variant: "destructive" });
     },
   });
 
@@ -87,14 +116,25 @@ export default function OneDriveInventoryPage() {
   return (
     <div className="p-6 lg:p-8 space-y-6 max-w-7xl mx-auto">
       {/* Header */}
-      <div>
-        <div className="flex items-center gap-3 mb-1">
-          <HardDrive className="w-6 h-6 text-primary" />
-          <h1 className="text-2xl font-bold tracking-tight">OneDrive Inventory</h1>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <div className="flex items-center gap-3 mb-1">
+            <HardDrive className="w-6 h-6 text-primary" />
+            <h1 className="text-2xl font-bold tracking-tight">OneDrive Inventory</h1>
+          </div>
+          <p className="text-sm text-muted-foreground">
+            Full inventory of OneDrive for Business drives across connected tenants.
+          </p>
         </div>
-        <p className="text-sm text-muted-foreground">
-          Full inventory of OneDrive for Business drives across connected tenants.
-        </p>
+        <Button
+          onClick={() => syncMutation.mutate()}
+          disabled={syncMutation.isPending || !tenantConnectionId}
+          title={!tenantConnectionId ? "Select a tenant to sync" : undefined}
+        >
+          {syncMutation.isPending
+            ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Syncing…</>
+            : <><RefreshCw className="mr-2 h-4 w-4" />Sync OneDrives</>}
+        </Button>
       </div>
 
       {/* Stats */}
@@ -153,7 +193,7 @@ export default function OneDriveInventoryPage() {
           ) : drives.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-48 gap-3 text-muted-foreground">
               <HardDrive className="h-10 w-10 opacity-30" />
-              <p className="text-sm">No OneDrives discovered yet. Run an inventory sync from the tenant admin page.</p>
+              <p className="text-sm">No OneDrives discovered yet. Select a tenant and click "Sync OneDrives" to begin.</p>
             </div>
           ) : (
             <Table>

@@ -1,8 +1,12 @@
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
+import { queryClient } from "@/lib/queryClient";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
+import { useToast } from "@/hooks/use-toast";
+import { useTenant } from "@/lib/tenant-context";
 import {
   MessagesSquare,
   Search,
@@ -13,6 +17,7 @@ import {
   Hash,
   Video,
   Loader2,
+  RefreshCw,
   Info,
   Users,
   Shield,
@@ -252,6 +257,9 @@ function TeamRow({ team, inventory }: { team: TeamSummary; inventory?: TeamsInve
 
 export default function TeamsChannelsPage() {
   const [search, setSearch] = useState("");
+  const { selectedTenant } = useTenant();
+  const { toast } = useToast();
+  const tenantConnectionId = selectedTenant?.id;
 
   const { data: teams = [], isLoading } = useQuery<TeamSummary[]>({
     queryKey: ["/api/teams-channels"],
@@ -260,6 +268,28 @@ export default function TeamsChannelsPage() {
   // Also fetch full inventory for enrichment
   const { data: inventory = [] } = useQuery<TeamsInventoryItem[]>({
     queryKey: ["/api/teams-inventory"],
+  });
+
+  const syncMutation = useMutation({
+    mutationFn: async () => {
+      if (!tenantConnectionId) throw new Error("No tenant selected");
+      const res = await fetch(`/api/admin/tenants/${tenantConnectionId}/teams-inventory/sync`, {
+        method: "POST",
+        credentials: "include",
+      });
+      if (!res.ok) throw new Error("Failed to start sync");
+      return res.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Teams sync started", description: "Discovering all teams and channels…" });
+      setTimeout(() => {
+        queryClient.invalidateQueries({ queryKey: ["/api/teams-channels"] });
+        queryClient.invalidateQueries({ queryKey: ["/api/teams-inventory"] });
+      }, 5000);
+    },
+    onError: (err: any) => {
+      toast({ title: "Sync failed", description: err.message, variant: "destructive" });
+    },
   });
 
   // Build inventory lookup by teamId
@@ -288,14 +318,25 @@ export default function TeamsChannelsPage() {
   return (
     <div className="p-6 lg:p-8 space-y-6 max-w-6xl mx-auto">
       {/* Header */}
-      <div>
-        <div className="flex items-center gap-3 mb-1">
-          <MessagesSquare className="w-6 h-6 text-primary" />
-          <h1 className="text-2xl font-bold tracking-tight" data-testid="text-page-title">Teams &amp; Channels</h1>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <div className="flex items-center gap-3 mb-1">
+            <MessagesSquare className="w-6 h-6 text-primary" />
+            <h1 className="text-2xl font-bold tracking-tight" data-testid="text-page-title">Teams &amp; Channels</h1>
+          </div>
+          <p className="text-sm text-muted-foreground">
+            Full inventory of all Teams and Channels across connected tenants.
+          </p>
         </div>
-        <p className="text-sm text-muted-foreground">
-          Full inventory of all Teams and Channels across connected tenants.
-        </p>
+        <Button
+          onClick={() => syncMutation.mutate()}
+          disabled={syncMutation.isPending || !tenantConnectionId}
+          title={!tenantConnectionId ? "Select a tenant to sync" : undefined}
+        >
+          {syncMutation.isPending
+            ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Syncing…</>
+            : <><RefreshCw className="mr-2 h-4 w-4" />Sync Teams</>}
+        </Button>
       </div>
 
       {/* Stats */}
@@ -351,7 +392,7 @@ export default function TeamsChannelsPage() {
         <div className="flex items-start gap-2 rounded-lg border border-blue-200/50 bg-blue-50/50 dark:border-blue-900/50 dark:bg-blue-950/20 px-4 py-3">
           <Info className="w-4 h-4 text-blue-500 mt-0.5 shrink-0" />
           <p className="text-xs text-blue-700 dark:text-blue-400">
-            Showing teams discovered from recordings only. Run a Teams Inventory sync from the tenant admin page to discover all teams with full properties.
+            Showing teams discovered from recordings only. Select a tenant and click "Sync Teams" to discover all teams with full properties.
           </p>
         </div>
       )}
@@ -372,7 +413,7 @@ export default function TeamsChannelsPage() {
               {teams.length === 0 ? (
                 <>
                   <p className="text-sm font-medium mb-1">No teams discovered yet</p>
-                  <p className="text-xs">Run a Teams Inventory or Recordings discovery sync from the tenant admin page.</p>
+                  <p className="text-xs">Select a tenant and click "Sync Teams" above, or run a Recordings Discovery to find meeting recordings.</p>
                 </>
               ) : (
                 <p className="text-sm">No teams match your search.</p>

@@ -3061,7 +3061,7 @@ export async function fetchAllOneDriveInventories(
             `[graph] OneDrive inventory for ${user.userPrincipalName}: unexpected status ${driveRes.status}`,
           );
         }
-        continue;
+        return;
       }
       const driveData = await driveRes.json();
       const quota = driveData.quota ?? {};
