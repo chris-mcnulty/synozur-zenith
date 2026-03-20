@@ -2724,6 +2724,17 @@ export async function fetchAllTeamsInventory(
       }
     } catch {}
 
+    try {
+      const guestRes = await fetch(
+        `https://graph.microsoft.com/v1.0/groups/${g.id}/members/microsoft.graph.user/$count` +
+          `?$filter=userType eq 'Guest'`,
+        { headers: { Authorization: `Bearer ${token}`, ConsistencyLevel: "eventual" } },
+      );
+      if (guestRes.ok) {
+        guestCount = parseInt(await guestRes.text(), 10) || null;
+      }
+    } catch {}
+
     // SharePoint site backing URL
     let sharepointSiteUrl: string | null = null;
     let sharepointSiteId: string | null = null;
