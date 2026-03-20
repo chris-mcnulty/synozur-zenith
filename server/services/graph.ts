@@ -2824,55 +2824,92 @@ export async function fetchAllTeamsInventory(
     url = data["@odata.nextLink"] ?? null;
   }
 
-  // Step 2: Enrich each group using Graph $batch.
-  // Each group needs 4 sub-requests; GRAPH_BATCH_SIZE = 20, so we process
-  // GRAPH_BATCH_SIZE / 4 = 5 groups per $batch call, drastically reducing
-  // round-trips compared to sequential per-group fetches.
-  const GROUPS_PER_BATCH = Math.floor(GRAPH_BATCH_SIZE / 4); // 5
+  // Step 2: Enrich each group with Teams-specific properties and member counts
+  for (const g of rawGroups) {
+    let isArchived = false;
 
-  for (let i = 0; i < rawGroups.length; i += GROUPS_PER_BATCH) {
-    const groupSlice = rawGroups.slice(i, i + GROUPS_PER_BATCH);
+    // Fetch team-level properties (isArchived)
+    try {
+      const teamRes = await fetch(
+        `https://graph.microsoft.com/v1.0/teams/${g.id}?$select=isArchived`,
+        { headers: { Authorization: `Bearer ${token}` } },
+      );
+      if (teamRes.ok) {
+        const teamData = await teamRes.json();
+        isArchived = teamData.isArchived === true;
+      }
+    } catch {}
 
-    const batchRequests: GraphBatchRequest[] = [];
-    for (const g of groupSlice) {
-      batchRequests.push({ id: `team-${g.id}`,    method: "GET", url: `/teams/${g.id}?$select=isArchived` });
-      batchRequests.push({ id: `members-${g.id}`, method: "GET", url: `/groups/${g.id}/members/$count`, headers: { ConsistencyLevel: "eventual" } });
-      batchRequests.push({ id: `owners-${g.id}`,  method: "GET", url: `/groups/${g.id}/owners/$count`,  headers: { ConsistencyLevel: "eventual" } });
-      batchRequests.push({ id: `site-${g.id}`,    method: "GET", url: `/groups/${g.id}/sites/root?$select=id,webUrl` });
-    }
+    // Fetch member/owner/guest counts
+    let memberCount: number | null = null;
+    let ownerCount: number | null = null;
+    let guestCount: number | null = null;
 
-    const batchResults = await graphBatch(token, batchRequests);
+    try {
+      const membersRes = await fetch(
+        `https://graph.microsoft.com/v1.0/groups/${g.id}/members/$count`,
+        { headers: { Authorization: `Bearer ${token}`, ConsistencyLevel: "eventual" } },
+      );
+      if (membersRes.ok) {
+        memberCount = parseInt(await membersRes.text(), 10) || null;
+      }
+    } catch {}
 
-    for (const g of groupSlice) {
-      const teamResp    = batchResults.get(`team-${g.id}`);
-      const membersResp = batchResults.get(`members-${g.id}`);
-      const ownersResp  = batchResults.get(`owners-${g.id}`);
-      const siteResp    = batchResults.get(`site-${g.id}`);
+    try {
+      const ownersRes = await fetch(
+        `https://graph.microsoft.com/v1.0/groups/${g.id}/owners/$count`,
+        { headers: { Authorization: `Bearer ${token}`, ConsistencyLevel: "eventual" } },
+      );
+      if (ownersRes.ok) {
+        ownerCount = parseInt(await ownersRes.text(), 10) || null;
+      }
+    } catch {}
 
-      const isArchived = teamResp?.status === 200 && teamResp.body?.isArchived === true;
-      const memberCount = membersResp?.status === 200 ? parseCountFromBatchBody(membersResp.body) : null;
-      const ownerCount  = ownersResp?.status === 200  ? parseCountFromBatchBody(ownersResp.body)  : null;
-      const sharepointSiteUrl = siteResp?.status === 200 ? (siteResp.body?.webUrl ?? null) : null;
-      const sharepointSiteId  = siteResp?.status === 200 ? (siteResp.body?.id     ?? null) : null;
+    try {
+      const guestRes = await fetch(
+        `https://graph.microsoft.com/v1.0/groups/${g.id}/members/microsoft.graph.user/$count` +
+          `?$filter=userType eq 'Guest'`,
+        { headers: { Authorization: `Bearer ${token}`, ConsistencyLevel: "eventual" } },
+      );
+      if (guestRes.ok) {
+        guestCount = parseInt(await guestRes.text(), 10) || null;
+      }
+    } catch {}
 
-      teams.push({
-        id: g.id,
-        displayName: g.displayName ?? g.id,
-        description: g.description ?? null,
-        mailNickname: g.mailNickname ?? null,
-        visibility: g.visibility ?? null,
-        isArchived,
-        classification: g.classification ?? null,
-        createdDateTime: g.createdDateTime ?? null,
-        renewedDateTime: g.renewedDateTime ?? null,
-        memberCount,
-        ownerCount,
-        guestCount: null, // Graph has no direct guest-count endpoint for groups; reserved for future use
-        sharepointSiteUrl,
-        sharepointSiteId,
-        sensitivityLabel: g.assignedLabels?.[0]?.displayName ?? null,
-      });
-    }
+    // SharePoint site backing URL
+    let sharepointSiteUrl: string | null = null;
+    let sharepointSiteId: string | null = null;
+    try {
+      const siteRes = await fetch(
+        `https://graph.microsoft.com/v1.0/groups/${g.id}/sites/root?$select=id,webUrl`,
+        { headers: { Authorization: `Bearer ${token}` } },
+      );
+      if (siteRes.ok) {
+        const siteData = await siteRes.json();
+        sharepointSiteUrl = siteData.webUrl ?? null;
+        sharepointSiteId = siteData.id ?? null;
+      }
+    } catch {}
+
+    const sensitivityLabel = g.assignedLabels?.[0]?.displayName ?? null;
+
+    teams.push({
+      id: g.id,
+      displayName: g.displayName ?? g.id,
+      description: g.description ?? null,
+      mailNickname: g.mailNickname ?? null,
+      visibility: g.visibility ?? null,
+      isArchived,
+      classification: g.classification ?? null,
+      createdDateTime: g.createdDateTime ?? null,
+      renewedDateTime: g.renewedDateTime ?? null,
+      memberCount,
+      ownerCount,
+      guestCount,
+      sharepointSiteUrl,
+      sharepointSiteId,
+      sensitivityLabel,
+    });
   }
 
   console.log(`[graph] fetchAllTeamsInventory: ${teams.length} teams`);
@@ -2965,8 +3002,9 @@ export async function fetchAllOneDriveInventories(
       headers: { Authorization: `Bearer ${token}`, ConsistencyLevel: "eventual" },
     });
     if (!res.ok) {
-      console.error(`[graph] fetchAllOneDriveInventories users ${res.status}`);
-      break;
+      throw new Error(
+        `[graph] fetchAllOneDriveInventories: failed to fetch users (HTTP ${res.status})`,
+      );
     }
     const data = await res.json();
     for (const u of data.value || []) {
