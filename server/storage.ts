@@ -73,6 +73,15 @@ import {
   teamsDiscoveryRuns,
   type TeamsDiscoveryRun,
   type InsertTeamsDiscoveryRun,
+  teamsInventory,
+  type TeamsInventoryItem,
+  type InsertTeamsInventory,
+  channelsInventory,
+  type ChannelsInventoryItem,
+  type InsertChannelsInventory,
+  onedriveInventory,
+  type OnedriveInventoryItem,
+  type InsertOnedriveInventory,
 } from "@shared/schema";
 
 export interface TeamsChannelsSummaryChannel {
@@ -217,12 +226,26 @@ export interface IStorage {
   // Teams recordings discovery
   upsertTeamsRecording(data: InsertTeamsRecording): Promise<TeamsRecording>;
   getTeamsRecordings(tenantConnectionId?: string, search?: string): Promise<TeamsRecording[]>;
+  getTeamsRecordingsPaginated(opts: { tenantConnectionIds?: string[]; search?: string; limit: number; offset: number }): Promise<{ rows: TeamsRecording[]; total: number }>;
   getTeamsRecording(id: string): Promise<TeamsRecording | undefined>;
   createTeamsDiscoveryRun(data: InsertTeamsDiscoveryRun): Promise<TeamsDiscoveryRun>;
   updateTeamsDiscoveryRun(id: string, updates: Partial<InsertTeamsDiscoveryRun>): Promise<TeamsDiscoveryRun | undefined>;
   getTeamsDiscoveryRuns(tenantConnectionId?: string, limit?: number): Promise<TeamsDiscoveryRun[]>;
   getLatestTeamsDiscoveryRun(tenantConnectionId: string): Promise<TeamsDiscoveryRun | undefined>;
   getTeamsChannelsSummary(tenantConnectionIds?: string[]): Promise<TeamsChannelsSummary[]>;
+
+  // Teams & Channels inventory
+  upsertTeamsInventory(data: InsertTeamsInventory): Promise<TeamsInventoryItem>;
+  getTeamsInventory(tenantConnectionIds?: string[], search?: string): Promise<TeamsInventoryItem[]>;
+  getTeamsInventoryItem(id: string): Promise<TeamsInventoryItem | undefined>;
+  upsertChannelsInventory(data: InsertChannelsInventory): Promise<ChannelsInventoryItem>;
+  getChannelsInventory(tenantConnectionId: string, teamId?: string): Promise<ChannelsInventoryItem[]>;
+  getTeamsInventorySummary(tenantConnectionIds?: string[]): Promise<TeamsChannelsSummary[]>;
+
+  // OneDrive inventory
+  upsertOnedriveInventory(data: InsertOnedriveInventory): Promise<OnedriveInventoryItem>;
+  getOnedriveInventory(tenantConnectionIds?: string[], search?: string): Promise<OnedriveInventoryItem[]>;
+  getOnedriveInventoryItem(id: string): Promise<OnedriveInventoryItem | undefined>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -1113,6 +1136,318 @@ export class DatabaseStorage implements IStorage {
       });
     }
 
+    return result;
+  }
+
+  // ── Paginated Recordings ──────────────────────────────────────────────────
+
+  async getTeamsRecordingsPaginated(opts: {
+    tenantConnectionIds?: string[];
+    search?: string;
+    limit: number;
+    offset: number;
+  }): Promise<{ rows: TeamsRecording[]; total: number }> {
+    const conditions = [];
+    if (opts.tenantConnectionIds && opts.tenantConnectionIds.length > 0) {
+      conditions.push(
+        sql`${teamsRecordings.tenantConnectionId} IN (${sql.join(
+          opts.tenantConnectionIds.map(id => sql`${id}`),
+          sql`, `,
+        )})` as any,
+      );
+    }
+    if (opts.search) {
+      conditions.push(
+        or(
+          ilike(teamsRecordings.fileName, `%${opts.search}%`),
+          ilike(teamsRecordings.teamDisplayName, `%${opts.search}%`),
+          ilike(teamsRecordings.userDisplayName, `%${opts.search}%`),
+          ilike(teamsRecordings.organizer, `%${opts.search}%`),
+        )!,
+      );
+    }
+
+    const where = conditions.length > 0 ? and(...conditions) : undefined;
+
+    const [countResult] = await db.select({ count: sql<number>`count(*)::int` })
+      .from(teamsRecordings)
+      .where(where);
+
+    const rows = await db.select().from(teamsRecordings)
+      .where(where)
+      .orderBy(desc(teamsRecordings.lastDiscoveredAt))
+      .limit(opts.limit)
+      .offset(opts.offset);
+
+    return { rows, total: countResult?.count ?? 0 };
+  }
+
+  // ── Teams & Channels Inventory ──────────────────────────────────────────────
+
+  async upsertTeamsInventory(data: InsertTeamsInventory): Promise<TeamsInventoryItem> {
+    const [result] = await db.insert(teamsInventory)
+      .values(data)
+      .onConflictDoUpdate({
+        target: [teamsInventory.tenantConnectionId, teamsInventory.teamId],
+        set: {
+          displayName: data.displayName,
+          description: data.description,
+          mailNickname: data.mailNickname,
+          visibility: data.visibility,
+          isArchived: data.isArchived,
+          classification: data.classification,
+          createdDateTime: data.createdDateTime,
+          renewedDateTime: data.renewedDateTime,
+          memberCount: data.memberCount,
+          ownerCount: data.ownerCount,
+          guestCount: data.guestCount,
+          sharepointSiteUrl: data.sharepointSiteUrl,
+          sharepointSiteId: data.sharepointSiteId,
+          sensitivityLabel: data.sensitivityLabel,
+          lastDiscoveredAt: data.lastDiscoveredAt,
+          discoveryStatus: data.discoveryStatus,
+        },
+      })
+      .returning();
+    return result;
+  }
+
+  async getTeamsInventory(tenantConnectionIds?: string[], search?: string): Promise<TeamsInventoryItem[]> {
+    const conditions = [eq(teamsInventory.discoveryStatus, "ACTIVE")];
+    if (tenantConnectionIds && tenantConnectionIds.length > 0) {
+      conditions.push(
+        sql`${teamsInventory.tenantConnectionId} IN (${sql.join(
+          tenantConnectionIds.map(id => sql`${id}`),
+          sql`, `,
+        )})` as any,
+      );
+    }
+    if (search) {
+      conditions.push(
+        or(
+          ilike(teamsInventory.displayName, `%${search}%`),
+          ilike(teamsInventory.description, `%${search}%`),
+          ilike(teamsInventory.mailNickname, `%${search}%`),
+        )!,
+      );
+    }
+    return db.select().from(teamsInventory)
+      .where(and(...conditions))
+      .orderBy(teamsInventory.displayName);
+  }
+
+  async getTeamsInventoryItem(id: string): Promise<TeamsInventoryItem | undefined> {
+    const [result] = await db.select().from(teamsInventory).where(eq(teamsInventory.id, id));
+    return result;
+  }
+
+  async upsertChannelsInventory(data: InsertChannelsInventory): Promise<ChannelsInventoryItem> {
+    const [result] = await db.insert(channelsInventory)
+      .values(data)
+      .onConflictDoUpdate({
+        target: [channelsInventory.tenantConnectionId, channelsInventory.teamId, channelsInventory.channelId],
+        set: {
+          displayName: data.displayName,
+          description: data.description,
+          membershipType: data.membershipType,
+          email: data.email,
+          webUrl: data.webUrl,
+          createdDateTime: data.createdDateTime,
+          memberCount: data.memberCount,
+          lastDiscoveredAt: data.lastDiscoveredAt,
+          discoveryStatus: data.discoveryStatus,
+        },
+      })
+      .returning();
+    return result;
+  }
+
+  async getChannelsInventory(tenantConnectionId: string, teamId?: string): Promise<ChannelsInventoryItem[]> {
+    const conditions = [
+      eq(channelsInventory.tenantConnectionId, tenantConnectionId),
+      eq(channelsInventory.discoveryStatus, "ACTIVE"),
+    ];
+    if (teamId) {
+      conditions.push(eq(channelsInventory.teamId, teamId));
+    }
+    return db.select().from(channelsInventory)
+      .where(and(...conditions))
+      .orderBy(channelsInventory.displayName);
+  }
+
+  /**
+   * Build a teams/channels summary from the inventory tables (not recordings).
+   * Shows ALL teams and ALL channels. Recording counts are enriched by joining
+   * against teamsRecordings where available.
+   */
+  async getTeamsInventorySummary(tenantConnectionIds?: string[]): Promise<TeamsChannelsSummary[]> {
+    if (tenantConnectionIds !== undefined && tenantConnectionIds.length === 0) {
+      return [];
+    }
+
+    // Fetch all inventory teams
+    const teamConditions = [eq(teamsInventory.discoveryStatus, "ACTIVE")];
+    if (tenantConnectionIds) {
+      teamConditions.push(
+        sql`${teamsInventory.tenantConnectionId} IN (${sql.join(
+          tenantConnectionIds.map(id => sql`${id}`),
+          sql`, `,
+        )})` as any,
+      );
+    }
+
+    const inventoryTeams = await db.select().from(teamsInventory)
+      .where(and(...teamConditions))
+      .orderBy(teamsInventory.displayName);
+
+    if (inventoryTeams.length === 0) return [];
+
+    // Fetch all inventory channels for these tenant connections
+    const channelConditions = [eq(channelsInventory.discoveryStatus, "ACTIVE")];
+    if (tenantConnectionIds) {
+      channelConditions.push(
+        sql`${channelsInventory.tenantConnectionId} IN (${sql.join(
+          tenantConnectionIds.map(id => sql`${id}`),
+          sql`, `,
+        )})` as any,
+      );
+    }
+
+    const inventoryChannels = await db.select().from(channelsInventory)
+      .where(and(...channelConditions))
+      .orderBy(channelsInventory.displayName);
+
+    // Fetch recording counts per team+channel for enrichment
+    const recConditions = [
+      eq(teamsRecordings.storageType, "SHAREPOINT_CHANNEL"),
+      eq(teamsRecordings.discoveryStatus, "ACTIVE"),
+      eq(teamsRecordings.fileType, "RECORDING"),
+    ];
+    if (tenantConnectionIds) {
+      recConditions.push(
+        sql`${teamsRecordings.tenantConnectionId} IN (${sql.join(
+          tenantConnectionIds.map(id => sql`${id}`),
+          sql`, `,
+        )})` as any,
+      );
+    }
+
+    const recRows = await db.select({
+      teamId: teamsRecordings.teamId,
+      channelId: teamsRecordings.channelId,
+      recordingCount: sql<number>`count(*)::int`,
+      lastActivity: sql<string | null>`max(${teamsRecordings.fileModifiedAt})`,
+    })
+      .from(teamsRecordings)
+      .where(and(...recConditions))
+      .groupBy(teamsRecordings.teamId, teamsRecordings.channelId);
+
+    // Build lookup maps for recording counts
+    const recByChannel = new Map<string, { count: number; lastActivity: string | null }>();
+    const recByTeam = new Map<string, number>();
+    for (const r of recRows) {
+      const key = `${r.teamId}:${r.channelId}`;
+      recByChannel.set(key, { count: r.recordingCount, lastActivity: r.lastActivity });
+      recByTeam.set(r.teamId!, (recByTeam.get(r.teamId!) ?? 0) + r.recordingCount);
+    }
+
+    // Group channels by team
+    const channelsByTeam = new Map<string, ChannelsInventoryItem[]>();
+    for (const ch of inventoryChannels) {
+      const list = channelsByTeam.get(ch.teamId) ?? [];
+      list.push(ch);
+      channelsByTeam.set(ch.teamId, list);
+    }
+
+    // Assemble summary
+    const result: TeamsChannelsSummary[] = [];
+    for (const team of inventoryTeams) {
+      const teamChannels = channelsByTeam.get(team.teamId) ?? [];
+      const channels: TeamsChannelsSummaryChannel[] = teamChannels.map(ch => {
+        const recInfo = recByChannel.get(`${team.teamId}:${ch.channelId}`);
+        return {
+          channelId: ch.channelId,
+          channelDisplayName: ch.displayName,
+          channelType: ch.membershipType ?? "standard",
+          recordingCount: recInfo?.count ?? 0,
+          lastActivity: recInfo?.lastActivity ?? null,
+        };
+      });
+
+      channels.sort((a, b) => {
+        if (!a.lastActivity) return 1;
+        if (!b.lastActivity) return -1;
+        return b.lastActivity.localeCompare(a.lastActivity);
+      });
+
+      result.push({
+        teamId: team.teamId,
+        teamDisplayName: team.displayName,
+        channelCount: teamChannels.length,
+        recordingCount: recByTeam.get(team.teamId) ?? 0,
+        channels,
+      });
+    }
+
+    return result;
+  }
+
+  // ── OneDrive Inventory ──────────────────────────────────────────────────────
+
+  async upsertOnedriveInventory(data: InsertOnedriveInventory): Promise<OnedriveInventoryItem> {
+    const [result] = await db.insert(onedriveInventory)
+      .values(data)
+      .onConflictDoUpdate({
+        target: [onedriveInventory.tenantConnectionId, onedriveInventory.userId],
+        set: {
+          userDisplayName: data.userDisplayName,
+          userPrincipalName: data.userPrincipalName,
+          userDepartment: data.userDepartment,
+          userJobTitle: data.userJobTitle,
+          userMail: data.userMail,
+          driveId: data.driveId,
+          driveType: data.driveType,
+          quotaTotalBytes: data.quotaTotalBytes,
+          quotaUsedBytes: data.quotaUsedBytes,
+          quotaRemainingBytes: data.quotaRemainingBytes,
+          quotaState: data.quotaState,
+          lastActivityDate: data.lastActivityDate,
+          fileCount: data.fileCount,
+          activeFileCount: data.activeFileCount,
+          lastDiscoveredAt: data.lastDiscoveredAt,
+          discoveryStatus: data.discoveryStatus,
+        },
+      })
+      .returning();
+    return result;
+  }
+
+  async getOnedriveInventory(tenantConnectionIds?: string[], search?: string): Promise<OnedriveInventoryItem[]> {
+    const conditions = [eq(onedriveInventory.discoveryStatus, "ACTIVE")];
+    if (tenantConnectionIds && tenantConnectionIds.length > 0) {
+      conditions.push(
+        sql`${onedriveInventory.tenantConnectionId} IN (${sql.join(
+          tenantConnectionIds.map(id => sql`${id}`),
+          sql`, `,
+        )})` as any,
+      );
+    }
+    if (search) {
+      conditions.push(
+        or(
+          ilike(onedriveInventory.userDisplayName, `%${search}%`),
+          ilike(onedriveInventory.userPrincipalName, `%${search}%`),
+          ilike(onedriveInventory.userDepartment, `%${search}%`),
+        )!,
+      );
+    }
+    return db.select().from(onedriveInventory)
+      .where(and(...conditions))
+      .orderBy(onedriveInventory.userDisplayName);
+  }
+
+  async getOnedriveInventoryItem(id: string): Promise<OnedriveInventoryItem | undefined> {
+    const [result] = await db.select().from(onedriveInventory).where(eq(onedriveInventory.id, id));
     return result;
   }
 }

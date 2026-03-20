@@ -14,6 +14,11 @@ import {
   Video,
   Loader2,
   Info,
+  Users,
+  Shield,
+  Archive,
+  Link2,
+  Calendar,
 } from "lucide-react";
 
 type ChannelType = "standard" | "private" | "shared";
@@ -32,6 +37,28 @@ interface TeamSummary {
   channelCount: number;
   recordingCount: number;
   channels: ChannelSummary[];
+}
+
+interface TeamsInventoryItem {
+  id: string;
+  tenantConnectionId: string;
+  teamId: string;
+  displayName: string;
+  description: string | null;
+  mailNickname: string | null;
+  visibility: string | null;
+  isArchived: boolean | null;
+  classification: string | null;
+  createdDateTime: string | null;
+  renewedDateTime: string | null;
+  memberCount: number | null;
+  ownerCount: number | null;
+  guestCount: number | null;
+  sharepointSiteUrl: string | null;
+  sharepointSiteId: string | null;
+  sensitivityLabel: string | null;
+  lastDiscoveredAt: string | null;
+  discoveryStatus: string;
 }
 
 function channelTypeIcon(type: ChannelType) {
@@ -56,6 +83,19 @@ function channelTypeBadge(type: ChannelType) {
   }
 }
 
+function visibilityBadge(visibility: string | null) {
+  switch (visibility) {
+    case "Private":
+      return <Badge variant="outline" className="text-amber-500 border-amber-500/30 bg-amber-500/5 text-[10px] px-1.5 py-0"><Lock className="w-2.5 h-2.5 mr-0.5" />Private</Badge>;
+    case "Public":
+      return <Badge variant="outline" className="text-emerald-500 border-emerald-500/30 bg-emerald-500/5 text-[10px] px-1.5 py-0"><Globe className="w-2.5 h-2.5 mr-0.5" />Public</Badge>;
+    case "HiddenMembership":
+      return <Badge variant="outline" className="text-purple-500 border-purple-500/30 bg-purple-500/5 text-[10px] px-1.5 py-0"><Shield className="w-2.5 h-2.5 mr-0.5" />Hidden</Badge>;
+    default:
+      return null;
+  }
+}
+
 function formatLastActivity(iso: string | null): string {
   if (!iso) return "—";
   const date = new Date(iso);
@@ -72,7 +112,12 @@ function formatLastActivity(iso: string | null): string {
   return date.toLocaleDateString();
 }
 
-function TeamRow({ team }: { team: TeamSummary }) {
+function formatDate(iso: string | null): string {
+  if (!iso) return "—";
+  return new Date(iso).toLocaleDateString();
+}
+
+function TeamRow({ team, inventory }: { team: TeamSummary; inventory?: TeamsInventoryItem }) {
   const [expanded, setExpanded] = useState(false);
 
   return (
@@ -93,53 +138,112 @@ function TeamRow({ team }: { team: TeamSummary }) {
             <MessagesSquare className="w-5 h-5 text-primary" />
           </div>
           <div className="min-w-0">
-            <span className="font-semibold text-sm text-foreground truncate block" data-testid={`text-team-name-${team.teamId}`}>
-              {team.teamDisplayName}
-            </span>
+            <div className="flex items-center gap-2">
+              <span className="font-semibold text-sm text-foreground truncate" data-testid={`text-team-name-${team.teamId}`}>
+                {team.teamDisplayName}
+              </span>
+              {inventory?.isArchived && (
+                <Badge variant="outline" className="text-muted-foreground text-[10px] px-1.5 py-0">
+                  <Archive className="w-2.5 h-2.5 mr-0.5" />Archived
+                </Badge>
+              )}
+              {visibilityBadge(inventory?.visibility ?? null)}
+              {inventory?.sensitivityLabel && (
+                <Badge variant="outline" className="text-purple-600 border-purple-600/30 bg-purple-600/5 text-[10px] px-1.5 py-0">
+                  <Shield className="w-2.5 h-2.5 mr-0.5" />{inventory.sensitivityLabel}
+                </Badge>
+              )}
+            </div>
+            {inventory?.description && (
+              <span className="text-xs text-muted-foreground truncate block max-w-md">{inventory.description}</span>
+            )}
           </div>
         </div>
 
         <div className="hidden sm:flex items-center gap-6 shrink-0 text-sm">
+          {inventory?.memberCount != null && (
+            <div className="flex items-center gap-1.5 text-muted-foreground">
+              <Users className="w-3.5 h-3.5" />
+              <span className="text-xs">{inventory.memberCount} members</span>
+            </div>
+          )}
           <div className="flex items-center gap-1.5 text-muted-foreground" data-testid={`text-team-channels-${team.teamId}`}>
             <Hash className="w-3.5 h-3.5" />
             <span className="text-xs">{team.channelCount} channels</span>
           </div>
-          <div className="flex items-center gap-1.5 text-muted-foreground" data-testid={`text-team-recordings-${team.teamId}`}>
-            <Video className="w-3.5 h-3.5" />
-            <span className="text-xs">{team.recordingCount} recordings</span>
-          </div>
+          {team.recordingCount > 0 && (
+            <div className="flex items-center gap-1.5 text-muted-foreground" data-testid={`text-team-recordings-${team.teamId}`}>
+              <Video className="w-3.5 h-3.5" />
+              <span className="text-xs">{team.recordingCount} recordings</span>
+            </div>
+          )}
         </div>
       </div>
 
       {expanded && (
         <div className="border-t border-border/40 bg-muted/10">
+          {/* Team properties row */}
+          {inventory && (
+            <div className="px-5 py-3 border-b border-border/30 flex flex-wrap gap-x-6 gap-y-1.5 text-xs text-muted-foreground">
+              {inventory.ownerCount != null && (
+                <span className="flex items-center gap-1"><Users className="w-3 h-3" />{inventory.ownerCount} owners</span>
+              )}
+              {inventory.guestCount != null && inventory.guestCount > 0 && (
+                <span className="flex items-center gap-1"><Globe className="w-3 h-3" />{inventory.guestCount} guests</span>
+              )}
+              {inventory.classification && (
+                <span className="flex items-center gap-1"><Shield className="w-3 h-3" />{inventory.classification}</span>
+              )}
+              {inventory.createdDateTime && (
+                <span className="flex items-center gap-1"><Calendar className="w-3 h-3" />Created {formatDate(inventory.createdDateTime)}</span>
+              )}
+              {inventory.sharepointSiteUrl && (
+                <a
+                  href={inventory.sharepointSiteUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-1 text-primary hover:underline"
+                  onClick={e => e.stopPropagation()}
+                >
+                  <Link2 className="w-3 h-3" />SharePoint site
+                </a>
+              )}
+            </div>
+          )}
+
           <div className="px-5 py-3">
             <h4 className="text-xs font-bold text-muted-foreground uppercase tracking-widest">Channels</h4>
           </div>
-          <div className="divide-y divide-border/30">
-            {team.channels.map(channel => (
-              <div
-                key={channel.channelId}
-                className="flex items-center gap-3 px-6 py-2.5 hover:bg-muted/20 transition-colors"
-                data-testid={`row-channel-${channel.channelId}`}
-              >
-                <div className="shrink-0">{channelTypeIcon(channel.channelType)}</div>
-                <span className="text-sm font-medium flex-1" data-testid={`text-channel-name-${channel.channelId}`}>
-                  {channel.channelDisplayName}
-                </span>
-                <div className="hidden sm:flex items-center gap-3">
-                  {channelTypeBadge(channel.channelType)}
-                  <span className="text-xs text-muted-foreground flex items-center gap-1">
-                    <Video className="w-3 h-3" />
-                    {channel.recordingCount}
+          {team.channels.length === 0 ? (
+            <div className="px-6 py-4 text-xs text-muted-foreground">No channels discovered yet.</div>
+          ) : (
+            <div className="divide-y divide-border/30">
+              {team.channels.map(channel => (
+                <div
+                  key={channel.channelId}
+                  className="flex items-center gap-3 px-6 py-2.5 hover:bg-muted/20 transition-colors"
+                  data-testid={`row-channel-${channel.channelId}`}
+                >
+                  <div className="shrink-0">{channelTypeIcon(channel.channelType)}</div>
+                  <span className="text-sm font-medium flex-1" data-testid={`text-channel-name-${channel.channelId}`}>
+                    {channel.channelDisplayName}
                   </span>
-                  <span className="text-xs text-muted-foreground w-28 text-right" data-testid={`text-channel-activity-${channel.channelId}`}>
-                    {formatLastActivity(channel.lastActivity)}
-                  </span>
+                  <div className="hidden sm:flex items-center gap-3">
+                    {channelTypeBadge(channel.channelType)}
+                    {channel.recordingCount > 0 && (
+                      <span className="text-xs text-muted-foreground flex items-center gap-1">
+                        <Video className="w-3 h-3" />
+                        {channel.recordingCount}
+                      </span>
+                    )}
+                    <span className="text-xs text-muted-foreground w-28 text-right" data-testid={`text-channel-activity-${channel.channelId}`}>
+                      {formatLastActivity(channel.lastActivity)}
+                    </span>
+                  </div>
                 </div>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -153,17 +257,33 @@ export default function TeamsChannelsPage() {
     queryKey: ["/api/teams-channels"],
   });
 
+  // Also fetch full inventory for enrichment
+  const { data: inventory = [] } = useQuery<TeamsInventoryItem[]>({
+    queryKey: ["/api/teams-inventory"],
+  });
+
+  // Build inventory lookup by teamId
+  const inventoryByTeamId = new Map<string, TeamsInventoryItem>();
+  for (const item of inventory) {
+    inventoryByTeamId.set(item.teamId, item);
+  }
+
   const filteredTeams = teams.filter(t => {
     if (!search) return true;
     const q = search.toLowerCase();
+    const inv = inventoryByTeamId.get(t.teamId);
     return (
       t.teamDisplayName.toLowerCase().includes(q) ||
-      t.channels.some(ch => ch.channelDisplayName.toLowerCase().includes(q))
+      t.channels.some(ch => ch.channelDisplayName.toLowerCase().includes(q)) ||
+      inv?.description?.toLowerCase().includes(q) ||
+      inv?.mailNickname?.toLowerCase().includes(q)
     );
   });
 
   const totalChannels = teams.reduce((s, t) => s + t.channelCount, 0);
   const totalRecordings = teams.reduce((s, t) => s + t.recordingCount, 0);
+  const archivedCount = inventory.filter(t => t.isArchived).length;
+  const privateCount = inventory.filter(t => t.visibility === "Private").length;
 
   return (
     <div className="p-6 lg:p-8 space-y-6 max-w-6xl mx-auto">
@@ -174,12 +294,12 @@ export default function TeamsChannelsPage() {
           <h1 className="text-2xl font-bold tracking-tight" data-testid="text-page-title">Teams &amp; Channels</h1>
         </div>
         <p className="text-sm text-muted-foreground">
-          Teams and channels discovered from recordings sync. Run a recordings discovery to populate this view.
+          Full inventory of all Teams and Channels across connected tenants.
         </p>
       </div>
 
       {/* Stats */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-4">
         <Card>
           <CardContent className="pt-5 pb-4 px-5">
             <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Teams</p>
@@ -196,6 +316,18 @@ export default function TeamsChannelsPage() {
           <CardContent className="pt-5 pb-4 px-5">
             <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Recordings</p>
             <p className="text-2xl font-bold" data-testid="stat-recordings">{totalRecordings}</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="pt-5 pb-4 px-5">
+            <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Private</p>
+            <p className="text-2xl font-bold text-amber-500">{privateCount}</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="pt-5 pb-4 px-5">
+            <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Archived</p>
+            <p className="text-2xl font-bold text-muted-foreground">{archivedCount}</p>
           </CardContent>
         </Card>
       </div>
@@ -215,11 +347,11 @@ export default function TeamsChannelsPage() {
       </div>
 
       {/* Info banner */}
-      {!isLoading && teams.length > 0 && (
+      {!isLoading && teams.length > 0 && inventory.length === 0 && (
         <div className="flex items-start gap-2 rounded-lg border border-blue-200/50 bg-blue-50/50 dark:border-blue-900/50 dark:bg-blue-950/20 px-4 py-3">
           <Info className="w-4 h-4 text-blue-500 mt-0.5 shrink-0" />
           <p className="text-xs text-blue-700 dark:text-blue-400">
-            Showing teams and channels that have meeting recordings. To discover more, run a recordings sync from the tenant admin page.
+            Showing teams discovered from recordings only. Run a Teams Inventory sync from the tenant admin page to discover all teams with full properties.
           </p>
         </div>
       )}
@@ -240,7 +372,7 @@ export default function TeamsChannelsPage() {
               {teams.length === 0 ? (
                 <>
                   <p className="text-sm font-medium mb-1">No teams discovered yet</p>
-                  <p className="text-xs">Run a recordings discovery sync from the tenant admin page to populate this view.</p>
+                  <p className="text-xs">Run a Teams Inventory or Recordings discovery sync from the tenant admin page.</p>
                 </>
               ) : (
                 <p className="text-sm">No teams match your search.</p>
@@ -248,7 +380,13 @@ export default function TeamsChannelsPage() {
             </CardContent>
           </Card>
         ) : (
-          filteredTeams.map(team => <TeamRow key={team.teamId} team={team} />)
+          filteredTeams.map(team => (
+            <TeamRow
+              key={team.teamId}
+              team={team}
+              inventory={inventoryByTeamId.get(team.teamId)}
+            />
+          ))
         )}
       </div>
     </div>

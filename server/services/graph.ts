@@ -2599,6 +2599,326 @@ export async function fetchLibraryDetails(
   }
 }
 
+// ── Teams & Channels Inventory Discovery ──────────────────────────────────────
+// Rich team properties for full inventory (not just recordings).
+export interface TeamInventoryInfo {
+  id: string;
+  displayName: string;
+  description: string | null;
+  mailNickname: string | null;
+  visibility: string | null;
+  isArchived: boolean;
+  classification: string | null;
+  createdDateTime: string | null;
+  renewedDateTime: string | null;
+  memberCount: number | null;
+  ownerCount: number | null;
+  guestCount: number | null;
+  sharepointSiteUrl: string | null;
+  sharepointSiteId: string | null;
+  sensitivityLabel: string | null;
+}
+
+export interface ChannelInventoryInfo {
+  id: string;
+  teamId: string;
+  displayName: string;
+  description: string | null;
+  membershipType: string;
+  email: string | null;
+  webUrl: string | null;
+  createdDateTime: string | null;
+  memberCount: number | null;
+}
+
+export interface OneDriveInventoryInfo {
+  userId: string;
+  userDisplayName: string | null;
+  userPrincipalName: string;
+  userDepartment: string | null;
+  userJobTitle: string | null;
+  userMail: string | null;
+  driveId: string | null;
+  driveType: string | null;
+  quotaTotalBytes: number | null;
+  quotaUsedBytes: number | null;
+  quotaRemainingBytes: number | null;
+  quotaState: string | null;
+  lastActivityDate: string | null;
+  fileCount: number | null;
+  activeFileCount: number | null;
+}
+
+/**
+ * Fetch all Teams with rich property inventory. Includes description,
+ * visibility, archived status, classification, dates, and member counts.
+ */
+export async function fetchAllTeamsInventory(
+  tenantId: string,
+  clientId: string,
+  clientSecret: string,
+): Promise<TeamInventoryInfo[]> {
+  const token = await getAppToken(tenantId, clientId, clientSecret);
+  const teams: TeamInventoryInfo[] = [];
+
+  // Step 1: Fetch all Teams-enabled groups with extended properties
+  let url =
+    `https://graph.microsoft.com/v1.0/groups` +
+    `?$filter=resourceProvisioningOptions/Any(x:x eq 'Team')` +
+    `&$select=id,displayName,description,mailNickname,visibility,classification,createdDateTime,renewedDateTime,assignedLabels` +
+    `&$top=999`;
+
+  const rawGroups: any[] = [];
+  while (url) {
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${token}`, ConsistencyLevel: "eventual" },
+    });
+    if (!res.ok) {
+      const errorBody = (await res.text()).substring(0, 200);
+      console.error(`[graph] fetchAllTeamsInventory groups ${res.status}: ${errorBody}`);
+      throw new Error(`fetchAllTeamsInventory groups failed: HTTP ${res.status} - ${errorBody}`);
+    }
+    const data = await res.json();
+    rawGroups.push(...(data.value || []));
+    url = data["@odata.nextLink"] ?? null;
+  }
+
+  // Step 2: Enrich each group with Teams-specific properties and member counts
+  for (const g of rawGroups) {
+    let isArchived = false;
+
+    // Fetch team-level properties (isArchived)
+    try {
+      const teamRes = await fetch(
+        `https://graph.microsoft.com/v1.0/teams/${g.id}?$select=isArchived`,
+        { headers: { Authorization: `Bearer ${token}` } },
+      );
+      if (teamRes.ok) {
+        const teamData = await teamRes.json();
+        isArchived = teamData.isArchived === true;
+      }
+    } catch {}
+
+    // Fetch member/owner/guest counts
+    let memberCount: number | null = null;
+    let ownerCount: number | null = null;
+    let guestCount: number | null = null;
+
+    try {
+      const membersRes = await fetch(
+        `https://graph.microsoft.com/v1.0/groups/${g.id}/members/$count`,
+        { headers: { Authorization: `Bearer ${token}`, ConsistencyLevel: "eventual" } },
+      );
+      if (membersRes.ok) {
+        memberCount = parseInt(await membersRes.text(), 10) || null;
+      }
+    } catch {}
+
+    try {
+      const ownersRes = await fetch(
+        `https://graph.microsoft.com/v1.0/groups/${g.id}/owners/$count`,
+        { headers: { Authorization: `Bearer ${token}`, ConsistencyLevel: "eventual" } },
+      );
+      if (ownersRes.ok) {
+        ownerCount = parseInt(await ownersRes.text(), 10) || null;
+      }
+    } catch {}
+
+    // SharePoint site backing URL
+    let sharepointSiteUrl: string | null = null;
+    let sharepointSiteId: string | null = null;
+    try {
+      const siteRes = await fetch(
+        `https://graph.microsoft.com/v1.0/groups/${g.id}/sites/root?$select=id,webUrl`,
+        { headers: { Authorization: `Bearer ${token}` } },
+      );
+      if (siteRes.ok) {
+        const siteData = await siteRes.json();
+        sharepointSiteUrl = siteData.webUrl ?? null;
+        sharepointSiteId = siteData.id ?? null;
+      }
+    } catch {}
+
+    const sensitivityLabel = g.assignedLabels?.[0]?.displayName ?? null;
+
+    teams.push({
+      id: g.id,
+      displayName: g.displayName ?? g.id,
+      description: g.description ?? null,
+      mailNickname: g.mailNickname ?? null,
+      visibility: g.visibility ?? null,
+      isArchived,
+      classification: g.classification ?? null,
+      createdDateTime: g.createdDateTime ?? null,
+      renewedDateTime: g.renewedDateTime ?? null,
+      memberCount,
+      ownerCount,
+      guestCount,
+      sharepointSiteUrl,
+      sharepointSiteId,
+      sensitivityLabel,
+    });
+  }
+
+  console.log(`[graph] fetchAllTeamsInventory: ${teams.length} teams`);
+  return teams;
+}
+
+/**
+ * Fetch all channels for a team with rich properties.
+ */
+export async function fetchTeamChannelsInventory(
+  teamId: string,
+  tenantId: string,
+  clientId: string,
+  clientSecret: string,
+): Promise<ChannelInventoryInfo[]> {
+  const token = await getAppToken(tenantId, clientId, clientSecret);
+  const res = await fetch(
+    `https://graph.microsoft.com/v1.0/teams/${teamId}/channels` +
+    `?$select=id,displayName,description,membershipType,email,webUrl,createdDateTime`,
+    { headers: { Authorization: `Bearer ${token}` } },
+  );
+  if (!res.ok) {
+    if (res.status === 403 || res.status === 404) {
+      console.warn(`[graph] fetchTeamChannelsInventory ${teamId} ${res.status}`);
+      return [];
+    }
+    const errorText = (await res.text()).substring(0, 200);
+    throw new Error(`fetchTeamChannelsInventory ${teamId} ${res.status}: ${errorText}`);
+  }
+  const data = await res.json();
+  const channels: ChannelInventoryInfo[] = [];
+
+  for (const c of data.value || []) {
+    let memberCount: number | null = null;
+    try {
+      const mRes = await fetch(
+        `https://graph.microsoft.com/v1.0/teams/${teamId}/channels/${c.id}/members/$count`,
+        { headers: { Authorization: `Bearer ${token}`, ConsistencyLevel: "eventual" } },
+      );
+      if (mRes.ok) {
+        memberCount = parseInt(await mRes.text(), 10) || null;
+      }
+    } catch {}
+
+    channels.push({
+      id: c.id,
+      teamId,
+      displayName: c.displayName ?? c.id,
+      description: c.description ?? null,
+      membershipType: c.membershipType || "standard",
+      email: c.email ?? null,
+      webUrl: c.webUrl ?? null,
+      createdDateTime: c.createdDateTime ?? null,
+      memberCount,
+    });
+  }
+
+  return channels;
+}
+
+/**
+ * Fetch all OneDrive for Business inventories for tenant users.
+ * Returns drive quota, file counts, and user department/title info.
+ */
+export async function fetchAllOneDriveInventories(
+  tenantId: string,
+  clientId: string,
+  clientSecret: string,
+): Promise<OneDriveInventoryInfo[]> {
+  const token = await getAppToken(tenantId, clientId, clientSecret);
+  const results: OneDriveInventoryInfo[] = [];
+
+  // Step 1: Fetch all enabled member users with dept/title
+  const users: Array<{ id: string; displayName: string | null; userPrincipalName: string; department: string | null; jobTitle: string | null; mail: string | null }> = [];
+  let url =
+    `https://graph.microsoft.com/v1.0/users` +
+    `?$filter=accountEnabled eq true and userType eq 'Member'` +
+    `&$select=id,displayName,userPrincipalName,department,jobTitle,mail&$top=999`;
+
+  while (url) {
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${token}`, ConsistencyLevel: "eventual" },
+    });
+    if (!res.ok) {
+      console.error(`[graph] fetchAllOneDriveInventories users ${res.status}`);
+      break;
+    }
+    const data = await res.json();
+    for (const u of data.value || []) {
+      users.push({
+        id: u.id,
+        displayName: u.displayName ?? null,
+        userPrincipalName: u.userPrincipalName,
+        department: u.department ?? null,
+        jobTitle: u.jobTitle ?? null,
+        mail: u.mail ?? null,
+      });
+    }
+    url = data["@odata.nextLink"] ?? null;
+  }
+
+  // Step 2: Fetch drive info for each user
+  for (const user of users) {
+    try {
+      const driveRes = await fetch(
+        `https://graph.microsoft.com/v1.0/users/${user.id}/drive?$select=id,driveType,quota`,
+        { headers: { Authorization: `Bearer ${token}` } },
+      );
+      if (!driveRes.ok) {
+        // User may not have a license/OneDrive provisioned
+        if (driveRes.status === 404 || driveRes.status === 403 || driveRes.status === 401) {
+          results.push({
+            userId: user.id,
+            userDisplayName: user.displayName,
+            userPrincipalName: user.userPrincipalName,
+            userDepartment: user.department,
+            userJobTitle: user.jobTitle,
+            userMail: user.mail,
+            driveId: null,
+            driveType: null,
+            quotaTotalBytes: null,
+            quotaUsedBytes: null,
+            quotaRemainingBytes: null,
+            quotaState: null,
+            lastActivityDate: null,
+            fileCount: null,
+            activeFileCount: null,
+          });
+          continue;
+        }
+        continue;
+      }
+      const driveData = await driveRes.json();
+      const quota = driveData.quota ?? {};
+
+      results.push({
+        userId: user.id,
+        userDisplayName: user.displayName,
+        userPrincipalName: user.userPrincipalName,
+        userDepartment: user.department,
+        userJobTitle: user.jobTitle,
+        userMail: user.mail,
+        driveId: driveData.id ?? null,
+        driveType: driveData.driveType ?? null,
+        quotaTotalBytes: quota.total ?? null,
+        quotaUsedBytes: quota.used ?? null,
+        quotaRemainingBytes: quota.remaining ?? null,
+        quotaState: quota.state ?? null,
+        lastActivityDate: null,
+        fileCount: null,
+        activeFileCount: null,
+      });
+    } catch (err: any) {
+      console.warn(`[graph] OneDrive inventory for ${user.userPrincipalName}: ${err.message}`);
+    }
+  }
+
+  console.log(`[graph] fetchAllOneDriveInventories: ${results.length} users`);
+  return results;
+}
+
 // ── Teams Recordings Discovery ────────────────────────────────────────────────
 // New permissions required on the Entra app registration:
 //   Application: Channel.ReadBasic.All, Team.ReadBasic.All
