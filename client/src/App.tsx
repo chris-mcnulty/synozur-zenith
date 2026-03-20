@@ -40,6 +40,7 @@ import DataDictionariesPage from "./pages/app/admin/data-dictionaries";
 import CustomFieldsPage from "./pages/app/admin/custom-fields";
 import SupportPage from "./pages/app/support";
 import TeamsChannelsPage from "./pages/app/teams-channels";
+import OneDriveInventoryPage from "./pages/app/onedrive-inventory";
 import RecordingsPage from "./pages/app/recordings";
 import AppShell from "./components/layout/app-shell";
 
@@ -102,6 +103,7 @@ function AppRoutes() {
         <Route path="/app/admin/entra" component={EntraSetupPage} />
         <Route path="/app/admin" component={AdminTemplatesPage} />
         <Route path="/app/teams-channels" component={TeamsChannelsPage} />
+        <Route path="/app/onedrive-inventory" component={OneDriveInventoryPage} />
         <Route path="/app/recordings" component={RecordingsPage} />
         <Route path="/app/support/:tab" component={SupportPage} />
         <Route path="/app/support" component={SupportPage} />

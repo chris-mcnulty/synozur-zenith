@@ -158,19 +158,36 @@ export default function RecordingsPage() {
   const [selected, setSelected] = useState<TeamsRecording | null>(null);
 
   const tenantConnectionId = selectedTenant?.id;
+  const [page, setPage] = useState(1);
+  const pageSize = 50;
 
-  const { data: recordings = [], isLoading } = useQuery<TeamsRecording[]>({
-    queryKey: ["/api/recordings", tenantConnectionId, search],
+  // Reset to page 1 when filters change
+  useEffect(() => { setPage(1); }, [tenantConnectionId, search]);
+
+  const { data: paginatedData, isLoading } = useQuery<{
+    rows: TeamsRecording[];
+    total: number;
+    page: number;
+    pageSize: number;
+    totalPages: number;
+  }>({
+    queryKey: ["/api/recordings", tenantConnectionId, search, page, pageSize],
     queryFn: async () => {
       const params = new URLSearchParams();
       if (tenantConnectionId) params.set("tenantConnectionId", tenantConnectionId);
       if (search) params.set("search", search);
+      params.set("page", String(page));
+      params.set("pageSize", String(pageSize));
       const res = await fetch(`/api/recordings?${params}`, { credentials: "include" });
       if (!res.ok) throw new Error("Failed to load recordings");
       return res.json();
     },
     enabled: true,
   });
+
+  const recordings = paginatedData?.rows ?? [];
+  const totalResults = paginatedData?.total ?? 0;
+  const totalPages = paginatedData?.totalPages ?? 1;
 
   const { data: latestRun } = useQuery<TeamsDiscoveryRun | null>({
     queryKey: ["/api/recordings/latest-run", tenantConnectionId],
@@ -187,8 +204,7 @@ export default function RecordingsPage() {
   });
 
   // Invalidate the recordings list whenever a discovery run transitions from
-  // RUNNING to a terminal state (COMPLETED, PARTIAL, or FAILED) so the table
-  // reflects newly-discovered files without requiring a manual page refresh.
+  // RUNNING to a terminal state so the table reflects newly-discovered files.
   const prevRunStatusRef = useRef<string | undefined>(undefined);
   useEffect(() => {
     const currentStatus = latestRun?.status;
@@ -199,6 +215,7 @@ export default function RecordingsPage() {
       currentStatus !== "RUNNING"
     ) {
       queryClient.invalidateQueries({ queryKey: ["/api/recordings"] });
+      setPage(1);
     }
     prevRunStatusRef.current = currentStatus;
   }, [latestRun?.status]);
@@ -410,6 +427,36 @@ export default function RecordingsPage() {
             </Table>
           )}
         </CardContent>
+
+        {/* Pagination */}
+        {totalPages > 1 && (
+          <div className="flex items-center justify-between px-4 py-3 border-t text-sm text-muted-foreground">
+            <span>
+              Showing {(page - 1) * pageSize + 1}–{Math.min(page * pageSize, totalResults)} of {totalResults}
+            </span>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={page <= 1}
+                onClick={() => setPage(p => Math.max(1, p - 1))}
+              >
+                Previous
+              </Button>
+              <span className="text-xs">
+                Page {page} of {totalPages}
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={page >= totalPages}
+                onClick={() => setPage(p => p + 1)}
+              >
+                Next
+              </Button>
+            </div>
+          </div>
+        )}
       </Card>
 
       {/* Detail panel */}

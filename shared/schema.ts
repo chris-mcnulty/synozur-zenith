@@ -735,6 +735,127 @@ export const insertTeamsDiscoveryRunSchema = createInsertSchema(teamsDiscoveryRu
 export type InsertTeamsDiscoveryRun = z.infer<typeof insertTeamsDiscoveryRunSchema>;
 export type TeamsDiscoveryRun = typeof teamsDiscoveryRuns.$inferSelect;
 
+// ── Teams & Channels Inventory ────────────────────────────────────────────────
+// Full inventory of all Teams in the tenant, independent of recordings.
+export const teamsInventory = pgTable("teams_inventory", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantConnectionId: varchar("tenant_connection_id").notNull(),
+
+  teamId: text("team_id").notNull(),                    // M365 group id
+  displayName: text("display_name").notNull(),
+  description: text("description"),
+  mailNickname: text("mail_nickname"),
+  visibility: text("visibility"),                        // Public | Private | HiddenMembership
+  isArchived: boolean("is_archived").default(false),
+  classification: text("classification"),                // e.g. "Confidential" from Azure AD group classification
+  createdDateTime: text("created_date_time"),
+  renewedDateTime: text("renewed_date_time"),
+
+  // Membership counts
+  memberCount: integer("member_count"),
+  ownerCount: integer("owner_count"),
+  guestCount: integer("guest_count"),
+
+  // SharePoint site backing info
+  sharepointSiteUrl: text("sharepoint_site_url"),
+  sharepointSiteId: text("sharepoint_site_id"),
+
+  // Sensitivity
+  sensitivityLabel: text("sensitivity_label"),
+
+  // Discovery metadata
+  lastDiscoveredAt: timestamp("last_discovered_at").defaultNow(),
+  discoveryStatus: text("discovery_status").notNull().default("ACTIVE"), // ACTIVE | DELETED
+
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => [
+  unique("uq_tenant_team").on(table.tenantConnectionId, table.teamId),
+]);
+
+export const insertTeamsInventorySchema = createInsertSchema(teamsInventory).omit({
+  id: true,
+  createdAt: true,
+});
+export type InsertTeamsInventory = z.infer<typeof insertTeamsInventorySchema>;
+export type TeamsInventoryItem = typeof teamsInventory.$inferSelect;
+
+// Full inventory of all channels across all Teams.
+export const channelsInventory = pgTable("channels_inventory", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantConnectionId: varchar("tenant_connection_id").notNull(),
+
+  teamId: text("team_id").notNull(),
+  channelId: text("channel_id").notNull(),
+  displayName: text("display_name").notNull(),
+  description: text("description"),
+  membershipType: text("membership_type").notNull().default("standard"), // standard | private | shared
+  email: text("email"),
+  webUrl: text("web_url"),
+  createdDateTime: text("created_date_time"),
+
+  // Membership
+  memberCount: integer("member_count"),
+
+  // Discovery metadata
+  lastDiscoveredAt: timestamp("last_discovered_at").defaultNow(),
+  discoveryStatus: text("discovery_status").notNull().default("ACTIVE"),
+
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => [
+  unique("uq_tenant_channel").on(table.tenantConnectionId, table.teamId, table.channelId),
+]);
+
+export const insertChannelsInventorySchema = createInsertSchema(channelsInventory).omit({
+  id: true,
+  createdAt: true,
+});
+export type InsertChannelsInventory = z.infer<typeof insertChannelsInventorySchema>;
+export type ChannelsInventoryItem = typeof channelsInventory.$inferSelect;
+
+// ── OneDrive Inventory ───────────────────────────────────────────────────────
+// Full inventory of all OneDrive for Business drives in the tenant.
+export const onedriveInventory = pgTable("onedrive_inventory", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantConnectionId: varchar("tenant_connection_id").notNull(),
+
+  userId: text("user_id").notNull(),                    // M365 user object ID
+  userDisplayName: text("user_display_name"),
+  userPrincipalName: text("user_principal_name").notNull(),
+  userDepartment: text("user_department"),
+  userJobTitle: text("user_job_title"),
+  userMail: text("user_mail"),
+
+  // Drive info
+  driveId: text("drive_id"),
+  driveType: text("drive_type"),                        // business, personal
+
+  // Quota
+  quotaTotalBytes: bigint("quota_total_bytes", { mode: "number" }),
+  quotaUsedBytes: bigint("quota_used_bytes", { mode: "number" }),
+  quotaRemainingBytes: bigint("quota_remaining_bytes", { mode: "number" }),
+  quotaState: text("quota_state"),                      // normal | nearing | critical | exceeded
+
+  // Activity
+  lastActivityDate: text("last_activity_date"),
+  fileCount: integer("file_count"),
+  activeFileCount: integer("active_file_count"),
+
+  // Discovery metadata
+  lastDiscoveredAt: timestamp("last_discovered_at").defaultNow(),
+  discoveryStatus: text("discovery_status").notNull().default("ACTIVE"),
+
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => [
+  unique("uq_tenant_user_onedrive").on(table.tenantConnectionId, table.userId),
+]);
+
+export const insertOnedriveInventorySchema = createInsertSchema(onedriveInventory).omit({
+  id: true,
+  createdAt: true,
+});
+export type InsertOnedriveInventory = z.infer<typeof insertOnedriveInventorySchema>;
+export type OnedriveInventoryItem = typeof onedriveInventory.$inferSelect;
+
 // ── Workspace Telemetry ──────────────────────────────────────────────────────
 // One row per sync snapshot per workspace. Retaining multiple snapshots enables
 // growth-trend analysis (storage, file count, content-type drift over time).
