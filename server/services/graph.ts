@@ -3028,8 +3028,8 @@ export async function fetchAllOneDriveInventories(
         { headers: { Authorization: `Bearer ${token}` } },
       );
       if (!driveRes.ok) {
-        // User may not have a license/OneDrive provisioned
-        if (driveRes.status === 404 || driveRes.status === 403 || driveRes.status === 401) {
+        if (driveRes.status === 404) {
+          // User does not have OneDrive provisioned (no license or not yet set up)
           results.push({
             userId: user.id,
             userDisplayName: user.displayName,
@@ -3048,7 +3048,20 @@ export async function fetchAllOneDriveInventories(
             activeFileCount: null,
           });
         }
-        return;
+        if (driveRes.status === 401) {
+          console.error(
+            `[graph] OneDrive inventory for ${user.userPrincipalName}: 401 Unauthorized — token may be invalid or expired`,
+          );
+        } else if (driveRes.status === 403) {
+          console.error(
+            `[graph] OneDrive inventory for ${user.userPrincipalName}: 403 Forbidden — app may be missing Files.Read.All or Sites.Read.All permission`,
+          );
+        } else {
+          console.warn(
+            `[graph] OneDrive inventory for ${user.userPrincipalName}: unexpected status ${driveRes.status}`,
+          );
+        }
+        continue;
       }
       const driveData = await driveRes.json();
       const quota = driveData.quota ?? {};
