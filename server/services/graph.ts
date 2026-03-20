@@ -2850,8 +2850,9 @@ export async function fetchAllOneDriveInventories(
       headers: { Authorization: `Bearer ${token}`, ConsistencyLevel: "eventual" },
     });
     if (!res.ok) {
-      console.error(`[graph] fetchAllOneDriveInventories users ${res.status}`);
-      break;
+      throw new Error(
+        `[graph] fetchAllOneDriveInventories: failed to fetch users (HTTP ${res.status})`,
+      );
     }
     const data = await res.json();
     for (const u of data.value || []) {
