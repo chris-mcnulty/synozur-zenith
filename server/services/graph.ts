@@ -2774,45 +2774,53 @@ export async function fetchTeamChannelsInventory(
   clientSecret: string,
 ): Promise<ChannelInventoryInfo[]> {
   const token = await getAppToken(tenantId, clientId, clientSecret);
-  const res = await fetch(
-    `https://graph.microsoft.com/v1.0/teams/${teamId}/channels` +
-    `?$select=id,displayName,description,membershipType,email,webUrl,createdDateTime`,
-    { headers: { Authorization: `Bearer ${token}` } },
-  );
-  if (!res.ok) {
-    if (res.status === 403 || res.status === 404) {
-      console.warn(`[graph] fetchTeamChannelsInventory ${teamId} ${res.status}`);
-      return [];
-    }
-    const errorText = (await res.text()).substring(0, 200);
-    throw new Error(`fetchTeamChannelsInventory ${teamId} ${res.status}: ${errorText}`);
-  }
-  const data = await res.json();
   const channels: ChannelInventoryInfo[] = [];
+  let url: string | null =
+    `https://graph.microsoft.com/v1.0/teams/${teamId}/channels` +
+    `?$select=id,displayName,description,membershipType,email,webUrl,createdDateTime`;
 
-  for (const c of data.value || []) {
-    let memberCount: number | null = null;
-    try {
-      const mRes = await fetch(
-        `https://graph.microsoft.com/v1.0/teams/${teamId}/channels/${c.id}/members/$count`,
-        { headers: { Authorization: `Bearer ${token}`, ConsistencyLevel: "eventual" } },
-      );
-      if (mRes.ok) {
-        memberCount = parseInt(await mRes.text(), 10) || null;
-      }
-    } catch {}
-
-    channels.push({
-      id: c.id,
-      teamId,
-      displayName: c.displayName ?? c.id,
-      description: c.description ?? null,
-      membershipType: c.membershipType || "standard",
-      email: c.email ?? null,
-      webUrl: c.webUrl ?? null,
-      createdDateTime: c.createdDateTime ?? null,
-      memberCount,
+  while (url) {
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${token}` },
     });
+
+   if (!res.ok) {
+      if ((res.status === 403 || res.status === 404) && channels.length === 0) {
+        console.warn(`[graph] fetchTeamChannelsInventory ${teamId} ${res.status}`);
+        return [];
+      }
+      const errorText = (await res.text()).substring(0, 200);
+      throw new Error(`fetchTeamChannelsInventory ${teamId} ${res.status}: ${errorText}`);
+    }
+
+    const data = await res.json();
+
+    for (const c of data.value || []) {
+      let memberCount: number | null = null;
+      try {
+        const mRes = await fetch(
+          `https://graph.microsoft.com/v1.0/teams/${teamId}/channels/${c.id}/members/$count`,
+          { headers: { Authorization: `Bearer ${token}`, ConsistencyLevel: "eventual" } },
+        );
+        if (mRes.ok) {
+          memberCount = parseInt(await mRes.text(), 10) || null;
+        }
+      } catch {}
+
+      channels.push({
+        id: c.id,
+        teamId,
+        displayName: c.displayName ?? c.id,
+        description: c.description ?? null,
+        membershipType: c.membershipType || "standard",
+        email: c.email ?? null,
+        webUrl: c.webUrl ?? null,
+        createdDateTime: c.createdDateTime ?? null,
+        memberCount,
+      });
+    }
+
+    url = (data && data['@odata.nextLink']) ? data['@odata.nextLink'] : null;
   }
 
   return channels;
