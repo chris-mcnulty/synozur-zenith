@@ -1333,6 +1333,7 @@ export class DatabaseStorage implements IStorage {
     }
 
     const recRows = await db.select({
+      tenantConnectionId: teamsRecordings.tenantConnectionId,
       teamId: teamsRecordings.teamId,
       channelId: teamsRecordings.channelId,
       recordingCount: sql<number>`count(*)::int`,
@@ -1340,31 +1341,34 @@ export class DatabaseStorage implements IStorage {
     })
       .from(teamsRecordings)
       .where(and(...recConditions))
-      .groupBy(teamsRecordings.teamId, teamsRecordings.channelId);
+      .groupBy(teamsRecordings.tenantConnectionId, teamsRecordings.teamId, teamsRecordings.channelId);
 
-    // Build lookup maps for recording counts
+    // Build lookup maps for recording counts, keyed by tenantConnectionId to avoid cross-tenant collisions
     const recByChannel = new Map<string, { count: number; lastActivity: string | null }>();
     const recByTeam = new Map<string, number>();
     for (const r of recRows) {
-      const key = `${r.teamId}:${r.channelId}`;
-      recByChannel.set(key, { count: r.recordingCount, lastActivity: r.lastActivity });
-      recByTeam.set(r.teamId!, (recByTeam.get(r.teamId!) ?? 0) + r.recordingCount);
+      const channelKey = `${r.tenantConnectionId}:${r.teamId}:${r.channelId}`;
+      recByChannel.set(channelKey, { count: r.recordingCount, lastActivity: r.lastActivity });
+      const teamKey = `${r.tenantConnectionId}:${r.teamId}`;
+      recByTeam.set(teamKey, (recByTeam.get(teamKey) ?? 0) + r.recordingCount);
     }
 
-    // Group channels by team
+    // Group channels by tenant+team to avoid cross-tenant collisions
     const channelsByTeam = new Map<string, ChannelsInventoryItem[]>();
     for (const ch of inventoryChannels) {
-      const list = channelsByTeam.get(ch.teamId) ?? [];
+      const key = `${ch.tenantConnectionId}:${ch.teamId}`;
+      const list = channelsByTeam.get(key) ?? [];
       list.push(ch);
-      channelsByTeam.set(ch.teamId, list);
+      channelsByTeam.set(key, list);
     }
 
     // Assemble summary
     const result: TeamsChannelsSummary[] = [];
     for (const team of inventoryTeams) {
-      const teamChannels = channelsByTeam.get(team.teamId) ?? [];
+      const teamKey = `${team.tenantConnectionId}:${team.teamId}`;
+      const teamChannels = channelsByTeam.get(teamKey) ?? [];
       const channels: TeamsChannelsSummaryChannel[] = teamChannels.map(ch => {
-        const recInfo = recByChannel.get(`${team.teamId}:${ch.channelId}`);
+        const recInfo = recByChannel.get(`${team.tenantConnectionId}:${team.teamId}:${ch.channelId}`);
         return {
           channelId: ch.channelId,
           channelDisplayName: ch.displayName,
@@ -1384,7 +1388,7 @@ export class DatabaseStorage implements IStorage {
         teamId: team.teamId,
         teamDisplayName: team.displayName,
         channelCount: teamChannels.length,
-        recordingCount: recByTeam.get(team.teamId) ?? 0,
+        recordingCount: recByTeam.get(teamKey) ?? 0,
         channels,
       });
     }
