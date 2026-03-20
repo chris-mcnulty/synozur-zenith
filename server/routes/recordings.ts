@@ -21,6 +21,21 @@ async function getOrgTenantConnectionIds(user: AuthenticatedRequest["user"]): Pr
   return connections.map(c => c.id);
 }
 
+// GET /api/teams-channels — aggregated teams & channels summary from discovered recordings
+router.get("/api/teams-channels", requireAuth(), async (req: AuthenticatedRequest, res) => {
+  const allowedIds = await getOrgTenantConnectionIds(req.user);
+
+  // If the user belongs to an org with no tenant connections, return no data.
+  if (Array.isArray(allowedIds) && allowedIds.length === 0) {
+    return res.json([]);
+  }
+
+  const summary = await storage.getTeamsChannelsSummary(
+    allowedIds === null ? undefined : allowedIds
+  );
+  res.json(summary);
+});
+
 // GET /api/recordings — list discovered recordings (filterable by tenantConnectionId)
 router.get("/api/recordings", requireAuth(), async (req: AuthenticatedRequest, res) => {
   const search = req.query.search as string | undefined;

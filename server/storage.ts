@@ -75,6 +75,22 @@ import {
   type InsertTeamsDiscoveryRun,
 } from "@shared/schema";
 
+export interface TeamsChannelsSummaryChannel {
+  channelId: string;
+  channelDisplayName: string;
+  channelType: string;
+  recordingCount: number;
+  lastActivity: string | null;
+}
+
+export interface TeamsChannelsSummary {
+  teamId: string;
+  teamDisplayName: string;
+  channelCount: number;
+  recordingCount: number;
+  channels: TeamsChannelsSummaryChannel[];
+}
+
 export interface IStorage {
   getWorkspaces(search?: string, tenantConnectionId?: string): Promise<Workspace[]>;
   getWorkspace(id: string): Promise<Workspace | undefined>;
@@ -206,6 +222,7 @@ export interface IStorage {
   updateTeamsDiscoveryRun(id: string, updates: Partial<InsertTeamsDiscoveryRun>): Promise<TeamsDiscoveryRun | undefined>;
   getTeamsDiscoveryRuns(tenantConnectionId?: string, limit?: number): Promise<TeamsDiscoveryRun[]>;
   getLatestTeamsDiscoveryRun(tenantConnectionId: string): Promise<TeamsDiscoveryRun | undefined>;
+  getTeamsChannelsSummary(tenantConnectionIds?: string[]): Promise<TeamsChannelsSummary[]>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -1014,6 +1031,88 @@ export class DatabaseStorage implements IStorage {
       .where(eq(teamsDiscoveryRuns.tenantConnectionId, tenantConnectionId))
       .orderBy(desc(teamsDiscoveryRuns.startedAt))
       .limit(1);
+    return result;
+  }
+
+  async getTeamsChannelsSummary(tenantConnectionIds?: string[]): Promise<TeamsChannelsSummary[]> {
+    // An explicit empty list means the caller has no accessible tenants — return nothing.
+    if (tenantConnectionIds !== undefined && tenantConnectionIds.length === 0) {
+      return [];
+    }
+
+    // Query all channel-stored recordings, optionally filtered by tenant
+    const conditions = [
+      eq(teamsRecordings.storageType, "SHAREPOINT_CHANNEL"),
+      eq(teamsRecordings.discoveryStatus, "ACTIVE"),
+      eq(teamsRecordings.fileType, "RECORDING"),
+    ];
+    if (tenantConnectionIds !== undefined) {
+      conditions.push(
+        sql`${teamsRecordings.tenantConnectionId} IN (${sql.join(
+          tenantConnectionIds.map(id => sql`${id}`),
+          sql`, `,
+        )})` as any,
+      );
+    }
+
+    const rows = await db.select({
+      teamId: teamsRecordings.teamId,
+      teamDisplayName: sql<string | null>`max(${teamsRecordings.teamDisplayName})`,
+      channelId: teamsRecordings.channelId,
+      channelDisplayName: sql<string | null>`max(${teamsRecordings.channelDisplayName})`,
+      // max() picks an arbitrary representative; channel type is effectively immutable
+      channelType: sql<string | null>`max(${teamsRecordings.channelType})`,
+      recordingCount: sql<number>`count(*)::int`,
+      lastActivity: sql<string | null>`max(${teamsRecordings.fileModifiedAt})`,
+    })
+      .from(teamsRecordings)
+      .where(and(...conditions))
+      .groupBy(
+        teamsRecordings.teamId,
+        teamsRecordings.channelId,
+      );
+
+    // Aggregate into team → channels hierarchy
+    const teamMap = new Map<string, TeamsChannelsSummary>();
+
+    for (const row of rows) {
+      if (!row.teamId) continue;
+      let team = teamMap.get(row.teamId);
+      if (!team) {
+        team = {
+          teamId: row.teamId,
+          teamDisplayName: row.teamDisplayName ?? row.teamId,
+          channelCount: 0,
+          recordingCount: 0,
+          channels: [],
+        };
+        teamMap.set(row.teamId, team);
+      }
+
+      team.recordingCount += row.recordingCount;
+      if (row.channelId) {
+        team.channelCount++;
+        team.channels.push({
+          channelId: row.channelId,
+          channelDisplayName: row.channelDisplayName ?? row.channelId,
+          channelType: row.channelType ?? "standard",
+          recordingCount: row.recordingCount,
+          lastActivity: row.lastActivity,
+        });
+      }
+    }
+
+    // Sort teams by name, channels by last activity desc
+    const result = Array.from(teamMap.values());
+    result.sort((a, b) => a.teamDisplayName.localeCompare(b.teamDisplayName));
+    for (const team of result) {
+      team.channels.sort((a, b) => {
+        if (!a.lastActivity) return 1;
+        if (!b.lastActivity) return -1;
+        return b.lastActivity.localeCompare(a.lastActivity);
+      });
+    }
+
     return result;
   }
 }
