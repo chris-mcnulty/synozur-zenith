@@ -1039,6 +1039,7 @@ export class DatabaseStorage implements IStorage {
     const conditions = [
       eq(teamsRecordings.storageType, "SHAREPOINT_CHANNEL"),
       eq(teamsRecordings.discoveryStatus, "ACTIVE"),
+      eq(teamsRecordings.fileType, "RECORDING"),
     ];
     if (tenantConnectionIds && tenantConnectionIds.length > 0) {
       conditions.push(
