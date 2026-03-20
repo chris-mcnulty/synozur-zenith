@@ -1035,13 +1035,18 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getTeamsChannelsSummary(tenantConnectionIds?: string[]): Promise<TeamsChannelsSummary[]> {
+    // An explicit empty list means the caller has no accessible tenants — return nothing.
+    if (tenantConnectionIds !== undefined && tenantConnectionIds.length === 0) {
+      return [];
+    }
+
     // Query all channel-stored recordings, optionally filtered by tenant
     const conditions = [
       eq(teamsRecordings.storageType, "SHAREPOINT_CHANNEL"),
       eq(teamsRecordings.discoveryStatus, "ACTIVE"),
       eq(teamsRecordings.fileType, "RECORDING"),
     ];
-    if (tenantConnectionIds && tenantConnectionIds.length > 0) {
+    if (tenantConnectionIds !== undefined) {
       conditions.push(
         sql`${teamsRecordings.tenantConnectionId} IN (${sql.join(
           tenantConnectionIds.map(id => sql`${id}`),
