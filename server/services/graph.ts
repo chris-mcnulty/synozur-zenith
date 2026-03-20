@@ -2649,6 +2649,147 @@ export interface OneDriveInventoryInfo {
   activeFileCount: number | null;
 }
 
+// ── Graph throttle-aware fetch helpers ────────────────────────────────────────
+
+const GRAPH_MAX_RETRIES = 5;
+/** Max concurrent Graph requests outside of $batch calls. */
+const GRAPH_CONCURRENCY = 5;
+/** Max sub-requests per Graph $batch call (hard Graph limit is 20). */
+const GRAPH_BATCH_SIZE = 20;
+/** Maximum backoff delay in milliseconds for retry logic. */
+const GRAPH_MAX_BACKOFF_MS = 64000;
+
+/**
+ * Fetch a Graph URL with automatic retry/backoff for 429 and 5xx responses.
+ * Respects the Retry-After header returned by Graph on 429 responses.
+ */
+async function graphFetchWithRetry(
+  url: string,
+  options: RequestInit,
+  maxRetries = GRAPH_MAX_RETRIES,
+): Promise<Response> {
+  let attempt = 0;
+  while (attempt <= maxRetries) {
+    const res = await fetch(url, options);
+    const isTransient = res.status === 429 || (res.status >= 500 && res.status <= 599);
+    if (!isTransient || attempt === maxRetries) return res;
+    const retryAfterRaw = res.status === 429 ? res.headers.get("Retry-After") : null;
+    const delayMs = retryAfterRaw
+      ? parseInt(retryAfterRaw, 10) * 1000
+      : Math.min(Math.pow(2, attempt) * 1000, GRAPH_MAX_BACKOFF_MS);
+    console.warn(`[graph] HTTP ${res.status}; retrying in ${Math.round(delayMs / 1000)}s (attempt ${attempt + 1}/${maxRetries})`);
+    await new Promise(r => setTimeout(r, delayMs));
+    attempt++;
+  }
+  // Unreachable, but satisfies the TypeScript return type
+  return fetch(url, options);
+}
+
+interface GraphBatchRequest {
+  id: string;
+  method: string;
+  url: string;
+  headers?: Record<string, string>;
+}
+
+interface GraphBatchResponse {
+  id: string;
+  status: number;
+  headers?: Record<string, string>;
+  body?: any;
+}
+
+/**
+ * Execute one or more Graph $batch calls. Splits requests into chunks of
+ * GRAPH_BATCH_SIZE, retries any sub-requests throttled with 429, and returns
+ * a Map keyed by request id.
+ */
+async function graphBatch(
+  token: string,
+  requests: GraphBatchRequest[],
+  maxRetries = GRAPH_MAX_RETRIES,
+): Promise<Map<string, GraphBatchResponse>> {
+  const results = new Map<string, GraphBatchResponse>();
+  let pending = [...requests];
+
+  for (let attempt = 0; attempt <= maxRetries && pending.length > 0; attempt++) {
+    const chunks: GraphBatchRequest[][] = [];
+    for (let i = 0; i < pending.length; i += GRAPH_BATCH_SIZE) {
+      chunks.push(pending.slice(i, i + GRAPH_BATCH_SIZE));
+    }
+    pending = [];
+
+    for (const chunk of chunks) {
+      const batchRes = await graphFetchWithRetry(
+        "https://graph.microsoft.com/v1.0/$batch",
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ requests: chunk }),
+        },
+      );
+
+      if (!batchRes.ok) {
+        for (const req of chunk) {
+          results.set(req.id, { id: req.id, status: batchRes.status });
+        }
+        continue;
+      }
+
+      const batchData = await batchRes.json();
+      for (const resp of batchData.responses as GraphBatchResponse[]) {
+        if (resp.status === 429) {
+          const original = chunk.find(r => r.id === resp.id);
+          if (original) pending.push(original);
+        } else {
+          results.set(resp.id, resp);
+        }
+      }
+    }
+
+    if (pending.length > 0) {
+      const delayMs = Math.min(Math.pow(2, attempt) * 1000, GRAPH_MAX_BACKOFF_MS);
+      console.warn(`[graph] ${pending.length} batch sub-requests throttled; retrying in ${delayMs / 1000}s`);
+      await new Promise(r => setTimeout(r, delayMs));
+    }
+  }
+
+  // Any still-pending requests exceeded retries – store a 429 tombstone
+  for (const req of pending) {
+    results.set(req.id, { id: req.id, status: 429 });
+  }
+
+  return results;
+}
+
+/**
+ * Parse an integer count from a Graph $batch sub-response body.
+ * The body may be a plain number (e.g. 42) or a numeric string.
+ */
+function parseCountFromBatchBody(body: any): number | null {
+  if (body === undefined || body === null || body === "") return null;
+  const n = parseInt(String(body), 10);
+  return isNaN(n) ? null : n || null;
+}
+
+/**
+ * Process items with a maximum concurrency limit.
+ */
+async function asyncPool<T>(
+  items: T[],
+  concurrency: number,
+  fn: (item: T) => Promise<void>,
+): Promise<void> {
+  for (let i = 0; i < items.length; i += concurrency) {
+    await Promise.all(items.slice(i, i + concurrency).map(fn));
+  }
+}
+
+// ── Teams Inventory ────────────────────────────────────────────────────────────
+
 /**
  * Fetch all Teams with rich property inventory. Includes description,
  * visibility, archived status, classification, dates, and member counts.
@@ -2670,7 +2811,7 @@ export async function fetchAllTeamsInventory(
 
   const rawGroups: any[] = [];
   while (url) {
-    const res = await fetch(url, {
+    const res = await graphFetchWithRetry(url, {
       headers: { Authorization: `Bearer ${token}`, ConsistencyLevel: "eventual" },
     });
     if (!res.ok) {
@@ -2683,81 +2824,55 @@ export async function fetchAllTeamsInventory(
     url = data["@odata.nextLink"] ?? null;
   }
 
-  // Step 2: Enrich each group with Teams-specific properties and member counts
-  for (const g of rawGroups) {
-    let isArchived = false;
+  // Step 2: Enrich each group using Graph $batch.
+  // Each group needs 4 sub-requests; GRAPH_BATCH_SIZE = 20, so we process
+  // GRAPH_BATCH_SIZE / 4 = 5 groups per $batch call, drastically reducing
+  // round-trips compared to sequential per-group fetches.
+  const GROUPS_PER_BATCH = Math.floor(GRAPH_BATCH_SIZE / 4); // 5
 
-    // Fetch team-level properties (isArchived)
-    try {
-      const teamRes = await fetch(
-        `https://graph.microsoft.com/v1.0/teams/${g.id}?$select=isArchived`,
-        { headers: { Authorization: `Bearer ${token}` } },
-      );
-      if (teamRes.ok) {
-        const teamData = await teamRes.json();
-        isArchived = teamData.isArchived === true;
-      }
-    } catch {}
+  for (let i = 0; i < rawGroups.length; i += GROUPS_PER_BATCH) {
+    const groupSlice = rawGroups.slice(i, i + GROUPS_PER_BATCH);
 
-    // Fetch member/owner/guest counts
-    let memberCount: number | null = null;
-    let ownerCount: number | null = null;
-    let guestCount: number | null = null;
+    const batchRequests: GraphBatchRequest[] = [];
+    for (const g of groupSlice) {
+      batchRequests.push({ id: `team-${g.id}`,    method: "GET", url: `/teams/${g.id}?$select=isArchived` });
+      batchRequests.push({ id: `members-${g.id}`, method: "GET", url: `/groups/${g.id}/members/$count`, headers: { ConsistencyLevel: "eventual" } });
+      batchRequests.push({ id: `owners-${g.id}`,  method: "GET", url: `/groups/${g.id}/owners/$count`,  headers: { ConsistencyLevel: "eventual" } });
+      batchRequests.push({ id: `site-${g.id}`,    method: "GET", url: `/groups/${g.id}/sites/root?$select=id,webUrl` });
+    }
 
-    try {
-      const membersRes = await fetch(
-        `https://graph.microsoft.com/v1.0/groups/${g.id}/members/$count`,
-        { headers: { Authorization: `Bearer ${token}`, ConsistencyLevel: "eventual" } },
-      );
-      if (membersRes.ok) {
-        memberCount = parseInt(await membersRes.text(), 10) || null;
-      }
-    } catch {}
+    const batchResults = await graphBatch(token, batchRequests);
 
-    try {
-      const ownersRes = await fetch(
-        `https://graph.microsoft.com/v1.0/groups/${g.id}/owners/$count`,
-        { headers: { Authorization: `Bearer ${token}`, ConsistencyLevel: "eventual" } },
-      );
-      if (ownersRes.ok) {
-        ownerCount = parseInt(await ownersRes.text(), 10) || null;
-      }
-    } catch {}
+    for (const g of groupSlice) {
+      const teamResp    = batchResults.get(`team-${g.id}`);
+      const membersResp = batchResults.get(`members-${g.id}`);
+      const ownersResp  = batchResults.get(`owners-${g.id}`);
+      const siteResp    = batchResults.get(`site-${g.id}`);
 
-    // SharePoint site backing URL
-    let sharepointSiteUrl: string | null = null;
-    let sharepointSiteId: string | null = null;
-    try {
-      const siteRes = await fetch(
-        `https://graph.microsoft.com/v1.0/groups/${g.id}/sites/root?$select=id,webUrl`,
-        { headers: { Authorization: `Bearer ${token}` } },
-      );
-      if (siteRes.ok) {
-        const siteData = await siteRes.json();
-        sharepointSiteUrl = siteData.webUrl ?? null;
-        sharepointSiteId = siteData.id ?? null;
-      }
-    } catch {}
+      const isArchived = teamResp?.status === 200 && teamResp.body?.isArchived === true;
+      const memberCount = membersResp?.status === 200 ? parseCountFromBatchBody(membersResp.body) : null;
+      const ownerCount  = ownersResp?.status === 200  ? parseCountFromBatchBody(ownersResp.body)  : null;
+      const sharepointSiteUrl = siteResp?.status === 200 ? (siteResp.body?.webUrl ?? null) : null;
+      const sharepointSiteId  = siteResp?.status === 200 ? (siteResp.body?.id     ?? null) : null;
 
-    const sensitivityLabel = g.assignedLabels?.[0]?.displayName ?? null;
-
-    teams.push({
-      id: g.id,
-      displayName: g.displayName ?? g.id,
-      description: g.description ?? null,
-      mailNickname: g.mailNickname ?? null,
-      visibility: g.visibility ?? null,
-      isArchived,
-      classification: g.classification ?? null,
-      createdDateTime: g.createdDateTime ?? null,
-      renewedDateTime: g.renewedDateTime ?? null,
-      memberCount,
-      ownerCount,
-      guestCount,
-      sharepointSiteUrl,
-      sharepointSiteId,
-      sensitivityLabel,
-    });
+      teams.push({
+        id: g.id,
+        displayName: g.displayName ?? g.id,
+        description: g.description ?? null,
+        mailNickname: g.mailNickname ?? null,
+        visibility: g.visibility ?? null,
+        isArchived,
+        classification: g.classification ?? null,
+        createdDateTime: g.createdDateTime ?? null,
+        renewedDateTime: g.renewedDateTime ?? null,
+        memberCount,
+        ownerCount,
+        guestCount: null, // Graph has no direct guest-count endpoint for groups; reserved for future use
+        sharepointSiteUrl,
+        sharepointSiteId,
+        sensitivityLabel: g.assignedLabels?.[0]?.displayName ?? null,
+      });
+    }
   }
 
   console.log(`[graph] fetchAllTeamsInventory: ${teams.length} teams`);
@@ -2774,18 +2889,18 @@ export async function fetchTeamChannelsInventory(
   clientSecret: string,
 ): Promise<ChannelInventoryInfo[]> {
   const token = await getAppToken(tenantId, clientId, clientSecret);
-  const channels: ChannelInventoryInfo[] = [];
+  const rawChannels: any[] = [];
   let url: string | null =
     `https://graph.microsoft.com/v1.0/teams/${teamId}/channels` +
     `?$select=id,displayName,description,membershipType,email,webUrl,createdDateTime`;
 
   while (url) {
-    const res = await fetch(url, {
+    const res = await graphFetchWithRetry(url, {
       headers: { Authorization: `Bearer ${token}` },
     });
 
-   if (!res.ok) {
-      if ((res.status === 403 || res.status === 404) && channels.length === 0) {
+    if (!res.ok) {
+      if ((res.status === 403 || res.status === 404) && rawChannels.length === 0) {
         console.warn(`[graph] fetchTeamChannelsInventory ${teamId} ${res.status}`);
         return [];
       }
@@ -2794,34 +2909,34 @@ export async function fetchTeamChannelsInventory(
     }
 
     const data = await res.json();
-
-    for (const c of data.value || []) {
-      let memberCount: number | null = null;
-      try {
-        const mRes = await fetch(
-          `https://graph.microsoft.com/v1.0/teams/${teamId}/channels/${c.id}/members/$count`,
-          { headers: { Authorization: `Bearer ${token}`, ConsistencyLevel: "eventual" } },
-        );
-        if (mRes.ok) {
-          memberCount = parseInt(await mRes.text(), 10) || null;
-        }
-      } catch {}
-
-      channels.push({
-        id: c.id,
-        teamId,
-        displayName: c.displayName ?? c.id,
-        description: c.description ?? null,
-        membershipType: c.membershipType || "standard",
-        email: c.email ?? null,
-        webUrl: c.webUrl ?? null,
-        createdDateTime: c.createdDateTime ?? null,
-        memberCount,
-      });
-    }
-
-    url = (data && data['@odata.nextLink']) ? data['@odata.nextLink'] : null;
+    rawChannels.push(...(data.value || []));
+    url = data["@odata.nextLink"] ?? null;
   }
+
+  // Fetch member counts for all channels concurrently (with concurrency limit)
+  const channels: ChannelInventoryInfo[] = rawChannels.map(c => ({
+    id: c.id,
+    teamId,
+    displayName: c.displayName ?? c.id,
+    description: c.description ?? null,
+    membershipType: c.membershipType || "standard",
+    email: c.email ?? null,
+    webUrl: c.webUrl ?? null,
+    createdDateTime: c.createdDateTime ?? null,
+    memberCount: null as number | null,
+  }));
+
+  await asyncPool(channels, GRAPH_CONCURRENCY, async (ch) => {
+    try {
+      const mRes = await graphFetchWithRetry(
+        `https://graph.microsoft.com/v1.0/teams/${teamId}/channels/${ch.id}/members/$count`,
+        { headers: { Authorization: `Bearer ${token}`, ConsistencyLevel: "eventual" } },
+      );
+      if (mRes.ok) {
+        ch.memberCount = parseInt(await mRes.text(), 10) || null;
+      }
+    } catch {}
+  });
 
   return channels;
 }
@@ -2846,7 +2961,7 @@ export async function fetchAllOneDriveInventories(
     `&$select=id,displayName,userPrincipalName,department,jobTitle,mail&$top=999`;
 
   while (url) {
-    const res = await fetch(url, {
+    const res = await graphFetchWithRetry(url, {
       headers: { Authorization: `Bearer ${token}`, ConsistencyLevel: "eventual" },
     });
     if (!res.ok) {
@@ -2867,10 +2982,10 @@ export async function fetchAllOneDriveInventories(
     url = data["@odata.nextLink"] ?? null;
   }
 
-  // Step 2: Fetch drive info for each user
-  for (const user of users) {
+  // Step 2: Fetch drive info for each user concurrently (with concurrency limit)
+  await asyncPool(users, GRAPH_CONCURRENCY, async (user) => {
     try {
-      const driveRes = await fetch(
+      const driveRes = await graphFetchWithRetry(
         `https://graph.microsoft.com/v1.0/users/${user.id}/drive?$select=id,driveType,quota`,
         { headers: { Authorization: `Bearer ${token}` } },
       );
@@ -2894,9 +3009,8 @@ export async function fetchAllOneDriveInventories(
             fileCount: null,
             activeFileCount: null,
           });
-          continue;
         }
-        continue;
+        return;
       }
       const driveData = await driveRes.json();
       const quota = driveData.quota ?? {};
@@ -2921,7 +3035,7 @@ export async function fetchAllOneDriveInventories(
     } catch (err: any) {
       console.warn(`[graph] OneDrive inventory for ${user.userPrincipalName}: ${err.message}`);
     }
-  }
+  });
 
   console.log(`[graph] fetchAllOneDriveInventories: ${results.length} users`);
   return results;
