@@ -121,8 +121,13 @@ router.get("/api/recordings", requireAuth(), async (req: AuthenticatedRequest, r
       return res.json({ rows: [], total: 0, page, pageSize });
     }
     effectiveIds = [tenantConnectionId];
-  } else if (allowedIds) {
-    effectiveIds = allowedIds;
+  } else {
+    if (Array.isArray(allowedIds) && allowedIds.length === 0) {
+      return res.json({ rows: [], total: 0, page, pageSize });
+    }
+    if (allowedIds && allowedIds.length > 0) {
+      effectiveIds = allowedIds;
+    }
   }
 
   const result = await storage.getTeamsRecordingsPaginated({
