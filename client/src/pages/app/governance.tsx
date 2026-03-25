@@ -768,7 +768,7 @@ export default function GovernancePage() {
               )}
             </div>
           ) : (
-            <span className="text-xs text-muted-foreground">\u2014</span>
+            <span className="text-xs text-muted-foreground">{"—"}</span>
           )}
         </TableCell>
         <TableCell className="relative z-10">
@@ -801,7 +801,7 @@ export default function GovernancePage() {
               )}
             </div>
           ) : (
-            <span className="text-xs text-muted-foreground">\u2014</span>
+            <span className="text-xs text-muted-foreground">{"—"}</span>
           )}
         </TableCell>
         <TableCell className="relative z-10">
