@@ -109,7 +109,7 @@ export interface IStorage {
   deleteWorkspace(id: string): Promise<void>;
   bulkUpdateWorkspaces(ids: string[], updates: Partial<InsertWorkspace>): Promise<void>;
 
-  getProvisioningRequests(): Promise<ProvisioningRequest[]>;
+  getProvisioningRequests(orgId?: string): Promise<ProvisioningRequest[]>;
   getProvisioningRequest(id: string): Promise<ProvisioningRequest | undefined>;
   createProvisioningRequest(request: InsertProvisioningRequest): Promise<ProvisioningRequest>;
   updateProvisioningRequestStatus(id: string, status: string): Promise<ProvisioningRequest | undefined>;
@@ -302,7 +302,12 @@ export class DatabaseStorage implements IStorage {
     }
   }
 
-  async getProvisioningRequests(): Promise<ProvisioningRequest[]> {
+  async getProvisioningRequests(orgId?: string): Promise<ProvisioningRequest[]> {
+    if (orgId) {
+      return db.select().from(provisioningRequests)
+        .where(eq(provisioningRequests.organizationId, orgId))
+        .orderBy(desc(provisioningRequests.createdAt));
+    }
     return db.select().from(provisioningRequests).orderBy(desc(provisioningRequests.createdAt));
   }
 

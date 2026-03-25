@@ -8,14 +8,42 @@ import { invalidateDefaultSignupPlanCache } from "../utils/platformSettingsCache
 const router = Router();
 
 // ── Dashboard Stats ──
-router.get("/api/stats", requireAuth(), async (_req: AuthenticatedRequest, res) => {
-  const allWorkspaces = await storage.getWorkspaces();
+router.get("/api/stats", requireAuth(), async (req: AuthenticatedRequest, res) => {
+  const orgId = req.activeOrganizationId;
+
+  const EMPTY_STATS = {
+    totalWorkspaces: 0,
+    copilotReady: 0,
+    copilotNotReady: 0,
+    metadataComplete: 0,
+    metadataMissing: 0,
+    highlyConfidential: 0,
+    pendingRequests: 0,
+    totalRequests: 0,
+  };
+
+  if (!orgId) return res.json(EMPTY_STATS);
+
+  // Scope workspaces to this org's tenant connections only
+  const tenants = await storage.getTenantConnections(orgId);
+  const tenantIds = tenants.map(t => t.id);
+
+  let allWorkspaces: Awaited<ReturnType<typeof storage.getWorkspaces>> = [];
+  if (tenantIds.length > 0) {
+    const perTenantResults = await Promise.all(
+      tenantIds.map(tid => storage.getWorkspaces(undefined, tid))
+    );
+    allWorkspaces = perTenantResults.flat();
+  }
+
   const total = allWorkspaces.length;
   const copilotReady = allWorkspaces.filter(w => w.copilotReady).length;
   const metadataComplete = allWorkspaces.filter(w => w.metadataStatus === "COMPLETE").length;
   const metadataMissing = allWorkspaces.filter(w => w.metadataStatus === "MISSING_REQUIRED").length;
   const highlyConfidential = allWorkspaces.filter(w => w.sensitivity === "HIGHLY_CONFIDENTIAL").length;
-  const requests = await storage.getProvisioningRequests();
+
+  // Scope provisioning requests to this org
+  const requests = await storage.getProvisioningRequests(orgId);
   const pendingRequests = requests.filter(r => r.status === "PENDING").length;
 
   res.json({
