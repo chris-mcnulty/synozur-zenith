@@ -262,6 +262,65 @@
   }
 }
 
+/* ── Aurora background blobs (Constellation UX module) ───────────────────── */
+.aurora-blob {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(80px);
+  opacity: 0.12;
+  animation-timing-function: ease-in-out;
+  animation-iteration-count: infinite;
+  animation-direction: alternate;
+}
+
+.aurora-blob-1 {
+  width: 55vw;
+  height: 55vw;
+  background: radial-gradient(circle, #810FFB 0%, transparent 70%);
+  top: -15vw;
+  left: -10vw;
+  animation: aurora-drift-1 22s ease-in-out infinite alternate;
+}
+
+.aurora-blob-2 {
+  width: 45vw;
+  height: 45vw;
+  background: radial-gradient(circle, #E60CB3 0%, transparent 70%);
+  bottom: -15vw;
+  right: -10vw;
+  animation: aurora-drift-2 28s ease-in-out infinite alternate;
+}
+
+.aurora-blob-3 {
+  width: 35vw;
+  height: 35vw;
+  background: radial-gradient(circle, #5B0FBC 0%, transparent 70%);
+  top: 30%;
+  left: 40%;
+  animation: aurora-drift-3 18s ease-in-out infinite alternate;
+  opacity: 0.07;
+}
+
+@keyframes aurora-drift-1 {
+  0%   { transform: translate(0, 0) scale(1); }
+  33%  { transform: translate(6vw, 4vw) scale(1.08); }
+  66%  { transform: translate(-3vw, 8vw) scale(0.95); }
+  100% { transform: translate(4vw, -5vw) scale(1.05); }
+}
+
+@keyframes aurora-drift-2 {
+  0%   { transform: translate(0, 0) scale(1); }
+  33%  { transform: translate(-8vw, -4vw) scale(1.1); }
+  66%  { transform: translate(4vw, -8vw) scale(0.92); }
+  100% { transform: translate(-5vw, 6vw) scale(1.06); }
+}
+
+@keyframes aurora-drift-3 {
+  0%   { transform: translate(0, 0) scale(1); }
+  50%  { transform: translate(-10vw, 6vw) scale(1.15); }
+  100% { transform: translate(8vw, -4vw) scale(0.9); }
+}
+
 @layer utilities {
   .glass-panel {
     @apply bg-background/60 backdrop-blur-xl border border-white/10 dark:border-white/5 shadow-2xl;

@@ -1,4 +1,6 @@
 import { useState, useEffect } from "react";
+import { useTheme } from "next-themes";
+import { Aurora } from "@/components/aurora";
 import { Link, useLocation, Redirect } from "wouter";
 import { 
   LayoutDashboard, 
@@ -143,6 +145,7 @@ type OrgMembership = {
 
 export default function AppShell({ children }: AppShellProps) {
   const [location] = useLocation();
+  const { theme, setTheme } = useTheme();
   const { tenants, selectedTenant, setSelectedTenantId } = useTenant();
 
   const { data: authData, isLoading: authLoading } = useQuery<{
@@ -325,7 +328,8 @@ export default function AppShell({ children }: AppShellProps) {
   };
 
   return (
-    <div className="min-h-screen bg-background flex text-foreground">
+    <div className="min-h-screen bg-background flex text-foreground relative">
+      <Aurora />
       {/* Desktop Sidebar */}
       <aside className="hidden lg:flex w-72 flex-col border-r border-border/40 bg-card/40 backdrop-blur-xl">
         <div className="h-16 flex items-center px-6 border-b border-border/40">
@@ -583,9 +587,13 @@ export default function AppShell({ children }: AppShellProps) {
                     <User className="mr-2 h-4 w-4 text-muted-foreground" />
                     <span>Profile Settings</span>
                   </DropdownMenuItem>
-                  <DropdownMenuItem className="rounded-lg cursor-pointer p-2.5">
+                  <DropdownMenuItem
+                    className="rounded-lg cursor-pointer p-2.5"
+                    onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+                    data-testid="button-toggle-theme"
+                  >
                     <SunMoon className="mr-2 h-4 w-4 text-muted-foreground" />
-                    <span>Toggle Theme</span>
+                    <span>{theme === "dark" ? "Light Mode" : "Dark Mode"}</span>
                   </DropdownMenuItem>
                 </DropdownMenuGroup>
                 <DropdownMenuSeparator className="my-2" />
