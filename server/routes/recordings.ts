@@ -28,13 +28,23 @@ async function getOrgTenantConnectionIds(user: AuthenticatedRequest["user"]): Pr
 // GET /api/teams-channels — aggregated teams & channels summary from inventory
 // Falls back to recordings-based summary if no inventory data exists yet.
 router.get("/api/teams-channels", requireAuth(), async (req: AuthenticatedRequest, res) => {
+  const requestedTenantId = req.query.tenantConnectionId as string | undefined;
   const allowedIds = await getOrgTenantConnectionIds(req.user);
 
   if (Array.isArray(allowedIds) && allowedIds.length === 0) {
     return res.json([]);
   }
 
-  const ids = allowedIds === null ? undefined : allowedIds;
+  // Scope to the requested tenant if provided, validating it is within org's allowed set
+  let ids: string[] | undefined;
+  if (requestedTenantId) {
+    if (allowedIds && !allowedIds.includes(requestedTenantId)) {
+      return res.status(403).json({ error: "Tenant not accessible" });
+    }
+    ids = [requestedTenantId];
+  } else {
+    ids = allowedIds === null ? undefined : allowedIds;
+  }
 
   // Try inventory-based summary first (shows ALL teams)
   const inventorySummary = await storage.getTeamsInventorySummary(ids);
@@ -50,13 +60,24 @@ router.get("/api/teams-channels", requireAuth(), async (req: AuthenticatedReques
 // GET /api/teams-inventory — full inventory list with properties
 router.get("/api/teams-inventory", requireAuth(), async (req: AuthenticatedRequest, res) => {
   const search = req.query.search as string | undefined;
+  const requestedTenantId = req.query.tenantConnectionId as string | undefined;
   const allowedIds = await getOrgTenantConnectionIds(req.user);
 
   if (Array.isArray(allowedIds) && allowedIds.length === 0) {
     return res.json([]);
   }
 
-  const ids = allowedIds === null ? undefined : allowedIds;
+  // Scope to the requested tenant if provided
+  let ids: string[] | undefined;
+  if (requestedTenantId) {
+    if (allowedIds && !allowedIds.includes(requestedTenantId)) {
+      return res.status(403).json({ error: "Tenant not accessible" });
+    }
+    ids = [requestedTenantId];
+  } else {
+    ids = allowedIds === null ? undefined : allowedIds;
+  }
+
   const teams = await storage.getTeamsInventory(ids, search);
   res.json(teams);
 });
@@ -78,13 +99,24 @@ router.get("/api/teams-inventory/:id", requireAuth(), async (req: AuthenticatedR
 // GET /api/onedrive-inventory — full OneDrive inventory list
 router.get("/api/onedrive-inventory", requireAuth(), async (req: AuthenticatedRequest, res) => {
   const search = req.query.search as string | undefined;
+  const requestedTenantId = req.query.tenantConnectionId as string | undefined;
   const allowedIds = await getOrgTenantConnectionIds(req.user);
 
   if (Array.isArray(allowedIds) && allowedIds.length === 0) {
     return res.json([]);
   }
 
-  const ids = allowedIds === null ? undefined : allowedIds;
+  // Scope to the requested tenant if provided, validating it is within org's allowed set
+  let ids: string[] | undefined;
+  if (requestedTenantId) {
+    if (allowedIds && !allowedIds.includes(requestedTenantId)) {
+      return res.status(403).json({ error: "Tenant not accessible" });
+    }
+    ids = [requestedTenantId];
+  } else {
+    ids = allowedIds === null ? undefined : allowedIds;
+  }
+
   const drives = await storage.getOnedriveInventory(ids, search);
   res.json(drives);
 });

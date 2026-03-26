@@ -262,12 +262,26 @@ export default function TeamsChannelsPage() {
   const tenantConnectionId = selectedTenant?.id;
 
   const { data: teams = [], isLoading } = useQuery<TeamSummary[]>({
-    queryKey: ["/api/teams-channels"],
+    queryKey: ["/api/teams-channels", tenantConnectionId],
+    queryFn: async () => {
+      const params = new URLSearchParams();
+      if (tenantConnectionId) params.set("tenantConnectionId", tenantConnectionId);
+      const res = await fetch(`/api/teams-channels?${params}`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to load Teams inventory");
+      return res.json();
+    },
   });
 
   // Also fetch full inventory for enrichment
   const { data: inventory = [] } = useQuery<TeamsInventoryItem[]>({
-    queryKey: ["/api/teams-inventory"],
+    queryKey: ["/api/teams-inventory", tenantConnectionId],
+    queryFn: async () => {
+      const params = new URLSearchParams();
+      if (tenantConnectionId) params.set("tenantConnectionId", tenantConnectionId);
+      const res = await fetch(`/api/teams-inventory?${params}`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to load Teams inventory");
+      return res.json();
+    },
   });
 
   const syncMutation = useMutation({
@@ -283,8 +297,8 @@ export default function TeamsChannelsPage() {
     onSuccess: () => {
       toast({ title: "Teams sync started", description: "Discovering all teams and channels…" });
       setTimeout(() => {
-        queryClient.invalidateQueries({ queryKey: ["/api/teams-channels"] });
-        queryClient.invalidateQueries({ queryKey: ["/api/teams-inventory"] });
+        queryClient.invalidateQueries({ queryKey: ["/api/teams-channels", tenantConnectionId] });
+        queryClient.invalidateQueries({ queryKey: ["/api/teams-inventory", tenantConnectionId] });
       }, 5000);
     },
     onError: (err: any) => {

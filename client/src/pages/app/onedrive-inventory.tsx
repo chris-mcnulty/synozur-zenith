@@ -75,10 +75,11 @@ export default function OneDriveInventoryPage() {
   const tenantConnectionId = selectedTenant?.id;
 
   const { data: drives = [], isLoading } = useQuery<OneDriveItem[]>({
-    queryKey: ["/api/onedrive-inventory", search],
+    queryKey: ["/api/onedrive-inventory", tenantConnectionId, search],
     queryFn: async () => {
       const params = new URLSearchParams();
       if (search) params.set("search", search);
+      if (tenantConnectionId) params.set("tenantConnectionId", tenantConnectionId);
       const res = await fetch(`/api/onedrive-inventory?${params}`, { credentials: "include" });
       if (!res.ok) throw new Error("Failed to load OneDrive inventory");
       return res.json();
