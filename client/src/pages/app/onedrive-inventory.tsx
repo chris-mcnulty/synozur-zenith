@@ -99,7 +99,7 @@ export default function OneDriveInventoryPage() {
     onSuccess: () => {
       toast({ title: "OneDrive sync started", description: "Discovering all user drives and quota data…" });
       setTimeout(() => {
-        queryClient.invalidateQueries({ queryKey: ["/api/onedrive-inventory"] });
+        queryClient.invalidateQueries({ queryKey: ["/api/onedrive-inventory", tenantConnectionId] });
       }, 8000);
     },
     onError: (err: any) => {
