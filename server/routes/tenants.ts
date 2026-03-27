@@ -238,6 +238,20 @@ router.post("/api/admin/tenants", requireRole(ZENITH_ROLES.TENANT_ADMIN), async 
     clientId: clientId || undefined,
     clientSecret: encryptedSecret,
   });
+
+  await storage.createAuditEntry({
+    userId: req.user?.id || null,
+    userEmail: req.user?.email || null,
+    action: 'TENANT_REGISTERED',
+    resource: 'tenant_connection',
+    resourceId: connection.id,
+    organizationId: req.user?.organizationId || null,
+    tenantConnectionId: connection.id,
+    details: { tenantName: connection.tenantName, domain: connection.domain, ownershipType: connection.ownershipType },
+    result: 'SUCCESS',
+    ipAddress: req.ip || null,
+  });
+
   res.status(201).json({ ...connection, clientSecret: undefined });
 });
 
@@ -253,6 +267,28 @@ router.patch("/api/admin/tenants/:id", requireRole(ZENITH_ROLES.TENANT_ADMIN), a
   }
   const connection = await storage.updateTenantConnection(req.params.id, updates);
   if (!connection) return res.status(404).json({ message: "Tenant connection not found" });
+
+  if ('status' in req.body && req.body.status !== existing.status) {
+    const statusActionMap: Record<string, string> = {
+      ACTIVE: 'TENANT_REACTIVATED',
+      SUSPENDED: 'TENANT_SUSPENDED',
+      REVOKED: 'TENANT_REVOKED',
+    };
+    const action = statusActionMap[req.body.status] || 'TENANT_REGISTERED';
+    await storage.createAuditEntry({
+      userId: req.user?.id || null,
+      userEmail: req.user?.email || null,
+      action,
+      resource: 'tenant_connection',
+      resourceId: req.params.id,
+      organizationId: req.user?.organizationId || null,
+      tenantConnectionId: req.params.id,
+      details: { tenantName: existing.tenantName, previousStatus: existing.status, newStatus: req.body.status },
+      result: 'SUCCESS',
+      ipAddress: req.ip || null,
+    });
+  }
+
   res.json({ ...connection, clientSecret: undefined });
 });
 

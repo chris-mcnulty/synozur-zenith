@@ -408,6 +408,71 @@ router.patch("/api/workspaces/:id", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, Z
   }
 
   const finalWorkspace = await storage.getWorkspace(req.params.id);
+
+  const metadataFields = ['department', 'costCenter', 'projectCode', 'description', 'primarySteward', 'secondarySteward'];
+  const hasMetadataChange = metadataFields.some(f => f in req.body && req.body[f] !== (existing as any)[f]);
+  const hasSharingChange = 'externalSharing' in req.body && req.body.externalSharing !== existing.externalSharing;
+
+  if (sensitivityLabelChanged) {
+    await storage.createAuditEntry({
+      userId: req.user?.id || null,
+      userEmail: req.user?.email || null,
+      action: 'LABEL_ASSIGNED',
+      resource: 'workspace',
+      resourceId: req.params.id,
+      organizationId: req.user?.organizationId || null,
+      tenantConnectionId: existing.tenantConnectionId || null,
+      details: {
+        workspaceName: existing.displayName,
+        previousLabelId: existing.sensitivityLabelId,
+        newLabelId: req.body.sensitivityLabelId,
+        pushed: labelSyncResult?.pushed,
+      },
+      result: labelSyncResult?.pushed === false && labelSyncResult?.error ? 'FAILURE' : 'SUCCESS',
+      ipAddress: req.ip || null,
+    });
+  }
+
+  if (hasMetadataChange) {
+    const changedFields: Record<string, { from: any; to: any }> = {};
+    for (const f of metadataFields) {
+      if (f in req.body && req.body[f] !== (existing as any)[f]) {
+        changedFields[f] = { from: (existing as any)[f], to: req.body[f] };
+      }
+    }
+    await storage.createAuditEntry({
+      userId: req.user?.id || null,
+      userEmail: req.user?.email || null,
+      action: 'METADATA_UPDATED',
+      resource: 'workspace',
+      resourceId: req.params.id,
+      organizationId: req.user?.organizationId || null,
+      tenantConnectionId: existing.tenantConnectionId || null,
+      details: { workspaceName: existing.displayName, changedFields },
+      result: 'SUCCESS',
+      ipAddress: req.ip || null,
+    });
+  }
+
+  if (hasSharingChange) {
+    await storage.createAuditEntry({
+      userId: req.user?.id || null,
+      userEmail: req.user?.email || null,
+      action: 'SHARING_CHANGED',
+      resource: 'workspace',
+      resourceId: req.params.id,
+      organizationId: req.user?.organizationId || null,
+      tenantConnectionId: existing.tenantConnectionId || null,
+      details: {
+        workspaceName: existing.displayName,
+        previousValue: existing.externalSharing,
+        newValue: req.body.externalSharing,
+      },
+      result: 'SUCCESS',
+      ipAddress: req.ip || null,
+    });
+  }
+
   res.json({ ...(finalWorkspace || workspace), labelSyncResult, ...(writebackResult.attempted ? { autoWriteback: writebackResult } : {}) });
 });
 
@@ -906,7 +971,7 @@ router.post("/api/provisioning-requests", requireRole(ZENITH_ROLES.OPERATOR, ZEN
   res.status(201).json(request);
 });
 
-router.patch("/api/provisioning-requests/:id/status", requireRole(ZENITH_ROLES.TENANT_ADMIN), async (req, res) => {
+router.patch("/api/provisioning-requests/:id/status", requireRole(ZENITH_ROLES.TENANT_ADMIN), async (req: AuthenticatedRequest, res) => {
   const { status } = req.body;
   if (!["PENDING", "APPROVED", "PROVISIONED", "REJECTED"].includes(status)) {
     return res.status(400).json({ message: "Invalid status" });
@@ -924,13 +989,42 @@ router.patch("/api/provisioning-requests/:id/status", requireRole(ZENITH_ROLES.T
       });
     }
   }
+  const existing = await storage.getProvisioningRequest(req.params.id);
   const request = await storage.updateProvisioningRequestStatus(req.params.id, status);
   if (!request) return res.status(404).json({ message: "Request not found" });
+
+  const actionMap: Record<string, string> = {
+    APPROVED: 'WORKSPACE_PROVISIONED',
+    REJECTED: 'PROVISIONING_REJECTED',
+    PROVISIONED: 'WORKSPACE_PROVISIONED',
+    PENDING: 'PROVISIONING_FAILED',
+  };
+  const action = actionMap[status] || 'PROVISIONING_FAILED';
+  const auditResult = status === 'REJECTED' ? 'FAILURE' : 'SUCCESS';
+
+  await storage.createAuditEntry({
+    userId: req.user?.id || null,
+    userEmail: req.user?.email || null,
+    action,
+    resource: 'provisioning_request',
+    resourceId: request.id,
+    organizationId: req.user?.organizationId || null,
+    details: {
+      workspaceName: request.workspaceName,
+      workspaceType: request.workspaceType,
+      previousStatus: existing?.status,
+      newStatus: status,
+      requestedBy: request.requestedBy,
+    },
+    result: auditResult,
+    ipAddress: req.ip || null,
+  });
+
   res.json(request);
 });
 
 // ── Site Inventory Sync ──
-router.post("/api/admin/tenants/:id/sync", requireRole(ZENITH_ROLES.TENANT_ADMIN), async (req, res) => {
+router.post("/api/admin/tenants/:id/sync", requireRole(ZENITH_ROLES.TENANT_ADMIN), async (req: AuthenticatedRequest, res) => {
   const connection = await storage.getTenantConnection(req.params.id);
   if (!connection) return res.status(404).json({ message: "Tenant connection not found" });
 
@@ -940,6 +1034,19 @@ router.post("/api/admin/tenants/:id/sync", requireRole(ZENITH_ROLES.TENANT_ADMIN
   if (!clientId || !clientSecret) {
     return res.status(503).json({ success: false, error: "Zenith app credentials not configured. Set AZURE_CLIENT_ID and AZURE_CLIENT_SECRET." });
   }
+
+  await storage.createAuditEntry({
+    userId: req.user?.id || null,
+    userEmail: req.user?.email || null,
+    action: 'TENANT_SYNC_STARTED',
+    resource: 'tenant_connection',
+    resourceId: req.params.id,
+    organizationId: req.user?.organizationId || null,
+    tenantConnectionId: req.params.id,
+    details: { tenantName: connection.tenantName, tenantId: connection.tenantId },
+    result: 'SUCCESS',
+    ipAddress: req.ip || null,
+  });
 
   try {
     const [siteResult, usageResult] = await Promise.all([
@@ -1592,6 +1699,24 @@ router.post("/api/admin/tenants/:id/sync", requireRole(ZENITH_ROLES.TENANT_ADMIN
       consentGranted: true,
     });
 
+    await storage.createAuditEntry({
+      userId: (req as AuthenticatedRequest).user?.id || null,
+      userEmail: (req as AuthenticatedRequest).user?.email || null,
+      action: 'TENANT_SYNC_COMPLETED',
+      resource: 'tenant_connection',
+      resourceId: req.params.id,
+      organizationId: (req as AuthenticatedRequest).user?.organizationId || null,
+      tenantConnectionId: req.params.id,
+      details: {
+        tenantName: connection.tenantName,
+        sitesFound: siteResult.sites.length,
+        upserted: upsertedCount,
+        warningCount: permissionWarnings.length,
+      },
+      result: 'SUCCESS',
+      ipAddress: req.ip || null,
+    });
+
     res.json({
       success: true,
       sitesFound: siteResult.sites.length,
@@ -1613,6 +1738,18 @@ router.post("/api/admin/tenants/:id/sync", requireRole(ZENITH_ROLES.TENANT_ADMIN
     await storage.updateTenantConnection(req.params.id, {
       lastSyncAt: new Date(),
       lastSyncStatus: `ERROR: ${err.message}`,
+    });
+    await storage.createAuditEntry({
+      userId: (req as AuthenticatedRequest).user?.id || null,
+      userEmail: (req as AuthenticatedRequest).user?.email || null,
+      action: 'TENANT_SYNC_FAILED',
+      resource: 'tenant_connection',
+      resourceId: req.params.id,
+      organizationId: (req as AuthenticatedRequest).user?.organizationId || null,
+      tenantConnectionId: req.params.id,
+      details: { tenantName: connection.tenantName, error: err.message },
+      result: 'FAILURE',
+      ipAddress: req.ip || null,
     });
     res.status(500).json({ success: false, error: err.message });
   }

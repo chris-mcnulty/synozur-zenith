@@ -39,6 +39,7 @@ import PolicyWhatIfPage from "./pages/app/admin/policy-whatif";
 import EntraSetupPage from "./pages/app/admin/entra-setup";
 import DataDictionariesPage from "./pages/app/admin/data-dictionaries";
 import CustomFieldsPage from "./pages/app/admin/custom-fields";
+import AuditLogPage from "./pages/app/admin/audit-log";
 import SupportPage from "./pages/app/support";
 import TeamsChannelsPage from "./pages/app/teams-channels";
 import OneDriveInventoryPage from "./pages/app/onedrive-inventory";
@@ -97,6 +98,7 @@ function AppRoutes() {
         <Route path="/app/admin/organization" component={OrganizationSettingsPage} />
         <Route path="/app/admin/system" component={SystemAdminPage} />
         <Route path="/app/admin/tenants" component={TenantConnectionsPage} />
+        <Route path="/app/admin/audit-log" component={AuditLogPage} />
         <Route path="/app/admin/data-dictionaries" component={DataDictionariesPage} />
         <Route path="/app/admin/custom-fields" component={CustomFieldsPage} />
         <Route path="/app/admin/policies" component={PolicyBuilderPage} />

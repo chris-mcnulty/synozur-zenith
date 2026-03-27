@@ -119,7 +119,7 @@ router.get("/api/dashboard", requireAuth(), async (req: AuthenticatedRequest, re
   ];
 
   // Recent Activity — last 5 audit log entries for the org
-  const recentActivity = await storage.getAuditLog(orgId, 5);
+  const { rows: recentActivity } = await storage.getAuditLog({ orgId, limit: 5 });
 
   // Build service status payload
   const serviceStatus = tenants.map(t => ({
@@ -135,6 +135,49 @@ router.get("/api/dashboard", requireAuth(), async (req: AuthenticatedRequest, re
   const activeTenantsCount = tenants.filter(t => t.status === "ACTIVE").length;
 
   res.json({ alerts, recentActivity, serviceStatus, activeTenantsCount });
+});
+
+// ── Audit Log ──
+router.get("/api/audit-log", requireAuth(), requireRole(ZENITH_ROLES.PLATFORM_OWNER, ZENITH_ROLES.TENANT_ADMIN, ZENITH_ROLES.AUDITOR), async (req: AuthenticatedRequest, res) => {
+  try {
+    const orgId = req.user?.role === ZENITH_ROLES.PLATFORM_OWNER
+      ? (req.query.orgId as string | undefined)
+      : (req.activeOrganizationId || req.user?.organizationId || undefined);
+
+    const {
+      action,
+      userId,
+      userEmail,
+      result,
+      startDate: startDateStr,
+      endDate: endDateStr,
+      page: pageStr,
+      limit: limitStr,
+    } = req.query as Record<string, string | undefined>;
+
+    const limit = Math.min(parseInt(limitStr || "50", 10), 500);
+    const page = Math.max(parseInt(pageStr || "1", 10), 1);
+    const offset = (page - 1) * limit;
+
+    const startDate = startDateStr ? new Date(startDateStr) : undefined;
+    const endDate = endDateStr ? new Date(endDateStr + "T23:59:59.999Z") : undefined;
+
+    const { rows, total } = await storage.getAuditLog({
+      orgId,
+      action: action || undefined,
+      userId: userId || undefined,
+      userEmail: userEmail || undefined,
+      result: result || undefined,
+      startDate,
+      endDate,
+      limit,
+      offset,
+    });
+
+    res.json({ rows, total, page, limit, totalPages: Math.ceil(total / limit) });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ── Organization & Service Plan ──

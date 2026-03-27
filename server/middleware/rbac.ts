@@ -2,6 +2,29 @@ import { Request, Response, NextFunction } from 'express';
 import { storage } from '../storage';
 import { ZENITH_ROLES, type ZenithRole, type User } from '@shared/schema';
 
+async function logAccessDenial(req: AuthenticatedRequest, resource: string, reason: string) {
+  try {
+    await storage.createAuditEntry({
+      userId: req.user?.id || null,
+      userEmail: req.user?.email || null,
+      action: 'ACCESS_DENIED',
+      resource,
+      resourceId: null,
+      organizationId: req.user?.organizationId || req.activeOrganizationId || null,
+      details: {
+        method: req.method,
+        path: req.path,
+        reason,
+        requiredRole: undefined,
+      },
+      result: 'DENIED',
+      ipAddress: req.ip || null,
+    });
+  } catch (err) {
+    console.error('[RBAC] Failed to log access denial:', err);
+  }
+}
+
 declare module 'express-session' {
   interface SessionData {
     userId?: string;
@@ -94,12 +117,13 @@ export function requireAuth() {
 }
 
 export function requireRole(...roles: ZenithRole[]) {
-  return (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+  return async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     if (!req.user) {
       return res.status(401).json({ error: 'Authentication required' });
     }
     const userRole = (req.effectiveRole || req.user.role) as ZenithRole;
     if (!roles.includes(userRole) && userRole !== ZENITH_ROLES.PLATFORM_OWNER) {
+      await logAccessDenial(req, req.path, `Role '${userRole}' not in required roles: ${roles.join(', ')}`);
       return res.status(403).json({ error: 'Insufficient permissions' });
     }
     next();
@@ -107,13 +131,14 @@ export function requireRole(...roles: ZenithRole[]) {
 }
 
 export function requirePermission(permission: string) {
-  return (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+  return async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     if (!req.user) {
       return res.status(401).json({ error: 'Authentication required' });
     }
     const userRole = (req.effectiveRole || req.user.role) as ZenithRole;
     const userPerms = ROLE_PERMISSIONS[userRole] || [];
     if (!userPerms.includes(permission)) {
+      await logAccessDenial(req, req.path, `Missing permission '${permission}' for role '${userRole}'`);
       return res.status(403).json({ error: 'Insufficient permissions for this action' });
     }
     next();

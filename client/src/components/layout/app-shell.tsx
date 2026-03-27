@@ -41,6 +41,7 @@ import {
   FlaskConical,
   ArrowLeft,
   HardDrive,
+  ClipboardList,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -222,6 +223,7 @@ export default function AppShell({ children }: AppShellProps) {
   const platformAdminItems: Array<{ name: string; href: string; icon: any; minRole: string }> = [
     { name: "System Administration", href: "/app/admin/system", icon: Server, minRole: "tenant_admin" },
     { name: "Entra ID Setup", href: "/app/admin/entra", icon: KeyRound, minRole: "tenant_admin" },
+    { name: "Audit Log", href: "/app/admin/audit-log", icon: ClipboardList, minRole: "read_only_auditor" },
   ];
 
   const NavLinks = () => {

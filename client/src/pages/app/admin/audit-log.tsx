@@ -1,0 +1,389 @@
+import { useState, useCallback } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Badge } from "@/components/ui/badge";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Download, Filter, RefreshCw, ChevronLeft, ChevronRight, ShieldAlert } from "lucide-react";
+
+type AuditLogEntry = {
+  id: string;
+  userId: string | null;
+  userEmail: string | null;
+  action: string;
+  resource: string;
+  resourceId: string | null;
+  organizationId: string | null;
+  tenantConnectionId: string | null;
+  details: Record<string, any> | null;
+  result: string;
+  ipAddress: string | null;
+  createdAt: string;
+};
+
+type AuditLogResponse = {
+  rows: AuditLogEntry[];
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+};
+
+const ACTION_LABELS: Record<string, string> = {
+  USER_LOGIN: "User Login",
+  USER_SIGNUP: "User Signup",
+  USER_CREATED: "User Created",
+  USER_ROLE_CHANGED: "Role Changed",
+  USER_DEACTIVATED: "User Deactivated",
+  USER_REACTIVATED: "User Reactivated",
+  PASSWORD_RESET_REQUESTED: "Password Reset Requested",
+  PASSWORD_RESET_COMPLETED: "Password Reset Completed",
+  WORKSPACE_PROVISIONED: "Workspace Provisioned",
+  PROVISIONING_REJECTED: "Provisioning Rejected",
+  PROVISIONING_FAILED: "Provisioning Failed",
+  LABEL_ASSIGNED: "Label Assigned",
+  METADATA_UPDATED: "Metadata Updated",
+  SHARING_CHANGED: "Sharing Changed",
+  SITE_ARCHIVED: "Site Archived",
+  TENANT_REGISTERED: "Tenant Registered",
+  TENANT_SUSPENDED: "Tenant Suspended",
+  TENANT_REVOKED: "Tenant Revoked",
+  TENANT_REACTIVATED: "Tenant Reactivated",
+  TENANT_SYNC_STARTED: "Sync Started",
+  TENANT_SYNC_COMPLETED: "Sync Completed",
+  TENANT_SYNC_FAILED: "Sync Failed",
+  ROLE_ASSIGNED: "Role Assigned",
+  ROLE_REVOKED: "Role Revoked",
+  ORG_MEMBER_ADDED: "Member Added",
+  ORG_MEMBER_ROLE_CHANGED: "Member Role Changed",
+  ACCESS_DENIED: "Access Denied",
+};
+
+const ACTION_TYPES = Object.keys(ACTION_LABELS);
+
+function humaniseAction(action: string): string {
+  return ACTION_LABELS[action] || action.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+}
+
+function resultBadge(result: string) {
+  if (result === "SUCCESS") return <Badge className="bg-emerald-500/10 text-emerald-500 border-emerald-500/20 hover:bg-emerald-500/20" data-testid={`badge-result-${result}`}>Success</Badge>;
+  if (result === "FAILURE") return <Badge className="bg-red-500/10 text-red-500 border-red-500/20 hover:bg-red-500/20" data-testid={`badge-result-${result}`}>Failure</Badge>;
+  if (result === "DENIED") return <Badge className="bg-amber-500/10 text-amber-500 border-amber-500/20 hover:bg-amber-500/20" data-testid={`badge-result-${result}`}>Denied</Badge>;
+  return <Badge variant="outline" data-testid={`badge-result-${result}`}>{result}</Badge>;
+}
+
+function formatDate(iso: string) {
+  try {
+    return new Intl.DateTimeFormat("en-GB", {
+      dateStyle: "short",
+      timeStyle: "medium",
+      hour12: false,
+    }).format(new Date(iso));
+  } catch {
+    return iso;
+  }
+}
+
+function buildCsvRow(entry: AuditLogEntry): string {
+  const escape = (v: unknown) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+  return [
+    escape(entry.createdAt),
+    escape(entry.action),
+    escape(entry.result),
+    escape(entry.userEmail ?? ""),
+    escape(entry.resource),
+    escape(entry.resourceId ?? ""),
+    escape(entry.organizationId ?? ""),
+    escape(entry.ipAddress ?? ""),
+    escape(entry.details ? JSON.stringify(entry.details) : ""),
+  ].join(",");
+}
+
+const CSV_HEADER = "Timestamp,Action,Result,User,Resource,Resource ID,Organization ID,IP Address,Details";
+
+function downloadCsv(rows: AuditLogEntry[]) {
+  const lines = [CSV_HEADER, ...rows.map(buildCsvRow)];
+  const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `audit-log-${new Date().toISOString().slice(0, 10)}.csv`;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+export default function AuditLogPage() {
+  const [page, setPage] = useState(1);
+  const [limit] = useState(50);
+  const [filters, setFilters] = useState({
+    action: "",
+    userEmail: "",
+    result: "",
+    startDate: "",
+    endDate: "",
+  });
+  const [applied, setApplied] = useState(filters);
+
+  const buildQuery = useCallback((f: typeof filters, p: number) => {
+    const params = new URLSearchParams();
+    params.set("page", String(p));
+    params.set("limit", String(limit));
+    if (f.action && f.action !== "ALL") params.set("action", f.action);
+    if (f.userEmail) params.set("userEmail", f.userEmail);
+    if (f.result && f.result !== "ALL") params.set("result", f.result);
+    if (f.startDate) params.set("startDate", f.startDate);
+    if (f.endDate) params.set("endDate", f.endDate);
+    return `/api/audit-log?${params.toString()}`;
+  }, [limit]);
+
+  const { data, isLoading, refetch } = useQuery<AuditLogResponse>({
+    queryKey: ["audit-log", applied, page],
+    queryFn: async () => {
+      const res = await fetch(buildQuery(applied, page), { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch audit log");
+      return res.json();
+    },
+  });
+
+  function applyFilters() {
+    setPage(1);
+    setApplied({ ...filters });
+  }
+
+  function resetFilters() {
+    const empty = { action: "", userEmail: "", result: "", startDate: "", endDate: "" };
+    setFilters(empty);
+    setApplied(empty);
+    setPage(1);
+  }
+
+  const rows = data?.rows ?? [];
+  const totalPages = data?.totalPages ?? 1;
+  const total = data?.total ?? 0;
+
+  return (
+    <div className="space-y-6 animate-in fade-in duration-500 pb-12 max-w-7xl mx-auto">
+      <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight flex items-center gap-3">
+            <ShieldAlert className="w-8 h-8 text-primary" />
+            Audit Log
+          </h1>
+          <p className="text-muted-foreground mt-1 max-w-2xl">
+            Full record of governance actions, access events, and system changes across the platform.
+          </p>
+        </div>
+        <div className="flex gap-3 items-center">
+          <Button variant="outline" size="sm" onClick={() => refetch()} className="gap-2" data-testid="button-refresh-audit-log">
+            <RefreshCw className="w-4 h-4" />
+            Refresh
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            className="gap-2"
+            disabled={rows.length === 0}
+            onClick={() => downloadCsv(rows)}
+            data-testid="button-export-csv"
+          >
+            <Download className="w-4 h-4" />
+            Export CSV
+          </Button>
+        </div>
+      </div>
+
+      <Card className="glass-panel">
+        <CardHeader className="pb-4">
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Filter className="w-4 h-4 text-primary" />
+            Filters
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
+            <div className="space-y-1.5">
+              <Label htmlFor="filter-action">Action Type</Label>
+              <Select
+                value={filters.action || "ALL"}
+                onValueChange={(v) => setFilters(f => ({ ...f, action: v === "ALL" ? "" : v }))}
+              >
+                <SelectTrigger id="filter-action" data-testid="select-filter-action">
+                  <SelectValue placeholder="All actions" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="ALL">All actions</SelectItem>
+                  {ACTION_TYPES.map(a => (
+                    <SelectItem key={a} value={a}>{ACTION_LABELS[a]}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="filter-user">User Email</Label>
+              <Input
+                id="filter-user"
+                placeholder="user@example.com"
+                value={filters.userEmail}
+                onChange={e => setFilters(f => ({ ...f, userEmail: e.target.value }))}
+                data-testid="input-filter-user-email"
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="filter-result">Result</Label>
+              <Select
+                value={filters.result || "ALL"}
+                onValueChange={(v) => setFilters(f => ({ ...f, result: v === "ALL" ? "" : v }))}
+              >
+                <SelectTrigger id="filter-result" data-testid="select-filter-result">
+                  <SelectValue placeholder="All results" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="ALL">All results</SelectItem>
+                  <SelectItem value="SUCCESS">Success</SelectItem>
+                  <SelectItem value="FAILURE">Failure</SelectItem>
+                  <SelectItem value="DENIED">Denied</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="filter-start">From Date</Label>
+              <Input
+                id="filter-start"
+                type="date"
+                value={filters.startDate}
+                onChange={e => setFilters(f => ({ ...f, startDate: e.target.value }))}
+                data-testid="input-filter-start-date"
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="filter-end">To Date</Label>
+              <Input
+                id="filter-end"
+                type="date"
+                value={filters.endDate}
+                onChange={e => setFilters(f => ({ ...f, endDate: e.target.value }))}
+                data-testid="input-filter-end-date"
+              />
+            </div>
+          </div>
+
+          <div className="flex gap-2 mt-4">
+            <Button size="sm" onClick={applyFilters} data-testid="button-apply-filters">Apply Filters</Button>
+            <Button size="sm" variant="ghost" onClick={resetFilters} data-testid="button-reset-filters">Reset</Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card className="glass-panel">
+        <CardHeader className="pb-2">
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-base">Log Entries</CardTitle>
+            <CardDescription data-testid="text-total-entries">
+              {isLoading ? "Loading..." : `${total.toLocaleString()} total entries`}
+            </CardDescription>
+          </div>
+        </CardHeader>
+        <CardContent className="p-0">
+          <div className="overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow className="border-b border-border/50 bg-muted/20">
+                  <TableHead className="pl-6 w-40">Timestamp</TableHead>
+                  <TableHead className="w-44">Action</TableHead>
+                  <TableHead className="w-24">Result</TableHead>
+                  <TableHead>User</TableHead>
+                  <TableHead>Resource</TableHead>
+                  <TableHead className="pr-6">IP Address</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {isLoading ? (
+                  <TableRow>
+                    <TableCell colSpan={6} className="text-center text-muted-foreground py-12">
+                      Loading audit log entries...
+                    </TableCell>
+                  </TableRow>
+                ) : rows.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={6} className="text-center text-muted-foreground py-12">
+                      No audit log entries found for the selected filters.
+                    </TableCell>
+                  </TableRow>
+                ) : rows.map((entry) => (
+                  <TableRow
+                    key={entry.id}
+                    className="hover:bg-muted/10 transition-colors border-b border-border/30"
+                    data-testid={`row-audit-${entry.id}`}
+                  >
+                    <TableCell className="pl-6 font-mono text-xs text-muted-foreground whitespace-nowrap">
+                      {formatDate(entry.createdAt)}
+                    </TableCell>
+                    <TableCell>
+                      <span className="text-sm font-medium" data-testid={`text-action-${entry.id}`}>
+                        {humaniseAction(entry.action)}
+                      </span>
+                    </TableCell>
+                    <TableCell data-testid={`cell-result-${entry.id}`}>
+                      {resultBadge(entry.result)}
+                    </TableCell>
+                    <TableCell className="text-sm text-muted-foreground" data-testid={`text-user-${entry.id}`}>
+                      {entry.userEmail ?? <span className="italic opacity-50">system</span>}
+                    </TableCell>
+                    <TableCell className="text-sm" data-testid={`text-resource-${entry.id}`}>
+                      <span className="text-muted-foreground">{entry.resource}</span>
+                      {entry.resourceId && (
+                        <span className="ml-1 font-mono text-xs text-muted-foreground/60">
+                          /{entry.resourceId.slice(0, 8)}…
+                        </span>
+                      )}
+                    </TableCell>
+                    <TableCell className="pr-6 font-mono text-xs text-muted-foreground">
+                      {entry.ipAddress ?? "—"}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+
+          {totalPages > 1 && (
+            <div className="flex items-center justify-between px-6 py-4 border-t border-border/50">
+              <p className="text-sm text-muted-foreground">
+                Page {page} of {totalPages}
+              </p>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setPage(p => Math.max(1, p - 1))}
+                  disabled={page <= 1}
+                  data-testid="button-prev-page"
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                  Previous
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+                  disabled={page >= totalPages}
+                  data-testid="button-next-page"
+                >
+                  Next
+                  <ChevronRight className="w-4 h-4" />
+                </Button>
+              </div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}

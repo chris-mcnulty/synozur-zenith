@@ -291,7 +291,7 @@ export default function DashboardPage() {
                 ))}
               </div>
               <div className="mt-6">
-                <Link href="/app/reports">
+                <Link href="/app/admin/audit-log">
                   <Button variant="outline" className="w-full text-muted-foreground rounded-full" data-testid="button-view-audit-log">View Full Audit Log</Button>
                 </Link>
               </div>

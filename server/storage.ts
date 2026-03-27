@@ -1,4 +1,4 @@
-import { eq, desc, ilike, or, and, sql, gt, max } from "drizzle-orm";
+import { eq, desc, ilike, or, and, sql, gt, max, gte, lte, inArray } from "drizzle-orm";
 import { db } from "./db";
 import {
   workspaces,
@@ -164,7 +164,17 @@ export interface IStorage {
   getAnyValidDelegatedToken(service?: string, organizationId?: string): Promise<{ token: string; expiresAt: Date | null; userId: string } | undefined>;
 
   createAuditEntry(entry: InsertAuditLog): Promise<AuditLog>;
-  getAuditLog(orgId?: string, limit?: number): Promise<AuditLog[]>;
+  getAuditLog(filters?: {
+    orgId?: string;
+    action?: string;
+    userId?: string;
+    userEmail?: string;
+    result?: string;
+    startDate?: Date;
+    endDate?: Date;
+    limit?: number;
+    offset?: number;
+  }): Promise<{ rows: AuditLog[]; total: number }>;
 
   getBlockedDomains(): Promise<DomainBlocklist[]>;
   addBlockedDomain(entry: InsertDomainBlocklist): Promise<DomainBlocklist>;
@@ -612,14 +622,40 @@ export class DatabaseStorage implements IStorage {
     return created;
   }
 
-  async getAuditLog(orgId?: string, limit: number = 100): Promise<AuditLog[]> {
-    if (orgId) {
-      return db.select().from(auditLog)
-        .where(eq(auditLog.organizationId, orgId))
+  async getAuditLog(filters: {
+    orgId?: string;
+    action?: string;
+    userId?: string;
+    userEmail?: string;
+    result?: string;
+    startDate?: Date;
+    endDate?: Date;
+    limit?: number;
+    offset?: number;
+  } = {}): Promise<{ rows: AuditLog[]; total: number }> {
+    const { orgId, action, userId, userEmail, result, startDate, endDate, limit = 100, offset = 0 } = filters;
+    const conditions: any[] = [];
+
+    if (orgId) conditions.push(eq(auditLog.organizationId, orgId));
+    if (action) conditions.push(eq(auditLog.action, action));
+    if (userId) conditions.push(eq(auditLog.userId, userId));
+    if (userEmail) conditions.push(ilike(auditLog.userEmail, `%${userEmail}%`));
+    if (result) conditions.push(eq(auditLog.result, result));
+    if (startDate) conditions.push(gte(auditLog.createdAt, startDate));
+    if (endDate) conditions.push(lte(auditLog.createdAt, endDate));
+
+    const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
+
+    const [countResult, rows] = await Promise.all([
+      db.select({ count: sql<number>`count(*)::int` }).from(auditLog).where(whereClause),
+      db.select().from(auditLog)
+        .where(whereClause)
         .orderBy(desc(auditLog.createdAt))
-        .limit(limit);
-    }
-    return db.select().from(auditLog).orderBy(desc(auditLog.createdAt)).limit(limit);
+        .limit(limit)
+        .offset(offset),
+    ]);
+
+    return { rows, total: countResult[0]?.count ?? 0 };
   }
 
   async getBlockedDomains(): Promise<DomainBlocklist[]> {
