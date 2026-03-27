@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -9,69 +10,71 @@ import {
   Search, 
   HardDrive, 
   FileBox, 
-  AlertTriangle,
+  Globe,
   ArrowRight,
   ShieldAlert,
   FolderOpen,
   Database,
   Sparkles,
   Download,
-  Filter
+  CheckCircle2,
+  AlertTriangle,
+  Building2,
+  Loader2,
+  Clock,
+  Users,
 } from "lucide-react";
 
-const discoveredSources = [
-  {
-    id: "SRC-001",
-    name: "Finance Legacy Share",
-    type: "On-Prem File Share",
-    path: "\\\\corp-fs01\\finance",
-    size: "4.2 TB",
-    fileCount: "1.2M",
-    riskLevel: "High",
-    sensitiveHits: 4520,
-    status: "Scanned",
-    lastScan: "2 hours ago"
-  },
-  {
-    id: "SRC-002",
-    name: "Marketing Archive 2018",
-    type: "SharePoint Server 2016",
-    path: "https://sp2016.corp.local/sites/marketing",
-    size: "850 GB",
-    fileCount: "450K",
-    riskLevel: "Medium",
-    sensitiveHits: 120,
-    status: "Scanning...",
-    lastScan: "In progress"
-  },
-  {
-    id: "SRC-003",
-    name: "HR Employee Data Backup",
-    type: "On-Prem File Share",
-    path: "\\\\corp-fs02\\hr-backups",
-    size: "1.1 TB",
-    fileCount: "85K",
-    riskLevel: "Critical",
-    sensitiveHits: 12400,
-    status: "Scanned",
-    lastScan: "1 day ago"
-  },
-  {
-    id: "SRC-004",
-    name: "Engineering Specs (Deprecated)",
-    type: "SharePoint Server 2019",
-    path: "https://sp2019.corp.local/sites/eng-old",
-    size: "3.5 TB",
-    fileCount: "2.1M",
-    riskLevel: "Low",
-    sensitiveHits: 15,
-    status: "Pending",
-    lastScan: "Never"
-  }
-];
+type TenantConnection = {
+  id: string;
+  tenantId: string;
+  tenantName: string;
+  domain: string;
+  status: string;
+  ownershipType: string;
+  lastSyncAt: string | null;
+  lastSyncStatus: string | null;
+  lastSyncSiteCount: number | null;
+  consentGranted: boolean;
+};
+
+type DashboardData = {
+  serviceStatus: TenantConnection[];
+  activeTenantsCount: number;
+};
+
+const formatDate = (date: string | null): string => {
+  if (!date) return "Never";
+  const d = new Date(date);
+  const days = Math.floor((Date.now() - d.getTime()) / 86400000);
+  if (days === 0) return "Today";
+  if (days === 1) return "Yesterday";
+  if (days < 7) return `${days} days ago`;
+  if (days < 30) return `${Math.floor(days / 7)} weeks ago`;
+  return `${Math.floor(days / 30)} months ago`;
+};
 
 export default function DiscoverDashboard() {
   const [searchTerm, setSearchTerm] = useState("");
+
+  const { data: dashboard, isLoading } = useQuery<DashboardData>({
+    queryKey: ["/api/dashboard"],
+    queryFn: () => fetch("/api/dashboard", { credentials: "include" }).then(r => r.ok ? r.json() : { serviceStatus: [], activeTenantsCount: 0 }),
+  });
+
+  const tenants: TenantConnection[] = dashboard?.serviceStatus ?? [];
+
+  const totalSites = tenants.reduce((s, t) => s + (t.lastSyncSiteCount ?? 0), 0);
+  const activeTenants = tenants.filter(t => t.status === "ACTIVE").length;
+  const pendingConsent = tenants.filter(t => !t.consentGranted).length;
+  const healthyTenants = tenants.filter(t => t.lastSyncStatus === "SUCCESS").length;
+
+  const filtered = searchTerm
+    ? tenants.filter(t =>
+        t.tenantName.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        t.domain.toLowerCase().includes(searchTerm.toLowerCase())
+      )
+    : tenants;
 
   return (
     <div className="space-y-6 animate-in fade-in duration-500 pb-12">
@@ -84,158 +87,204 @@ export default function DiscoverDashboard() {
             </Badge>
           </div>
           <p className="text-muted-foreground max-w-2xl">
-            Catalog unmanaged content across file shares and legacy SharePoint. 
-            Analyze oversharing risks via MGDC and plan target M365 migrations.
+            Catalog managed M365 environments, monitor sync health, and plan governance onboarding for unmanaged tenants.
           </p>
         </div>
         <div className="flex gap-3">
-          <Button variant="outline" className="gap-2">
+          <Button variant="outline" className="gap-2" disabled>
             <Download className="w-4 h-4" />
-            Export MGDC Report
+            Export Inventory
           </Button>
-          <Button className="gap-2 shadow-md shadow-primary/20">
+          <Button className="gap-2 shadow-md shadow-primary/20" disabled>
             <Database className="w-4 h-4" />
-            Add Data Source
+            Add Tenant
           </Button>
         </div>
       </div>
 
-      {/* High-level metrics */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
         <Card className="glass-panel border-border/50">
           <CardHeader className="pb-2 flex flex-row items-center justify-between">
-            <CardTitle className="text-sm font-medium text-muted-foreground">Total Discovered</CardTitle>
-            <HardDrive className="w-4 h-4 text-blue-500" />
+            <CardTitle className="text-sm font-medium text-muted-foreground">Connected Tenants</CardTitle>
+            <Building2 className="w-4 h-4 text-blue-500" />
           </CardHeader>
           <CardContent>
-            <div className="text-3xl font-bold">9.65 <span className="text-lg text-muted-foreground font-normal">TB</span></div>
-            <p className="text-xs text-muted-foreground mt-1">Across 4 connected sources</p>
-          </CardContent>
-        </Card>
-        
-        <Card className="glass-panel border-border/50">
-          <CardHeader className="pb-2 flex flex-row items-center justify-between">
-            <CardTitle className="text-sm font-medium text-muted-foreground">Unmanaged Files</CardTitle>
-            <FileBox className="w-4 h-4 text-indigo-500" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-3xl font-bold">3.8M</div>
-            <p className="text-xs text-muted-foreground mt-1">Files pending classification</p>
+            {isLoading
+              ? <div className="h-9 w-16 bg-muted/40 animate-pulse rounded" />
+              : <div className="text-3xl font-bold" data-testid="stat-tenants">{activeTenants}</div>}
+            <p className="text-xs text-muted-foreground mt-1">{!isLoading && `${tenants.length} total, ${activeTenants} active`}</p>
           </CardContent>
         </Card>
 
         <Card className="glass-panel border-border/50">
           <CardHeader className="pb-2 flex flex-row items-center justify-between">
-            <CardTitle className="text-sm font-medium text-muted-foreground">Oversharing Risk</CardTitle>
+            <CardTitle className="text-sm font-medium text-muted-foreground">Managed Workspaces</CardTitle>
+            <FileBox className="w-4 h-4 text-indigo-500" />
+          </CardHeader>
+          <CardContent>
+            {isLoading
+              ? <div className="h-9 w-16 bg-muted/40 animate-pulse rounded" />
+              : <div className="text-3xl font-bold" data-testid="stat-sites">{totalSites.toLocaleString()}</div>}
+            <p className="text-xs text-muted-foreground mt-1">Sites across all tenants</p>
+          </CardContent>
+        </Card>
+
+        <Card className="glass-panel border-border/50">
+          <CardHeader className="pb-2 flex flex-row items-center justify-between">
+            <CardTitle className="text-sm font-medium text-muted-foreground">Pending Consent</CardTitle>
             <ShieldAlert className="w-4 h-4 text-amber-500" />
           </CardHeader>
           <CardContent>
-            <div className="text-3xl font-bold text-amber-500">17.2k</div>
-            <p className="text-xs text-muted-foreground mt-1">Sensitive hits found</p>
+            {isLoading
+              ? <div className="h-9 w-16 bg-muted/40 animate-pulse rounded" />
+              : <div className={`text-3xl font-bold ${pendingConsent > 0 ? "text-amber-500" : ""}`} data-testid="stat-pending">{pendingConsent}</div>}
+            <p className="text-xs text-muted-foreground mt-1">Tenants awaiting admin consent</p>
           </CardContent>
         </Card>
 
         <Card className="glass-panel border-primary/20 bg-primary/5">
           <CardHeader className="pb-2 flex flex-row items-center justify-between">
-            <CardTitle className="text-sm font-medium text-primary">Migration Readiness</CardTitle>
+            <CardTitle className="text-sm font-medium text-primary">Sync Health</CardTitle>
             <Sparkles className="w-4 h-4 text-primary" />
           </CardHeader>
           <CardContent>
-            <div className="flex items-end justify-between mb-2">
-              <div className="text-3xl font-bold text-foreground">24%</div>
-            </div>
-            <Progress value={24} className="h-1.5 bg-primary/20" />
-            <p className="text-xs text-muted-foreground mt-2">Ready for Purview labeling</p>
+            {isLoading
+              ? <div className="h-9 w-16 bg-muted/40 animate-pulse rounded" />
+              : (
+                <>
+                  <div className="flex items-end justify-between mb-2">
+                    <div className="text-3xl font-bold" data-testid="stat-health">
+                      {tenants.length > 0 ? `${Math.round((healthyTenants / tenants.length) * 100)}%` : "—"}
+                    </div>
+                  </div>
+                  <Progress
+                    value={tenants.length > 0 ? (healthyTenants / tenants.length) * 100 : 0}
+                    className="h-1.5 bg-primary/20"
+                  />
+                </>
+              )}
+            <p className="text-xs text-muted-foreground mt-2">Tenants with successful last sync</p>
           </CardContent>
         </Card>
       </div>
 
-      {/* Main Content Area */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        
-        {/* Sources Table */}
         <Card className="glass-panel border-border/50 shadow-xl lg:col-span-2 flex flex-col">
           <CardHeader className="pb-4 border-b border-border/40 bg-muted/10 flex flex-row items-center justify-between">
             <CardTitle className="text-lg flex items-center gap-2">
               <FolderOpen className="w-5 h-5 text-primary" />
-              Discovered Sources
+              Connected M365 Tenants
+              {!isLoading && tenants.length > 0 && (
+                <Badge variant="outline" className="ml-1 text-xs">{tenants.length}</Badge>
+              )}
             </CardTitle>
             <div className="flex items-center gap-2">
-              <div className="relative w-full sm:w-64">
+              <div className="relative w-full sm:w-56">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                 <Input
-                  placeholder="Search sources..."
+                  placeholder="Search tenants..."
                   className="pl-9 h-9 bg-background/50 rounded-lg border-border/50 text-sm"
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
+                  data-testid="input-search-tenants"
                 />
               </div>
-              <Button variant="outline" size="icon" className="h-9 w-9">
-                <Filter className="w-4 h-4" />
-              </Button>
             </div>
           </CardHeader>
           <CardContent className="p-0 flex-1">
-            <Table>
-              <TableHeader className="bg-muted/30">
-                <TableRow>
-                  <TableHead className="pl-6">Source Location</TableHead>
-                  <TableHead>Type</TableHead>
-                  <TableHead>Volume</TableHead>
-                  <TableHead>Risk</TableHead>
-                  <TableHead className="text-right pr-6">Action</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {discoveredSources.map((source) => (
-                  <TableRow key={source.id} className="hover:bg-muted/10 transition-colors cursor-pointer group">
-                    <TableCell className="pl-6 py-4">
-                      <div className="flex flex-col">
-                        <span className="font-semibold text-sm">{source.name}</span>
-                        <span className="text-xs font-mono text-muted-foreground mt-0.5 truncate max-w-[200px]" title={source.path}>
-                          {source.path}
-                        </span>
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant="outline" className="bg-background font-normal text-xs">
-                        {source.type}
-                      </Badge>
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex flex-col">
-                        <span className="text-sm font-medium">{source.size}</span>
-                        <span className="text-xs text-muted-foreground">{source.fileCount} files</span>
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex items-center gap-1.5">
-                        {source.riskLevel === 'Critical' && <AlertTriangle className="w-3.5 h-3.5 text-red-500" />}
-                        {source.riskLevel === 'High' && <AlertTriangle className="w-3.5 h-3.5 text-amber-500" />}
-                        {source.riskLevel === 'Medium' && <AlertTriangle className="w-3.5 h-3.5 text-yellow-500" />}
-                        {source.riskLevel === 'Low' && <ShieldAlert className="w-3.5 h-3.5 text-emerald-500" />}
-                        <span className={`text-xs font-medium ${
-                          source.riskLevel === 'Critical' ? 'text-red-500' : 
-                          source.riskLevel === 'High' ? 'text-amber-500' : 
-                          source.riskLevel === 'Medium' ? 'text-yellow-500' : 'text-emerald-500'
-                        }`}>
-                          {source.riskLevel}
-                        </span>
-                      </div>
-                    </TableCell>
-                    <TableCell className="text-right pr-6">
-                      <Button variant="ghost" size="sm" className="opacity-0 group-hover:opacity-100 transition-opacity gap-1 text-primary hover:text-primary hover:bg-primary/10">
-                        Classify <ArrowRight className="w-3.5 h-3.5" />
-                      </Button>
-                    </TableCell>
+            {isLoading ? (
+              <div className="flex items-center justify-center py-16 gap-3 text-muted-foreground">
+                <Loader2 className="w-5 h-5 animate-spin" />
+                Loading tenant inventory...
+              </div>
+            ) : filtered.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-16 gap-3 text-center">
+                <Building2 className="w-10 h-10 text-muted-foreground/30" />
+                <p className="text-sm text-muted-foreground">
+                  {searchTerm ? "No tenants match your search." : "No tenants connected yet."}
+                </p>
+                <p className="text-xs text-muted-foreground/70">
+                  Connect an M365 tenant from the Admin › Tenants page.
+                </p>
+              </div>
+            ) : (
+              <Table>
+                <TableHeader className="bg-muted/30">
+                  <TableRow>
+                    <TableHead className="pl-6">Tenant</TableHead>
+                    <TableHead>Ownership</TableHead>
+                    <TableHead>Sites</TableHead>
+                    <TableHead>Last Sync</TableHead>
+                    <TableHead>Health</TableHead>
+                    <TableHead className="text-right pr-6">Action</TableHead>
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+                </TableHeader>
+                <TableBody>
+                  {filtered.map((tenant) => (
+                    <TableRow key={tenant.id} className="hover:bg-muted/10 transition-colors cursor-pointer group" data-testid={`row-tenant-${tenant.id}`}>
+                      <TableCell className="pl-6 py-4">
+                        <div className="flex items-center gap-3">
+                          <div className="w-8 h-8 rounded-lg bg-background border border-border/50 flex items-center justify-center shadow-sm shrink-0">
+                            <Globe className="w-4 h-4 text-blue-500" />
+                          </div>
+                          <div className="flex flex-col min-w-0">
+                            <span className="font-semibold text-sm truncate">{tenant.tenantName}</span>
+                            <span className="text-xs text-muted-foreground truncate">{tenant.domain}</span>
+                          </div>
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant="outline" className="font-normal text-xs bg-background">
+                          {tenant.ownershipType}
+                        </Badge>
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex items-center gap-1.5">
+                          <Users className="w-3.5 h-3.5 text-muted-foreground" />
+                          <span className="text-sm">{tenant.lastSyncSiteCount?.toLocaleString() ?? "—"}</span>
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex items-center gap-1.5 text-sm text-muted-foreground">
+                          <Clock className="w-3.5 h-3.5" />
+                          {formatDate(tenant.lastSyncAt)}
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        {!tenant.consentGranted ? (
+                          <Badge variant="outline" className="bg-amber-500/10 text-amber-500 border-amber-500/20 text-xs">
+                            <AlertTriangle className="w-3 h-3 mr-1" />
+                            Needs Consent
+                          </Badge>
+                        ) : tenant.lastSyncStatus === "SUCCESS" ? (
+                          <Badge variant="outline" className="bg-emerald-500/10 text-emerald-500 border-emerald-500/20 text-xs">
+                            <CheckCircle2 className="w-3 h-3 mr-1" />
+                            Healthy
+                          </Badge>
+                        ) : tenant.lastSyncStatus === "FAILED" ? (
+                          <Badge variant="outline" className="bg-red-500/10 text-red-500 border-red-500/20 text-xs">
+                            <AlertTriangle className="w-3 h-3 mr-1" />
+                            Sync Error
+                          </Badge>
+                        ) : (
+                          <Badge variant="outline" className="bg-muted/30 text-muted-foreground text-xs">
+                            Not synced
+                          </Badge>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-right pr-6">
+                        <Button variant="ghost" size="sm" className="opacity-0 group-hover:opacity-100 transition-opacity gap-1 text-primary hover:text-primary hover:bg-primary/10">
+                          View <ArrowRight className="w-3.5 h-3.5" />
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
           </CardContent>
         </Card>
 
-        {/* AI Recommendations Panel */}
         <div className="space-y-6">
           <Card className="glass-panel border-primary/20 bg-gradient-to-br from-primary/5 to-background">
             <CardHeader className="pb-3">
@@ -244,65 +293,84 @@ export default function DiscoverDashboard() {
                 Zenith Intelligence
               </CardTitle>
               <CardDescription className="text-xs">
-                AI-driven analysis of discovered content
+                Governance onboarding recommendations
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
+              {!isLoading && pendingConsent > 0 && (
+                <div className="rounded-lg bg-background/60 p-3 border border-amber-500/20 text-sm">
+                  <p className="font-medium text-foreground mb-1 flex items-center gap-1.5">
+                    <AlertTriangle className="w-4 h-4 text-amber-500" />
+                    Consent Required
+                  </p>
+                  <p className="text-muted-foreground text-xs leading-relaxed">
+                    {pendingConsent} tenant{pendingConsent > 1 ? "s" : ""} require admin consent before Zenith can read governance data.
+                  </p>
+                  <Button size="sm" variant="outline" className="w-full mt-3 h-8 text-xs" disabled>
+                    Initiate Consent Flow
+                  </Button>
+                </div>
+              )}
+
               <div className="rounded-lg bg-background/60 p-3 border border-border/50 text-sm">
                 <p className="font-medium text-foreground mb-1 flex items-center gap-1.5">
-                  <AlertTriangle className="w-4 h-4 text-amber-500" />
-                  High Risk Open Shares
+                  <HardDrive className="w-4 h-4 text-blue-500" />
+                  On-Premise Discovery
                 </p>
                 <p className="text-muted-foreground text-xs leading-relaxed">
-                  Found 12,400 files in <span className="font-mono text-[10px] bg-muted px-1 py-0.5 rounded">HR Employee Data Backup</span> matching PII patterns (SSN, DOB) with 'Everyone' read access.
+                  Scan legacy file shares and on-premise SharePoint farms. Requires MGDC (Microsoft Graph Data Connect) and the Enterprise+ plan.
                 </p>
-                <Button size="sm" variant="outline" className="w-full mt-3 h-8 text-xs">Isolate Content</Button>
+                <Button size="sm" className="w-full mt-3 h-8 text-xs bg-primary/90" disabled>
+                  Configure MGDC Pipeline
+                </Button>
               </div>
 
               <div className="rounded-lg bg-background/60 p-3 border border-border/50 text-sm">
                 <p className="font-medium text-foreground mb-1 flex items-center gap-1.5">
-                  <FileBox className="w-4 h-4 text-blue-500" />
-                  Migration Candidate
+                  <ShieldAlert className="w-4 h-4 text-purple-500" />
+                  Oversharing Analysis
                 </p>
                 <p className="text-muted-foreground text-xs leading-relaxed">
-                  <span className="font-mono text-[10px] bg-muted px-1 py-0.5 rounded">Finance Legacy Share</span> has 4.2TB of structured data suitable for automated migration to a new Purview-governed SharePoint site.
+                  MGDC bulk extraction pipeline for anonymized oversharing analytics across all managed content.
                 </p>
-                <Button size="sm" className="w-full mt-3 h-8 text-xs bg-primary/90">Draft Migration Plan</Button>
+                <Button size="sm" variant="outline" className="w-full mt-3 h-8 text-xs border-primary/20 hover:bg-primary/5 text-primary" disabled>
+                  Learn More
+                </Button>
               </div>
             </CardContent>
           </Card>
 
           <Card className="glass-panel border-border/50">
             <CardHeader className="pb-3">
-              <CardTitle className="text-base">MGDC Batch Sync</CardTitle>
+              <CardTitle className="text-base">MGDC Pipeline Status</CardTitle>
               <CardDescription className="text-xs">
-                Microsoft Graph Data Connect status
+                Microsoft Graph Data Connect — not yet configured
               </CardDescription>
             </CardHeader>
             <CardContent>
               <div className="space-y-4">
                 <div>
                   <div className="flex justify-between text-xs mb-1.5">
-                    <span className="font-medium">Oversharing Analytics Pipeline</span>
-                    <span className="text-muted-foreground">Last run: Yesterday</span>
+                    <span className="font-medium">Oversharing Analytics</span>
+                    <span className="text-muted-foreground/50">Not connected</span>
                   </div>
-                  <Progress value={100} className="h-1.5 bg-muted" />
+                  <Progress value={0} className="h-1.5 bg-muted" />
                 </div>
                 <div>
                   <div className="flex justify-between text-xs mb-1.5">
                     <span className="font-medium">Sensitivity Label Extraction</span>
-                    <span className="text-primary animate-pulse">Running (45%)</span>
+                    <span className="text-muted-foreground/50">Not connected</span>
                   </div>
-                  <Progress value={45} className="h-1.5 bg-primary/20" />
+                  <Progress value={0} className="h-1.5 bg-muted" />
                 </div>
                 <p className="text-[10px] text-muted-foreground pt-2">
-                  * MGDC is used exclusively for bulk, read-only extraction and oversharing analysis as per governance policy.
+                  MGDC is used exclusively for bulk, read-only extraction as per governance policy.
+                  Requires Enterprise+ plan and Azure Data Factory configuration.
                 </p>
               </div>
             </CardContent>
           </Card>
         </div>
-
       </div>
     </div>
   );

@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { Link } from "wouter";
+import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -16,98 +17,154 @@ import {
 import { 
   Clock, 
   Search, 
-  Filter, 
   Users, 
   Globe, 
-  FolderGit2,
+  FolderOpen,
   CheckCircle2,
-  XCircle,
   AlertCircle,
   Archive,
-  Trash2,
   CalendarDays,
   ShieldAlert,
-  BarChart2,
-  Infinity,
-  BookOpen,
-  ArrowRight
+  ArrowRight,
+  Building2,
+  Loader2,
+  UserX,
+  Share2,
 } from "lucide-react";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+import { useTenant } from "@/lib/tenant-context";
 
-const reviews = [
-  {
-    id: "REV-001",
-    workspaceName: "Project Phoenix",
-    type: "TEAM",
-    reviewType: "Time-based Renewal",
-    dueDate: "2 days ago",
-    status: "Overdue",
-    owner: "Sarah Jenkins",
-    activityScore: 12
-  },
-  {
-    id: "REV-002",
-    workspaceName: "Q3 Marketing Assets",
-    type: "SHAREPOINT_SITE",
-    reviewType: "Ownership Confirmation",
-    dueDate: "Today",
-    status: "Pending",
-    owner: "Mike Ross (Inactive)",
-    activityScore: 84
-  },
-  {
-    id: "REV-003",
-    workspaceName: "Engineering Specs Sync",
-    type: "LOOP_WORKSPACE",
-    reviewType: "External Guest Review",
-    dueDate: "In 3 days",
-    status: "Pending",
-    owner: "Alex Chen",
-    activityScore: 95
-  },
-  {
-    id: "REV-004",
-    workspaceName: "Mergers & Acquisitions",
-    type: "TEAM",
-    reviewType: "Time-based Renewal",
-    dueDate: "In 5 days",
-    status: "Pending",
-    owner: "David Smith",
-    activityScore: 5
-  },
-  {
-    id: "REV-005",
-    workspaceName: "FY24 Sales Targets",
-    type: "POWER_BI",
-    reviewType: "Ownership Confirmation",
-    dueDate: "In 1 week",
-    status: "Pending",
-    owner: "Jessica Wong",
-    activityScore: 42
+type Workspace = {
+  id: string;
+  displayName: string;
+  siteUrl: string | null;
+  type: string;
+  projectType: string;
+  lastActivityDate: string | null;
+  externalSharing: boolean;
+  siteOwners: Array<{ id?: string; displayName: string; mail?: string }> | null;
+  department: string | null;
+  sensitivity: string;
+};
+
+const daysSince = (date: string | null): number => {
+  if (!date) return 9999;
+  return Math.floor((Date.now() - new Date(date).getTime()) / 86400000);
+};
+
+const activityScore = (date: string | null): number => {
+  const d = daysSince(date);
+  if (d >= 365) return 0;
+  return Math.max(0, Math.round(100 - (d / 365) * 100));
+};
+
+const dueLabel = (d: number): string => {
+  if (d >= 180) return `${d - 180}d overdue`;
+  if (d >= 90) return `Due in ${180 - d}d`;
+  return "Active";
+};
+
+const typeIcon = (type: string) => {
+  switch (type) {
+    case "TEAM_SITE": return <Users className="w-4 h-4 text-blue-500" />;
+    case "COMMUNICATION_SITE": return <Globe className="w-4 h-4 text-teal-500" />;
+    case "HUB_SITE": return <Building2 className="w-4 h-4 text-indigo-500" />;
+    default: return <FolderOpen className="w-4 h-4 text-muted-foreground" />;
   }
-];
+};
+
+const typeLabel = (type: string): string => {
+  switch (type) {
+    case "TEAM_SITE": return "Team Site";
+    case "COMMUNICATION_SITE": return "Communication Site";
+    case "HUB_SITE": return "Hub Site";
+    default: return type.replace(/_/g, " ");
+  }
+};
 
 export default function LifecycleReviewHub() {
   const [searchTerm, setSearchTerm] = useState("");
+  const { selectedTenant } = useTenant();
+  const tenantConnectionId = selectedTenant?.id;
 
-  const getIconForType = (type: string) => {
-    switch(type) {
-      case 'TEAM': return <Users className="w-4 h-4 text-blue-500" />;
-      case 'SHAREPOINT_SITE': return <Globe className="w-4 h-4 text-teal-500" />;
-      case 'M365_GROUP': return <FolderGit2 className="w-4 h-4 text-orange-500" />;
-      case 'POWER_BI': return <BarChart2 className="w-4 h-4 text-yellow-500" />;
-      case 'LOOP_WORKSPACE': return <Infinity className="w-4 h-4 text-indigo-500" />;
-      case 'COPILOT_NOTEBOOK': return <BookOpen className="w-4 h-4 text-purple-500" />;
-      default: return <FolderGit2 className="w-4 h-4" />;
-    }
-  };
+  const { data: workspaces = [], isLoading } = useQuery<Workspace[]>({
+    queryKey: ["/api/workspaces", tenantConnectionId, "lifecycle"],
+    queryFn: async () => {
+      const params = new URLSearchParams();
+      if (tenantConnectionId) params.set("tenantConnectionId", tenantConnectionId);
+      const res = await fetch(`/api/workspaces?${params}`, { credentials: "include" });
+      if (!res.ok) return [];
+      return res.json();
+    },
+    enabled: true,
+  });
+
+  const stats = useMemo(() => {
+    const overdue = workspaces.filter(w => daysSince(w.lastActivityDate) >= 180);
+    const atRisk = workspaces.filter(w => {
+      const d = daysSince(w.lastActivityDate);
+      return d >= 90 && d < 180;
+    });
+    const orphaned = workspaces.filter(w => {
+      const owners = Array.isArray(w.siteOwners) ? w.siteOwners : [];
+      return owners.length === 0;
+    });
+    const active = workspaces.filter(w => daysSince(w.lastActivityDate) < 90);
+    const rate = workspaces.length > 0
+      ? Math.round((active.length / workspaces.length) * 100)
+      : 0;
+    return { overdue: overdue.length, atRisk: atRisk.length, orphaned: orphaned.length, rate };
+  }, [workspaces]);
+
+  const reviewQueue = useMemo(() => {
+    return workspaces
+      .filter(w => daysSince(w.lastActivityDate) >= 90)
+      .sort((a, b) => daysSince(b.lastActivityDate) - daysSince(a.lastActivityDate))
+      .map(w => {
+        const d = daysSince(w.lastActivityDate);
+        const owners = Array.isArray(w.siteOwners) ? w.siteOwners : [];
+        const orphaned = owners.length === 0;
+        let reviewType = "Time-based Renewal";
+        if (orphaned) reviewType = "Ownership Confirmation";
+        else if (w.externalSharing) reviewType = "External Guest Review";
+        return {
+          ...w,
+          reviewType,
+          dueStr: dueLabel(d),
+          isOverdue: d >= 180,
+          ownerName: orphaned ? "No owner assigned" : owners[0]?.displayName ?? "Unknown",
+          orphaned,
+          score: activityScore(w.lastActivityDate),
+        };
+      });
+  }, [workspaces]);
+
+  const filtered = searchTerm
+    ? reviewQueue.filter(r =>
+        r.displayName.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        r.ownerName.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        r.reviewType.toLowerCase().includes(searchTerm.toLowerCase())
+      )
+    : reviewQueue;
+
+  if (!tenantConnectionId && !isLoading && workspaces.length === 0) {
+    return (
+      <div className="space-y-8 animate-in fade-in duration-500 pb-12">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight">Workspace Review Hub</h1>
+          <p className="text-muted-foreground mt-1">Manage lifecycle events, ownership confirmations, and retention policies.</p>
+        </div>
+        <Card className="glass-panel border-border/50">
+          <CardContent className="flex flex-col items-center justify-center py-16 text-center gap-4">
+            <Building2 className="w-12 h-12 text-muted-foreground/40" />
+            <div>
+              <p className="text-lg font-medium text-muted-foreground">No tenant selected</p>
+              <p className="text-sm text-muted-foreground/70 mt-1">Select a tenant to view workspaces requiring lifecycle review.</p>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6 animate-in fade-in duration-500 pb-12 max-w-6xl mx-auto">
@@ -115,75 +172,85 @@ export default function LifecycleReviewHub() {
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Workspace Review Hub</h1>
           <p className="text-muted-foreground mt-1 max-w-2xl">
-            Manage lifecycle events, ownership confirmations, and automated retention policies. No destructive actions occur without human confirmation.
+            Lifecycle reviews are triggered automatically by inactivity thresholds. No destructive actions occur without human confirmation.
           </p>
         </div>
         <div className="flex gap-3">
-          <Button variant="outline" className="gap-2 shadow-sm">
+          <Button variant="outline" className="gap-2 shadow-sm" disabled>
             <CalendarDays className="w-4 h-4 text-muted-foreground" />
             Schedule Mass Review
           </Button>
         </div>
       </div>
 
-      {/* Metrics Dashboard */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
         <Card className="glass-panel border-red-500/20 shadow-red-500/5">
           <CardHeader className="pb-2 flex flex-row items-center justify-between">
-            <CardTitle className="text-sm font-medium text-muted-foreground uppercase tracking-wider text-red-500">Overdue Reviews</CardTitle>
+            <CardTitle className="text-sm font-medium text-red-500 uppercase tracking-wider">Overdue Reviews</CardTitle>
             <AlertCircle className="w-4 h-4 text-red-500" />
           </CardHeader>
           <CardContent>
-            <div className="text-3xl font-bold text-red-500">24</div>
-            <p className="text-xs text-red-500/80 mt-1 flex items-center gap-1">Requires immediate action</p>
-          </CardContent>
-        </Card>
-        
-        <Card className="glass-panel border-border/50">
-          <CardHeader className="pb-2 flex flex-row items-center justify-between">
-            <CardTitle className="text-sm font-medium text-muted-foreground uppercase tracking-wider">Pending This Week</CardTitle>
-            <Clock className="w-4 h-4 text-amber-500" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-3xl font-bold text-foreground">156</div>
-            <p className="text-xs text-muted-foreground mt-1 flex items-center gap-1">Notices sent to owners</p>
+            {isLoading
+              ? <div className="h-9 w-16 bg-muted/40 animate-pulse rounded" />
+              : <div className="text-3xl font-bold text-red-500" data-testid="stat-overdue">{stats.overdue}</div>}
+            <p className="text-xs text-red-500/80 mt-1">Inactive 180+ days</p>
           </CardContent>
         </Card>
 
         <Card className="glass-panel border-border/50">
           <CardHeader className="pb-2 flex flex-row items-center justify-between">
-            <CardTitle className="text-sm font-medium text-muted-foreground uppercase tracking-wider">Orphaned Workspaces</CardTitle>
-            <Users className="w-4 h-4 text-indigo-500" />
+            <CardTitle className="text-sm font-medium text-muted-foreground uppercase tracking-wider">At Risk</CardTitle>
+            <Clock className="w-4 h-4 text-amber-500" />
           </CardHeader>
           <CardContent>
-            <div className="text-3xl font-bold text-foreground">42</div>
-            <p className="text-xs text-muted-foreground mt-1 flex items-center gap-1">No active owner in Entra ID</p>
+            {isLoading
+              ? <div className="h-9 w-16 bg-muted/40 animate-pulse rounded" />
+              : <div className="text-3xl font-bold" data-testid="stat-at-risk">{stats.atRisk}</div>}
+            <p className="text-xs text-muted-foreground mt-1">Inactive 90–180 days</p>
+          </CardContent>
+        </Card>
+
+        <Card className="glass-panel border-border/50">
+          <CardHeader className="pb-2 flex flex-row items-center justify-between">
+            <CardTitle className="text-sm font-medium text-muted-foreground uppercase tracking-wider">Orphaned</CardTitle>
+            <UserX className="w-4 h-4 text-indigo-500" />
+          </CardHeader>
+          <CardContent>
+            {isLoading
+              ? <div className="h-9 w-16 bg-muted/40 animate-pulse rounded" />
+              : <div className="text-3xl font-bold" data-testid="stat-orphaned">{stats.orphaned}</div>}
+            <p className="text-xs text-muted-foreground mt-1">No active owner in Entra ID</p>
           </CardContent>
         </Card>
 
         <Card className="glass-panel border-emerald-500/20 bg-emerald-500/5">
           <CardHeader className="pb-2 flex flex-row items-center justify-between">
-            <CardTitle className="text-sm font-medium text-emerald-600 dark:text-emerald-500 uppercase tracking-wider">Completion Rate</CardTitle>
+            <CardTitle className="text-sm font-medium text-emerald-600 dark:text-emerald-500 uppercase tracking-wider">Active Rate</CardTitle>
             <CheckCircle2 className="w-4 h-4 text-emerald-500" />
           </CardHeader>
           <CardContent>
-            <div className="flex items-end justify-between mb-2">
-              <div className="text-3xl font-bold text-foreground">89%</div>
-            </div>
-            <Progress value={89} className="h-1.5 bg-emerald-500/20 [&>div]:bg-emerald-500" />
-            <p className="text-xs text-emerald-600/80 mt-2">For current quarter</p>
+            {isLoading
+              ? <div className="h-9 w-16 bg-muted/40 animate-pulse rounded" />
+              : (
+                <>
+                  <div className="text-3xl font-bold" data-testid="stat-active-rate">{stats.rate}%</div>
+                  <Progress value={stats.rate} className="h-1.5 bg-emerald-500/20 [&>div]:bg-emerald-500 mt-2" />
+                </>
+              )}
+            <p className="text-xs text-emerald-600/80 mt-1">Workspaces active within 90 days</p>
           </CardContent>
         </Card>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        
-        {/* Main Review Queue Table */}
         <Card className="glass-panel border-border/50 shadow-xl lg:col-span-2 flex flex-col min-h-[500px]">
           <CardHeader className="pb-4 border-b border-border/40 bg-muted/10 flex flex-row items-center justify-between">
             <CardTitle className="text-lg flex items-center gap-2">
               <Clock className="w-5 h-5 text-primary" />
               Active Review Queue
+              {!isLoading && reviewQueue.length > 0 && (
+                <Badge variant="outline" className="ml-1 text-xs">{reviewQueue.length}</Badge>
+              )}
             </CardTitle>
             <div className="flex items-center gap-2">
               <div className="relative w-full sm:w-64">
@@ -193,86 +260,104 @@ export default function LifecycleReviewHub() {
                   className="pl-9 h-9 bg-background/50 rounded-lg border-border/50 text-sm"
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
+                  data-testid="input-search-reviews"
                 />
               </div>
-              <Button variant="outline" size="icon" className="h-9 w-9">
-                <Filter className="w-4 h-4" />
-              </Button>
             </div>
           </CardHeader>
           <CardContent className="p-0 flex-1">
-            <Table>
-              <TableHeader className="bg-muted/30">
-                <TableRow>
-                  <TableHead className="pl-6">Workspace</TableHead>
-                  <TableHead>Review Type</TableHead>
-                  <TableHead>Owner / Status</TableHead>
-                  <TableHead>Activity</TableHead>
-                  <TableHead className="text-right pr-6">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {reviews.map((review) => (
-                  <TableRow key={review.id} className="hover:bg-muted/10 transition-colors group">
-                    <TableCell className="pl-6 py-4">
-                      <div className="flex items-center gap-3">
-                        <div className="w-8 h-8 rounded-lg bg-background border border-border/50 flex items-center justify-center shadow-sm">
-                          {getIconForType(review.type)}
-                        </div>
-                        <div className="flex flex-col">
-                          <span className="font-semibold text-sm">{review.workspaceName}</span>
-                          <span className="text-xs text-muted-foreground">{review.type.replace('_', ' ')}</span>
-                        </div>
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant="outline" className="bg-background font-normal text-xs whitespace-nowrap">
-                        {review.reviewType}
-                      </Badge>
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex flex-col gap-1">
-                        <span className={`text-sm ${review.owner.includes('(Inactive)') ? 'text-red-500 font-medium flex items-center gap-1' : ''}`}>
-                          {review.owner.includes('(Inactive)') && <AlertCircle className="w-3 h-3" />}
-                          {review.owner}
-                        </span>
-                        <span className={`text-[10px] font-medium uppercase tracking-wider ${
-                          review.status === 'Overdue' ? 'text-red-500' : 'text-amber-500'
-                        }`}>
-                          {review.status} • {review.dueDate}
-                        </span>
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex items-center gap-2">
-                        <div className="w-16 h-1.5 rounded-full bg-muted overflow-hidden">
-                          <div 
-                            className={`h-full ${
-                              review.activityScore > 70 ? 'bg-emerald-500' : 
-                              review.activityScore > 30 ? 'bg-amber-500' : 'bg-red-500'
-                            }`}
-                            style={{ width: `${review.activityScore}%` }}
-                          />
-                        </div>
-                        <span className="text-xs text-muted-foreground">{review.activityScore}%</span>
-                      </div>
-                    </TableCell>
-                    <TableCell className="text-right pr-6">
-                      <Button size="sm" variant="ghost" className="opacity-0 group-hover:opacity-100 transition-opacity gap-1 text-primary hover:text-primary hover:bg-primary/10">
-                        Review <ArrowRight className="w-3.5 h-3.5" />
-                      </Button>
-                    </TableCell>
+            {isLoading ? (
+              <div className="flex items-center justify-center py-16 gap-3 text-muted-foreground">
+                <Loader2 className="w-5 h-5 animate-spin" />
+                Loading workspace review queue...
+              </div>
+            ) : filtered.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-16 gap-3 text-center">
+                <CheckCircle2 className="w-10 h-10 text-emerald-500/40" />
+                <p className="text-sm text-muted-foreground">
+                  {searchTerm ? "No matches found." : "No workspaces require review."}
+                </p>
+                <p className="text-xs text-muted-foreground/70">
+                  Workspaces inactive for 90+ days will appear here automatically.
+                </p>
+              </div>
+            ) : (
+              <Table>
+                <TableHeader className="bg-muted/30">
+                  <TableRow>
+                    <TableHead className="pl-6">Workspace</TableHead>
+                    <TableHead>Review Type</TableHead>
+                    <TableHead>Owner / Status</TableHead>
+                    <TableHead>Activity</TableHead>
+                    <TableHead className="text-right pr-6">Due</TableHead>
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+                </TableHeader>
+                <TableBody>
+                  {filtered.slice(0, 20).map((item) => (
+                    <TableRow key={item.id} className="hover:bg-muted/10 transition-colors group" data-testid={`row-review-${item.id}`}>
+                      <TableCell className="pl-6 py-4">
+                        <div className="flex items-center gap-3">
+                          <div className="w-8 h-8 rounded-lg bg-background border border-border/50 flex items-center justify-center shadow-sm shrink-0">
+                            {typeIcon(item.type)}
+                          </div>
+                          <div className="flex flex-col min-w-0">
+                            <span className="font-semibold text-sm truncate" title={item.displayName}>{item.displayName}</span>
+                            <span className="text-xs text-muted-foreground">{typeLabel(item.type)}</span>
+                          </div>
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant="outline" className="bg-background font-normal text-xs whitespace-nowrap">
+                          {item.reviewType === "Ownership Confirmation" && <UserX className="w-3 h-3 mr-1" />}
+                          {item.reviewType === "External Guest Review" && <Share2 className="w-3 h-3 mr-1" />}
+                          {item.reviewType}
+                        </Badge>
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex flex-col gap-0.5">
+                          <span className={`text-sm flex items-center gap-1 ${item.orphaned ? "text-red-500 font-medium" : ""}`}>
+                            {item.orphaned && <AlertCircle className="w-3 h-3 shrink-0" />}
+                            <span className="truncate max-w-[140px]" title={item.ownerName}>{item.ownerName}</span>
+                          </span>
+                          <span className={`text-[10px] font-medium uppercase tracking-wider ${
+                            item.isOverdue ? "text-red-500" : "text-amber-500"
+                          }`}>
+                            {item.isOverdue ? "Overdue" : "Pending"}
+                          </span>
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex items-center gap-2">
+                          <div className="w-16 h-1.5 rounded-full bg-muted overflow-hidden">
+                            <div
+                              className={`h-full ${
+                                item.score > 70 ? "bg-emerald-500" :
+                                item.score > 30 ? "bg-amber-500" : "bg-red-500"
+                              }`}
+                              style={{ width: `${item.score}%` }}
+                            />
+                          </div>
+                          <span className="text-xs text-muted-foreground w-8">{item.score}%</span>
+                        </div>
+                      </TableCell>
+                      <TableCell className="text-right pr-6">
+                        <span className={`text-xs font-medium ${item.isOverdue ? "text-red-500" : "text-amber-500"}`}>
+                          {item.dueStr}
+                        </span>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
           </CardContent>
-          <CardFooter className="bg-muted/10 border-t border-border/40 p-3 flex justify-center text-xs text-muted-foreground rounded-b-xl">
-            Showing 5 of 180 pending reviews.
-          </CardFooter>
+          {!isLoading && reviewQueue.length > 0 && (
+            <CardFooter className="bg-muted/10 border-t border-border/40 p-3 flex justify-center text-xs text-muted-foreground rounded-b-xl">
+              Showing {Math.min(20, filtered.length)} of {reviewQueue.length} workspaces pending review
+            </CardFooter>
+          )}
         </Card>
 
-        {/* Right Sidebar - Quick Actions & Insights */}
         <div className="space-y-6">
           <Card className="glass-panel border-primary/20 bg-gradient-to-br from-primary/5 to-background">
             <CardHeader className="pb-3">
@@ -281,30 +366,34 @@ export default function LifecycleReviewHub() {
                 Suggested Actions
               </CardTitle>
               <CardDescription className="text-xs">
-                AI-driven recommendations based on activity
+                Recommended next steps based on your workspace inventory
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="rounded-lg bg-background/60 p-3 border border-border/50 text-sm">
                 <p className="font-medium text-foreground mb-1 flex items-center justify-between">
-                  <span className="flex items-center gap-1.5"><Archive className="w-4 h-4 text-amber-500" /> Auto-Archive</span>
-                  <Badge className="bg-primary text-primary-foreground text-[10px] h-5 px-1.5">14 Sites</Badge>
+                  <span className="flex items-center gap-1.5"><Archive className="w-4 h-4 text-amber-500" /> Archive Candidates</span>
+                  {!isLoading && <Badge className="bg-primary text-primary-foreground text-[10px] h-5 px-1.5">{stats.overdue} Sites</Badge>}
                 </p>
                 <p className="text-muted-foreground text-xs leading-relaxed">
-                  These workspaces have 0% activity in the last 180 days and owners have not responded to 3 renewal notices.
+                  These workspaces have been inactive for 180+ days. Review before archiving.
                 </p>
-                <Button size="sm" className="w-full mt-3 h-8 text-xs bg-primary/90">Review Archive Candidates</Button>
+                <Button size="sm" className="w-full mt-3 h-8 text-xs bg-primary/90" disabled>
+                  Review Archive Candidates
+                </Button>
               </div>
 
               <div className="rounded-lg bg-background/60 p-3 border border-border/50 text-sm">
                 <p className="font-medium text-foreground mb-1 flex items-center justify-between">
                   <span className="flex items-center gap-1.5"><Users className="w-4 h-4 text-blue-500" /> Reassign Ownership</span>
-                  <Badge className="bg-primary text-primary-foreground text-[10px] h-5 px-1.5">42 Orphaned</Badge>
+                  {!isLoading && <Badge className="bg-primary text-primary-foreground text-[10px] h-5 px-1.5">{stats.orphaned} Orphaned</Badge>}
                 </p>
                 <p className="text-muted-foreground text-xs leading-relaxed">
-                  Primary owners have left the organization. Zenith can automatically suggest new owners based on top contributors.
+                  No active owners found for these workspaces. Assign new owners to maintain governance.
                 </p>
-                <Button size="sm" variant="outline" className="w-full mt-3 h-8 text-xs border-primary/20 hover:bg-primary/5 text-primary">Suggest New Owners</Button>
+                <Button size="sm" variant="outline" className="w-full mt-3 h-8 text-xs border-primary/20 hover:bg-primary/5 text-primary" disabled>
+                  Suggest New Owners
+                </Button>
               </div>
             </CardContent>
           </Card>
@@ -317,21 +406,21 @@ export default function LifecycleReviewHub() {
               <div className="flex items-center justify-between p-2 rounded-lg bg-muted/30 border border-border/40">
                 <div className="flex items-center gap-2">
                   <div className="w-2 h-2 rounded-full bg-emerald-500" />
-                  <span className="text-sm font-medium">Standard 1-Year Renewal</span>
+                  <span className="text-sm font-medium">Inactivity Threshold (90 days)</span>
                 </div>
                 <Badge variant="outline" className="text-[10px]">Active</Badge>
               </div>
               <div className="flex items-center justify-between p-2 rounded-lg bg-muted/30 border border-border/40">
                 <div className="flex items-center gap-2">
                   <div className="w-2 h-2 rounded-full bg-emerald-500" />
-                  <span className="text-sm font-medium">Guest Access 90-Day Review</span>
+                  <span className="text-sm font-medium">Archive Review (180 days)</span>
                 </div>
                 <Badge variant="outline" className="text-[10px]">Active</Badge>
               </div>
               <div className="flex items-center justify-between p-2 rounded-lg bg-muted/30 border border-border/40">
                 <div className="flex items-center gap-2">
                   <div className="w-2 h-2 rounded-full bg-amber-500" />
-                  <span className="text-sm font-medium">Orphaned Workspace Escalation</span>
+                  <span className="text-sm font-medium">Orphan Escalation</span>
                 </div>
                 <Badge variant="outline" className="text-[10px]">Draft</Badge>
               </div>
@@ -341,7 +430,6 @@ export default function LifecycleReviewHub() {
             </CardContent>
           </Card>
         </div>
-
       </div>
     </div>
   );

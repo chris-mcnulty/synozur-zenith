@@ -1,7 +1,7 @@
+import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { 
   BarChart3, 
@@ -9,13 +9,14 @@ import {
   TrendingUp, 
   Users, 
   Activity,
-  Zap,
   Globe,
   Database,
-  ArrowUpRight,
   ShieldCheck,
-  LineChart,
-  PieChart
+  PieChart,
+  Loader2,
+  Building2,
+  FolderOpen,
+  AlertCircle,
 } from "lucide-react";
 import {
   Table,
@@ -26,30 +27,106 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Progress } from "@/components/ui/progress";
+import { useTenant } from "@/lib/tenant-context";
+
+type Workspace = {
+  id: string;
+  type: string;
+  projectType: string;
+  department: string | null;
+  siteOwners: Array<{ displayName: string }> | null;
+  lastActivityDate: string | null;
+  externalSharing: boolean;
+  sensitivity: string;
+};
+
+type Policy = { id: string; name: string; isActive: boolean };
+
+const daysSince = (date: string | null): number => {
+  if (!date) return 9999;
+  return Math.floor((Date.now() - new Date(date).getTime()) / 86400000);
+};
 
 export default function ReportsPage() {
+  const { selectedTenant } = useTenant();
+  const tenantConnectionId = selectedTenant?.id;
+
+  const { data: workspaces = [], isLoading: loadingWs } = useQuery<Workspace[]>({
+    queryKey: ["/api/workspaces", tenantConnectionId, "reports"],
+    queryFn: async () => {
+      const params = new URLSearchParams();
+      if (tenantConnectionId) params.set("tenantConnectionId", tenantConnectionId);
+      const res = await fetch(`/api/workspaces?${params}`, { credentials: "include" });
+      if (!res.ok) return [];
+      const data = await res.json();
+      return Array.isArray(data) ? data : (data.items ?? []);
+    },
+  });
+
+  const { data: policies = [], isLoading: loadingPolicies } = useQuery<Policy[]>({
+    queryKey: ["/api/policies"],
+    queryFn: () => fetch("/api/policies", { credentials: "include" }).then(r => r.ok ? r.json() : []),
+  });
+
+  const isLoading = loadingWs || loadingPolicies;
+
+  const total = workspaces.length;
+  const activePolicies = policies.filter(p => p.isActive).length;
+  const activeWorkspaces = workspaces.filter(w => daysSince(w.lastActivityDate) < 90).length;
+  const orphaned = workspaces.filter(w => {
+    const owners = Array.isArray(w.siteOwners) ? w.siteOwners : [];
+    return owners.length === 0;
+  }).length;
+
+  const byType = [
+    { label: "Team Sites", key: "TEAM_SITE", color: "bg-blue-500" },
+    { label: "Communication Sites", key: "COMMUNICATION_SITE", color: "bg-teal-500" },
+    { label: "Hub Sites", key: "HUB_SITE", color: "bg-indigo-500" },
+  ].map(t => ({
+    ...t,
+    count: workspaces.filter(w => w.type === t.key).length,
+    pct: total > 0 ? Math.round((workspaces.filter(w => w.type === t.key).length / total) * 100) : 0,
+  }));
+
+  const byProject = [
+    { label: "Deal Sites", key: "DEAL", color: "bg-emerald-500" },
+    { label: "Portfolio Company Sites", key: "PORTCO", color: "bg-amber-500" },
+    { label: "General Sites", key: "GENERAL", color: "bg-muted-foreground" },
+  ].map(t => ({
+    ...t,
+    count: workspaces.filter(w => w.projectType === t.key).length,
+    pct: total > 0 ? Math.round((workspaces.filter(w => w.projectType === t.key).length / total) * 100) : 0,
+  }));
+
+  const byDepartment = Array.from(
+    workspaces.reduce((map, w) => {
+      const dept = w.department || "Unclassified";
+      if (!map.has(dept)) map.set(dept, { dept, count: 0, withOwners: 0, external: 0, active: 0 });
+      const entry = map.get(dept)!;
+      entry.count++;
+      if ((Array.isArray(w.siteOwners) ? w.siteOwners : []).length >= 2) entry.withOwners++;
+      if (w.externalSharing) entry.external++;
+      if (daysSince(w.lastActivityDate) < 90) entry.active++;
+      return map;
+    }, new Map<string, { dept: string; count: number; withOwners: number; external: number; active: number }>())
+  )
+    .map(([, v]) => v)
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 8);
+
+  const complianceRate = total > 0 ? Math.round((activeWorkspaces / total) * 100) : 0;
+
   return (
     <div className="space-y-6 animate-in fade-in duration-500 pb-12 max-w-7xl mx-auto">
       <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Platform Telemetry</h1>
           <p className="text-muted-foreground mt-1 max-w-2xl">
-            Internal usage analytics, API health, and governance adoption metrics across your managed environments.
+            Live governance metrics and workspace analytics across your managed M365 environment.
           </p>
         </div>
         <div className="flex gap-3 items-center">
-          <Select defaultValue="30">
-            <SelectTrigger className="w-[140px] bg-background shadow-sm">
-              <SelectValue placeholder="Time Range" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="7">Last 7 days</SelectItem>
-              <SelectItem value="30">Last 30 days</SelectItem>
-              <SelectItem value="90">Last 90 days</SelectItem>
-              <SelectItem value="365">Last year</SelectItem>
-            </SelectContent>
-          </Select>
-          <Button variant="outline" className="gap-2 shadow-sm">
+          <Button variant="outline" className="gap-2 shadow-sm" disabled>
             <Download className="w-4 h-4" />
             Export Report
           </Button>
@@ -58,279 +135,305 @@ export default function ReportsPage() {
 
       <Tabs defaultValue="overview" className="space-y-6">
         <TabsList className="bg-muted/50 border border-border/50 p-1">
-          <TabsTrigger value="overview" className="rounded-md data-[state=active]:shadow-sm">Platform Overview</TabsTrigger>
-          <TabsTrigger value="api" className="rounded-md data-[state=active]:shadow-sm">Graph API Health</TabsTrigger>
-          <TabsTrigger value="adoption" className="rounded-md data-[state=active]:shadow-sm">Governance Adoption</TabsTrigger>
+          <TabsTrigger value="overview" className="rounded-md data-[state=active]:shadow-sm" data-testid="tab-overview">Platform Overview</TabsTrigger>
+          <TabsTrigger value="breakdown" className="rounded-md data-[state=active]:shadow-sm" data-testid="tab-breakdown">Workspace Breakdown</TabsTrigger>
         </TabsList>
 
         <TabsContent value="overview" className="space-y-6">
-          {/* Top Level KPIs */}
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
             <Card className="glass-panel border-border/50 shadow-sm">
               <CardHeader className="pb-2 flex flex-row items-center justify-between">
-                <CardTitle className="text-sm font-medium text-muted-foreground">Active Workspaces</CardTitle>
+                <CardTitle className="text-sm font-medium text-muted-foreground">Managed Workspaces</CardTitle>
                 <div className="w-8 h-8 rounded-full bg-blue-500/10 flex items-center justify-center">
                   <Globe className="w-4 h-4 text-blue-500" />
                 </div>
               </CardHeader>
               <CardContent>
-                <div className="text-2xl font-bold">14,248</div>
-                <div className="flex items-center gap-1 mt-1 text-xs font-medium text-emerald-500">
-                  <TrendingUp className="w-3 h-3" />
-                  +12% vs last month
+                {isLoading
+                  ? <div className="h-8 w-20 bg-muted/40 animate-pulse rounded" />
+                  : <div className="text-2xl font-bold" data-testid="stat-total-workspaces">{total.toLocaleString()}</div>}
+                <div className="flex items-center gap-1 mt-1 text-xs font-medium text-muted-foreground">
+                  {!isLoading && <span>{activeWorkspaces.toLocaleString()} active in last 90 days</span>}
                 </div>
               </CardContent>
             </Card>
 
             <Card className="glass-panel border-border/50 shadow-sm">
               <CardHeader className="pb-2 flex flex-row items-center justify-between">
-                <CardTitle className="text-sm font-medium text-muted-foreground">Policies Enforced</CardTitle>
+                <CardTitle className="text-sm font-medium text-muted-foreground">Active Policies</CardTitle>
                 <div className="w-8 h-8 rounded-full bg-purple-500/10 flex items-center justify-center">
                   <ShieldCheck className="w-4 h-4 text-purple-500" />
                 </div>
               </CardHeader>
               <CardContent>
-                <div className="text-2xl font-bold">842.1k</div>
-                <div className="flex items-center gap-1 mt-1 text-xs font-medium text-emerald-500">
-                  <TrendingUp className="w-3 h-3" />
-                  +5% vs last month
+                {isLoading
+                  ? <div className="h-8 w-20 bg-muted/40 animate-pulse rounded" />
+                  : <div className="text-2xl font-bold" data-testid="stat-active-policies">{activePolicies}</div>}
+                <div className="text-xs text-muted-foreground mt-1">
+                  {!isLoading && <span>{policies.length} total policies defined</span>}
                 </div>
               </CardContent>
             </Card>
 
             <Card className="glass-panel border-border/50 shadow-sm">
               <CardHeader className="pb-2 flex flex-row items-center justify-between">
-                <CardTitle className="text-sm font-medium text-muted-foreground">Unique Users Managed</CardTitle>
+                <CardTitle className="text-sm font-medium text-muted-foreground">Activity Rate</CardTitle>
                 <div className="w-8 h-8 rounded-full bg-emerald-500/10 flex items-center justify-center">
-                  <Users className="w-4 h-4 text-emerald-500" />
+                  <Activity className="w-4 h-4 text-emerald-500" />
                 </div>
               </CardHeader>
               <CardContent>
-                <div className="text-2xl font-bold">42,892</div>
-                <div className="flex items-center gap-1 mt-1 text-xs font-medium text-emerald-500">
-                  <TrendingUp className="w-3 h-3" />
-                  +2% vs last month
-                </div>
+                {isLoading
+                  ? <div className="h-8 w-20 bg-muted/40 animate-pulse rounded" />
+                  : <div className="text-2xl font-bold" data-testid="stat-activity-rate">{complianceRate}%</div>}
+                <div className="text-xs text-muted-foreground mt-1">Active in last 90 days</div>
               </CardContent>
             </Card>
 
             <Card className="glass-panel border-border/50 shadow-sm">
               <CardHeader className="pb-2 flex flex-row items-center justify-between">
-                <CardTitle className="text-sm font-medium text-muted-foreground">Zenith Agent Calls</CardTitle>
-                <div className="w-8 h-8 rounded-full bg-amber-500/10 flex items-center justify-center">
-                  <Zap className="w-4 h-4 text-amber-500" />
+                <CardTitle className="text-sm font-medium text-muted-foreground">Orphaned Workspaces</CardTitle>
+                <div className="w-8 h-8 rounded-full bg-red-500/10 flex items-center justify-center">
+                  <AlertCircle className="w-4 h-4 text-red-500" />
                 </div>
               </CardHeader>
               <CardContent>
-                <div className="text-2xl font-bold">18,430</div>
-                <div className="flex items-center gap-1 mt-1 text-xs font-medium text-emerald-500">
-                  <TrendingUp className="w-3 h-3" />
-                  +45% vs last month
-                </div>
+                {isLoading
+                  ? <div className="h-8 w-20 bg-muted/40 animate-pulse rounded" />
+                  : <div className="text-2xl font-bold text-red-500" data-testid="stat-orphaned">{orphaned}</div>}
+                <div className="text-xs text-muted-foreground mt-1">No owners assigned in Entra ID</div>
               </CardContent>
             </Card>
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            {/* Main Traffic Chart */}
-            <Card className="glass-panel border-border/50 shadow-xl lg:col-span-2 min-h-[400px]">
+            <Card className="glass-panel border-border/50 shadow-xl lg:col-span-2">
               <CardHeader className="pb-4 border-b border-border/40">
                 <div className="flex items-center justify-between">
                   <div>
                     <CardTitle className="flex items-center gap-2 text-lg">
-                      <BarChart3 className="w-5 h-5 text-primary" />
-                      Platform Activity Volume
+                      <PieChart className="w-5 h-5 text-primary" />
+                      Workspace Type Distribution
                     </CardTitle>
-                    <CardDescription>Provisioning events, lifecycle checks, and policy evaluations</CardDescription>
+                    <CardDescription>Live breakdown of your managed M365 site inventory by site type</CardDescription>
                   </div>
-                  <Badge variant="outline" className="bg-primary/5 border-primary/20 text-primary">Daily Active Workloads</Badge>
+                  {!isLoading && <Badge variant="outline" className="bg-primary/5 border-primary/20 text-primary">{total} Total Sites</Badge>}
                 </div>
               </CardHeader>
-              <CardContent className="p-6 h-[320px] flex flex-col justify-end relative">
-                {/* Mock Chart Area */}
-                <div className="absolute inset-0 flex items-center justify-center pointer-events-none opacity-20">
-                   <LineChart className="w-48 h-48 text-muted-foreground" />
-                </div>
-                
-                <div className="h-full flex items-end gap-2 sm:gap-4 relative z-10 w-full pt-10">
-                  {/* Generate 30 random bars for a mock chart */}
-                  {Array.from({ length: 30 }).map((_, i) => {
-                    const height = 30 + Math.random() * 60;
-                    const isWeekend = i % 7 === 5 || i % 7 === 6;
-                    return (
-                      <div key={i} className="relative flex-1 group flex flex-col justify-end h-full">
-                        <div 
-                          className={`w-full rounded-t-sm transition-all duration-300 ${
-                            isWeekend ? 'bg-muted/40' : 'bg-primary/60 group-hover:bg-primary/80'
-                          }`}
-                          style={{ height: `${isWeekend ? height * 0.4 : height}%` }}
-                        />
+              <CardContent className="p-6">
+                {isLoading ? (
+                  <div className="flex items-center justify-center py-12 gap-3 text-muted-foreground">
+                    <Loader2 className="w-5 h-5 animate-spin" />
+                    Loading workspace data...
+                  </div>
+                ) : total === 0 ? (
+                  <div className="flex flex-col items-center justify-center py-12 gap-3 text-center">
+                    <Database className="w-10 h-10 text-muted-foreground/30" />
+                    <p className="text-sm text-muted-foreground">No workspaces synced yet.</p>
+                    <p className="text-xs text-muted-foreground/70">Run a tenant sync to populate workspace analytics.</p>
+                  </div>
+                ) : (
+                  <div className="space-y-6">
+                    <div>
+                      <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-3">By Site Type</p>
+                      <div className="space-y-4">
+                        {byType.map(t => (
+                          <div key={t.key} className="space-y-1.5" data-testid={`dist-type-${t.key}`}>
+                            <div className="flex items-center justify-between text-sm">
+                              <div className="flex items-center gap-2">
+                                <div className={`w-2.5 h-2.5 rounded-full ${t.color}`} />
+                                <span className="font-medium">{t.label}</span>
+                              </div>
+                              <div className="flex items-center gap-2 text-muted-foreground">
+                                <span>{t.count.toLocaleString()}</span>
+                                <span className="text-xs font-bold text-foreground">{t.pct}%</span>
+                              </div>
+                            </div>
+                            <Progress value={t.pct} className={`h-2 bg-muted [&>div]:${t.color}`} />
+                          </div>
+                        ))}
                       </div>
-                    );
-                  })}
-                </div>
-                <div className="flex justify-between mt-4 text-xs text-muted-foreground pt-2 border-t border-border/50 font-medium">
-                  <span>Nov 1</span>
-                  <span>Nov 15</span>
-                  <span>Nov 30</span>
-                </div>
+                    </div>
+                    <div className="border-t border-border/40 pt-4">
+                      <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-3">By Project Context</p>
+                      <div className="grid grid-cols-3 gap-3">
+                        {byProject.map(p => (
+                          <div key={p.key} className="text-center p-3 rounded-lg bg-muted/30 border border-border/40" data-testid={`dist-project-${p.key}`}>
+                            <div className="text-xl font-bold">{p.count}</div>
+                            <div className="text-xs text-muted-foreground mt-1">{p.label}</div>
+                            <Badge variant="outline" className="mt-1 text-[10px]">{p.pct}%</Badge>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                )}
               </CardContent>
             </Card>
 
-            {/* Right Column KPIs */}
             <div className="space-y-6">
               <Card className="glass-panel border-border/50 shadow-sm">
                 <CardHeader className="pb-3">
                   <CardTitle className="text-base flex items-center gap-2">
-                    <Database className="w-4 h-4 text-primary" />
-                    Data Processed
+                    <ShieldCheck className="w-4 h-4 text-primary" />
+                    Governance Health
                   </CardTitle>
-                  <CardDescription className="text-xs">MGDC and Purview syncs</CardDescription>
+                  <CardDescription className="text-xs">Key compliance indicators</CardDescription>
                 </CardHeader>
-                <CardContent className="space-y-5">
-                  <div className="space-y-2">
+                <CardContent className="space-y-4">
+                  <div className="space-y-1.5">
                     <div className="flex justify-between text-sm">
-                      <span className="font-medium">Purview Label Sync</span>
-                      <span className="text-muted-foreground">4.2M events</span>
+                      <span className="font-medium">Activity Coverage</span>
+                      <span className="text-muted-foreground">{isLoading ? "—" : `${complianceRate}%`}</span>
                     </div>
-                    <Progress value={85} className="h-2 bg-blue-500/10 [&>div]:bg-blue-500" />
+                    <Progress value={complianceRate} className="h-2 bg-blue-500/10 [&>div]:bg-blue-500" />
                   </div>
-                  <div className="space-y-2">
+                  <div className="space-y-1.5">
                     <div className="flex justify-between text-sm">
-                      <span className="font-medium">MGDC Extraction</span>
-                      <span className="text-muted-foreground">1.8 TB</span>
+                      <span className="font-medium">Ownership Coverage</span>
+                      <span className="text-muted-foreground">
+                        {isLoading ? "—" : total > 0 ? `${Math.round(((total - orphaned) / total) * 100)}%` : "—"}
+                      </span>
                     </div>
-                    <Progress value={60} className="h-2 bg-purple-500/10 [&>div]:bg-purple-500" />
+                    <Progress
+                      value={total > 0 ? Math.round(((total - orphaned) / total) * 100) : 0}
+                      className="h-2 bg-emerald-500/10 [&>div]:bg-emerald-500"
+                    />
                   </div>
-                  <div className="space-y-2">
+                  <div className="space-y-1.5">
                     <div className="flex justify-between text-sm">
-                      <span className="font-medium">Audit Logs Ingested</span>
-                      <span className="text-muted-foreground">12.4M rows</span>
+                      <span className="font-medium">External Sharing</span>
+                      <span className="text-muted-foreground">
+                        {isLoading ? "—" : total > 0 ? `${Math.round((workspaces.filter(w => w.externalSharing).length / total) * 100)}%` : "—"}
+                      </span>
                     </div>
-                    <Progress value={40} className="h-2 bg-emerald-500/10 [&>div]:bg-emerald-500" />
-                  </div>
-                </CardContent>
-              </Card>
-
-              <Card className="glass-panel border-border/50 shadow-sm">
-                <CardHeader className="pb-3">
-                  <CardTitle className="text-base flex items-center gap-2">
-                    <PieChart className="w-4 h-4 text-primary" />
-                    Workspace Distribution
-                  </CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="space-y-3">
-                    <div className="flex items-center justify-between text-sm p-2 rounded-md bg-muted/30">
-                      <div className="flex items-center gap-2">
-                        <div className="w-2 h-2 rounded-full bg-blue-500" />
-                        <span>Microsoft Teams</span>
-                      </div>
-                      <span className="font-bold">54%</span>
-                    </div>
-                    <div className="flex items-center justify-between text-sm p-2 rounded-md bg-muted/30">
-                      <div className="flex items-center gap-2">
-                        <div className="w-2 h-2 rounded-full bg-teal-500" />
-                        <span>SharePoint Sites</span>
-                      </div>
-                      <span className="font-bold">28%</span>
-                    </div>
-                    <div className="flex items-center justify-between text-sm p-2 rounded-md bg-muted/30">
-                      <div className="flex items-center gap-2">
-                        <div className="w-2 h-2 rounded-full bg-orange-500" />
-                        <span>M365 Groups</span>
-                      </div>
-                      <span className="font-bold">12%</span>
-                    </div>
-                    <div className="flex items-center justify-between text-sm p-2 rounded-md bg-muted/30">
-                      <div className="flex items-center gap-2">
-                        <div className="w-2 h-2 rounded-full bg-indigo-500" />
-                        <span>Loop / Power BI / Other</span>
-                      </div>
-                      <span className="font-bold">6%</span>
-                    </div>
+                    <Progress
+                      value={total > 0 ? Math.round((workspaces.filter(w => w.externalSharing).length / total) * 100) : 0}
+                      className="h-2 bg-amber-500/10 [&>div]:bg-amber-500"
+                    />
                   </div>
                 </CardContent>
               </Card>
             </div>
           </div>
 
-          {/* Org Level Usage Table */}
-          <Card className="glass-panel border-border/50 shadow-xl">
-             <CardHeader className="pb-4 border-b border-border/40 bg-muted/10">
-              <CardTitle className="text-lg flex items-center gap-2">
-                <Users className="w-5 h-5 text-primary" />
-                Departmental Usage Telemetry
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="p-0">
-              <Table>
-                <TableHeader className="bg-muted/30">
-                  <TableRow>
-                    <TableHead className="pl-6">Department</TableHead>
-                    <TableHead>Active Workspaces</TableHead>
-                    <TableHead>Provisioning Velocity</TableHead>
-                    <TableHead>Avg. Lifecycle Compliance</TableHead>
-                    <TableHead>AI Agent Usage</TableHead>
-                    <TableHead className="text-right pr-6">Trend</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {[
-                    { name: "Engineering", ws: "4,240", vel: "High (120/mo)", comp: 94, ai: "8.2k calls", trend: "up" },
-                    { name: "Sales & Marketing", ws: "3,105", vel: "Medium (45/mo)", comp: 82, ai: "3.1k calls", trend: "up" },
-                    { name: "Finance & Legal", ws: "1,840", vel: "Low (12/mo)", comp: 98, ai: "1.4k calls", trend: "flat" },
-                    { name: "Human Resources", ws: "945", vel: "Medium (30/mo)", comp: 76, ai: "2.8k calls", trend: "down" },
-                    { name: "Executive Office", ws: "120", vel: "Low (2/mo)", comp: 100, ai: "500 calls", trend: "flat" },
-                  ].map((dept, i) => (
-                    <TableRow key={i} className="hover:bg-muted/10 transition-colors">
-                      <TableCell className="pl-6 font-medium">{dept.name}</TableCell>
-                      <TableCell>{dept.ws}</TableCell>
-                      <TableCell>
-                        <Badge variant="outline" className={`font-normal ${
-                          dept.vel.includes('High') ? 'bg-blue-500/10 text-blue-500 border-blue-500/20' : 
-                          dept.vel.includes('Medium') ? 'bg-amber-500/10 text-amber-500 border-amber-500/20' : 
-                          'bg-muted text-muted-foreground'
-                        }`}>
-                          {dept.vel}
-                        </Badge>
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex items-center gap-2">
-                          <div className="w-16 h-1.5 rounded-full bg-muted overflow-hidden">
-                            <div 
-                              className={`h-full ${dept.comp > 90 ? 'bg-emerald-500' : dept.comp > 80 ? 'bg-amber-500' : 'bg-red-500'}`}
-                              style={{ width: `${dept.comp}%` }}
-                            />
-                          </div>
-                          <span className="text-xs text-muted-foreground">{dept.comp}%</span>
-                        </div>
-                      </TableCell>
-                      <TableCell className="text-muted-foreground">{dept.ai}</TableCell>
-                      <TableCell className="text-right pr-6">
-                        {dept.trend === 'up' && <TrendingUp className="w-4 h-4 text-emerald-500 ml-auto" />}
-                        {dept.trend === 'down' && <TrendingUp className="w-4 h-4 text-red-500 ml-auto transform rotate-180" />}
-                        {dept.trend === 'flat' && <ArrowUpRight className="w-4 h-4 text-muted-foreground ml-auto transform rotate-45" />}
-                      </TableCell>
+          {byDepartment.length > 0 && (
+            <Card className="glass-panel border-border/50 shadow-xl">
+              <CardHeader className="pb-4 border-b border-border/40 bg-muted/10">
+                <CardTitle className="text-lg flex items-center gap-2">
+                  <Users className="w-5 h-5 text-primary" />
+                  Departmental Workspace Distribution
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="p-0">
+                <Table>
+                  <TableHeader className="bg-muted/30">
+                    <TableRow>
+                      <TableHead className="pl-6">Department</TableHead>
+                      <TableHead>Workspaces</TableHead>
+                      <TableHead>Dual-Owner Coverage</TableHead>
+                      <TableHead>External Sharing</TableHead>
+                      <TableHead className="pr-6">Active (90d)</TableHead>
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </CardContent>
-          </Card>
+                  </TableHeader>
+                  <TableBody>
+                    {byDepartment.map((dept) => (
+                      <TableRow key={dept.dept} className="hover:bg-muted/10 transition-colors" data-testid={`row-dept-${dept.dept}`}>
+                        <TableCell className="pl-6 font-medium">{dept.dept}</TableCell>
+                        <TableCell>
+                          <Badge variant="outline" className="bg-muted/30 font-mono">{dept.count}</Badge>
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex items-center gap-2">
+                            <div className="w-16 h-1.5 rounded-full bg-muted overflow-hidden">
+                              <div
+                                className={`h-full ${dept.withOwners / dept.count > 0.8 ? "bg-emerald-500" : dept.withOwners / dept.count > 0.5 ? "bg-amber-500" : "bg-red-500"}`}
+                                style={{ width: `${Math.round((dept.withOwners / dept.count) * 100)}%` }}
+                              />
+                            </div>
+                            <span className="text-xs text-muted-foreground">
+                              {Math.round((dept.withOwners / dept.count) * 100)}%
+                            </span>
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          {dept.external > 0
+                            ? <Badge variant="outline" className="bg-amber-500/10 text-amber-500 border-amber-500/20">{dept.external}</Badge>
+                            : <span className="text-muted-foreground/40 text-sm">—</span>}
+                        </TableCell>
+                        <TableCell className="pr-6">
+                          <div className="flex items-center gap-1.5">
+                            <TrendingUp className={`w-3.5 h-3.5 ${dept.active / dept.count > 0.7 ? "text-emerald-500" : "text-muted-foreground"}`} />
+                            <span className="text-sm">{dept.active} / {dept.count}</span>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </CardContent>
+            </Card>
+          )}
         </TabsContent>
 
-        <TabsContent value="api">
-          <Card className="glass-panel border-border/50 min-h-[400px] flex items-center justify-center p-12">
-            <div className="text-center space-y-4 max-w-md">
-              <div className="w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center mx-auto text-primary border border-primary/20">
-                <Activity className="w-8 h-8" />
-              </div>
-              <h3 className="text-xl font-bold">API Health Monitoring</h3>
-              <p className="text-muted-foreground text-sm">
-                This dashboard visualizes Microsoft Graph API request volumes, throttling limits, and event notification latencies across connected tenants.
-              </p>
-            </div>
+        <TabsContent value="breakdown" className="space-y-6">
+          <Card className="glass-panel border-border/50">
+            {isLoading ? (
+              <CardContent className="flex items-center justify-center py-16 gap-3 text-muted-foreground">
+                <Loader2 className="w-5 h-5 animate-spin" />
+                Loading workspace data...
+              </CardContent>
+            ) : total === 0 ? (
+              <CardContent className="flex flex-col items-center justify-center py-16 gap-3 text-center">
+                <FolderOpen className="w-10 h-10 text-muted-foreground/30" />
+                <p className="text-sm text-muted-foreground">No workspace data available.</p>
+                <p className="text-xs text-muted-foreground/70">Select a tenant and run a sync to see analytics.</p>
+              </CardContent>
+            ) : (
+              <>
+                <CardHeader className="pb-4 border-b border-border/40 bg-muted/10">
+                  <CardTitle className="text-lg flex items-center gap-2">
+                    <BarChart3 className="w-5 h-5 text-primary" />
+                    Sensitivity Label Coverage
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="p-6">
+                  <div className="space-y-4">
+                    {(["HIGHLY_CONFIDENTIAL", "CONFIDENTIAL", "INTERNAL", "PUBLIC"] as const).map(label => {
+                      const count = workspaces.filter(w => w.sensitivity === label).length;
+                      const pct = total > 0 ? Math.round((count / total) * 100) : 0;
+                      const colorMap: Record<string, string> = {
+                        HIGHLY_CONFIDENTIAL: "bg-red-500",
+                        CONFIDENTIAL: "bg-amber-500",
+                        INTERNAL: "bg-blue-500",
+                        PUBLIC: "bg-emerald-500",
+                      };
+                      const labelMap: Record<string, string> = {
+                        HIGHLY_CONFIDENTIAL: "Highly Confidential",
+                        CONFIDENTIAL: "Confidential",
+                        INTERNAL: "Internal",
+                        PUBLIC: "Public",
+                      };
+                      return (
+                        <div key={label} className="space-y-1.5" data-testid={`dist-sensitivity-${label}`}>
+                          <div className="flex items-center justify-between text-sm">
+                            <div className="flex items-center gap-2">
+                              <div className={`w-2.5 h-2.5 rounded-full ${colorMap[label]}`} />
+                              <span className="font-medium">{labelMap[label]}</span>
+                            </div>
+                            <div className="flex items-center gap-2 text-muted-foreground">
+                              <span>{count.toLocaleString()} sites</span>
+                              <span className="text-xs font-bold text-foreground w-10 text-right">{pct}%</span>
+                            </div>
+                          </div>
+                          <Progress value={pct} className={`h-2.5 bg-muted [&>div]:${colorMap[label]}`} />
+                        </div>
+                      );
+                    })}
+                  </div>
+                </CardContent>
+              </>
+            )}
           </Card>
         </TabsContent>
       </Tabs>
