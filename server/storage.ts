@@ -1,4 +1,4 @@
-import { eq, desc, ilike, or, and, sql, gt } from "drizzle-orm";
+import { eq, desc, ilike, or, and, sql, gt, max } from "drizzle-orm";
 import { db } from "./db";
 import {
   workspaces,
@@ -82,6 +82,10 @@ import {
   onedriveInventory,
   type OnedriveInventoryItem,
   type InsertOnedriveInventory,
+  supportTickets,
+  supportTicketReplies,
+  type SupportTicket,
+  type SupportTicketReply,
 } from "@shared/schema";
 
 export interface TeamsChannelsSummaryChannel {
@@ -246,6 +250,16 @@ export interface IStorage {
   upsertOnedriveInventory(data: InsertOnedriveInventory): Promise<OnedriveInventoryItem>;
   getOnedriveInventory(tenantConnectionIds?: string[], search?: string): Promise<OnedriveInventoryItem[]>;
   getOnedriveInventoryItem(id: string): Promise<OnedriveInventoryItem | undefined>;
+
+  // Support tickets
+  createSupportTicket(data: Omit<SupportTicket, 'id' | 'createdAt' | 'updatedAt' | 'resolvedAt' | 'resolvedBy' | 'assignedTo'>): Promise<SupportTicket>;
+  getSupportTickets(orgId: string | null, userId: string, isAdmin: boolean): Promise<SupportTicket[]>;
+  getSupportTicket(id: string, orgId: string | null, userId?: string): Promise<SupportTicket | null>;
+  getTicketReplies(ticketId: string, includeInternal: boolean): Promise<SupportTicketReply[]>;
+  addTicketReply(ticketId: string, userId: string, message: string, isInternal: boolean): Promise<SupportTicketReply>;
+  closeTicket(id: string, userId: string): Promise<SupportTicket>;
+  updateTicketStatus(id: string, status: string): Promise<SupportTicket>;
+  getNextTicketNumber(orgId: string): Promise<number>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -1458,6 +1472,81 @@ export class DatabaseStorage implements IStorage {
   async getOnedriveInventoryItem(id: string): Promise<OnedriveInventoryItem | undefined> {
     const [result] = await db.select().from(onedriveInventory).where(eq(onedriveInventory.id, id));
     return result;
+  }
+
+  async getNextTicketNumber(orgId: string): Promise<number> {
+    const [result] = await db
+      .select({ maxNum: max(supportTickets.ticketNumber) })
+      .from(supportTickets)
+      .where(eq(supportTickets.organizationId, orgId));
+    return (result?.maxNum ?? 0) + 1;
+  }
+
+  async createSupportTicket(data: Omit<SupportTicket, 'id' | 'createdAt' | 'updatedAt' | 'resolvedAt' | 'resolvedBy' | 'assignedTo'>): Promise<SupportTicket> {
+    const [ticket] = await db.insert(supportTickets).values(data).returning();
+    return ticket;
+  }
+
+  async getSupportTickets(orgId: string | null, userId: string, isAdmin: boolean): Promise<SupportTicket[]> {
+    if (isAdmin) {
+      return db.select().from(supportTickets).orderBy(desc(supportTickets.createdAt));
+    }
+    if (!orgId) return [];
+    return db
+      .select()
+      .from(supportTickets)
+      .where(and(eq(supportTickets.organizationId, orgId), eq(supportTickets.userId, userId)))
+      .orderBy(desc(supportTickets.createdAt));
+  }
+
+  async getSupportTicket(id: string, orgId: string | null, userId?: string): Promise<SupportTicket | null> {
+    const [ticket] = await db.select().from(supportTickets).where(eq(supportTickets.id, id));
+    if (!ticket) return null;
+    if (orgId && ticket.organizationId !== orgId) return null;
+    if (userId && ticket.userId !== userId) return null;
+    return ticket;
+  }
+
+  async getTicketReplies(ticketId: string, includeInternal: boolean): Promise<SupportTicketReply[]> {
+    const conditions = [eq(supportTicketReplies.ticketId, ticketId)];
+    if (!includeInternal) {
+      conditions.push(eq(supportTicketReplies.isInternal, false));
+    }
+    return db
+      .select()
+      .from(supportTicketReplies)
+      .where(and(...conditions))
+      .orderBy(supportTicketReplies.createdAt);
+  }
+
+  async addTicketReply(ticketId: string, userId: string, message: string, isInternal: boolean): Promise<SupportTicketReply> {
+    const [reply] = await db
+      .insert(supportTicketReplies)
+      .values({ ticketId, userId, message, isInternal })
+      .returning();
+    await db
+      .update(supportTickets)
+      .set({ updatedAt: new Date(), status: 'in_progress' })
+      .where(and(eq(supportTickets.id, ticketId), eq(supportTickets.status, 'open')));
+    return reply;
+  }
+
+  async closeTicket(id: string, userId: string): Promise<SupportTicket> {
+    const [ticket] = await db
+      .update(supportTickets)
+      .set({ status: 'closed', resolvedAt: new Date(), resolvedBy: userId, updatedAt: new Date() })
+      .where(eq(supportTickets.id, id))
+      .returning();
+    return ticket;
+  }
+
+  async updateTicketStatus(id: string, status: string): Promise<SupportTicket> {
+    const [ticket] = await db
+      .update(supportTickets)
+      .set({ status, updatedAt: new Date() })
+      .where(eq(supportTickets.id, id))
+      .returning();
+    return ticket;
   }
 }
 

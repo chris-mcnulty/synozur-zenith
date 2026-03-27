@@ -898,3 +898,51 @@ export const insertWorkspaceTelemetrySchema = createInsertSchema(workspaceTeleme
 
 export type InsertWorkspaceTelemetry = z.infer<typeof insertWorkspaceTelemetrySchema>;
 export type WorkspaceTelemetry = typeof workspaceTelemetry.$inferSelect;
+
+// ── Support Tickets ──────────────────────────────────────────────────────────
+export const supportTickets = pgTable("support_tickets", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  ticketNumber: integer("ticket_number").notNull(),
+  organizationId: varchar("organization_id").notNull().references(() => organizations.id, { onDelete: 'cascade' }),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: 'cascade' }),
+  category: text("category").notNull(),
+  subject: text("subject").notNull(),
+  description: text("description").notNull(),
+  priority: text("priority").notNull().default("medium"),
+  status: text("status").notNull().default("open"),
+  assignedTo: varchar("assigned_to").references(() => users.id, { onDelete: 'set null' }),
+  applicationSource: text("application_source").notNull().default("Zenith"),
+  resolvedAt: timestamp("resolved_at"),
+  resolvedBy: varchar("resolved_by").references(() => users.id, { onDelete: 'set null' }),
+  createdAt: timestamp("created_at").default(sql`now()`).notNull(),
+  updatedAt: timestamp("updated_at").default(sql`now()`).notNull(),
+});
+
+export const insertSupportTicketSchema = createInsertSchema(supportTickets).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+  resolvedAt: true,
+  resolvedBy: true,
+  assignedTo: true,
+});
+
+export type InsertSupportTicket = z.infer<typeof insertSupportTicketSchema>;
+export type SupportTicket = typeof supportTickets.$inferSelect;
+
+export const supportTicketReplies = pgTable("support_ticket_replies", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  ticketId: varchar("ticket_id").notNull().references(() => supportTickets.id, { onDelete: 'cascade' }),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: 'cascade' }),
+  message: text("message").notNull(),
+  isInternal: boolean("is_internal").default(false),
+  createdAt: timestamp("created_at").default(sql`now()`).notNull(),
+});
+
+export const insertSupportTicketReplySchema = createInsertSchema(supportTicketReplies).omit({
+  id: true,
+  createdAt: true,
+});
+
+export type InsertSupportTicketReply = z.infer<typeof insertSupportTicketReplySchema>;
+export type SupportTicketReply = typeof supportTicketReplies.$inferSelect;
