@@ -40,6 +40,7 @@ import {
   Calculator,
   Image,
   MapPin,
+  AlertTriangle,
 } from "lucide-react";
 
 type EnrichedLibrary = DocumentLibrary & {
@@ -369,7 +370,8 @@ export default function DocumentLibraryPage() {
       return res.json();
     },
     onSuccess: (data) => {
-      toast({ title: "Library sync complete", description: `${data.librariesSynced} libraries synced across ${data.workspacesSynced} sites (${data.librariesSkipped} unchanged)` });
+      const flagNote = data.flagged > 0 ? ` · ${data.flagged} flagged for review` : "";
+      toast({ title: "Library sync complete", description: `${data.librariesSynced} libraries synced across ${data.workspacesSynced} sites (${data.librariesSkipped} unchanged${flagNote})` });
       queryClient.invalidateQueries({ queryKey: ["/api/admin/tenants", tenantConnectionId, "libraries"] });
     },
     onError: (err: any) => {
@@ -555,10 +557,20 @@ export default function DocumentLibraryPage() {
                           <Library className="w-4 h-4 text-primary" />
                         </div>
                         <div>
-                          <div className="flex items-center gap-1.5">
+                          <div className="flex items-center gap-1.5 flex-wrap">
                             <span className="font-medium text-sm">{lib.displayName}</span>
                             {lib.isDefaultDocLib && <Badge variant="outline" className="text-[10px]">Default</Badge>}
                             {lib.hidden && <Badge variant="secondary" className="text-[10px]">Hidden</Badge>}
+                            {lib.flaggedLargeItems && (
+                              <Badge className="text-[10px] gap-0.5 bg-amber-500/20 text-amber-700 border-amber-500/30" data-testid={`badge-flagged-large-${lib.id}`}>
+                                <AlertTriangle className="w-2.5 h-2.5" /> Large
+                              </Badge>
+                            )}
+                            {lib.flaggedVersionSprawl && (
+                              <Badge className="text-[10px] gap-0.5 bg-red-500/20 text-red-700 border-red-500/30" data-testid={`badge-flagged-sprawl-${lib.id}`}>
+                                <AlertTriangle className="w-2.5 h-2.5" /> Sprawl
+                              </Badge>
+                            )}
                           </div>
                           {lib.description && <p className="text-[10px] text-muted-foreground mt-0.5 truncate max-w-[250px]">{lib.description}</p>}
                         </div>

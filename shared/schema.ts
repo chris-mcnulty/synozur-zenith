@@ -518,6 +518,8 @@ export const documentLibraries = pgTable("document_libraries", {
   lastModifiedAt: text("last_modified_at"),
   createdGraphAt: text("created_graph_at"),
   lastSyncAt: timestamp("last_sync_at"),
+  flaggedLargeItems: boolean("flagged_large_items").default(false),
+  flaggedVersionSprawl: boolean("flagged_version_sprawl").default(false),
   createdAt: timestamp("created_at").defaultNow(),
 }, (table) => [
   unique("uq_workspace_list").on(table.workspaceId, table.m365ListId),

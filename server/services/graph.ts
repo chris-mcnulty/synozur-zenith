@@ -2271,17 +2271,19 @@ export async function enumerateSiteDocumentLibraries(
   graphSiteId: string
 ): Promise<{ libraries: SiteDocumentLibrarySummary[]; error?: string }> {
   try {
-    const listsRes = await fetch(
-      `https://graph.microsoft.com/v1.0/sites/${graphSiteId}/lists?$select=id,displayName,lastModifiedDateTime,list&$top=200`,
-      { headers: { Authorization: `Bearer ${token}` } }
-    );
+    const allLists: any[] = [];
+    let nextLink: string | null = `https://graph.microsoft.com/v1.0/sites/${graphSiteId}/lists?$select=id,displayName,lastModifiedDateTime,list&$top=200`;
 
-    if (!listsRes.ok) {
-      return { libraries: [], error: `Lists API returned ${listsRes.status}` };
+    while (nextLink) {
+      const listsRes = await fetch(nextLink, { headers: { Authorization: `Bearer ${token}` } });
+      if (!listsRes.ok) {
+        return { libraries: [], error: `Lists API returned ${listsRes.status}` };
+      }
+      const listsData = await listsRes.json();
+      allLists.push(...(listsData.value || []));
+      nextLink = listsData["@odata.nextLink"] || null;
     }
 
-    const listsData = await listsRes.json();
-    const allLists: any[] = listsData.value || [];
     const docLibs = allLists.filter((l: any) => l.list?.template === "documentLibrary");
 
     const libraries: SiteDocumentLibrarySummary[] = docLibs.map((lib: any) => ({
@@ -2304,22 +2306,23 @@ export async function fetchSiteDocumentLibraries(
   graphSiteId: string
 ): Promise<{ libraries: SiteDocumentLibrary[]; error?: string }> {
   try {
-    const listsRes = await fetch(
-      `https://graph.microsoft.com/v1.0/sites/${graphSiteId}/lists?$top=200`,
-      { headers: { Authorization: `Bearer ${token}` } }
-    );
+    const allLists: any[] = [];
+    let nextLink: string | null = `https://graph.microsoft.com/v1.0/sites/${graphSiteId}/lists?$top=200`;
 
-    if (!listsRes.ok) {
-      const errText = await listsRes.text();
-      console.log(`[graph] fetchSiteDocumentLibraries failed for ${graphSiteId}: ${listsRes.status} ${errText.substring(0, 200)}`);
-      return { libraries: [], error: `Lists API returned ${listsRes.status}` };
+    while (nextLink) {
+      const listsRes = await fetch(nextLink, { headers: { Authorization: `Bearer ${token}` } });
+      if (!listsRes.ok) {
+        const errText = await listsRes.text();
+        console.log(`[graph] fetchSiteDocumentLibraries failed for ${graphSiteId}: ${listsRes.status} ${errText.substring(0, 200)}`);
+        return { libraries: [], error: `Lists API returned ${listsRes.status}` };
+      }
+      const listsData = await listsRes.json();
+      allLists.push(...(listsData.value || []));
+      nextLink = listsData["@odata.nextLink"] || null;
     }
 
-    const listsData = await listsRes.json();
-    const allLists: any[] = listsData.value || [];
-
     const docLibs = allLists.filter((l: any) => l.list?.template === "documentLibrary");
-    console.log(`[graph] fetchSiteDocumentLibraries ${graphSiteId}: ${docLibs.length} doc libs found`);
+    console.log(`[graph] fetchSiteDocumentLibraries ${graphSiteId}: ${docLibs.length} doc libs found (${allLists.length} total lists, paginated)`);
 
     interface DriveInfo {
       listId: string | null;

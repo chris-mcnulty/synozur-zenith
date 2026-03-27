@@ -1710,6 +1710,44 @@ router.post("/api/admin/tenants/:id/sync-libraries", requireRole(ZENITH_ROLES.TE
 
     console.log(`[library-sync] Complete: ${result.totalLibraries} libraries synced across ${result.synced} workspaces (${result.skipped} unchanged, ${result.errors} errors)`);
 
+    const LARGE_ITEMS_THRESHOLD = Number(req.query.largeItemsThreshold) || 50000;
+    const VERSION_SPRAWL_THRESHOLD = Number(req.query.versionSprawlThreshold) || 100000;
+    let flaggedCount = 0;
+
+    try {
+      console.log(`[library-sync] Applying threshold flags: largeItems>${LARGE_ITEMS_THRESHOLD}, versionSprawl>${VERSION_SPRAWL_THRESHOLD}`);
+      const allLibraries = await storage.getDocumentLibrariesByTenant(req.params.id);
+      for (const lib of allLibraries) {
+        const flaggedLargeItems = (lib.itemCount || 0) > LARGE_ITEMS_THRESHOLD;
+        const flaggedVersionSprawl = (lib.storageUsedBytes || 0) > VERSION_SPRAWL_THRESHOLD * 1024 * 1024;
+        if (flaggedLargeItems !== lib.flaggedLargeItems || flaggedVersionSprawl !== lib.flaggedVersionSprawl) {
+          await storage.upsertDocumentLibrary({
+            workspaceId: lib.workspaceId,
+            tenantConnectionId: lib.tenantConnectionId,
+            m365ListId: lib.m365ListId,
+            displayName: lib.displayName,
+            description: lib.description,
+            webUrl: lib.webUrl,
+            template: lib.template,
+            itemCount: lib.itemCount,
+            storageUsedBytes: lib.storageUsedBytes,
+            sensitivityLabelId: lib.sensitivityLabelId,
+            isDefaultDocLib: lib.isDefaultDocLib,
+            hidden: lib.hidden,
+            lastModifiedAt: lib.lastModifiedAt,
+            createdGraphAt: lib.createdGraphAt,
+            lastSyncAt: lib.lastSyncAt,
+            flaggedLargeItems,
+            flaggedVersionSprawl,
+          });
+          if (flaggedLargeItems || flaggedVersionSprawl) flaggedCount++;
+        }
+      }
+      console.log(`[library-sync] Flagging complete: ${flaggedCount} libraries flagged for large items or version sprawl`);
+    } catch (flagErr: any) {
+      console.error(`[library-sync] Flagging error: ${flagErr.message}`);
+    }
+
     res.json({
       success: true,
       workspacesProcessed: allWorkspaces.length,
@@ -1717,6 +1755,7 @@ router.post("/api/admin/tenants/:id/sync-libraries", requireRole(ZENITH_ROLES.TE
       librariesSynced: result.totalLibraries,
       librariesSkipped: result.skipped,
       errors: result.errors,
+      flagged: flaggedCount,
     });
   } catch (err: any) {
     console.error(`[library-sync] Error: ${err.message}`);
@@ -1753,7 +1792,7 @@ router.get("/api/admin/libraries/:libraryId/details", requireRole(ZENITH_ROLES.V
     res.json({
       library: lib,
       workspaceName: workspace.displayName,
-      workspaceType: workspace.workspaceType,
+      workspaceType: workspace.type,
       siteUrl: workspace.siteUrl,
       contentTypes: details.contentTypes,
       columns: details.columns,
