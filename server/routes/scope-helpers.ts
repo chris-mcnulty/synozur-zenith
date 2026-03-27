@@ -3,14 +3,12 @@ import { storage } from "../storage";
 import type { AuthenticatedRequest } from "../middleware/rbac";
 
 export function getActiveOrgId(req: AuthenticatedRequest): string | null {
-  if (req.user?.role === ZENITH_ROLES.PLATFORM_OWNER) return null;
   return req.activeOrganizationId || req.user?.organizationId || null;
 }
 
 export async function getOrgTenantConnectionIds(req: AuthenticatedRequest): Promise<string[] | null> {
-  if (req.user?.role === ZENITH_ROLES.PLATFORM_OWNER) return null;
   const orgId = getActiveOrgId(req);
-  if (!orgId) return [];
+  if (!orgId) return req.user?.role === ZENITH_ROLES.PLATFORM_OWNER ? null : [];
   const connections = await storage.getTenantConnectionsByOrganization(orgId);
   return connections.map(c => c.id);
 }
