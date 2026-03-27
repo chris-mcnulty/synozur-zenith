@@ -24,6 +24,7 @@ export function requireFeature(feature: keyof typeof PLAN_FEATURES.TRIAL) {
         lifecycleAutomation: "lifecycle automation",
         selfServicePortal: "self-service portal",
         advancedReporting: "advanced reporting",
+        dataMasking: "database masking",
       };
       const label = featureLabels[feature] || feature;
       return res.status(403).json({

@@ -43,6 +43,7 @@ import {
   TicketCheck,
   Timer,
   RefreshCw,
+  EyeOff,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -96,6 +97,8 @@ export default function TenantConnectionsPage() {
   const [mspAccessDialogId, setMspAccessDialogId] = useState<string | null>(null);
   const [mspCodeInput, setMspCodeInput] = useState("");
   const [mspCodeSubmitting, setMspCodeSubmitting] = useState(false);
+  const [maskingDialogTenantId, setMaskingDialogTenantId] = useState<string | null>(null);
+  const [maskingToggling, setMaskingToggling] = useState(false);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -114,6 +117,39 @@ export default function TenantConnectionsPage() {
   const { data: connections = [], isLoading } = useQuery<TenantConnection[]>({
     queryKey: ["/api/admin/tenants"],
   });
+
+  const { data: maskingStatus } = useQuery<{ enabled: boolean; hasKey: boolean }>({
+    queryKey: ["/api/admin/tenants", maskingDialogTenantId, "data-masking"],
+    queryFn: async () => {
+      const res = await fetch(`/api/admin/tenants/${maskingDialogTenantId}/data-masking`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch masking status");
+      return res.json();
+    },
+    enabled: !!maskingDialogTenantId,
+  });
+
+  const handleToggleMasking = async (tenantId: string, enable: boolean) => {
+    setMaskingToggling(true);
+    try {
+      const res = await apiRequest("POST", `/api/admin/tenants/${tenantId}/data-masking`, { enabled: enable });
+      const result = await res.json();
+      if (result.success) {
+        toast({
+          title: enable ? "Data Masking Enabled" : "Data Masking Disabled",
+          description: `${result.recordsProcessed} records were ${enable ? "encrypted" : "decrypted"}.`,
+        });
+        queryClient.invalidateQueries({ queryKey: ["/api/admin/tenants"] });
+        queryClient.invalidateQueries({ queryKey: ["/api/admin/tenants", tenantId, "data-masking"] });
+      } else {
+        toast({ title: "Partial Success", description: `Processed ${result.recordsProcessed} records with ${result.errors?.length || 0} errors.`, variant: "destructive" });
+      }
+    } catch (err: any) {
+      toast({ title: "Error", description: err.message || "Failed to toggle data masking", variant: "destructive" });
+    } finally {
+      setMaskingToggling(false);
+      setMaskingDialogTenantId(null);
+    }
+  };
 
   const deleteMutation = useMutation({
     mutationFn: async (id: string) => {
@@ -701,6 +737,11 @@ export default function TenantConnectionsPage() {
                               <Settings2 className="w-4 h-4" /> Governance Settings
                             </DropdownMenuItem>
                           )}
+                          {!isBlocked && (
+                            <DropdownMenuItem className="gap-2" onClick={() => setMaskingDialogTenantId(conn.id)} data-testid={`button-data-masking-${conn.id}`}>
+                              <EyeOff className="w-4 h-4" /> Data Masking
+                            </DropdownMenuItem>
+                          )}
                           <DropdownMenuItem className="gap-2" onClick={() => navigator.clipboard.writeText(conn.tenantId)}>
                             <Copy className="w-4 h-4" /> Copy Tenant ID
                           </DropdownMenuItem>
@@ -859,6 +900,74 @@ export default function TenantConnectionsPage() {
           </DialogHeader>
           {metadataDialogTenantId && (
             <RequiredMetadataConfig tenantConnectionId={metadataDialogTenantId} />
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Data Masking Dialog */}
+      <Dialog open={maskingDialogTenantId !== null} onOpenChange={(open) => { if (!open) setMaskingDialogTenantId(null); }}>
+        <DialogContent className="sm:max-w-[500px]">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2" data-testid="dialog-title-data-masking">
+              <EyeOff className="w-5 h-5 text-primary" />
+              Data Masking
+            </DialogTitle>
+            <DialogDescription>
+              When enabled, sensitive text fields (site names, team names, user names, file names, URLs) are encrypted in the database using AES-256 encryption. The application continues to display real values to authorized users.
+            </DialogDescription>
+          </DialogHeader>
+          {maskingDialogTenantId && (
+            <div className="space-y-4 py-2">
+              <div className="flex items-center justify-between p-4 rounded-lg border border-border/50 bg-muted/30">
+                <div className="space-y-1">
+                  <p className="text-sm font-medium">Database Masking</p>
+                  <p className="text-xs text-muted-foreground">
+                    {maskingStatus?.enabled
+                      ? "Sensitive fields are currently encrypted in the database."
+                      : "Sensitive fields are stored as plaintext in the database."}
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  {maskingStatus?.enabled ? (
+                    <Badge variant="default" className="bg-green-500/10 text-green-600 border-green-200" data-testid="badge-masking-enabled">Enabled</Badge>
+                  ) : (
+                    <Badge variant="secondary" data-testid="badge-masking-disabled">Disabled</Badge>
+                  )}
+                </div>
+              </div>
+
+              <div className="p-3 rounded-lg border border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/30">
+                <div className="flex items-start gap-2">
+                  <AlertTriangle className="w-4 h-4 text-amber-600 mt-0.5 shrink-0" />
+                  <div className="text-xs text-amber-800 dark:text-amber-200">
+                    {maskingStatus?.enabled
+                      ? "Disabling masking will decrypt all data back to plaintext in the database. This operation may take a few moments for large datasets."
+                      : "Enabling masking will encrypt all existing sensitive data for this tenant. This operation may take a few moments for large datasets. Anyone querying the database directly will see encrypted values."}
+                  </div>
+                </div>
+              </div>
+
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setMaskingDialogTenantId(null)} data-testid="button-masking-cancel">
+                  Cancel
+                </Button>
+                <Button
+                  onClick={() => handleToggleMasking(maskingDialogTenantId, !maskingStatus?.enabled)}
+                  disabled={maskingToggling}
+                  variant={maskingStatus?.enabled ? "destructive" : "default"}
+                  data-testid="button-masking-toggle"
+                >
+                  {maskingToggling ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                      {maskingStatus?.enabled ? "Decrypting..." : "Encrypting..."}
+                    </>
+                  ) : (
+                    maskingStatus?.enabled ? "Disable Masking" : "Enable Masking"
+                  )}
+                </Button>
+              </DialogFooter>
+            </div>
           )}
         </DialogContent>
       </Dialog>

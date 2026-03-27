@@ -7,6 +7,8 @@ import { METADATA_CATEGORIES, ZENITH_ROLES } from "@shared/schema";
 import { refreshDelegatedToken } from "../routes-entra";
 import { requireAuth, requireRole, requirePermission, type AuthenticatedRequest } from "../middleware/rbac";
 import { encryptToken, decryptToken, isEncryptionConfigured, isEncrypted } from "../utils/encryption";
+import { requireFeature } from "../services/feature-gate";
+import { enableDataMasking, disableDataMasking } from "../services/data-masking-toggle";
 
 const router = Router();
 
@@ -1070,5 +1072,81 @@ router.get("/api/admin/tenants/:id/access-check", requireAuth(), async (req: Aut
   }
 });
 
+
+async function verifyTenantAccess(req: AuthenticatedRequest, conn: { id: string; organizationId: string | null }): Promise<boolean> {
+  const isPlatformOwner = req.user?.role === ZENITH_ROLES.PLATFORM_OWNER;
+  if (isPlatformOwner) return true;
+
+  const orgId = req.activeOrganizationId || req.user?.organizationId;
+  if (!orgId) return false;
+  if (conn.organizationId === orgId) return true;
+
+  const grant = await storage.getActiveTenantAccessGrant(conn.id, orgId);
+  return !!grant;
+}
+
+router.get("/api/admin/tenants/:id/data-masking", requireAuth(), requireRole(ZENITH_ROLES.PLATFORM_OWNER, ZENITH_ROLES.TENANT_ADMIN), async (req: AuthenticatedRequest, res) => {
+  try {
+    const conn = await storage.getTenantConnection(req.params.id);
+    if (!conn) return res.status(404).json({ error: "Tenant connection not found" });
+
+    if (!(await verifyTenantAccess(req, conn))) {
+      return res.status(403).json({ error: "You do not have access to this tenant connection" });
+    }
+
+    const keyRecord = await storage.getTenantEncryptionKey(conn.id);
+    res.json({
+      enabled: conn.dataMaskingEnabled,
+      hasKey: !!keyRecord,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post("/api/admin/tenants/:id/data-masking", requireAuth(), requireRole(ZENITH_ROLES.PLATFORM_OWNER, ZENITH_ROLES.TENANT_ADMIN), requireFeature("dataMasking"), async (req: AuthenticatedRequest, res) => {
+  try {
+    const conn = await storage.getTenantConnection(req.params.id);
+    if (!conn) return res.status(404).json({ error: "Tenant connection not found" });
+
+    if (!(await verifyTenantAccess(req, conn))) {
+      return res.status(403).json({ error: "You do not have access to this tenant connection" });
+    }
+
+    const { enabled } = req.body;
+    if (typeof enabled !== "boolean") {
+      return res.status(400).json({ error: "Missing 'enabled' boolean in request body" });
+    }
+
+    if (enabled === conn.dataMaskingEnabled) {
+      return res.json({ success: true, enabled, recordsProcessed: 0, errors: [], message: `Data masking is already ${enabled ? "enabled" : "disabled"}` });
+    }
+
+    let result;
+    if (enabled) {
+      result = await enableDataMasking(conn.id);
+    } else {
+      result = await disableDataMasking(conn.id);
+    }
+
+    if (req.user) {
+      await storage.createAuditEntry({
+        userId: req.user.id,
+        userEmail: req.user.email,
+        action: enabled ? "DATA_MASKING_ENABLED" : "DATA_MASKING_DISABLED",
+        resource: "tenant_connection",
+        resourceId: conn.id,
+        organizationId: req.activeOrganizationId || null,
+        details: { tenantName: conn.tenantName, recordsProcessed: result.recordsProcessed, errors: result.errors },
+        result: result.success ? "SUCCESS" : "PARTIAL",
+        ipAddress: req.ip || null,
+      });
+    }
+
+    res.json(result);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 export default router;

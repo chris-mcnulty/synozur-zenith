@@ -99,7 +99,11 @@ import {
   mspAccessGrants,
   type MspAccessGrant,
   type InsertMspAccessGrant,
+  tenantEncryptionKeys,
+  type TenantEncryptionKey,
+  type InsertTenantEncryptionKey,
 } from "@shared/schema";
+import { decryptRecord, encryptRecord, getTenantKeyBuffer } from "./services/data-masking";
 
 export interface TeamsChannelsSummaryChannel {
   channelId: string;
@@ -309,9 +313,62 @@ export interface IStorage {
   getActiveMspGrantForOrg(tenantConnectionId: string, grantedToOrgId: string): Promise<MspAccessGrant | undefined>;
   updateMspAccessGrant(id: string, updates: Partial<MspAccessGrant>): Promise<MspAccessGrant | undefined>;
   invalidatePendingMspCodes(tenantConnectionId: string): Promise<void>;
+
+  // Tenant Encryption Keys
+  getTenantEncryptionKey(tenantConnectionId: string): Promise<TenantEncryptionKey | undefined>;
+  upsertTenantEncryptionKey(data: InsertTenantEncryptionKey): Promise<TenantEncryptionKey>;
+  deleteTenantEncryptionKey(tenantConnectionId: string): Promise<void>;
 }
 
 export class DatabaseStorage implements IStorage {
+  private keyCache = new Map<string, { buffer: Buffer; expiry: number }>();
+
+  private async getKeyBufferForTenant(tenantConnectionId: string): Promise<Buffer | null> {
+    const cached = this.keyCache.get(tenantConnectionId);
+    if (cached && cached.expiry > Date.now()) return cached.buffer;
+
+    const conn = await this.getTenantConnection(tenantConnectionId);
+    if (!conn?.dataMaskingEnabled) return null;
+
+    const keyRecord = await this.getTenantEncryptionKey(tenantConnectionId);
+    if (!keyRecord) return null;
+
+    const buffer = getTenantKeyBuffer(keyRecord.encryptedKey);
+    this.keyCache.set(tenantConnectionId, { buffer, expiry: Date.now() + 60000 });
+    return buffer;
+  }
+
+  invalidateKeyCache(tenantConnectionId: string): void {
+    this.keyCache.delete(tenantConnectionId);
+  }
+
+  private async encryptForTenant<T extends Record<string, any>>(data: T, tableName: string, tenantConnectionId: string): Promise<T> {
+    const buf = await this.getKeyBufferForTenant(tenantConnectionId);
+    if (!buf) return data;
+    return encryptRecord(data, tableName, buf);
+  }
+
+  private async decryptRows<T extends Record<string, any>>(rows: T[], tableName: string, tenantConnectionIdField: string = "tenantConnectionId"): Promise<T[]> {
+    if (rows.length === 0) return rows;
+
+    const tenantIds = [...new Set(rows.map(r => r[tenantConnectionIdField]).filter(Boolean))];
+    const keyMap = new Map<string, Buffer>();
+
+    for (const tid of tenantIds) {
+      const buf = await this.getKeyBufferForTenant(tid);
+      if (buf) keyMap.set(tid, buf);
+    }
+
+    if (keyMap.size === 0) return rows;
+
+    return rows.map(row => {
+      const tid = row[tenantConnectionIdField];
+      const buf = keyMap.get(tid);
+      if (!buf) return row;
+      return decryptRecord(row, tableName, buf);
+    });
+  }
+
   async getWorkspaces(search?: string, tenantConnectionId?: string, organizationId?: string): Promise<Workspace[]> {
     const conditions = [];
 
@@ -344,10 +401,13 @@ export class DatabaseStorage implements IStorage {
       conditions.push(sql`${workspaces.tenantConnectionId} = ANY(ARRAY[${sql.join(orgConnectionIds.map(id => sql`${id}`), sql`, `)}]::text[])`);
     }
 
+    let rows: Workspace[];
     if (conditions.length > 0) {
-      return db.select().from(workspaces).where(and(...conditions)).orderBy(desc(workspaces.createdAt));
+      rows = await db.select().from(workspaces).where(and(...conditions)).orderBy(desc(workspaces.createdAt));
+    } else {
+      rows = await db.select().from(workspaces).orderBy(desc(workspaces.createdAt));
     }
-    return db.select().from(workspaces).orderBy(desc(workspaces.createdAt));
+    return this.decryptRows(rows, "workspaces") as Promise<Workspace[]>;
   }
 
   async getWorkspacesPaginated(params: { page: number; pageSize: number; search?: string; tenantConnectionId?: string; tenantConnectionIds?: string[]; organizationId?: string }): Promise<{ items: Workspace[]; total: number }> {
@@ -393,32 +453,48 @@ export class DatabaseStorage implements IStorage {
     ]);
 
     const total = Number(countResult[0]?.count ?? 0);
-    return { items, total };
+    const decryptedItems = await this.decryptRows(items, "workspaces") as Workspace[];
+    return { items: decryptedItems, total };
   }
 
   async getWorkspace(id: string): Promise<Workspace | undefined> {
     const [workspace] = await db.select().from(workspaces).where(eq(workspaces.id, id));
-    return workspace;
+    if (!workspace) return undefined;
+    const [decrypted] = await this.decryptRows([workspace], "workspaces");
+    return decrypted as Workspace;
   }
 
   async getWorkspaceByM365ObjectId(m365ObjectId: string): Promise<Workspace | undefined> {
     const [workspace] = await db.select().from(workspaces).where(eq(workspaces.m365ObjectId, m365ObjectId));
-    return workspace;
+    if (!workspace) return undefined;
+    const [decrypted] = await this.decryptRows([workspace], "workspaces");
+    return decrypted as Workspace;
   }
 
   async createWorkspace(workspace: InsertWorkspace): Promise<Workspace> {
-    const [created] = await db.insert(workspaces).values(workspace).returning();
+    const data = workspace.tenantConnectionId
+      ? await this.encryptForTenant(workspace as Record<string, any>, "workspaces", workspace.tenantConnectionId) as InsertWorkspace
+      : workspace;
+    const [created] = await db.insert(workspaces).values(data).returning();
     return created;
   }
 
   async updateWorkspace(id: string, updates: Partial<InsertWorkspace>): Promise<Workspace | undefined> {
-    const [updated] = await db.update(workspaces).set(updates).where(eq(workspaces.id, id)).returning();
+    const [existing] = await db.select({ tenantConnectionId: workspaces.tenantConnectionId }).from(workspaces).where(eq(workspaces.id, id));
+    const encrypted = existing?.tenantConnectionId
+      ? await this.encryptForTenant(updates as Record<string, any>, "workspaces", existing.tenantConnectionId) as Partial<InsertWorkspace>
+      : updates;
+    const [updated] = await db.update(workspaces).set(encrypted).where(eq(workspaces.id, id)).returning();
     return updated;
   }
 
   async updateWorkspaceScoped(id: string, updates: Partial<InsertWorkspace>, allowedTenantConnectionIds: string[]): Promise<Workspace | undefined> {
     if (allowedTenantConnectionIds.length === 0) return undefined;
-    const [updated] = await db.update(workspaces).set(updates).where(
+    const [existing] = await db.select({ tenantConnectionId: workspaces.tenantConnectionId }).from(workspaces).where(eq(workspaces.id, id));
+    const encrypted = existing?.tenantConnectionId
+      ? await this.encryptForTenant(updates as Record<string, any>, "workspaces", existing.tenantConnectionId) as Partial<InsertWorkspace>
+      : updates;
+    const [updated] = await db.update(workspaces).set(encrypted).where(
       and(
         eq(workspaces.id, id),
         sql`${workspaces.tenantConnectionId} = ANY(ARRAY[${sql.join(allowedTenantConnectionIds.map(tid => sql`${tid}`), sql`, `)}]::text[])`
@@ -995,31 +1071,36 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getDocumentLibraries(workspaceId: string): Promise<DocumentLibrary[]> {
-    return db.select().from(documentLibraries)
+    const rows = await db.select().from(documentLibraries)
       .where(eq(documentLibraries.workspaceId, workspaceId))
       .orderBy(documentLibraries.displayName);
+    return this.decryptRows(rows, "document_libraries") as Promise<DocumentLibrary[]>;
   }
 
   async getDocumentLibrariesByTenant(tenantConnectionId: string): Promise<DocumentLibrary[]> {
-    return db.select().from(documentLibraries)
+    const rows = await db.select().from(documentLibraries)
       .where(eq(documentLibraries.tenantConnectionId, tenantConnectionId))
       .orderBy(documentLibraries.displayName);
+    return this.decryptRows(rows, "document_libraries") as Promise<DocumentLibrary[]>;
   }
 
   async getDocumentLibrary(id: string): Promise<DocumentLibrary | undefined> {
     const [lib] = await db.select().from(documentLibraries)
       .where(eq(documentLibraries.id, id));
-    return lib;
+    if (!lib) return undefined;
+    const [decrypted] = await this.decryptRows([lib], "document_libraries");
+    return decrypted as DocumentLibrary;
   }
 
   async upsertDocumentLibrary(data: InsertDocumentLibrary): Promise<DocumentLibrary> {
-    const [result] = await db.insert(documentLibraries).values(data)
+    const encrypted = await this.encryptForTenant(data as Record<string, any>, "document_libraries", data.tenantConnectionId) as InsertDocumentLibrary;
+    const [result] = await db.insert(documentLibraries).values(encrypted)
       .onConflictDoUpdate({
         target: [documentLibraries.workspaceId, documentLibraries.m365ListId],
         set: {
-          displayName: data.displayName,
-          description: data.description,
-          webUrl: data.webUrl,
+          displayName: encrypted.displayName,
+          description: encrypted.description,
+          webUrl: encrypted.webUrl,
           template: data.template,
           itemCount: data.itemCount,
           storageUsedBytes: data.storageUsedBytes,
@@ -1147,18 +1228,19 @@ export class DatabaseStorage implements IStorage {
   // ── Teams Recordings Discovery ─────────────────────────────────────────────
 
   async upsertTeamsRecording(data: InsertTeamsRecording): Promise<TeamsRecording> {
+    const encrypted = await this.encryptForTenant(data as Record<string, any>, "teams_recordings", data.tenantConnectionId) as InsertTeamsRecording;
     const [result] = await db.insert(teamsRecordings)
-      .values(data)
+      .values(encrypted)
       .onConflictDoUpdate({
         target: [teamsRecordings.tenantConnectionId, teamsRecordings.driveItemId],
         set: {
-          meetingTitle: data.meetingTitle,
-          meetingDate: data.meetingDate,
-          organizer: data.organizer,
-          organizerDisplayName: data.organizerDisplayName,
-          fileName: data.fileName,
-          fileUrl: data.fileUrl,
-          filePath: data.filePath,
+          meetingTitle: encrypted.meetingTitle,
+          meetingDate: encrypted.meetingDate,
+          organizer: encrypted.organizer,
+          organizerDisplayName: encrypted.organizerDisplayName,
+          fileName: encrypted.fileName,
+          fileUrl: encrypted.fileUrl,
+          filePath: encrypted.filePath,
           fileSizeBytes: data.fileSizeBytes,
           fileCreatedAt: data.fileCreatedAt,
           fileModifiedAt: data.fileModifiedAt,
@@ -1171,14 +1253,14 @@ export class DatabaseStorage implements IStorage {
           lastDiscoveredAt: data.lastDiscoveredAt,
           discoveryStatus: data.discoveryStatus,
           // Refresh additional mutable metadata to keep discovery idempotent
-          storageType: data.storageType,
-          teamDisplayName: data.teamDisplayName,
-          channelDisplayName: data.channelDisplayName,
-          channelType: data.channelType,
-          userDisplayName: data.userDisplayName,
-          userPrincipalName: data.userPrincipalName,
-          driveId: data.driveId,
-          fileType: data.fileType,
+          storageType: encrypted.storageType,
+          teamDisplayName: encrypted.teamDisplayName,
+          channelDisplayName: encrypted.channelDisplayName,
+          channelType: encrypted.channelType,
+          userDisplayName: encrypted.userDisplayName,
+          userPrincipalName: encrypted.userPrincipalName,
+          driveId: encrypted.driveId,
+          fileType: encrypted.fileType,
         },
       })
       .returning();
@@ -1200,17 +1282,22 @@ export class DatabaseStorage implements IStorage {
         )!,
       );
     }
+    let rows: TeamsRecording[];
     if (conditions.length > 0) {
-      return db.select().from(teamsRecordings)
+      rows = await db.select().from(teamsRecordings)
         .where(and(...conditions))
         .orderBy(desc(teamsRecordings.lastDiscoveredAt));
+    } else {
+      rows = await db.select().from(teamsRecordings).orderBy(desc(teamsRecordings.lastDiscoveredAt));
     }
-    return db.select().from(teamsRecordings).orderBy(desc(teamsRecordings.lastDiscoveredAt));
+    return this.decryptRows(rows, "teams_recordings") as Promise<TeamsRecording[]>;
   }
 
   async getTeamsRecording(id: string): Promise<TeamsRecording | undefined> {
     const [result] = await db.select().from(teamsRecordings).where(eq(teamsRecordings.id, id));
-    return result;
+    if (!result) return undefined;
+    const [decrypted] = await this.decryptRows([result], "teams_recordings");
+    return decrypted as TeamsRecording;
   }
 
   async createTeamsDiscoveryRun(data: InsertTeamsDiscoveryRun): Promise<TeamsDiscoveryRun> {
@@ -1368,20 +1455,22 @@ export class DatabaseStorage implements IStorage {
       .limit(opts.limit)
       .offset(opts.offset);
 
-    return { rows, total: countResult?.count ?? 0 };
+    const decryptedRows = await this.decryptRows(rows, "teams_recordings") as TeamsRecording[];
+    return { rows: decryptedRows, total: countResult?.count ?? 0 };
   }
 
   // ── Teams & Channels Inventory ──────────────────────────────────────────────
 
   async upsertTeamsInventory(data: InsertTeamsInventory): Promise<TeamsInventoryItem> {
+    const encrypted = await this.encryptForTenant(data as Record<string, any>, "teams_inventory", data.tenantConnectionId) as InsertTeamsInventory;
     const [result] = await db.insert(teamsInventory)
-      .values(data)
+      .values(encrypted)
       .onConflictDoUpdate({
         target: [teamsInventory.tenantConnectionId, teamsInventory.teamId],
         set: {
-          displayName: data.displayName,
-          description: data.description,
-          mailNickname: data.mailNickname,
+          displayName: encrypted.displayName,
+          description: encrypted.description,
+          mailNickname: encrypted.mailNickname,
           visibility: data.visibility,
           isArchived: data.isArchived,
           classification: data.classification,
@@ -1390,7 +1479,7 @@ export class DatabaseStorage implements IStorage {
           memberCount: data.memberCount,
           ownerCount: data.ownerCount,
           guestCount: data.guestCount,
-          sharepointSiteUrl: data.sharepointSiteUrl,
+          sharepointSiteUrl: encrypted.sharepointSiteUrl,
           sharepointSiteId: data.sharepointSiteId,
           sensitivityLabel: data.sensitivityLabel,
           lastDiscoveredAt: data.lastDiscoveredAt,
@@ -1420,27 +1509,31 @@ export class DatabaseStorage implements IStorage {
         )!,
       );
     }
-    return db.select().from(teamsInventory)
+    const rows = await db.select().from(teamsInventory)
       .where(and(...conditions))
       .orderBy(teamsInventory.displayName);
+    return this.decryptRows(rows, "teams_inventory") as Promise<TeamsInventoryItem[]>;
   }
 
   async getTeamsInventoryItem(id: string): Promise<TeamsInventoryItem | undefined> {
     const [result] = await db.select().from(teamsInventory).where(eq(teamsInventory.id, id));
-    return result;
+    if (!result) return undefined;
+    const [decrypted] = await this.decryptRows([result], "teams_inventory");
+    return decrypted as TeamsInventoryItem;
   }
 
   async upsertChannelsInventory(data: InsertChannelsInventory): Promise<ChannelsInventoryItem> {
+    const encrypted = await this.encryptForTenant(data as Record<string, any>, "channels_inventory", data.tenantConnectionId) as InsertChannelsInventory;
     const [result] = await db.insert(channelsInventory)
-      .values(data)
+      .values(encrypted)
       .onConflictDoUpdate({
         target: [channelsInventory.tenantConnectionId, channelsInventory.teamId, channelsInventory.channelId],
         set: {
-          displayName: data.displayName,
-          description: data.description,
+          displayName: encrypted.displayName,
+          description: encrypted.description,
           membershipType: data.membershipType,
-          email: data.email,
-          webUrl: data.webUrl,
+          email: encrypted.email,
+          webUrl: encrypted.webUrl,
           createdDateTime: data.createdDateTime,
           memberCount: data.memberCount,
           lastDiscoveredAt: data.lastDiscoveredAt,
@@ -1459,9 +1552,10 @@ export class DatabaseStorage implements IStorage {
     if (teamId) {
       conditions.push(eq(channelsInventory.teamId, teamId));
     }
-    return db.select().from(channelsInventory)
+    const rows = await db.select().from(channelsInventory)
       .where(and(...conditions))
       .orderBy(channelsInventory.displayName);
+    return this.decryptRows(rows, "channels_inventory") as Promise<ChannelsInventoryItem[]>;
   }
 
   /**
@@ -1588,16 +1682,17 @@ export class DatabaseStorage implements IStorage {
   // ── OneDrive Inventory ──────────────────────────────────────────────────────
 
   async upsertOnedriveInventory(data: InsertOnedriveInventory): Promise<OnedriveInventoryItem> {
+    const encrypted = await this.encryptForTenant(data as Record<string, any>, "onedrive_inventory", data.tenantConnectionId) as InsertOnedriveInventory;
     const [result] = await db.insert(onedriveInventory)
-      .values(data)
+      .values(encrypted)
       .onConflictDoUpdate({
         target: [onedriveInventory.tenantConnectionId, onedriveInventory.userId],
         set: {
-          userDisplayName: data.userDisplayName,
-          userPrincipalName: data.userPrincipalName,
-          userDepartment: data.userDepartment,
-          userJobTitle: data.userJobTitle,
-          userMail: data.userMail,
+          userDisplayName: encrypted.userDisplayName,
+          userPrincipalName: encrypted.userPrincipalName,
+          userDepartment: encrypted.userDepartment,
+          userJobTitle: encrypted.userJobTitle,
+          userMail: encrypted.userMail,
           driveId: data.driveId,
           driveType: data.driveType,
           quotaTotalBytes: data.quotaTotalBytes,
@@ -1634,14 +1729,17 @@ export class DatabaseStorage implements IStorage {
         )!,
       );
     }
-    return db.select().from(onedriveInventory)
+    const rows = await db.select().from(onedriveInventory)
       .where(and(...conditions))
       .orderBy(onedriveInventory.userDisplayName);
+    return this.decryptRows(rows, "onedrive_inventory") as Promise<OnedriveInventoryItem[]>;
   }
 
   async getOnedriveInventoryItem(id: string): Promise<OnedriveInventoryItem | undefined> {
     const [result] = await db.select().from(onedriveInventory).where(eq(onedriveInventory.id, id));
-    return result;
+    if (!result) return undefined;
+    const [decrypted] = await this.decryptRows([result], "onedrive_inventory");
+    return decrypted as OnedriveInventoryItem;
   }
 
   async getNextTicketNumber(orgId: string): Promise<number> {
@@ -1883,6 +1981,28 @@ export class DatabaseStorage implements IStorage {
         eq(mspAccessGrants.tenantConnectionId, tenantConnectionId),
         eq(mspAccessGrants.status, "PENDING")
       ));
+  }
+
+  async getTenantEncryptionKey(tenantConnectionId: string): Promise<TenantEncryptionKey | undefined> {
+    const [key] = await db.select().from(tenantEncryptionKeys)
+      .where(eq(tenantEncryptionKeys.tenantConnectionId, tenantConnectionId));
+    return key;
+  }
+
+  async upsertTenantEncryptionKey(data: InsertTenantEncryptionKey): Promise<TenantEncryptionKey> {
+    const [result] = await db.insert(tenantEncryptionKeys)
+      .values(data)
+      .onConflictDoUpdate({
+        target: [tenantEncryptionKeys.tenantConnectionId],
+        set: { encryptedKey: data.encryptedKey },
+      })
+      .returning();
+    return result;
+  }
+
+  async deleteTenantEncryptionKey(tenantConnectionId: string): Promise<void> {
+    await db.delete(tenantEncryptionKeys)
+      .where(eq(tenantEncryptionKeys.tenantConnectionId, tenantConnectionId));
   }
 }
 

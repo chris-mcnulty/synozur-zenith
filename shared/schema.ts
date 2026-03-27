@@ -200,6 +200,7 @@ export const tenantConnections = pgTable("tenant_connections", {
   lastSyncSiteCount: integer("last_sync_site_count"),
   consentGranted: boolean("consent_granted").notNull().default(false),
   isDemo: boolean("is_demo").notNull().default(false),
+  dataMaskingEnabled: boolean("data_masking_enabled").notNull().default(false),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -342,6 +343,7 @@ export const PLAN_FEATURES = {
     lifecycleAutomation: false,
     selfServicePortal: false,
     advancedReporting: false,
+    dataMasking: false,
     maxUsers: 25,
     maxTenants: 1,
     auditRetentionDays: 30,
@@ -355,6 +357,7 @@ export const PLAN_FEATURES = {
     lifecycleAutomation: false,
     selfServicePortal: false,
     advancedReporting: false,
+    dataMasking: false,
     maxUsers: 500,
     maxTenants: 2,
     auditRetentionDays: 365,
@@ -368,6 +371,7 @@ export const PLAN_FEATURES = {
     lifecycleAutomation: true,
     selfServicePortal: true,
     advancedReporting: false,
+    dataMasking: true,
     maxUsers: 5000,
     maxTenants: 10,
     auditRetentionDays: 365 * 7,
@@ -381,6 +385,7 @@ export const PLAN_FEATURES = {
     lifecycleAutomation: true,
     selfServicePortal: true,
     advancedReporting: true,
+    dataMasking: true,
     maxUsers: -1,
     maxTenants: -1,
     auditRetentionDays: -1,
@@ -1051,3 +1056,20 @@ export const insertTenantAccessCodeSchema = createInsertSchema(tenantAccessCodes
 
 export type InsertTenantAccessCode = z.infer<typeof insertTenantAccessCodeSchema>;
 export type TenantAccessCode = typeof tenantAccessCodes.$inferSelect;
+
+export const tenantEncryptionKeys = pgTable("tenant_encryption_keys", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantConnectionId: varchar("tenant_connection_id").notNull(),
+  encryptedKey: text("encrypted_key").notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => [
+  unique("uq_tenant_encryption_key").on(table.tenantConnectionId),
+]);
+
+export const insertTenantEncryptionKeySchema = createInsertSchema(tenantEncryptionKeys).omit({
+  id: true,
+  createdAt: true,
+});
+
+export type InsertTenantEncryptionKey = z.infer<typeof insertTenantEncryptionKeySchema>;
+export type TenantEncryptionKey = typeof tenantEncryptionKeys.$inferSelect;
