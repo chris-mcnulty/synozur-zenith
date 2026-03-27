@@ -22,6 +22,7 @@ import {
   RefreshCcw,
   ShieldAlert,
   ShieldCheck,
+  ShieldOff,
   MoreVertical,
   Activity,
   CheckCircle2,
@@ -40,6 +41,8 @@ import {
   Play,
   Users,
   TicketCheck,
+  Timer,
+  RefreshCw,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -86,8 +89,13 @@ export default function TenantConnectionsPage() {
   const [form, setForm] = useState({
     domain: "",
     ownershipType: "MSP",
+    installMode: "MSP",
     adminEmail: "",
   });
+
+  const [mspAccessDialogId, setMspAccessDialogId] = useState<string | null>(null);
+  const [mspCodeInput, setMspCodeInput] = useState("");
+  const [mspCodeSubmitting, setMspCodeSubmitting] = useState(false);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -155,6 +163,30 @@ export default function TenantConnectionsPage() {
       toast({ title: "Error", description: err.message, variant: "destructive" });
     } finally {
       setIsInitiating(false);
+    }
+  };
+
+  const handleRedeemCode = async (tenantConnectionId: string) => {
+    const code = mspCodeInput.trim();
+    if (!code || code.length !== 6) {
+      toast({ title: "Invalid Code", description: "Please enter a valid 6-digit code.", variant: "destructive" });
+      return;
+    }
+    setMspCodeSubmitting(true);
+    try {
+      const res = await apiRequest("POST", "/api/admin/msp-access/redeem", { code });
+      const data = await res.json();
+      if (!res.ok) {
+        toast({ title: "Code Failed", description: data.error || "Invalid or expired code.", variant: "destructive" });
+        return;
+      }
+      toast({ title: "Access Granted", description: "You now have access to this tenant." });
+      setMspCodeInput("");
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/tenants"] });
+    } catch (err: any) {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    } finally {
+      setMspCodeSubmitting(false);
     }
   };
 
@@ -276,7 +308,7 @@ export default function TenantConnectionsPage() {
             <TicketCheck className="w-4 h-4" />
             Enter Access Code
           </Button>
-          <Dialog open={showAddDialog} onOpenChange={(open) => { setShowAddDialog(open); if (!open) setForm({ domain: "", ownershipType: "MSP", adminEmail: "" }); }}>
+          <Dialog open={showAddDialog} onOpenChange={(open) => { setShowAddDialog(open); if (!open) setForm({ domain: "", ownershipType: "MSP", installMode: "MSP", adminEmail: "" }); }}>
             <DialogTrigger asChild>
               <Button className="gap-2 shadow-md shadow-primary/20" data-testid="button-connect-tenant">
                 <Plus className="w-4 h-4" />
@@ -336,6 +368,21 @@ export default function TenantConnectionsPage() {
                       <SelectItem value="Hybrid">Hybrid (Customer Owns, MSP Operates)</SelectItem>
                     </SelectContent>
                   </Select>
+                </div>
+
+                <div className="space-y-2">
+                  <Label>Install Mode</Label>
+                  <Select value={form.installMode} onValueChange={v => setForm(f => ({ ...f, installMode: v }))}>
+                    <SelectTrigger data-testid="select-install-mode">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="MSP">MSP (MSP-managed)</SelectItem>
+                      <SelectItem value="CUSTOMER">Customer (customer-only, consent required)</SelectItem>
+                      <SelectItem value="HYBRID">Hybrid</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p className="text-[11px] text-muted-foreground">Customer mode requires the customer to grant access before MSP can see this tenant.</p>
                 </div>
 
                 <div className="space-y-2">
@@ -493,6 +540,7 @@ export default function TenantConnectionsPage() {
                 <TableRow>
                   <TableHead className="pl-6">Tenant</TableHead>
                   <TableHead>Ownership</TableHead>
+                  <TableHead>Install Mode</TableHead>
                   <TableHead>Consent</TableHead>
                   <TableHead>Last Sync</TableHead>
                   <TableHead>Sites Found</TableHead>
@@ -503,8 +551,10 @@ export default function TenantConnectionsPage() {
               <TableBody>
                 {connections
                   .filter(c => !searchTerm || c.tenantName.toLowerCase().includes(searchTerm.toLowerCase()) || c.domain.toLowerCase().includes(searchTerm.toLowerCase()))
-                  .map((conn) => (
-                  <TableRow key={conn.id} className="hover:bg-muted/10 transition-colors" data-testid={`row-tenant-${conn.id}`}>
+                  .map((conn) => {
+                  const isBlocked = (conn as any).mspAccessDenied;
+                  return (
+                  <TableRow key={conn.id} className={`hover:bg-muted/10 transition-colors ${isBlocked ? 'opacity-60' : ''}`} data-testid={`row-tenant-${conn.id}`}>
                     <TableCell className="pl-6">
                       <div className="flex flex-col">
                         <span className="font-semibold text-sm flex items-center gap-2">
@@ -512,8 +562,16 @@ export default function TenantConnectionsPage() {
                           {conn.isDemo && (
                             <Badge variant="outline" className="text-[9px] bg-violet-500/10 text-violet-500 border-violet-500/20">DEMO</Badge>
                           )}
+                          {isBlocked && (
+                            <Badge variant="outline" className="text-[9px] bg-orange-500/10 text-orange-600 border-orange-500/20 flex items-center gap-1">
+                              <ShieldOff className="w-2.5 h-2.5" /> Access Restricted
+                            </Badge>
+                          )}
                         </span>
                         <span className="text-xs font-mono text-muted-foreground mt-0.5">{conn.domain}</span>
+                        {isBlocked && (
+                          <span className="text-[10px] text-orange-500 mt-0.5">This tenant has not consented to allow MSP access to their data.</span>
+                        )}
                       </div>
                     </TableCell>
                     <TableCell>
@@ -523,6 +581,15 @@ export default function TenantConnectionsPage() {
                         'bg-amber-500/10 text-amber-600 border-amber-500/20 text-[10px]'
                       }>
                         {conn.ownershipType}
+                      </Badge>
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant="outline" className={
+                        (conn as any).installMode === 'CUSTOMER' ? 'bg-orange-500/10 text-orange-600 border-orange-500/20 text-[10px]' :
+                        (conn as any).installMode === 'HYBRID' ? 'bg-amber-500/10 text-amber-600 border-amber-500/20 text-[10px]' :
+                        'bg-blue-500/10 text-blue-600 border-blue-500/20 text-[10px]'
+                      }>
+                        {(conn as any).installMode || 'MSP'}
                       </Badge>
                     </TableCell>
                     <TableCell>
@@ -594,31 +661,44 @@ export default function TenantConnectionsPage() {
                           </Button>
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end">
-                          <DropdownMenuItem
-                            className="gap-2"
-                            onClick={() => handleSync(conn.id)}
-                            disabled={syncingId === conn.id}
-                          >
-                            {syncingId === conn.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCcw className="w-4 h-4" />}
-                            {syncingId === conn.id ? "Syncing..." : "Sync Now"}
-                          </DropdownMenuItem>
-                          <DropdownMenuItem className="gap-2" onClick={() => handleCheckPermissions(conn.id)}>
-                            <KeyRound className="w-4 h-4" /> Check Permissions
-                          </DropdownMenuItem>
-                          <DropdownMenuItem
-                            className="gap-2"
-                            onClick={() => handleReconsent(conn.id)}
-                            disabled={reconsentingId === conn.id}
-                          >
-                            {reconsentingId === conn.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Lock className="w-4 h-4" />}
-                            Update Permissions
-                          </DropdownMenuItem>
-                          <DropdownMenuItem className="gap-2" onClick={() => setMetadataDialogTenantId(conn.id)}>
-                            <Settings2 className="w-4 h-4" /> Governance Settings
-                          </DropdownMenuItem>
-                          {conn.ownershipType === "Customer" && (
-                            <DropdownMenuItem className="gap-2" onClick={() => setAccessDialogTenantId(conn.id)}>
-                              <Users className="w-4 h-4" /> Manage Access
+                          {!isBlocked && (
+                            <DropdownMenuItem
+                              className="gap-2"
+                              onClick={() => handleSync(conn.id)}
+                              disabled={syncingId === conn.id}
+                            >
+                              {syncingId === conn.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCcw className="w-4 h-4" />}
+                              {syncingId === conn.id ? "Syncing..." : "Sync Now"}
+                            </DropdownMenuItem>
+                          )}
+                          {!isBlocked && (
+                            <DropdownMenuItem className="gap-2" onClick={() => handleCheckPermissions(conn.id)}>
+                              <KeyRound className="w-4 h-4" /> Check Permissions
+                            </DropdownMenuItem>
+                          )}
+                          {!isBlocked && (
+                            <DropdownMenuItem
+                              className="gap-2"
+                              onClick={() => handleReconsent(conn.id)}
+                              disabled={reconsentingId === conn.id}
+                            >
+                              {reconsentingId === conn.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Lock className="w-4 h-4" />}
+                              Update Permissions
+                            </DropdownMenuItem>
+                          )}
+                          {(conn as any).installMode === 'CUSTOMER' && !isBlocked && (
+                            <DropdownMenuItem className="gap-2" onClick={() => setMspAccessDialogId(conn.id)}>
+                              <Users className="w-4 h-4" /> MSP Access
+                            </DropdownMenuItem>
+                          )}
+                          {isBlocked && (
+                            <DropdownMenuItem className="gap-2" onClick={() => { setMspAccessDialogId(conn.id); setMspCodeInput(""); }}>
+                              <ShieldOff className="w-4 h-4" /> Enter Access Code
+                            </DropdownMenuItem>
+                          )}
+                          {!isBlocked && (
+                            <DropdownMenuItem className="gap-2" onClick={() => setMetadataDialogTenantId(conn.id)}>
+                              <Settings2 className="w-4 h-4" /> Governance Settings
                             </DropdownMenuItem>
                           )}
                           <DropdownMenuItem className="gap-2" onClick={() => navigator.clipboard.writeText(conn.tenantId)}>
@@ -639,7 +719,8 @@ export default function TenantConnectionsPage() {
                       </DropdownMenu>
                     </TableCell>
                   </TableRow>
-                ))}
+                  );
+                })}
               </TableBody>
             </Table>
           )}
@@ -822,20 +903,80 @@ export default function TenantConnectionsPage() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={accessDialogTenantId !== null} onOpenChange={(open) => { if (!open) setAccessDialogTenantId(null); }}>
+      {/* MSP Access Dialog — two modes: customer (grant/revoke) or MSP (blocked, enter code) */}
+      <Dialog open={mspAccessDialogId !== null} onOpenChange={(open) => { if (!open) { setMspAccessDialogId(null); setMspCodeInput(""); } }}>
         <DialogContent className="sm:max-w-[550px]">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <Users className="w-5 h-5 text-primary" />
-              Manage Tenant Access
-            </DialogTitle>
-            <DialogDescription>
-              Control which organizations can access this tenant's data. Generate a 6-digit code to share with an MSP organization.
-            </DialogDescription>
-          </DialogHeader>
-          {accessDialogTenantId && (
-            <TenantAccessManager tenantConnectionId={accessDialogTenantId} />
-          )}
+          {mspAccessDialogId && (() => {
+            const conn = connections.find(c => c.id === mspAccessDialogId);
+            const isBlocked = conn && (conn as any).mspAccessDenied;
+            if (!conn) return null;
+            if (isBlocked) {
+              return (
+                <>
+                  <DialogHeader>
+                    <DialogTitle className="flex items-center gap-2">
+                      <ShieldOff className="w-5 h-5 text-orange-500" />
+                      MSP Access Required
+                    </DialogTitle>
+                    <DialogDescription>
+                      This tenant has not consented to allow MSP access to their data.
+                    </DialogDescription>
+                  </DialogHeader>
+                  <div className="space-y-4 py-2">
+                    <Card className="border-orange-500/20 bg-orange-500/5">
+                      <CardContent className="p-4">
+                        <div className="flex items-start gap-2">
+                          <ShieldOff className="w-4 h-4 text-orange-500 mt-0.5 shrink-0" />
+                          <div>
+                            <p className="text-sm font-medium text-orange-600">Access Restricted</p>
+                            <p className="text-xs text-muted-foreground mt-1">
+                              This tenant operates in Customer mode. Ask the customer to generate a 6-digit access code from their MSP Access settings, then enter it below.
+                            </p>
+                          </div>
+                        </div>
+                      </CardContent>
+                    </Card>
+                    <div className="space-y-2">
+                      <Label>6-Digit Access Code</Label>
+                      <div className="flex gap-2">
+                        <Input
+                          placeholder="000000"
+                          value={mspCodeInput}
+                          onChange={e => setMspCodeInput(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                          className="font-mono text-center text-2xl tracking-widest h-12"
+                          maxLength={6}
+                          data-testid="input-msp-access-code"
+                        />
+                        <Button
+                          onClick={() => handleRedeemCode(mspAccessDialogId)}
+                          disabled={mspCodeInput.length !== 6 || mspCodeSubmitting}
+                          className="h-12 px-6"
+                          data-testid="button-submit-msp-code"
+                        >
+                          {mspCodeSubmitting ? <Loader2 className="w-4 h-4 animate-spin" /> : "Submit Code"}
+                        </Button>
+                      </div>
+                      <p className="text-xs text-muted-foreground">The code expires 10 minutes after it was generated.</p>
+                    </div>
+                  </div>
+                </>
+              );
+            }
+            return (
+              <>
+                <DialogHeader>
+                  <DialogTitle className="flex items-center gap-2">
+                    <Users className="w-5 h-5 text-primary" />
+                    MSP Access — {conn.tenantName}
+                  </DialogTitle>
+                  <DialogDescription>
+                    Manage which MSP organizations have access to this customer-mode tenant.
+                  </DialogDescription>
+                </DialogHeader>
+                <MspAccessPanel tenantConnectionId={mspAccessDialogId} />
+              </>
+            );
+          })()}
         </DialogContent>
       </Dialog>
     </div>
@@ -1110,6 +1251,187 @@ function TenantAccessManager({ tenantConnectionId }: { tenantConnectionId: strin
                   data-testid={`button-revoke-${grant.id}`}
                 >
                   <XCircle className="w-3.5 h-3.5" />
+                  Revoke
+                </Button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+interface MspGrant {
+  id: string;
+  tenantConnectionId: string;
+  grantingOrgId: string;
+  grantedToOrgId: string | null;
+  grantedToOrgName: string | null;
+  accessCode: string;
+  codeExpiresAt: string;
+  status: string;
+  grantedAt: string | null;
+  revokedAt: string | null;
+  createdAt: string;
+}
+
+function MspAccessPanel({ tenantConnectionId }: { tenantConnectionId: string }) {
+  const { toast } = useToast();
+  const qc = useQueryClient();
+  const [generatedCode, setGeneratedCode] = useState<{ code: string; expiresAt: string } | null>(null);
+  const [generating, setGenerating] = useState(false);
+  const [countdown, setCountdown] = useState<number>(0);
+  const [revoking, setRevoking] = useState<string | null>(null);
+
+  const { data: grants = [], isLoading } = useQuery<MspGrant[]>({
+    queryKey: [`/api/admin/tenants/${tenantConnectionId}/msp-access/grants`],
+    queryFn: () => fetch(`/api/admin/tenants/${tenantConnectionId}/msp-access/grants`, { credentials: "include" }).then(r => r.ok ? r.json() : []),
+    refetchInterval: generatedCode ? 10000 : false,
+  });
+
+  useEffect(() => {
+    if (!generatedCode) { setCountdown(0); return; }
+    const calcRemaining = () => Math.max(0, Math.round((new Date(generatedCode.expiresAt).getTime() - Date.now()) / 1000));
+    setCountdown(calcRemaining());
+    const interval = setInterval(() => {
+      const remaining = calcRemaining();
+      setCountdown(remaining);
+      if (remaining <= 0) {
+        clearInterval(interval);
+        setGeneratedCode(null);
+      }
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [generatedCode]);
+
+  const handleGenerateCode = async () => {
+    setGenerating(true);
+    try {
+      const res = await fetch(`/api/admin/tenants/${tenantConnectionId}/msp-access/code`, {
+        method: "POST",
+        credentials: "include",
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        toast({ title: "Error", description: data.error || "Failed to generate code", variant: "destructive" });
+        return;
+      }
+      setGeneratedCode({ code: data.code, expiresAt: data.expiresAt });
+      qc.invalidateQueries({ queryKey: [`/api/admin/tenants/${tenantConnectionId}/msp-access/grants`] });
+    } catch (err: any) {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  const handleRevoke = async (grantId: string) => {
+    if (!confirm("Revoke this access? The MSP will immediately lose access to this tenant.")) return;
+    setRevoking(grantId);
+    try {
+      const res = await fetch(`/api/admin/tenants/${tenantConnectionId}/msp-access/grants/${grantId}`, {
+        method: "DELETE",
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        toast({ title: "Error", description: data.error || "Failed to revoke", variant: "destructive" });
+        return;
+      }
+      toast({ title: "Access Revoked", description: "MSP access has been revoked." });
+      qc.invalidateQueries({ queryKey: [`/api/admin/tenants/${tenantConnectionId}/msp-access/grants`] });
+    } catch (err: any) {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    } finally {
+      setRevoking(null);
+    }
+  };
+
+  const activeGrants = grants.filter(g => g.status === "ACTIVE");
+  const fmt = (d: string | null) => d ? new Date(d).toLocaleString() : "—";
+  const fmtCountdown = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+
+  return (
+    <div className="space-y-4">
+      <div className="space-y-2">
+        <div className="flex items-center justify-between">
+          <h4 className="text-sm font-medium">Generate Access Code</h4>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={handleGenerateCode}
+            disabled={generating}
+            className="gap-2"
+            data-testid="button-generate-access-code"
+          >
+            {generating ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+            {generatedCode ? "Regenerate Code" : "Generate Code"}
+          </Button>
+        </div>
+        <p className="text-xs text-muted-foreground">Share this code with the MSP. It expires in 10 minutes.</p>
+        {generatedCode && (
+          <Card className="border-primary/20 bg-primary/5">
+            <CardContent className="p-4">
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <div className="text-3xl font-mono font-bold tracking-[0.3em] text-primary" data-testid="text-generated-code">
+                    {generatedCode.code}
+                  </div>
+                  <div className="flex items-center gap-1.5 mt-1 text-xs text-muted-foreground">
+                    <Timer className="w-3.5 h-3.5" />
+                    {countdown > 0 ? `Expires in ${fmtCountdown(countdown)}` : "Expired"}
+                  </div>
+                </div>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => navigator.clipboard.writeText(generatedCode.code)}
+                  className="gap-2"
+                  data-testid="button-copy-access-code"
+                >
+                  <Copy className="w-3.5 h-3.5" /> Copy
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+      </div>
+
+      <div className="space-y-2 border-t border-border/50 pt-4">
+        <h4 className="text-sm font-medium flex items-center gap-2">
+          <Users className="w-4 h-4" />
+          Organizations with Access
+          {activeGrants.length > 0 && (
+            <Badge variant="secondary" className="text-[10px]">{activeGrants.length}</Badge>
+          )}
+        </h4>
+        {isLoading ? (
+          <div className="flex items-center justify-center py-4">
+            <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
+          </div>
+        ) : activeGrants.length === 0 ? (
+          <p className="text-xs text-muted-foreground py-3 text-center">No organizations currently have access.</p>
+        ) : (
+          <div className="space-y-2">
+            {activeGrants.map(grant => (
+              <div key={grant.id} className="flex items-center justify-between p-3 rounded-lg border border-border/50 bg-card/50" data-testid={`grant-row-${grant.id}`}>
+                <div className="min-w-0">
+                  <div className="text-sm font-medium flex items-center gap-2">
+                    <Building2 className="w-3.5 h-3.5 text-muted-foreground" />
+                    {grant.grantedToOrgName || grant.grantedToOrgId || "Unknown Org"}
+                  </div>
+                  <div className="text-xs text-muted-foreground mt-0.5">Granted {fmt(grant.grantedAt)}</div>
+                </div>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="text-destructive hover:text-destructive gap-1.5"
+                  onClick={() => handleRevoke(grant.id)}
+                  disabled={revoking === grant.id}
+                  data-testid={`button-revoke-grant-${grant.id}`}
+                >
+                  {revoking === grant.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <X className="w-3.5 h-3.5" />}
                   Revoke
                 </Button>
               </div>

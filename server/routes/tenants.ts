@@ -62,26 +62,26 @@ async function getDelegatedTokenForRetention(currentUserId?: string, organizatio
 router.get("/api/admin/tenants", requirePermission('inventory:read'), async (req: AuthenticatedRequest, res) => {
   const orgId = req.activeOrganizationId || req.user?.organizationId;
   const isPlatformOwner = req.user?.role === ZENITH_ROLES.PLATFORM_OWNER;
-  const ownedConnections = await storage.getTenantConnections(orgId || undefined);
 
-  let allConnections = ownedConnections;
+  const allConnections = await storage.getTenantConnections(isPlatformOwner ? undefined : undefined);
 
-  if (orgId && !isPlatformOwner) {
-    const grantedIds = await storage.getGrantedTenantConnectionIds(orgId);
-    if (grantedIds.length > 0) {
-      const grantedConns = await Promise.all(
-        grantedIds
-          .filter(id => !ownedConnections.some(c => c.id === id))
-          .map(id => storage.getTenantConnection(id))
-      );
-      allConnections = [
-        ...ownedConnections,
-        ...grantedConns.filter((c): c is NonNullable<typeof c> => !!c),
-      ];
+  const filtered: (typeof allConnections[0] & { mspAccessDenied?: boolean })[] = [];
+  for (const c of allConnections) {
+    if (isPlatformOwner) {
+      filtered.push(c);
+    } else if (c.organizationId === orgId) {
+      filtered.push(c);
+    } else if (c.installMode === "CUSTOMER") {
+      const grant = orgId ? await storage.getActiveMspGrantForOrg(c.id, orgId) : null;
+      if (grant) {
+        filtered.push(c);
+      } else {
+        filtered.push({ ...c, mspAccessDenied: true });
+      }
     }
   }
 
-  const safe = allConnections.map(c => ({
+  const safe = filtered.map(c => ({
     ...c,
     clientSecret: undefined,
     clientId: c.clientId ? `${c.clientId.substring(0, 8)}...` : undefined,
@@ -232,9 +232,26 @@ router.get("/api/admin/tenants/consent/callback", async (req, res) => {
 router.get("/api/admin/tenants/:id", requirePermission('inventory:read'), async (req: AuthenticatedRequest, res) => {
   const connection = await storage.getTenantConnection(req.params.id);
   if (!connection) return res.status(404).json({ message: "Tenant connection not found" });
-  if (req.user?.role !== ZENITH_ROLES.PLATFORM_OWNER && connection.organizationId !== req.user?.organizationId) {
-    return res.status(404).json({ message: "Tenant connection not found" });
+
+  const isPlatformOwner = req.user?.role === ZENITH_ROLES.PLATFORM_OWNER;
+  const orgId = req.activeOrganizationId || req.user?.organizationId;
+
+  if (!isPlatformOwner && connection.organizationId !== orgId) {
+    if (connection.installMode === "CUSTOMER") {
+      const grant = orgId ? await storage.getActiveMspGrantForOrg(connection.id, orgId) : null;
+      if (!grant) {
+        return res.status(403).json({
+          reason: "MSP_ACCESS_DENIED",
+          tenantId: connection.tenantId,
+          tenantName: connection.tenantName,
+          tenantConnectionId: connection.id,
+        });
+      }
+    } else {
+      return res.status(404).json({ message: "Tenant connection not found" });
+    }
   }
+
   res.json({ ...connection, clientSecret: undefined });
 });
 
@@ -812,6 +829,98 @@ router.get("/api/admin/tenants/:tenantConnectionId/access-grants", requireAuth()
       const org = await storage.getOrganization(g.grantedOrganizationId);
       return { ...g, grantedOrganizationName: org?.name || "Unknown" };
     }));
+
+    res.json(enriched);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── MSP Access: code generation (customer side) ──
+router.post("/api/admin/tenants/:id/msp-access/code", requireRole(ZENITH_ROLES.TENANT_ADMIN), async (req: AuthenticatedRequest, res) => {
+  try {
+    const conn = await storage.getTenantConnection(req.params.id);
+    if (!conn) return res.status(404).json({ error: "Tenant connection not found" });
+
+    const orgId = req.activeOrganizationId || req.user?.organizationId;
+    if (req.user?.role !== ZENITH_ROLES.PLATFORM_OWNER && conn.organizationId !== orgId) {
+      return res.status(403).json({ error: "Access denied" });
+    }
+
+    await storage.invalidatePendingMspCodes(conn.id);
+
+    const code = String(Math.floor(100000 + Math.random() * 900000));
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+
+    const grant = await storage.createMspAccessGrant({
+      tenantConnectionId: conn.id,
+      grantingOrgId: orgId!,
+      grantedToOrgId: null,
+      accessCode: code,
+      codeExpiresAt: expiresAt,
+      status: "PENDING",
+    });
+
+    res.json({ code, expiresAt, grantId: grant.id });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── MSP Access: redeem a code (MSP side) ──
+router.post("/api/admin/msp-access/redeem", requireRole(ZENITH_ROLES.TENANT_ADMIN), async (req: AuthenticatedRequest, res) => {
+  try {
+    const { code } = req.body;
+    if (!code || typeof code !== "string") {
+      return res.status(400).json({ error: "code is required" });
+    }
+
+    const grant = await storage.getMspAccessGrantByCode(code.trim());
+    if (!grant) {
+      return res.status(400).json({ error: "Invalid code" });
+    }
+
+    if (new Date() > new Date(grant.codeExpiresAt)) {
+      return res.status(400).json({ error: "Code has expired" });
+    }
+
+    const requestingOrgId = req.activeOrganizationId || req.user?.organizationId;
+    if (!requestingOrgId) {
+      return res.status(403).json({ error: "Organization context required" });
+    }
+
+    const updated = await storage.updateMspAccessGrant(grant.id, {
+      status: "ACTIVE",
+      grantedToOrgId: requestingOrgId,
+      grantedAt: new Date(),
+    });
+
+    res.json({ success: true, grant: updated });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── MSP Access: list grants for a tenant (customer side) ──
+router.get("/api/admin/tenants/:id/msp-access/grants", requireRole(ZENITH_ROLES.TENANT_ADMIN), async (req: AuthenticatedRequest, res) => {
+  try {
+    const conn = await storage.getTenantConnection(req.params.id);
+    if (!conn) return res.status(404).json({ error: "Tenant connection not found" });
+
+    const orgId = req.activeOrganizationId || req.user?.organizationId;
+    if (req.user?.role !== ZENITH_ROLES.PLATFORM_OWNER && conn.organizationId !== orgId) {
+      return res.status(403).json({ error: "Access denied" });
+    }
+
+    const grants = await storage.getMspAccessGrantsForTenant(conn.id);
+    const orgs = await storage.getOrganizations();
+    const orgMap = new Map(orgs.map(o => [o.id, o]));
+
+    const enriched = grants.map(g => ({
+      ...g,
+      grantedToOrgName: g.grantedToOrgId ? orgMap.get(g.grantedToOrgId)?.name || g.grantedToOrgId : null,
+    }));
+
     res.json(enriched);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -866,6 +975,34 @@ router.delete("/api/admin/tenants/:tenantConnectionId/access-grants/:grantId", r
 
     const revoked = await storage.revokeTenantAccessGrant(req.params.grantId, req.params.tenantConnectionId);
     if (!revoked) return res.status(404).json({ error: "Access grant not found or does not belong to this tenant" });
+
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── MSP Access: revoke a grant (customer side) ──
+router.delete("/api/admin/tenants/:id/msp-access/grants/:grantId", requireRole(ZENITH_ROLES.TENANT_ADMIN), async (req: AuthenticatedRequest, res) => {
+  try {
+    const conn = await storage.getTenantConnection(req.params.id);
+    if (!conn) return res.status(404).json({ error: "Tenant connection not found" });
+
+    const orgId = req.activeOrganizationId || req.user?.organizationId;
+    if (req.user?.role !== ZENITH_ROLES.PLATFORM_OWNER && conn.organizationId !== orgId) {
+      return res.status(403).json({ error: "Access denied" });
+    }
+
+    const grant = await storage.getMspAccessGrant(req.params.grantId);
+    if (!grant || grant.tenantConnectionId !== conn.id) {
+      return res.status(404).json({ error: "Grant not found" });
+    }
+
+    await storage.updateMspAccessGrant(grant.id, {
+      status: "REVOKED",
+      revokedAt: new Date(),
+    });
+
     res.json({ success: true });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -932,5 +1069,6 @@ router.get("/api/admin/tenants/:id/access-check", requireAuth(), async (req: Aut
     res.status(500).json({ error: err.message });
   }
 });
+
 
 export default router;

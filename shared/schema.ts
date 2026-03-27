@@ -193,6 +193,7 @@ export const tenantConnections = pgTable("tenant_connections", {
   clientSecret: text("client_secret"),
   organizationId: text("organization_id"),
   ownershipType: text("ownership_type").notNull().default("MSP"),
+  installMode: text("install_mode").notNull().default("MSP"),
   status: text("status").notNull().default("PENDING"),
   lastSyncAt: timestamp("last_sync_at"),
   lastSyncStatus: text("last_sync_status"),
@@ -212,6 +213,29 @@ export const insertTenantConnectionSchema = createInsertSchema(tenantConnections
 
 export type InsertTenantConnection = z.infer<typeof insertTenantConnectionSchema>;
 export type TenantConnection = typeof tenantConnections.$inferSelect;
+
+export const mspAccessGrants = pgTable("msp_access_grants", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantConnectionId: varchar("tenant_connection_id").notNull(),
+  grantingOrgId: text("granting_org_id").notNull(),
+  grantedToOrgId: text("granted_to_org_id"),
+  accessCode: text("access_code").notNull(),
+  codeExpiresAt: timestamp("code_expires_at").notNull(),
+  status: text("status").notNull().default("PENDING"),
+  grantedAt: timestamp("granted_at"),
+  revokedAt: timestamp("revoked_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertMspAccessGrantSchema = createInsertSchema(mspAccessGrants).omit({
+  id: true,
+  createdAt: true,
+  grantedAt: true,
+  revokedAt: true,
+});
+
+export type InsertMspAccessGrant = z.infer<typeof insertMspAccessGrantSchema>;
+export type MspAccessGrant = typeof mspAccessGrants.$inferSelect;
 
 export const tenantDepartments = pgTable("tenant_departments", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),

@@ -9,8 +9,10 @@ interface TenantConnection {
   tenantName: string;
   domain: string;
   ownershipType: string;
+  installMode: string;
   status: string;
   isDemo: boolean;
+  mspAccessDenied?: boolean;
 }
 
 interface TenantContextType {
@@ -55,8 +57,9 @@ export function TenantProvider({ children }: { children: ReactNode }) {
   });
 
   const storedId = selectedTenantId;
-  const matchesStored = storedId ? tenants.find(t => t.id === storedId) : undefined;
-  const selectedTenant = matchesStored || tenants[0];
+  const accessibleTenants = tenants.filter(t => !t.mspAccessDenied);
+  const matchesStored = storedId ? tenants.find(t => t.id === storedId && !t.mspAccessDenied) : undefined;
+  const selectedTenant = matchesStored || accessibleTenants[0];
 
   useEffect(() => {
     if (tenants.length > 0 && selectedTenant && selectedTenant.id !== storedId) {

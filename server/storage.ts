@@ -96,6 +96,9 @@ import {
   tenantAccessCodes,
   type TenantAccessCode,
   type InsertTenantAccessCode,
+  mspAccessGrants,
+  type MspAccessGrant,
+  type InsertMspAccessGrant,
 } from "@shared/schema";
 
 export interface TeamsChannelsSummaryChannel {
@@ -297,6 +300,15 @@ export interface IStorage {
   getGrantedTenantConnectionIds(organizationId: string): Promise<string[]>;
   createTenantAccessCode(data: InsertTenantAccessCode): Promise<TenantAccessCode>;
   validateAndRedeemAccessCode(code: string, organizationId: string): Promise<{ grant: TenantAccessGrant; tenantConnection: TenantConnection } | null>;
+
+  // MSP Access Grants
+  createMspAccessGrant(data: InsertMspAccessGrant): Promise<MspAccessGrant>;
+  getMspAccessGrant(id: string): Promise<MspAccessGrant | undefined>;
+  getMspAccessGrantByCode(code: string): Promise<MspAccessGrant | undefined>;
+  getMspAccessGrantsForTenant(tenantConnectionId: string): Promise<MspAccessGrant[]>;
+  getActiveMspGrantForOrg(tenantConnectionId: string, grantedToOrgId: string): Promise<MspAccessGrant | undefined>;
+  updateMspAccessGrant(id: string, updates: Partial<MspAccessGrant>): Promise<MspAccessGrant | undefined>;
+  invalidatePendingMspCodes(tenantConnectionId: string): Promise<void>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -1823,6 +1835,54 @@ export class DatabaseStorage implements IStorage {
 
       return { grant, tenantConnection: conn };
     });
+  }
+
+  // ── MSP Access Grants ───────────────────────────────────────────────────────
+
+  async createMspAccessGrant(data: InsertMspAccessGrant): Promise<MspAccessGrant> {
+    const [created] = await db.insert(mspAccessGrants).values(data).returning();
+    return created;
+  }
+
+  async getMspAccessGrant(id: string): Promise<MspAccessGrant | undefined> {
+    const [grant] = await db.select().from(mspAccessGrants).where(eq(mspAccessGrants.id, id));
+    return grant;
+  }
+
+  async getMspAccessGrantByCode(code: string): Promise<MspAccessGrant | undefined> {
+    const [grant] = await db.select().from(mspAccessGrants)
+      .where(and(eq(mspAccessGrants.accessCode, code), eq(mspAccessGrants.status, "PENDING")));
+    return grant;
+  }
+
+  async getMspAccessGrantsForTenant(tenantConnectionId: string): Promise<MspAccessGrant[]> {
+    return db.select().from(mspAccessGrants)
+      .where(eq(mspAccessGrants.tenantConnectionId, tenantConnectionId))
+      .orderBy(desc(mspAccessGrants.createdAt));
+  }
+
+  async getActiveMspGrantForOrg(tenantConnectionId: string, grantedToOrgId: string): Promise<MspAccessGrant | undefined> {
+    const [grant] = await db.select().from(mspAccessGrants)
+      .where(and(
+        eq(mspAccessGrants.tenantConnectionId, tenantConnectionId),
+        eq(mspAccessGrants.grantedToOrgId, grantedToOrgId),
+        eq(mspAccessGrants.status, "ACTIVE")
+      ));
+    return grant;
+  }
+
+  async updateMspAccessGrant(id: string, updates: Partial<MspAccessGrant>): Promise<MspAccessGrant | undefined> {
+    const [updated] = await db.update(mspAccessGrants).set(updates).where(eq(mspAccessGrants.id, id)).returning();
+    return updated;
+  }
+
+  async invalidatePendingMspCodes(tenantConnectionId: string): Promise<void> {
+    await db.update(mspAccessGrants)
+      .set({ status: "REVOKED", revokedAt: new Date() })
+      .where(and(
+        eq(mspAccessGrants.tenantConnectionId, tenantConnectionId),
+        eq(mspAccessGrants.status, "PENDING")
+      ));
   }
 }
 
