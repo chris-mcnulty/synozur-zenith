@@ -2,7 +2,7 @@ import { Router } from "express";
 import { storage } from "../storage";
 import { ZENITH_ROLES } from "@shared/schema";
 import { requireAuth, requireRole, type AuthenticatedRequest } from "../middleware/rbac";
-import { getAppToken, fetchAllSpeContainerTypes, fetchAllSpeContainers, fetchSpeContainerDriveDetails } from "../services/graph";
+import { getAppToken, fetchAllSpeContainerTypes, fetchAllSpeContainers, fetchSpeContainerDriveDetails, applySensitivityLabelToSpeContainer } from "../services/graph";
 import { getDelegatedSpoToken } from "../routes-entra";
 import { decryptToken } from "../utils/encryption";
 
@@ -19,7 +19,9 @@ async function getOrgTenantConnectionIds(user: AuthenticatedRequest["user"]): Pr
   if (!user?.organizationId) return null;
   if (user.role === ZENITH_ROLES.PLATFORM_OWNER) return null;
   const connections = await storage.getTenantConnectionsByOrganization(user.organizationId);
-  return connections.map(c => c.id);
+  const ownedIds = connections.map(c => c.id);
+  const grantedIds = await storage.getGrantedTenantConnectionIds(user.organizationId);
+  return [...new Set([...ownedIds, ...grantedIds])];
 }
 
 router.get("/api/spe/container-types", requireAuth(), async (req: AuthenticatedRequest, res) => {
@@ -86,7 +88,42 @@ router.patch("/api/spe/containers/:id", requireRole(ZENITH_ROLES.GOVERNANCE_ADMI
   if (allowedIds && !allowedIds.includes(existing.tenantConnectionId)) {
     return res.status(404).json({ message: "Container not found" });
   }
-  const updated = await storage.updateSpeContainer(req.params.id, req.body);
+
+  const { sensitivityLabelId, sensitivityLabel, ...otherFields } = req.body;
+
+  if (sensitivityLabelId !== undefined) {
+    const conn = await storage.getTenantConnection(existing.tenantConnectionId);
+    if (!conn) return res.status(404).json({ message: "Tenant connection not found" });
+
+    const clientId = conn.clientId || process.env.AZURE_CLIENT_ID;
+    const clientSecret = getEffectiveClientSecret(conn);
+
+    if (!clientId || !clientSecret || !conn.tenantId) {
+      return res.status(400).json({ message: "Tenant connection is missing credentials needed to apply the label via Microsoft Graph" });
+    }
+
+    if (!existing.m365ContainerId) {
+      return res.status(400).json({ message: "Container has no Microsoft 365 container ID — cannot push label change" });
+    }
+
+    let graphToken: string;
+    try {
+      graphToken = await getAppToken(conn.tenantId, clientId, clientSecret);
+    } catch (err: any) {
+      return res.status(502).json({ message: `Failed to acquire Graph token: ${err.message}` });
+    }
+
+    const result = await applySensitivityLabelToSpeContainer(graphToken, existing.m365ContainerId, sensitivityLabelId);
+    if (!result.success) {
+      return res.status(502).json({ message: result.error || "Failed to apply sensitivity label in Microsoft 365" });
+    }
+  }
+
+  const updatePayload: Record<string, any> = { ...otherFields };
+  if (sensitivityLabelId !== undefined) updatePayload.sensitivityLabelId = sensitivityLabelId;
+  if (sensitivityLabel !== undefined) updatePayload.sensitivityLabel = sensitivityLabel;
+
+  const updated = await storage.updateSpeContainer(req.params.id, updatePayload);
   res.json(updated);
 });
 

@@ -61,8 +61,27 @@ async function getDelegatedTokenForRetention(currentUserId?: string, organizatio
 // ── Tenant Connections ──
 router.get("/api/admin/tenants", requirePermission('inventory:read'), async (req: AuthenticatedRequest, res) => {
   const orgId = req.activeOrganizationId || req.user?.organizationId;
-  const connections = await storage.getTenantConnections(orgId || undefined);
-  const safe = connections.map(c => ({
+  const isPlatformOwner = req.user?.role === ZENITH_ROLES.PLATFORM_OWNER;
+  const ownedConnections = await storage.getTenantConnections(orgId || undefined);
+
+  let allConnections = ownedConnections;
+
+  if (orgId && !isPlatformOwner) {
+    const grantedIds = await storage.getGrantedTenantConnectionIds(orgId);
+    if (grantedIds.length > 0) {
+      const grantedConns = await Promise.all(
+        grantedIds
+          .filter(id => !ownedConnections.some(c => c.id === id))
+          .map(id => storage.getTenantConnection(id))
+      );
+      allConnections = [
+        ...ownedConnections,
+        ...grantedConns.filter((c): c is NonNullable<typeof c> => !!c),
+      ];
+    }
+  }
+
+  const safe = allConnections.map(c => ({
     ...c,
     clientSecret: undefined,
     clientId: c.clientId ? `${c.clientId.substring(0, 8)}...` : undefined,
@@ -770,6 +789,145 @@ router.delete("/api/admin/tenants/:tenantConnectionId/custom-fields/:fieldId", r
     }
     await storage.deleteCustomFieldDefinition(req.params.fieldId);
     res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Tenant Access Grants & Codes ──
+
+router.get("/api/admin/tenants/:tenantConnectionId/access-grants", requireAuth(), async (req: AuthenticatedRequest, res) => {
+  try {
+    const conn = await storage.getTenantConnection(req.params.tenantConnectionId);
+    if (!conn) return res.status(404).json({ error: "Tenant connection not found" });
+
+    const orgId = req.activeOrganizationId || req.user?.organizationId;
+    const isPlatformOwner = req.user?.role === ZENITH_ROLES.PLATFORM_OWNER;
+    if (!isPlatformOwner && conn.organizationId !== orgId) {
+      return res.status(403).json({ error: "Only the tenant owner can view access grants" });
+    }
+
+    const grants = await storage.getTenantAccessGrants(conn.id);
+    const enriched = await Promise.all(grants.map(async (g) => {
+      const org = await storage.getOrganization(g.grantedOrganizationId);
+      return { ...g, grantedOrganizationName: org?.name || "Unknown" };
+    }));
+    res.json(enriched);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post("/api/admin/tenants/:tenantConnectionId/access-codes", requireRole(ZENITH_ROLES.TENANT_ADMIN), async (req: AuthenticatedRequest, res) => {
+  try {
+    const conn = await storage.getTenantConnection(req.params.tenantConnectionId);
+    if (!conn) return res.status(404).json({ error: "Tenant connection not found" });
+
+    const orgId = req.activeOrganizationId || req.user?.organizationId;
+    const isPlatformOwner = req.user?.role === ZENITH_ROLES.PLATFORM_OWNER;
+    if (!isPlatformOwner && conn.organizationId !== orgId) {
+      return res.status(403).json({ error: "Only the tenant owner can generate access codes" });
+    }
+
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+
+    let accessCode;
+    for (let attempt = 0; attempt < 10; attempt++) {
+      const code = String(Math.floor(100000 + Math.random() * 900000));
+      try {
+        accessCode = await storage.createTenantAccessCode({
+          tenantConnectionId: conn.id,
+          code,
+          expiresAt,
+          createdBy: req.user?.id || null,
+        });
+        break;
+      } catch (e: any) {
+        if (attempt === 9) throw new Error("Failed to generate unique access code");
+      }
+    }
+
+    res.json({ code: accessCode!.code, expiresAt: accessCode!.expiresAt });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.delete("/api/admin/tenants/:tenantConnectionId/access-grants/:grantId", requireRole(ZENITH_ROLES.TENANT_ADMIN), async (req: AuthenticatedRequest, res) => {
+  try {
+    const conn = await storage.getTenantConnection(req.params.tenantConnectionId);
+    if (!conn) return res.status(404).json({ error: "Tenant connection not found" });
+
+    const orgId = req.activeOrganizationId || req.user?.organizationId;
+    const isPlatformOwner = req.user?.role === ZENITH_ROLES.PLATFORM_OWNER;
+    if (!isPlatformOwner && conn.organizationId !== orgId) {
+      return res.status(403).json({ error: "Only the tenant owner can revoke access" });
+    }
+
+    const revoked = await storage.revokeTenantAccessGrant(req.params.grantId, req.params.tenantConnectionId);
+    if (!revoked) return res.status(404).json({ error: "Access grant not found or does not belong to this tenant" });
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post("/api/admin/tenants/claim-access", requireRole(ZENITH_ROLES.TENANT_ADMIN), async (req: AuthenticatedRequest, res) => {
+  try {
+    const { code } = req.body;
+    if (!code || typeof code !== "string" || code.length !== 6) {
+      return res.status(400).json({ error: "A valid 6-digit access code is required" });
+    }
+
+    const orgId = req.activeOrganizationId || req.user?.organizationId;
+    if (!orgId) {
+      return res.status(400).json({ error: "You must belong to an organization to claim access" });
+    }
+
+    const result = await storage.validateAndRedeemAccessCode(code.trim(), orgId);
+    if (!result) {
+      return res.status(400).json({ error: "Invalid or expired access code. Ask the tenant owner to generate a new code." });
+    }
+
+    res.json({
+      success: true,
+      tenantName: result.tenantConnection.tenantName,
+      tenantDomain: result.tenantConnection.domain,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get("/api/admin/tenants/:id/access-check", requireAuth(), async (req: AuthenticatedRequest, res) => {
+  try {
+    const conn = await storage.getTenantConnection(req.params.id);
+    if (!conn) return res.status(404).json({ error: "Tenant connection not found" });
+
+    const orgId = req.activeOrganizationId || req.user?.organizationId;
+    const isPlatformOwner = req.user?.role === ZENITH_ROLES.PLATFORM_OWNER;
+
+    if (isPlatformOwner || conn.organizationId === orgId) {
+      return res.json({ hasAccess: true, isOwner: true, ownershipType: conn.ownershipType });
+    }
+
+    if (conn.ownershipType === "MSP" || conn.ownershipType === "Hybrid") {
+      return res.json({ hasAccess: true, isOwner: false, ownershipType: conn.ownershipType });
+    }
+
+    if (orgId) {
+      const grant = await storage.getActiveTenantAccessGrant(conn.id, orgId);
+      if (grant) {
+        return res.json({ hasAccess: true, isOwner: false, ownershipType: conn.ownershipType, grantedAccess: true });
+      }
+    }
+
+    return res.json({
+      hasAccess: false,
+      isOwner: false,
+      ownershipType: conn.ownershipType,
+      message: "This tenant has not consented to allow MSP access to their data. Contact the tenant owner for an access code.",
+    });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

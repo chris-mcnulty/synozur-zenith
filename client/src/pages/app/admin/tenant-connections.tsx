@@ -38,6 +38,8 @@ import {
   KeyRound,
   Lock,
   Play,
+  Users,
+  TicketCheck,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -77,6 +79,9 @@ export default function TenantConnectionsPage() {
   const [permError, setPermError] = useState<string | null>(null);
   const [reconsentingId, setReconsentingId] = useState<string | null>(null);
   const [metadataDialogTenantId, setMetadataDialogTenantId] = useState<string | null>(null);
+  const [accessDialogTenantId, setAccessDialogTenantId] = useState<string | null>(null);
+  const [showClaimDialog, setShowClaimDialog] = useState(false);
+  const [claimCode, setClaimCode] = useState("");
 
   const [form, setForm] = useState({
     domain: "",
@@ -112,6 +117,21 @@ export default function TenantConnectionsPage() {
     },
   });
 
+  const claimAccessMutation = useMutation({
+    mutationFn: async (code: string) => {
+      const res = await apiRequest("POST", "/api/admin/tenants/claim-access", { code });
+      return res.json();
+    },
+    onSuccess: (data: any) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/tenants"] });
+      setShowClaimDialog(false);
+      setClaimCode("");
+      toast({ title: "Access Granted", description: `You now have access to ${data.tenantName} (${data.tenantDomain}).` });
+    },
+    onError: (err: any) => {
+      toast({ title: "Access Denied", description: err.message, variant: "destructive" });
+    },
+  });
 
   const handleInitiateConsent = async () => {
     if (!form.domain.trim()) {
@@ -251,13 +271,18 @@ export default function TenantConnectionsPage() {
           <h1 className="text-3xl font-bold tracking-tight" data-testid="text-page-title">Tenant Connections</h1>
           <p className="text-muted-foreground mt-1">Connect Microsoft 365 tenants via admin consent using Zenith's multi-tenant app registration.</p>
         </div>
-        <Dialog open={showAddDialog} onOpenChange={(open) => { setShowAddDialog(open); if (!open) setForm({ domain: "", ownershipType: "MSP", adminEmail: "" }); }}>
-          <DialogTrigger asChild>
-            <Button className="gap-2 shadow-md shadow-primary/20" data-testid="button-connect-tenant">
-              <Plus className="w-4 h-4" />
-              Connect Tenant
-            </Button>
-          </DialogTrigger>
+        <div className="flex gap-2">
+          <Button variant="outline" className="gap-2" onClick={() => setShowClaimDialog(true)} data-testid="button-enter-access-code">
+            <TicketCheck className="w-4 h-4" />
+            Enter Access Code
+          </Button>
+          <Dialog open={showAddDialog} onOpenChange={(open) => { setShowAddDialog(open); if (!open) setForm({ domain: "", ownershipType: "MSP", adminEmail: "" }); }}>
+            <DialogTrigger asChild>
+              <Button className="gap-2 shadow-md shadow-primary/20" data-testid="button-connect-tenant">
+                <Plus className="w-4 h-4" />
+                Connect Tenant
+              </Button>
+            </DialogTrigger>
           <DialogContent className="sm:max-w-[500px]">
             <DialogHeader>
               <DialogTitle className="flex items-center gap-2"><Cloud className="w-5 h-5 text-primary" /> Connect New Tenant</DialogTitle>
@@ -347,6 +372,7 @@ export default function TenantConnectionsPage() {
             </DialogFooter>
           </DialogContent>
         </Dialog>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
@@ -590,6 +616,11 @@ export default function TenantConnectionsPage() {
                           <DropdownMenuItem className="gap-2" onClick={() => setMetadataDialogTenantId(conn.id)}>
                             <Settings2 className="w-4 h-4" /> Governance Settings
                           </DropdownMenuItem>
+                          {conn.ownershipType === "Customer" && (
+                            <DropdownMenuItem className="gap-2" onClick={() => setAccessDialogTenantId(conn.id)}>
+                              <Users className="w-4 h-4" /> Manage Access
+                            </DropdownMenuItem>
+                          )}
                           <DropdownMenuItem className="gap-2" onClick={() => navigator.clipboard.writeText(conn.tenantId)}>
                             <Copy className="w-4 h-4" /> Copy Tenant ID
                           </DropdownMenuItem>
@@ -750,6 +781,63 @@ export default function TenantConnectionsPage() {
           )}
         </DialogContent>
       </Dialog>
+
+      <Dialog open={showClaimDialog} onOpenChange={(open) => { setShowClaimDialog(open); if (!open) setClaimCode(""); }}>
+        <DialogContent className="sm:max-w-[400px]">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <TicketCheck className="w-5 h-5 text-primary" />
+              Enter Access Code
+            </DialogTitle>
+            <DialogDescription>
+              Enter the 6-digit access code provided by the tenant owner to gain access to their environment.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="space-y-2">
+              <Label htmlFor="access-code">Access Code</Label>
+              <Input
+                id="access-code"
+                placeholder="000000"
+                className="text-center font-mono text-2xl tracking-[0.5em] h-14"
+                maxLength={6}
+                value={claimCode}
+                onChange={(e) => setClaimCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                data-testid="input-access-code"
+              />
+              <p className="text-xs text-muted-foreground text-center">Codes expire 10 minutes after generation.</p>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setShowClaimDialog(false); setClaimCode(""); }}>Cancel</Button>
+            <Button
+              onClick={() => claimAccessMutation.mutate(claimCode)}
+              disabled={claimCode.length !== 6 || claimAccessMutation.isPending}
+              data-testid="button-submit-access-code"
+            >
+              {claimAccessMutation.isPending && <Loader2 className="w-4 h-4 animate-spin mr-2" />}
+              Claim Access
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={accessDialogTenantId !== null} onOpenChange={(open) => { if (!open) setAccessDialogTenantId(null); }}>
+        <DialogContent className="sm:max-w-[550px]">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Users className="w-5 h-5 text-primary" />
+              Manage Tenant Access
+            </DialogTitle>
+            <DialogDescription>
+              Control which organizations can access this tenant's data. Generate a 6-digit code to share with an MSP organization.
+            </DialogDescription>
+          </DialogHeader>
+          {accessDialogTenantId && (
+            <TenantAccessManager tenantConnectionId={accessDialogTenantId} />
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -864,6 +952,170 @@ function RequiredMetadataConfig({ tenantConnectionId }: { tenantConnectionId: st
           {saveMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
           Save Configuration
         </Button>
+      </div>
+    </div>
+  );
+}
+
+type AccessGrant = {
+  id: string;
+  tenantConnectionId: string;
+  grantedOrganizationId: string;
+  grantedOrganizationName: string;
+  status: string;
+  createdAt: string;
+};
+
+function TenantAccessManager({ tenantConnectionId }: { tenantConnectionId: string }) {
+  const { toast } = useToast();
+  const qc = useQueryClient();
+  const [generatedCode, setGeneratedCode] = useState<string | null>(null);
+  const [codeExpiry, setCodeExpiry] = useState<Date | null>(null);
+
+  const { data: grants = [], isLoading } = useQuery<AccessGrant[]>({
+    queryKey: [`/api/admin/tenants/${tenantConnectionId}/access-grants`],
+    queryFn: async () => {
+      const res = await fetch(`/api/admin/tenants/${tenantConnectionId}/access-grants`, { credentials: "include" });
+      if (!res.ok) return [];
+      return res.json();
+    },
+  });
+
+  const generateCodeMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", `/api/admin/tenants/${tenantConnectionId}/access-codes`);
+      return res.json();
+    },
+    onSuccess: (data: { code: string; expiresAt: string }) => {
+      setGeneratedCode(data.code);
+      setCodeExpiry(new Date(data.expiresAt));
+      toast({ title: "Access Code Generated", description: "Share this code with the MSP organization. It expires in 10 minutes." });
+    },
+    onError: (err: any) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const revokeMutation = useMutation({
+    mutationFn: async (grantId: string) => {
+      await apiRequest("DELETE", `/api/admin/tenants/${tenantConnectionId}/access-grants/${grantId}`);
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: [`/api/admin/tenants/${tenantConnectionId}/access-grants`] });
+      qc.invalidateQueries({ queryKey: ["/api/admin/tenants"] });
+      toast({ title: "Access Revoked", description: "The organization no longer has access to this tenant." });
+    },
+    onError: (err: any) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center py-8">
+        <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-5">
+      <Card className="border-border/50 bg-muted/20">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm flex items-center gap-2">
+            <TicketCheck className="w-4 h-4" />
+            Generate Access Code
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p className="text-xs text-muted-foreground mb-3">
+            Generate a one-time 6-digit code that an MSP organization can use to register access to this tenant. Codes expire after 10 minutes.
+          </p>
+          {generatedCode ? (
+            <div className="space-y-3">
+              <div className="flex items-center justify-center gap-2 p-4 bg-background rounded-lg border border-primary/30">
+                <span className="font-mono text-3xl tracking-[0.5em] font-bold text-primary" data-testid="text-generated-code">{generatedCode}</span>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8 shrink-0"
+                  onClick={() => { navigator.clipboard.writeText(generatedCode); toast({ title: "Copied" }); }}
+                  data-testid="button-copy-code"
+                >
+                  <Copy className="w-4 h-4" />
+                </Button>
+              </div>
+              <p className="text-xs text-muted-foreground text-center">
+                Expires at {codeExpiry?.toLocaleTimeString()}
+              </p>
+              <Button
+                variant="outline"
+                className="w-full gap-2"
+                onClick={() => { setGeneratedCode(null); generateCodeMutation.mutate(); }}
+                disabled={generateCodeMutation.isPending}
+                data-testid="button-regenerate-code"
+              >
+                Generate New Code
+              </Button>
+            </div>
+          ) : (
+            <Button
+              className="w-full gap-2"
+              onClick={() => generateCodeMutation.mutate()}
+              disabled={generateCodeMutation.isPending}
+              data-testid="button-generate-code"
+            >
+              {generateCodeMutation.isPending && <Loader2 className="w-4 h-4 animate-spin" />}
+              Generate Access Code
+            </Button>
+          )}
+        </CardContent>
+      </Card>
+
+      <div>
+        <h4 className="text-sm font-medium mb-3 flex items-center gap-2">
+          <Building2 className="w-4 h-4" />
+          Organizations with Access ({grants.length})
+        </h4>
+        {grants.length === 0 ? (
+          <div className="text-center py-6 bg-muted/20 rounded-lg border border-border/50">
+            <Lock className="w-8 h-8 mx-auto text-muted-foreground/40 mb-2" />
+            <p className="text-sm text-muted-foreground font-medium">No external organizations have access</p>
+            <p className="text-xs text-muted-foreground mt-1">This tenant is in customer-only mode. Generate an access code above to grant access to an MSP.</p>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {grants.map((grant) => (
+              <div
+                key={grant.id}
+                className="flex items-center justify-between p-3 rounded-lg border border-border/50 bg-card/50"
+                data-testid={`grant-row-${grant.id}`}
+              >
+                <div className="min-w-0">
+                  <div className="font-medium text-sm">{grant.grantedOrganizationName}</div>
+                  <div className="text-xs text-muted-foreground">
+                    Granted {new Date(grant.createdAt).toLocaleDateString()}
+                  </div>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="gap-1.5 text-destructive hover:text-destructive hover:bg-destructive/10 shrink-0"
+                  onClick={() => {
+                    if (confirm(`Revoke access for ${grant.grantedOrganizationName}? They will no longer be able to view this tenant's data.`)) {
+                      revokeMutation.mutate(grant.id);
+                    }
+                  }}
+                  disabled={revokeMutation.isPending}
+                  data-testid={`button-revoke-${grant.id}`}
+                >
+                  <XCircle className="w-3.5 h-3.5" />
+                  Revoke
+                </Button>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );

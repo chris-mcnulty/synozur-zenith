@@ -985,3 +985,45 @@ export const insertContentTypeSchema = createInsertSchema(contentTypes).omit({
 
 export type InsertContentType = z.infer<typeof insertContentTypeSchema>;
 export type ContentType = typeof contentTypes.$inferSelect;
+
+export const tenantAccessGrants = pgTable("tenant_access_grants", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantConnectionId: varchar("tenant_connection_id").notNull().references(() => tenantConnections.id, { onDelete: 'cascade' }),
+  grantedOrganizationId: varchar("granted_organization_id").notNull().references(() => organizations.id, { onDelete: 'cascade' }),
+  status: text("status").notNull().default("ACTIVE"),
+  grantedBy: varchar("granted_by"),
+  createdAt: timestamp("created_at").defaultNow(),
+  revokedAt: timestamp("revoked_at"),
+}, (table) => [
+  unique("uq_tenant_org_grant").on(table.tenantConnectionId, table.grantedOrganizationId),
+]);
+
+export const insertTenantAccessGrantSchema = createInsertSchema(tenantAccessGrants).omit({
+  id: true,
+  createdAt: true,
+  revokedAt: true,
+});
+
+export type InsertTenantAccessGrant = z.infer<typeof insertTenantAccessGrantSchema>;
+export type TenantAccessGrant = typeof tenantAccessGrants.$inferSelect;
+
+export const tenantAccessCodes = pgTable("tenant_access_codes", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantConnectionId: varchar("tenant_connection_id").notNull().references(() => tenantConnections.id, { onDelete: 'cascade' }),
+  code: text("code").notNull(),
+  expiresAt: timestamp("expires_at").notNull(),
+  used: boolean("used").notNull().default(false),
+  usedByOrganizationId: varchar("used_by_organization_id"),
+  createdBy: varchar("created_by"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertTenantAccessCodeSchema = createInsertSchema(tenantAccessCodes).omit({
+  id: true,
+  createdAt: true,
+  used: true,
+  usedByOrganizationId: true,
+});
+
+export type InsertTenantAccessCode = z.infer<typeof insertTenantAccessCodeSchema>;
+export type TenantAccessCode = typeof tenantAccessCodes.$inferSelect;

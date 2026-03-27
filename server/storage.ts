@@ -90,6 +90,12 @@ import {
   contentTypes,
   type ContentType,
   type InsertContentType,
+  tenantAccessGrants,
+  type TenantAccessGrant,
+  type InsertTenantAccessGrant,
+  tenantAccessCodes,
+  type TenantAccessCode,
+  type InsertTenantAccessCode,
 } from "@shared/schema";
 
 export interface TeamsChannelsSummaryChannel {
@@ -281,6 +287,15 @@ export interface IStorage {
   // Content Types
   upsertContentType(data: InsertContentType): Promise<ContentType>;
   getContentTypes(tenantConnectionId: string): Promise<ContentType[]>;
+
+  // Tenant Access Grants & Codes
+  getTenantAccessGrants(tenantConnectionId: string): Promise<TenantAccessGrant[]>;
+  getActiveTenantAccessGrant(tenantConnectionId: string, organizationId: string): Promise<TenantAccessGrant | undefined>;
+  createTenantAccessGrant(data: InsertTenantAccessGrant): Promise<TenantAccessGrant>;
+  revokeTenantAccessGrant(id: string, tenantConnectionId: string): Promise<TenantAccessGrant | undefined>;
+  getGrantedTenantConnectionIds(organizationId: string): Promise<string[]>;
+  createTenantAccessCode(data: InsertTenantAccessCode): Promise<TenantAccessCode>;
+  validateAndRedeemAccessCode(code: string, organizationId: string): Promise<{ grant: TenantAccessGrant; tenantConnection: TenantConnection } | null>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -1669,6 +1684,98 @@ export class DatabaseStorage implements IStorage {
     return db.select().from(contentTypes)
       .where(eq(contentTypes.tenantConnectionId, tenantConnectionId))
       .orderBy(contentTypes.name);
+  }
+
+  async getTenantAccessGrants(tenantConnectionId: string): Promise<TenantAccessGrant[]> {
+    return db.select().from(tenantAccessGrants)
+      .where(and(
+        eq(tenantAccessGrants.tenantConnectionId, tenantConnectionId),
+        eq(tenantAccessGrants.status, "ACTIVE"),
+      ))
+      .orderBy(desc(tenantAccessGrants.createdAt));
+  }
+
+  async getActiveTenantAccessGrant(tenantConnectionId: string, organizationId: string): Promise<TenantAccessGrant | undefined> {
+    const [result] = await db.select().from(tenantAccessGrants)
+      .where(and(
+        eq(tenantAccessGrants.tenantConnectionId, tenantConnectionId),
+        eq(tenantAccessGrants.grantedOrganizationId, organizationId),
+        eq(tenantAccessGrants.status, "ACTIVE"),
+      ))
+      .limit(1);
+    return result;
+  }
+
+  async createTenantAccessGrant(data: InsertTenantAccessGrant): Promise<TenantAccessGrant> {
+    const [result] = await db.insert(tenantAccessGrants)
+      .values(data)
+      .onConflictDoUpdate({
+        target: [tenantAccessGrants.tenantConnectionId, tenantAccessGrants.grantedOrganizationId],
+        set: {
+          status: "ACTIVE",
+          grantedBy: data.grantedBy,
+          revokedAt: null,
+        },
+      })
+      .returning();
+    return result;
+  }
+
+  async revokeTenantAccessGrant(id: string, tenantConnectionId: string): Promise<TenantAccessGrant | undefined> {
+    const [result] = await db.update(tenantAccessGrants)
+      .set({ status: "REVOKED", revokedAt: new Date() })
+      .where(and(
+        eq(tenantAccessGrants.id, id),
+        eq(tenantAccessGrants.tenantConnectionId, tenantConnectionId),
+      ))
+      .returning();
+    return result;
+  }
+
+  async getGrantedTenantConnectionIds(organizationId: string): Promise<string[]> {
+    const grants = await db.select({ tenantConnectionId: tenantAccessGrants.tenantConnectionId })
+      .from(tenantAccessGrants)
+      .where(and(
+        eq(tenantAccessGrants.grantedOrganizationId, organizationId),
+        eq(tenantAccessGrants.status, "ACTIVE"),
+      ));
+    return grants.map(g => g.tenantConnectionId);
+  }
+
+  async createTenantAccessCode(data: InsertTenantAccessCode): Promise<TenantAccessCode> {
+    const [result] = await db.insert(tenantAccessCodes)
+      .values(data)
+      .returning();
+    return result;
+  }
+
+  async validateAndRedeemAccessCode(code: string, organizationId: string): Promise<{ grant: TenantAccessGrant; tenantConnection: TenantConnection } | null> {
+    return await db.transaction(async (tx) => {
+      const [redeemed] = await tx.update(tenantAccessCodes)
+        .set({ used: true, usedByOrganizationId: organizationId })
+        .where(and(
+          eq(tenantAccessCodes.code, code),
+          eq(tenantAccessCodes.used, false),
+          gt(tenantAccessCodes.expiresAt, new Date()),
+        ))
+        .returning();
+
+      if (!redeemed) return null;
+
+      const [grant] = await tx.insert(tenantAccessGrants)
+        .values({
+          tenantConnectionId: redeemed.tenantConnectionId,
+          grantedOrganizationId: organizationId,
+          status: "ACTIVE",
+          grantedBy: redeemed.createdBy,
+        })
+        .returning();
+
+      const conn = await this.getTenantConnection(redeemed.tenantConnectionId);
+      if (!conn) return null;
+
+      return { grant, tenantConnection: conn };
+    });
   }
 }
 

@@ -1,9 +1,9 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useTenant } from "@/lib/tenant-context";
 import { useToast } from "@/hooks/use-toast";
-import type { SpeContainer, SpeContainerType } from "@shared/schema";
+import type { SpeContainer, SpeContainerType, SensitivityLabel } from "@shared/schema";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -18,6 +18,13 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   Dialog,
   DialogContent,
@@ -689,7 +696,7 @@ export default function EmbeddedContainersPage() {
                   {selectedContainer.displayName}
                 </SheetTitle>
               </SheetHeader>
-              <ContainerDetailPanel container={selectedContainer} typeNameMap={typeNameMap} />
+              <ContainerDetailPanel container={selectedContainer} typeNameMap={typeNameMap} tenantConnectionId={tenantConnectionId || ""} />
             </>
           )}
         </SheetContent>
@@ -698,7 +705,16 @@ export default function EmbeddedContainersPage() {
   );
 }
 
-function ContainerDetailPanel({ container, typeNameMap }: { container: SpeContainer; typeNameMap: Map<string, string> }) {
+function ContainerDetailPanel({ container, typeNameMap, tenantConnectionId }: { container: SpeContainer; typeNameMap: Map<string, string>; tenantConnectionId: string }) {
+  const { toast } = useToast();
+  const [selectedLabelId, setSelectedLabelId] = useState<string>(container.sensitivityLabelId || "none");
+  const [isDirty, setIsDirty] = useState(false);
+
+  useEffect(() => {
+    setSelectedLabelId(container.sensitivityLabelId || "none");
+    setIsDirty(false);
+  }, [container.id, container.sensitivityLabelId]);
+
   const { data: usageHistory = [] } = useQuery({
     queryKey: ["/api/spe/containers", container.id, "usage"],
     queryFn: async () => {
@@ -707,6 +723,49 @@ function ContainerDetailPanel({ container, typeNameMap }: { container: SpeContai
       return res.json();
     },
   });
+
+  const { data: sensitivityLabels = [] } = useQuery<SensitivityLabel[]>({
+    queryKey: ["/api/admin/tenants", tenantConnectionId, "sensitivity-labels"],
+    queryFn: async () => {
+      const res = await fetch(`/api/admin/tenants/${tenantConnectionId}/sensitivity-labels`, { credentials: "include" });
+      if (!res.ok) return [];
+      return res.json();
+    },
+    enabled: !!tenantConnectionId,
+  });
+
+  const labelMutation = useMutation({
+    mutationFn: async ({ labelId, labelName }: { labelId: string; labelName: string | null }) => {
+      const res = await apiRequest("PATCH", `/api/spe/containers/${container.id}`, {
+        sensitivityLabelId: labelId === "none" ? "" : labelId,
+        sensitivityLabel: labelName,
+      });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/spe/containers"] });
+      setIsDirty(false);
+      toast({ title: "Label Updated", description: "Sensitivity label applied to container in Microsoft 365." });
+    },
+    onError: (err: any) => {
+      setSelectedLabelId(container.sensitivityLabelId || "none");
+      setIsDirty(false);
+      toast({ title: "Label Update Failed", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const handleLabelChange = (value: string) => {
+    setSelectedLabelId(value);
+    setIsDirty(value !== (container.sensitivityLabelId || "none"));
+  };
+
+  const handleSaveLabel = () => {
+    const chosenLabel = sensitivityLabels.find(l => l.labelId === selectedLabelId);
+    labelMutation.mutate({
+      labelId: selectedLabelId,
+      labelName: chosenLabel?.name ?? null,
+    });
+  };
 
   const pctUsed = container.storageAllocatedBytes
     ? ((container.storageUsedBytes || 0) / container.storageAllocatedBytes) * 100
@@ -792,14 +851,43 @@ function ContainerDetailPanel({ container, typeNameMap }: { container: SpeContai
         <CardContent>
           <div className="space-y-3">
             <div>
-              <div className="text-xs text-muted-foreground mb-1">Sensitivity Label</div>
-              {container.sensitivityLabel ? (
-                <Badge variant="outline" className={getLabelColor(container.sensitivityLabel)}>
-                  <ShieldCheck className="w-3 h-3 mr-1" />
-                  {container.sensitivityLabel}
-                </Badge>
-              ) : (
-                <Badge variant="outline" className="bg-muted/30 text-muted-foreground border-border/50">No Label</Badge>
+              <div className="text-xs text-muted-foreground mb-2">Sensitivity Label</div>
+              <div className="flex items-center gap-2">
+                <Select
+                  value={selectedLabelId}
+                  onValueChange={handleLabelChange}
+                  disabled={labelMutation.isPending}
+                >
+                  <SelectTrigger className="h-8 text-sm flex-1" data-testid="select-sensitivity-label">
+                    <SelectValue placeholder="Select a label…" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">
+                      <span className="text-muted-foreground">No label</span>
+                    </SelectItem>
+                    {sensitivityLabels.map((label) => (
+                      <SelectItem key={label.labelId} value={label.labelId} data-testid={`option-label-${label.labelId}`}>
+                        <span className={getLabelColor(label.name) ? `px-1.5 py-0.5 rounded text-xs font-medium ${getLabelColor(label.name)}` : ""}>
+                          {label.name}
+                        </span>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {isDirty && (
+                  <Button
+                    size="sm"
+                    className="h-8 shrink-0"
+                    onClick={handleSaveLabel}
+                    disabled={labelMutation.isPending}
+                    data-testid="button-save-sensitivity-label"
+                  >
+                    {labelMutation.isPending ? <Loader2 className="w-3 h-3 animate-spin" /> : "Apply"}
+                  </Button>
+                )}
+              </div>
+              {sensitivityLabels.length === 0 && (
+                <p className="text-xs text-muted-foreground mt-1">No labels synced for this tenant. Run a label sync first.</p>
               )}
             </div>
             <div>

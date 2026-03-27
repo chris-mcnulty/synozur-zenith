@@ -786,6 +786,38 @@ export async function getGroupIdForSite(
   }
 }
 
+export async function applySensitivityLabelToSpeContainer(
+  token: string,
+  containerId: string,
+  sensitivityLabelId: string
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const res = await fetch(
+      `https://graph.microsoft.com/v1.0/storage/fileStorage/containers/${containerId}`,
+      {
+        method: "PATCH",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          sensitivityLabel: { id: sensitivityLabelId },
+        }),
+      }
+    );
+    if (res.ok) return { success: true };
+    const errText = await res.text();
+    let detail = errText;
+    try {
+      const parsed = JSON.parse(errText);
+      detail = parsed.error?.message || parsed.message || errText;
+    } catch {}
+    return { success: false, error: `Graph API ${res.status}: ${detail.substring(0, 300)}` };
+  } catch (err: any) {
+    return { success: false, error: err.message };
+  }
+}
+
 export async function applySensitivityLabelToGroup(
   token: string,
   groupId: string,
