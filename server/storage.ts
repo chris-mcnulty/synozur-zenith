@@ -116,6 +116,7 @@ export interface TeamsChannelsSummary {
 
 export interface IStorage {
   getWorkspaces(search?: string, tenantConnectionId?: string, organizationId?: string): Promise<Workspace[]>;
+  getWorkspacesPaginated(params: { page: number; pageSize: number; search?: string; tenantConnectionId?: string; tenantConnectionIds?: string[]; organizationId?: string }): Promise<{ items: Workspace[]; total: number }>;
   getWorkspace(id: string): Promise<Workspace | undefined>;
   getWorkspaceByM365ObjectId(m365ObjectId: string): Promise<Workspace | undefined>;
   createWorkspace(workspace: InsertWorkspace): Promise<Workspace>;
@@ -335,6 +336,52 @@ export class DatabaseStorage implements IStorage {
       return db.select().from(workspaces).where(and(...conditions)).orderBy(desc(workspaces.createdAt));
     }
     return db.select().from(workspaces).orderBy(desc(workspaces.createdAt));
+  }
+
+  async getWorkspacesPaginated(params: { page: number; pageSize: number; search?: string; tenantConnectionId?: string; tenantConnectionIds?: string[]; organizationId?: string }): Promise<{ items: Workspace[]; total: number }> {
+    const { page, pageSize, search, tenantConnectionId, tenantConnectionIds, organizationId } = params;
+    const conditions = [];
+
+    if (search) {
+      conditions.push(
+        or(
+          ilike(workspaces.displayName, `%${search}%`),
+          ilike(workspaces.department, `%${search}%`),
+          sql`EXISTS (
+            SELECT 1 FROM jsonb_array_elements(${workspaces.siteOwners}) AS owner
+            WHERE owner->>'displayName' ILIKE ${`%${search}%`}
+               OR owner->>'mail' ILIKE ${`%${search}%`}
+               OR owner->>'userPrincipalName' ILIKE ${`%${search}%`}
+          )`
+        )
+      );
+    }
+
+    if (tenantConnectionId) {
+      conditions.push(eq(workspaces.tenantConnectionId, tenantConnectionId));
+    } else if (tenantConnectionIds && tenantConnectionIds.length > 0) {
+      conditions.push(inArray(workspaces.tenantConnectionId, tenantConnectionIds));
+    }
+
+    if (organizationId) {
+      const orgConnections = await db
+        .select({ id: tenantConnections.id })
+        .from(tenantConnections)
+        .where(eq(tenantConnections.organizationId, organizationId));
+      const orgConnectionIds = orgConnections.map(c => c.id);
+      if (orgConnectionIds.length === 0) return { items: [], total: 0 };
+      conditions.push(inArray(workspaces.tenantConnectionId, orgConnectionIds));
+    }
+
+    const where = conditions.length > 0 ? and(...conditions) : undefined;
+
+    const [countResult, items] = await Promise.all([
+      db.select({ count: sql<number>`COUNT(*)` }).from(workspaces).where(where),
+      db.select().from(workspaces).where(where).orderBy(desc(workspaces.createdAt)).limit(pageSize).offset((page - 1) * pageSize),
+    ]);
+
+    const total = Number(countResult[0]?.count ?? 0);
+    return { items, total };
   }
 
   async getWorkspace(id: string): Promise<Workspace | undefined> {

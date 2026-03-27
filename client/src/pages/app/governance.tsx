@@ -42,6 +42,7 @@ import {
   ArrowDown,
   Network,
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
   Layers,
   List,
@@ -88,10 +89,15 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 
+const GOVERNANCE_PAGE_SIZE = 50;
+const PAGINATION_THRESHOLD = 100;
+
 export default function GovernancePage() {
   const { toast } = useToast();
   const [searchTerm, setSearchTerm] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [currentPage, setCurrentPage] = useState(1);
+  const [isPaginatedMode, setIsPaginatedMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [isBulkEditOpen, setIsBulkEditOpen] = useState(false);
   const [showFilterDrawer, setShowFilterDrawer] = useState(false);
@@ -127,11 +133,24 @@ export default function GovernancePage() {
   useEffect(() => {
     const timer = setTimeout(() => {
       setDebouncedSearch(searchTerm);
+      setCurrentPage(1);
+      setIsPaginatedMode(false);
     }, 300);
     return () => clearTimeout(timer);
   }, [searchTerm]);
 
   const tenantConnectionId = selectedTenant?.id || "";
+
+  useEffect(() => {
+    setCurrentPage(1);
+    setIsPaginatedMode(false);
+  }, [tenantConnectionId]);
+
+  useEffect(() => {
+    if (isPaginatedMode) {
+      setCurrentPage(1);
+    }
+  }, [filterType, filterSensitivity, filterMetadata, filterDepartment, filterSize, filterAge, filterStatus]);
 
   const { data: authData } = useQuery<{ user: { organizationId: string }; organization: { id: string } | null; activeOrganizationId: string | null }>({
     queryKey: ["/api/auth/me"],
@@ -189,15 +208,75 @@ export default function GovernancePage() {
     ? requiredMetadataKeys.map(key => ({ key, label: FIELD_LABELS[key] || key }))
     : [{ key: "department", label: "Dept" }, { key: "costCenter", label: "Cost" }];
 
-  const { data: workspaces = [], isLoading, isError } = useQuery<Workspace[]>({
-    queryKey: ["/api/workspaces", debouncedSearch, tenantConnectionId],
-    queryFn: () => {
-      const params = new URLSearchParams();
-      if (debouncedSearch) params.set("search", debouncedSearch);
-      if (tenantConnectionId) params.set("tenantConnectionId", tenantConnectionId);
-      return fetch(`/api/workspaces?${params.toString()}`).then(r => r.json());
+  interface PaginatedWorkspacesResponse {
+    items: Workspace[];
+    total: number;
+    page: number;
+    pageSize: number;
+  }
+
+  function isPaginatedResponse(v: unknown): v is PaginatedWorkspacesResponse {
+    return (
+      v !== null &&
+      typeof v === "object" &&
+      !Array.isArray(v) &&
+      "items" in (v as object) &&
+      "total" in (v as object) &&
+      Array.isArray((v as PaginatedWorkspacesResponse).items)
+    );
+  }
+
+  type GovernanceData =
+    | { mode: "full"; items: Workspace[] }
+    | { mode: "paginated"; items: Workspace[]; total: number; page: number };
+
+  const { data: governanceData, isLoading, isError } = useQuery<GovernanceData>({
+    queryKey: ["/api/workspaces", debouncedSearch, tenantConnectionId, isPaginatedMode ? currentPage : "full"],
+    queryFn: async () => {
+      const buildParams = (extra?: Record<string, string>) => {
+        const p = new URLSearchParams();
+        if (debouncedSearch) p.set("search", debouncedSearch);
+        if (tenantConnectionId) p.set("tenantConnectionId", tenantConnectionId);
+        if (extra) Object.entries(extra).forEach(([k, v]) => p.set(k, v));
+        return p.toString();
+      };
+
+      if (isPaginatedMode) {
+        const result: unknown = await fetch(
+          `/api/workspaces?${buildParams({ page: String(currentPage), pageSize: String(GOVERNANCE_PAGE_SIZE) })}`
+        ).then(r => r.json());
+        if (isPaginatedResponse(result)) {
+          return { mode: "paginated" as const, items: result.items, total: result.total, page: result.page };
+        }
+        return { mode: "paginated" as const, items: [], total: 0, page: currentPage };
+      }
+
+      const probe: unknown = await fetch(
+        `/api/workspaces?${buildParams({ page: "1", pageSize: String(GOVERNANCE_PAGE_SIZE) })}`
+      ).then(r => r.json());
+
+      if (!isPaginatedResponse(probe)) {
+        return { mode: "full" as const, items: [] };
+      }
+
+      if (probe.total >= PAGINATION_THRESHOLD) {
+        setIsPaginatedMode(true);
+        return { mode: "paginated" as const, items: probe.items, total: probe.total, page: 1 };
+      }
+
+      if (probe.total <= probe.items.length) {
+        return { mode: "full" as const, items: probe.items };
+      }
+
+      const allResult: unknown = await fetch(`/api/workspaces?${buildParams()}`).then(r => r.json());
+      return { mode: "full" as const, items: Array.isArray(allResult) ? allResult : probe.items };
     },
   });
+
+  const workspaces: Workspace[] = governanceData?.items ?? [];
+  const paginatedTotal: number = governanceData?.mode === "paginated" ? governanceData.total : 0;
+  const showPagination = governanceData?.mode === "paginated";
+  const totalPages = showPagination ? Math.ceil(paginatedTotal / GOVERNANCE_PAGE_SIZE) : 1;
 
   const bulkMutation = useMutation({
     mutationFn: (data: any) => apiRequest("PATCH", "/api/workspaces/bulk/update", data),
@@ -1137,9 +1216,11 @@ export default function GovernancePage() {
             <>
               <div className="flex items-center justify-between px-6 py-2 border-b border-border/30 bg-muted/10">
                 <span className="text-xs text-muted-foreground" data-testid="text-results-summary">
-                  {filteredAndSortedWorkspaces.length === workspaces.length
-                    ? `${workspaces.length} workspace${workspaces.length !== 1 ? 's' : ''}`
-                    : `${filteredAndSortedWorkspaces.length} of ${workspaces.length} workspace${workspaces.length !== 1 ? 's' : ''}`}
+                  {showPagination
+                    ? `${paginatedTotal} workspace${paginatedTotal !== 1 ? 's' : ''} total \u00B7 page ${currentPage} of ${totalPages}`
+                    : filteredAndSortedWorkspaces.length === workspaces.length
+                      ? `${workspaces.length} workspace${workspaces.length !== 1 ? 's' : ''}`
+                      : `${filteredAndSortedWorkspaces.length} of ${workspaces.length} workspace${workspaces.length !== 1 ? 's' : ''}`}
                   {activeFilterCount > 0 && ` \u00B7 ${activeFilterCount} filter${activeFilterCount !== 1 ? 's' : ''} applied`}
                   {searchTerm && ` \u00B7 search: "${searchTerm}"`}
                 </span>
@@ -1237,11 +1318,66 @@ export default function GovernancePage() {
               </Table>
               </div>
               
-              <div className="p-4 border-t border-border/50 text-xs text-center text-muted-foreground" data-testid="text-workspace-count">
-                {activeFilterCount > 0
-                  ? `Showing ${filteredAndSortedWorkspaces.length} of ${workspaces.length} workspaces`
-                  : `Showing ${workspaces.length} workspaces`}
-              </div>
+              {showPagination && totalPages > 1 ? (
+                <div className="px-6 py-3 border-t border-border/50 flex items-center justify-between gap-4" data-testid="pagination-bar">
+                  <span className="text-xs text-muted-foreground" data-testid="text-workspace-count">
+                    {`Showing ${(currentPage - 1) * GOVERNANCE_PAGE_SIZE + 1}–${Math.min(currentPage * GOVERNANCE_PAGE_SIZE, paginatedTotal)} of ${paginatedTotal} workspaces`}
+                  </span>
+                  <div className="flex items-center gap-1">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-8 px-3 gap-1"
+                      onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                      disabled={currentPage <= 1}
+                      data-testid="button-pagination-prev"
+                    >
+                      <ChevronLeft className="w-3.5 h-3.5" />
+                      Previous
+                    </Button>
+                    {Array.from({ length: totalPages }, (_, i) => i + 1)
+                      .filter(p => p === 1 || p === totalPages || Math.abs(p - currentPage) <= 2)
+                      .reduce<(number | "ellipsis")[]>((acc, p, idx, arr) => {
+                        if (idx > 0 && p - (arr[idx - 1] as number) > 1) acc.push("ellipsis");
+                        acc.push(p);
+                        return acc;
+                      }, [])
+                      .map((item, idx) =>
+                        item === "ellipsis" ? (
+                          <span key={`ellipsis-${idx}`} className="px-1 text-xs text-muted-foreground" data-testid="pagination-ellipsis">…</span>
+                        ) : (
+                          <Button
+                            key={item}
+                            variant={item === currentPage ? "default" : "outline"}
+                            size="sm"
+                            className="h-8 w-8 p-0"
+                            onClick={() => setCurrentPage(item as number)}
+                            data-testid={`button-pagination-page-${item}`}
+                          >
+                            {item}
+                          </Button>
+                        )
+                      )}
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-8 px-3 gap-1"
+                      onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                      disabled={currentPage >= totalPages}
+                      data-testid="button-pagination-next"
+                    >
+                      Next
+                      <ChevronRight className="w-3.5 h-3.5" />
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <div className="p-4 border-t border-border/50 text-xs text-center text-muted-foreground" data-testid="text-workspace-count">
+                  {activeFilterCount > 0
+                    ? `Showing ${filteredAndSortedWorkspaces.length} of ${workspaces.length} workspaces`
+                    : `Showing ${workspaces.length} workspaces`}
+                </div>
+              )}
             </>
           )}
         </CardContent>

@@ -151,7 +151,34 @@ router.get("/api/workspaces/writeback-pending", requireAuth(), async (req: Authe
 router.get("/api/workspaces", requireAuth(), async (req: AuthenticatedRequest, res) => {
   const search = req.query.search as string | undefined;
   const tenantConnectionId = req.query.tenantConnectionId as string | undefined;
+  const pageParam = req.query.page as string | undefined;
+  const pageSizeParam = req.query.pageSize as string | undefined;
   const allowedIds = await getOrgTenantConnectionIds(req);
+
+  if (pageParam !== undefined) {
+    const page = Math.max(1, parseInt(pageParam, 10) || 1);
+    const pageSize = Math.min(500, Math.max(1, parseInt(pageSizeParam || "50", 10)));
+
+    if (tenantConnectionId) {
+      if (allowedIds && !allowedIds.includes(tenantConnectionId)) {
+        return res.json({ items: [], total: 0, page, pageSize });
+      }
+      const result = await storage.getWorkspacesPaginated({ page, pageSize, search, tenantConnectionId });
+      return res.json({ ...result, page, pageSize });
+    }
+
+    if (allowedIds) {
+      if (allowedIds.length === 0) {
+        return res.json({ items: [], total: 0, page, pageSize });
+      }
+      const result = await storage.getWorkspacesPaginated({ page, pageSize, search, tenantConnectionIds: allowedIds });
+      return res.json({ ...result, page, pageSize });
+    }
+
+    const result = await storage.getWorkspacesPaginated({ page, pageSize, search });
+    return res.json({ ...result, page, pageSize });
+  }
+
   if (tenantConnectionId) {
     if (allowedIds && !allowedIds.includes(tenantConnectionId)) {
       return res.json([]);
