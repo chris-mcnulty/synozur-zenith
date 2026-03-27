@@ -192,17 +192,10 @@ router.post('/login', async (req: AuthenticatedRequest, res) => {
   }
 });
 
-router.get('/me', async (req: AuthenticatedRequest, res) => {
+router.get('/me', requireAuth(), async (req: AuthenticatedRequest, res) => {
   try {
-    const userId = req.session?.userId;
-    if (!userId) {
-      return res.status(401).json({ error: 'Not authenticated' });
-    }
-
-    const user = await storage.getUser(userId);
-    if (!user) {
-      return res.status(401).json({ error: 'User not found' });
-    }
+    const user = req.user!;
+    const userId = user.id;
 
     const activeOrgId = req.session?.activeOrganizationId || user.organizationId;
     let organization = null;
@@ -231,16 +224,12 @@ router.get('/me', async (req: AuthenticatedRequest, res) => {
   }
 });
 
-router.get('/users', async (req: AuthenticatedRequest, res) => {
+router.get('/users', requireAuth(), requirePermission('users:manage'), async (req: AuthenticatedRequest, res) => {
   try {
-    const userId = req.session?.userId;
-    if (!userId) {
-      return res.status(401).json({ error: 'Not authenticated' });
-    }
+    const user = req.user!;
 
-    const user = await storage.getUser(userId);
-    if (!user || !user.organizationId) {
-      return res.status(401).json({ error: 'Not authenticated or no organization' });
+    if (!user.organizationId) {
+      return res.status(403).json({ error: 'No organization context' });
     }
 
     const orgUsers = await storage.getUsersByOrganization(user.organizationId);

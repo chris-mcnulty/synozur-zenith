@@ -5,7 +5,7 @@ import { testConnection, clearTokenCache, getAppToken, fetchSensitivityLabels, f
 import { checkTenantPermissions, REQUIRED_PERMISSIONS, PERMISSIONS_VERSION } from "../services/permissions";
 import { METADATA_CATEGORIES, ZENITH_ROLES } from "@shared/schema";
 import { refreshDelegatedToken } from "../routes-entra";
-import { requireAuth, requireRole, type AuthenticatedRequest } from "../middleware/rbac";
+import { requireAuth, requireRole, requirePermission, type AuthenticatedRequest } from "../middleware/rbac";
 import { encryptToken, decryptToken, isEncryptionConfigured } from "../utils/encryption";
 
 const router = Router();
@@ -59,7 +59,7 @@ async function getDelegatedTokenForRetention(currentUserId?: string, organizatio
 }
 
 // ── Tenant Connections ──
-router.get("/api/admin/tenants", requireAuth(), async (req: AuthenticatedRequest, res) => {
+router.get("/api/admin/tenants", requirePermission('inventory:read'), async (req: AuthenticatedRequest, res) => {
   const orgId = req.activeOrganizationId || req.user?.organizationId;
   const connections = await storage.getTenantConnections(orgId || undefined);
   const safe = connections.map(c => ({
@@ -70,7 +70,7 @@ router.get("/api/admin/tenants", requireAuth(), async (req: AuthenticatedRequest
   res.json(safe);
 });
 
-router.get("/api/admin/tenants/consent/initiate", requireAuth(), async (req: AuthenticatedRequest, res) => {
+router.get("/api/admin/tenants/consent/initiate", requireRole(ZENITH_ROLES.TENANT_ADMIN), async (req: AuthenticatedRequest, res) => {
   const clientId = process.env.AZURE_CLIENT_ID;
   if (!clientId) {
     return res.status(503).json({ error: "Zenith Entra app is not configured. Set AZURE_CLIENT_ID first." });
@@ -128,6 +128,8 @@ router.get("/api/admin/tenants/consent/initiate", requireAuth(), async (req: Aut
   res.json({ consentUrl });
 });
 
+// This callback must remain public: it is the OAuth redirect URI registered with Azure AD.
+// Security is enforced by CSRF nonce validation (consentNonce in session must match state.nonce).
 router.get("/api/admin/tenants/consent/callback", async (req, res) => {
   const { admin_consent, tenant, state, error, error_description } = req.query;
 
@@ -208,7 +210,7 @@ router.get("/api/admin/tenants/consent/callback", async (req, res) => {
   }
 });
 
-router.get("/api/admin/tenants/:id", requireAuth(), async (req: AuthenticatedRequest, res) => {
+router.get("/api/admin/tenants/:id", requirePermission('inventory:read'), async (req: AuthenticatedRequest, res) => {
   const connection = await storage.getTenantConnection(req.params.id);
   if (!connection) return res.status(404).json({ message: "Tenant connection not found" });
   if (req.user?.role !== ZENITH_ROLES.PLATFORM_OWNER && connection.organizationId !== req.user?.organizationId) {
@@ -274,7 +276,7 @@ router.post("/api/admin/tenants/test", requireRole(ZENITH_ROLES.TENANT_ADMIN), a
 });
 
 // ── Permission Health ──
-router.get("/api/admin/tenants/:id/permissions", requireAuth(), async (req: AuthenticatedRequest, res) => {
+router.get("/api/admin/tenants/:id/permissions", requirePermission('inventory:read'), async (req: AuthenticatedRequest, res) => {
   try {
     const conn = await storage.getTenantConnection(req.params.id);
     if (!conn) return res.status(404).json({ error: "Tenant connection not found" });
@@ -297,14 +299,14 @@ router.get("/api/admin/tenants/:id/permissions", requireAuth(), async (req: Auth
   }
 });
 
-router.get("/api/admin/tenants/permissions/manifest", (_req, res) => {
+router.get("/api/admin/tenants/permissions/manifest", requireAuth(), (_req: AuthenticatedRequest, res) => {
   res.json({
     version: PERMISSIONS_VERSION,
     permissions: REQUIRED_PERMISSIONS,
   });
 });
 
-router.get("/api/admin/tenants/:id/reconsent", requireAuth(), async (req: AuthenticatedRequest, res) => {
+router.get("/api/admin/tenants/:id/reconsent", requireRole(ZENITH_ROLES.TENANT_ADMIN), async (req: AuthenticatedRequest, res) => {
   try {
     const conn = await storage.getTenantConnection(req.params.id);
     if (!conn) return res.status(404).json({ error: "Tenant connection not found" });
@@ -343,7 +345,7 @@ router.get("/api/admin/tenants/:id/reconsent", requireAuth(), async (req: Authen
 });
 
 // ── Data Dictionaries (tenant-owned, shared across orgs) ──
-router.get("/api/admin/tenants/:tenantConnectionId/data-dictionaries", requireAuth(), async (req: AuthenticatedRequest, res) => {
+router.get("/api/admin/tenants/:tenantConnectionId/data-dictionaries", requirePermission('inventory:read'), async (req: AuthenticatedRequest, res) => {
   try {
     const conn = await storage.getTenantConnection(req.params.tenantConnectionId);
     if (!conn) return res.status(404).json({ error: "Tenant connection not found" });
@@ -404,7 +406,7 @@ const CONFIGURABLE_METADATA_FIELDS = [
   { field: "sensitivityLabelId", label: "Sensitivity Label (Purview)", description: "Microsoft Purview sensitivity label" },
 ];
 
-router.get("/api/admin/tenants/:tenantConnectionId/required-metadata", requireAuth(), async (req: AuthenticatedRequest, res) => {
+router.get("/api/admin/tenants/:tenantConnectionId/required-metadata", requirePermission('inventory:read'), async (req: AuthenticatedRequest, res) => {
   try {
     const conn = await storage.getTenantConnection(req.params.tenantConnectionId);
     if (!conn) return res.status(404).json({ error: "Tenant connection not found" });
@@ -463,7 +465,7 @@ router.put("/api/admin/tenants/:tenantConnectionId/required-metadata", requireRo
   }
 });
 
-router.get("/api/admin/tenants/:tenantConnectionId/sensitivity-labels", requireAuth(), async (req: AuthenticatedRequest, res) => {
+router.get("/api/admin/tenants/:tenantConnectionId/sensitivity-labels", requirePermission('inventory:read'), async (req: AuthenticatedRequest, res) => {
   try {
     const conn = await storage.getTenantConnection(req.params.tenantConnectionId);
     if (!conn) return res.status(404).json({ error: "Tenant connection not found" });
@@ -527,7 +529,7 @@ router.post("/api/admin/tenants/:tenantConnectionId/sensitivity-labels/sync", re
 });
 
 // ── Retention Labels ──
-router.get("/api/admin/tenants/:tenantConnectionId/retention-labels", requireAuth(), async (req: AuthenticatedRequest, res) => {
+router.get("/api/admin/tenants/:tenantConnectionId/retention-labels", requirePermission('inventory:read'), async (req: AuthenticatedRequest, res) => {
   try {
     const conn = await storage.getTenantConnection(req.params.tenantConnectionId);
     if (!conn) return res.status(404).json({ error: "Tenant connection not found" });
@@ -598,7 +600,7 @@ router.post("/api/admin/tenants/:tenantConnectionId/retention-labels/sync", requ
 });
 
 // ── Label Coverage (sensitivity + retention labels mapped to workspaces) ──
-router.get("/api/admin/tenants/:tenantConnectionId/label-coverage", requireAuth(), async (req: AuthenticatedRequest, res) => {
+router.get("/api/admin/tenants/:tenantConnectionId/label-coverage", requirePermission('inventory:read'), async (req: AuthenticatedRequest, res) => {
   try {
     const conn = await storage.getTenantConnection(req.params.tenantConnectionId);
     if (!conn) return res.status(404).json({ error: "Tenant connection not found" });
@@ -642,7 +644,7 @@ router.get("/api/admin/tenants/:tenantConnectionId/label-coverage", requireAuth(
 // ── Custom Field Definitions (tenant-owned) ──
 const VALID_FIELD_TYPES = ["TEXT", "SELECT", "NUMBER", "BOOLEAN", "DATE"];
 
-router.get("/api/admin/tenants/:tenantConnectionId/custom-fields", requireAuth(), async (req: AuthenticatedRequest, res) => {
+router.get("/api/admin/tenants/:tenantConnectionId/custom-fields", requirePermission('inventory:read'), async (req: AuthenticatedRequest, res) => {
   try {
     const conn = await storage.getTenantConnection(req.params.tenantConnectionId);
     if (!conn) return res.status(404).json({ error: "Tenant connection not found" });

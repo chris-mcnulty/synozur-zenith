@@ -4,7 +4,7 @@ import { insertWorkspaceSchema, insertProvisioningRequestSchema, type ServicePla
 import { fetchSharePointSites, fetchSiteUsageReport, fetchSiteDriveOwner, fetchSiteAnalytics, fetchSiteGroupOwners, fetchSiteCollectionAdmins, getAppToken, writeSitePropertyBag, requestSiteReindex, fetchSitePropertyBag, fetchSensitivityLabels, fetchRetentionLabels, fetchHubSites, fetchSiteHubAssociation, fetchHubSitesViaSearch, applySensitivityLabelToSite, removeSensitivityLabelFromSite, joinHubSite, leaveHubSite, fetchSiteLockState, fetchSiteArchiveStatus, batchToggleNoScript, fetchSiteDocumentLibraries, enumerateSiteDocumentLibraries, fetchLibraryDetails, fetchSiteTelemetry } from "../services/graph";
 import { getPlanFeatures } from "../services/feature-gate";
 import { refreshDelegatedToken, getDelegatedSpoToken } from "../routes-entra";
-import { requireAuth, requireRole, type AuthenticatedRequest } from "../middleware/rbac";
+import { requireAuth, requireRole, requirePermission, type AuthenticatedRequest } from "../middleware/rbac";
 import { computeWritebackHash, computeSpoSyncHash } from "../services/writeback-hash";
 import { decryptToken } from "../utils/encryption";
 import { evaluatePolicy, evaluationResultsToCopilotRules, formatPolicyBagValue, DEFAULT_COPILOT_READINESS_RULES, type EvaluationContext } from "../services/policy-engine";
@@ -420,7 +420,7 @@ router.get("/api/workspaces/:id/libraries", requireAuth(), async (req: Authentic
   }
 });
 
-router.get("/api/admin/tenants/:tenantConnectionId/libraries", requireAuth(), async (req: AuthenticatedRequest, res) => {
+router.get("/api/admin/tenants/:tenantConnectionId/libraries", requirePermission('inventory:read'), async (req: AuthenticatedRequest, res) => {
   try {
     const libraries = await storage.getDocumentLibrariesByTenant(req.params.tenantConnectionId);
     const workspaces = await storage.getWorkspaces(undefined, req.params.tenantConnectionId);
@@ -437,7 +437,7 @@ router.get("/api/admin/tenants/:tenantConnectionId/libraries", requireAuth(), as
   }
 });
 
-router.get("/api/admin/tenants/:tenantConnectionId/libraries/stats", requireAuth(), async (req: AuthenticatedRequest, res) => {
+router.get("/api/admin/tenants/:tenantConnectionId/libraries/stats", requirePermission('inventory:read'), async (req: AuthenticatedRequest, res) => {
   try {
     const libraries = await storage.getDocumentLibrariesByTenant(req.params.tenantConnectionId);
     const totalLibraries = libraries.length;

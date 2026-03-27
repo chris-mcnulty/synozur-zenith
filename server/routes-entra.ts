@@ -134,7 +134,7 @@ export async function getDelegatedSpoToken(userId: string, spoHost: string): Pro
   return null;
 }
 
-router.get('/status', (_req: Request, res: Response) => {
+router.get('/status', requireAuth(), (_req: AuthenticatedRequest, res: Response) => {
   const configured = !!(process.env.AZURE_CLIENT_ID && process.env.AZURE_CLIENT_SECRET);
   return res.json({
     configured,
