@@ -948,3 +948,27 @@ export const insertSupportTicketReplySchema = createInsertSchema(supportTicketRe
 
 export type InsertSupportTicketReply = z.infer<typeof insertSupportTicketReplySchema>;
 export type SupportTicketReply = typeof supportTicketReplies.$inferSelect;
+
+// ── Content Types ─────────────────────────────────────────────────────────────
+// Stores Content Type Hub content types synced from Microsoft 365 Graph API.
+export const contentTypes = pgTable("content_types", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantConnectionId: varchar("tenant_connection_id").notNull(),
+  contentTypeId: text("content_type_id").notNull(),
+  name: text("name").notNull(),
+  group: text("group"),
+  description: text("description"),
+  isHub: boolean("is_hub").notNull().default(false),
+  subscribedSiteCount: integer("subscribed_site_count").notNull().default(0),
+  syncedAt: timestamp("synced_at").defaultNow(),
+}, (table) => [
+  unique("uq_tenant_content_type").on(table.tenantConnectionId, table.contentTypeId),
+]);
+
+export const insertContentTypeSchema = createInsertSchema(contentTypes).omit({
+  id: true,
+  syncedAt: true,
+});
+
+export type InsertContentType = z.infer<typeof insertContentTypeSchema>;
+export type ContentType = typeof contentTypes.$inferSelect;

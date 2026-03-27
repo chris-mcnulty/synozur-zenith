@@ -86,6 +86,9 @@ import {
   supportTicketReplies,
   type SupportTicket,
   type SupportTicketReply,
+  contentTypes,
+  type ContentType,
+  type InsertContentType,
 } from "@shared/schema";
 
 export interface TeamsChannelsSummaryChannel {
@@ -270,6 +273,10 @@ export interface IStorage {
   closeTicket(id: string, userId: string): Promise<SupportTicket>;
   updateTicketStatus(id: string, status: string): Promise<SupportTicket>;
   getNextTicketNumber(orgId: string): Promise<number>;
+
+  // Content Types
+  upsertContentType(data: InsertContentType): Promise<ContentType>;
+  getContentTypes(tenantConnectionId: string): Promise<ContentType[]>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -1583,6 +1590,32 @@ export class DatabaseStorage implements IStorage {
       .where(eq(supportTickets.id, id))
       .returning();
     return ticket;
+  }
+
+  // ── Content Types ──────────────────────────────────────────────────────────
+
+  async upsertContentType(data: InsertContentType): Promise<ContentType> {
+    const [result] = await db.insert(contentTypes)
+      .values(data)
+      .onConflictDoUpdate({
+        target: [contentTypes.tenantConnectionId, contentTypes.contentTypeId],
+        set: {
+          name: data.name,
+          group: data.group,
+          description: data.description,
+          isHub: data.isHub,
+          subscribedSiteCount: data.subscribedSiteCount,
+          syncedAt: new Date(),
+        },
+      })
+      .returning();
+    return result;
+  }
+
+  async getContentTypes(tenantConnectionId: string): Promise<ContentType[]> {
+    return db.select().from(contentTypes)
+      .where(eq(contentTypes.tenantConnectionId, tenantConnectionId))
+      .orderBy(contentTypes.name);
   }
 }
 

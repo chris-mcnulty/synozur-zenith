@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { storage } from "../storage";
 import { insertWorkspaceSchema, insertProvisioningRequestSchema, type ServicePlanTier, ZENITH_ROLES } from "@shared/schema";
-import { fetchSharePointSites, fetchSiteUsageReport, fetchSiteDriveOwner, fetchSiteAnalytics, fetchSiteGroupOwners, fetchSiteCollectionAdmins, getAppToken, writeSitePropertyBag, requestSiteReindex, fetchSitePropertyBag, fetchSensitivityLabels, fetchRetentionLabels, fetchHubSites, fetchSiteHubAssociation, fetchHubSitesViaSearch, applySensitivityLabelToSite, removeSensitivityLabelFromSite, joinHubSite, leaveHubSite, fetchSiteLockState, fetchSiteArchiveStatus, batchToggleNoScript, fetchSiteDocumentLibraries, enumerateSiteDocumentLibraries, fetchLibraryDetails, fetchSiteTelemetry } from "../services/graph";
+import { fetchSharePointSites, fetchSiteUsageReport, fetchSiteDriveOwner, fetchSiteAnalytics, fetchSiteGroupOwners, fetchSiteCollectionAdmins, getAppToken, writeSitePropertyBag, requestSiteReindex, fetchSitePropertyBag, fetchSensitivityLabels, fetchRetentionLabels, fetchHubSites, fetchSiteHubAssociation, fetchHubSitesViaSearch, applySensitivityLabelToSite, removeSensitivityLabelFromSite, joinHubSite, leaveHubSite, fetchSiteLockState, fetchSiteArchiveStatus, batchToggleNoScript, fetchSiteDocumentLibraries, enumerateSiteDocumentLibraries, fetchLibraryDetails, fetchSiteTelemetry, fetchContentTypes } from "../services/graph";
 import { getPlanFeatures } from "../services/feature-gate";
 import { refreshDelegatedToken, getDelegatedSpoToken } from "../routes-entra";
 import { requireAuth, requireRole, requirePermission, type AuthenticatedRequest } from "../middleware/rbac";
@@ -1691,6 +1691,58 @@ router.post("/api/admin/tenants/:id/sync", requireRole(ZENITH_ROLES.TENANT_ADMIN
       }
     }
 
+    let contentTypeSyncResult: { synced: number; hubSitesScanned: number; error?: string } = { synced: 0, hubSitesScanned: 0 };
+    if (token) {
+      try {
+        console.log(`[content-type-sync] Fetching content types for tenant ${connection.tenantId}...`);
+        const hubWorkspaces = await storage.getWorkspaces(undefined, req.params.id);
+        const hubSiteWorkspaces = hubWorkspaces.filter(w => w.isHubSite && w.m365ObjectId);
+        if (hubSiteWorkspaces.length === 0) {
+          console.log(`[content-type-sync] No hub sites found, skipping content type sync`);
+        }
+        const seenContentTypeIds = new Set<string>();
+        for (const hubWs of hubSiteWorkspaces) {
+          try {
+            const result = await fetchContentTypes(token, hubWs.m365ObjectId!);
+            if (result.error) {
+              console.warn(`[content-type-sync] Error fetching content types for site ${hubWs.displayName}: ${result.error}`);
+              contentTypeSyncResult.error = result.error;
+              continue;
+            }
+            contentTypeSyncResult.hubSitesScanned++;
+            for (const ct of result.contentTypes) {
+              if (seenContentTypeIds.has(ct.id)) continue;
+              seenContentTypeIds.add(ct.id);
+              await storage.upsertContentType({
+                tenantConnectionId: req.params.id,
+                contentTypeId: ct.id,
+                name: ct.name,
+                group: ct.group || null,
+                description: ct.description || null,
+                isHub: true,
+                subscribedSiteCount: 0,
+              });
+              contentTypeSyncResult.synced++;
+            }
+          } catch (ctErr: any) {
+            console.error(`[content-type-sync] Error for hub site ${hubWs.displayName}: ${ctErr.message}`);
+          }
+        }
+        console.log(`[content-type-sync] Synced ${contentTypeSyncResult.synced} content types from ${contentTypeSyncResult.hubSitesScanned} hub sites`);
+      } catch (e: any) {
+        contentTypeSyncResult.error = e.message;
+      }
+    }
+
+    if (contentTypeSyncResult.error) {
+      permissionWarnings.push({
+        area: "Content Types",
+        permission: "Sites.Read.All",
+        message: `Content type sync failed: ${contentTypeSyncResult.error}`,
+        severity: "warning",
+      });
+    }
+
     await storage.updateTenantConnection(req.params.id, {
       lastSyncAt: new Date(),
       lastSyncStatus: permissionWarnings.some(w => w.severity === "error") ? "SUCCESS_WITH_ERRORS" : permissionWarnings.length > 0 ? "SUCCESS_WITH_WARNINGS" : "SUCCESS",
@@ -1730,6 +1782,7 @@ router.post("/api/admin/tenants/:id/sync", requireRole(ZENITH_ROLES.TENANT_ADMIN
       retentionLabels: retentionSyncResult,
       hubSites: hubSyncResult,
       documentLibraries: librarySyncResult,
+      contentTypes: contentTypeSyncResult,
       policyEvaluation: policyEvalCount > 0 ? { evaluated: policyEvalCount } : undefined,
       writebackPending: writebackPendingCount > 0 ? { count: writebackPendingCount, message: `${writebackPendingCount} workspace(s) have policy outcome changes that need to be written back to SharePoint.` } : undefined,
       permissionWarnings: permissionWarnings.length > 0 ? permissionWarnings : undefined,
@@ -1897,6 +1950,15 @@ router.post("/api/admin/tenants/:id/sync-libraries", requireRole(ZENITH_ROLES.TE
   } catch (err: any) {
     console.error(`[library-sync] Error: ${err.message}`);
     res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+router.get("/api/admin/tenants/:id/content-types", requireAuth(), async (req: AuthenticatedRequest, res) => {
+  try {
+    const types = await storage.getContentTypes(req.params.id);
+    res.json(types);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
   }
 });
 

@@ -3364,3 +3364,49 @@ export async function fetchTenantUsers(
   console.log(`[graph] fetchTenantUsers: ${users.length} member users`);
   return users;
 }
+
+export interface GraphContentType {
+  id: string;
+  name: string;
+  group?: string;
+  description?: string;
+  isBuiltIn?: boolean;
+}
+
+export async function fetchContentTypes(graphToken: string, siteId: string): Promise<{
+  contentTypes: GraphContentType[];
+  error?: string;
+}> {
+  const allContentTypes: GraphContentType[] = [];
+  let url: string | null = `https://graph.microsoft.com/v1.0/sites/${siteId}/contentTypes?$select=id,name,group,description,isBuiltIn&$top=100`;
+
+  try {
+    while (url) {
+      const res = await fetch(url, {
+        headers: { Authorization: `Bearer ${graphToken}` },
+      });
+
+      if (!res.ok) {
+        const errText = await res.text();
+        return { contentTypes: [], error: `Graph API ${res.status}: ${errText.substring(0, 200)}` };
+      }
+
+      const data = await res.json();
+      for (const ct of data.value || []) {
+        allContentTypes.push({
+          id: ct.id,
+          name: ct.name,
+          group: ct.group || undefined,
+          description: ct.description || undefined,
+          isBuiltIn: ct.isBuiltIn ?? false,
+        });
+      }
+      url = data["@odata.nextLink"] ?? null;
+    }
+
+    console.log(`[content-types] Fetched ${allContentTypes.length} content types from site ${siteId}`);
+    return { contentTypes: allContentTypes };
+  } catch (err: any) {
+    return { contentTypes: [], error: err.message };
+  }
+}
