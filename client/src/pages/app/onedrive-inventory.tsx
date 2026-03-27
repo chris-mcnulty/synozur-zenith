@@ -70,9 +70,10 @@ function usagePercent(used: number | null, total: number | null): number | null 
 
 export default function OneDriveInventoryPage() {
   const [search, setSearch] = useState("");
-  const { selectedTenant } = useTenant();
+  const { selectedTenant, isFeatureEnabled } = useTenant();
   const { toast } = useToast();
   const tenantConnectionId = selectedTenant?.id;
+  const featureDisabled = !isFeatureEnabled("onedriveInventory");
 
   const { data: drives = [], isLoading } = useQuery<OneDriveItem[]>({
     queryKey: ["/api/onedrive-inventory", tenantConnectionId, search],
@@ -116,7 +117,17 @@ export default function OneDriveInventoryPage() {
 
   return (
     <div className="p-6 lg:p-8 space-y-6 max-w-7xl mx-auto">
-      {/* Header */}
+      {featureDisabled && (
+        <Card className="border-amber-500/30 bg-amber-500/5" data-testid="banner-feature-disabled">
+          <CardContent className="p-4 flex items-center gap-3">
+            <AlertTriangle className="w-5 h-5 text-amber-500 shrink-0" />
+            <div>
+              <p className="text-sm font-medium text-amber-700">OneDrive Inventory is disabled</p>
+              <p className="text-xs text-muted-foreground">Enable this feature in Tenant Settings to discover and sync OneDrive data.</p>
+            </div>
+          </CardContent>
+        </Card>
+      )}
       <div className="flex items-start justify-between gap-4">
         <div>
           <div className="flex items-center gap-3 mb-1">
@@ -129,8 +140,8 @@ export default function OneDriveInventoryPage() {
         </div>
         <Button
           onClick={() => syncMutation.mutate()}
-          disabled={syncMutation.isPending || !tenantConnectionId}
-          title={!tenantConnectionId ? "Select a tenant to sync" : undefined}
+          disabled={syncMutation.isPending || !tenantConnectionId || featureDisabled}
+          title={featureDisabled ? "Enable OneDrive Inventory in Feature Settings" : !tenantConnectionId ? "Select a tenant to sync" : undefined}
         >
           {syncMutation.isPending
             ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Syncing…</>

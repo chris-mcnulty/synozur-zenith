@@ -58,6 +58,7 @@ import {
   Plus,
   Trash2,
   X,
+  AlertCircle,
 } from "lucide-react";
 
 function formatBytes(bytes: number | null | undefined): string {
@@ -86,8 +87,9 @@ type QuickFilter = "all" | "active" | "warning" | "no-label" | "external-sharing
 
 export default function EmbeddedContainersPage() {
   const { toast } = useToast();
-  const { selectedTenant } = useTenant();
+  const { selectedTenant, isFeatureEnabled } = useTenant();
   const tenantConnectionId = selectedTenant?.id;
+  const featureDisabled = !isFeatureEnabled("speDiscovery");
 
   const [searchTerm, setSearchTerm] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
@@ -262,6 +264,15 @@ export default function EmbeddedContainersPage() {
 
   return (
     <div className="space-y-8 animate-in fade-in duration-500 pb-12">
+      {featureDisabled && (
+        <div className="flex items-center gap-3 p-4 rounded-lg border border-amber-500/30 bg-amber-500/5" data-testid="banner-feature-disabled">
+          <AlertCircle className="w-5 h-5 text-amber-500 shrink-0" />
+          <div>
+            <p className="text-sm font-medium text-amber-700">SPE Container Discovery is disabled</p>
+            <p className="text-xs text-muted-foreground">Enable this feature in Tenant Settings to discover and sync SharePoint Embedded containers.</p>
+          </div>
+        </div>
+      )}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-3xl font-bold tracking-tight" data-testid="heading-spe">SharePoint Embedded</h1>
@@ -269,9 +280,10 @@ export default function EmbeddedContainersPage() {
         </div>
         <Button
           onClick={() => syncMutation.mutate()}
-          disabled={syncMutation.isPending}
+          disabled={syncMutation.isPending || featureDisabled}
           className="gap-2 shadow-md shadow-primary/20"
           data-testid="button-sync-spe"
+          title={featureDisabled ? "Enable SPE Container Discovery in Feature Settings" : undefined}
         >
           {syncMutation.isPending && <Loader2 className="w-4 h-4 animate-spin" />}
           <Database className="w-4 h-4" />

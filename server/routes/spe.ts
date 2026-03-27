@@ -5,6 +5,7 @@ import { requireAuth, requireRole, type AuthenticatedRequest } from "../middlewa
 import { getAppToken, fetchAllSpeContainerTypes, fetchAllSpeContainers, fetchSpeContainerDriveDetails, applySensitivityLabelToSpeContainer } from "../services/graph";
 import { getDelegatedSpoToken } from "../routes-entra";
 import { decryptToken } from "../utils/encryption";
+import { isCancelled, clearCancellation } from "../services/discovery-cancellation";
 
 const router = Router();
 
@@ -196,6 +197,10 @@ router.post("/api/spe/tenants/:id/sync", requireRole(ZENITH_ROLES.TENANT_ADMIN),
   const conn = await storage.getTenantConnection(req.params.id);
   if (!conn) return res.status(404).json({ message: "Tenant connection not found" });
 
+  if (!conn.speDiscoveryEnabled) {
+    return res.status(403).json({ message: "SPE Container Discovery is disabled for this tenant. Enable it in Feature Settings before running a sync." });
+  }
+
   const allowedIds = await getOrgTenantConnectionIds(req.user);
   if (allowedIds && !allowedIds.includes(conn.id)) {
     return res.status(404).json({ message: "Tenant connection not found" });
@@ -345,6 +350,11 @@ router.post("/api/spe/tenants/:id/sync", requireRole(ZENITH_ROLES.TENANT_ADMIN),
     const BATCH_SIZE = 5;
 
     for (let i = 0; i < graphContainers.length; i += BATCH_SIZE) {
+      if (isCancelled(conn.id, "speDiscovery")) {
+        console.log(`[spe-sync] Sync cancelled for tenant ${conn.tenantName}`);
+        clearCancellation(conn.id, "speDiscovery");
+        break;
+      }
       const batch = graphContainers.slice(i, i + BATCH_SIZE);
 
       await Promise.all(batch.map(async (gc) => {

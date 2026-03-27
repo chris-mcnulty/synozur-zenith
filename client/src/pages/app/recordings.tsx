@@ -151,13 +151,14 @@ function RunStatusBadge({ status }: { status: string }) {
 type QuickFilter = "all" | "recordings" | "transcripts" | "channel" | "onedrive" | "no-label" | "copilot-blocked";
 
 export default function RecordingsPage() {
-  const { selectedTenant } = useTenant();
+  const { selectedTenant, isFeatureEnabled } = useTenant();
   const { toast } = useToast();
   const [search, setSearch] = useState("");
   const [quickFilter, setQuickFilter] = useState<QuickFilter>("all");
   const [selected, setSelected] = useState<TeamsRecording | null>(null);
 
   const tenantConnectionId = selectedTenant?.id;
+  const featureDisabled = !isFeatureEnabled("recordingsDiscovery");
   const [page, setPage] = useState(1);
   const pageSize = 50;
 
@@ -260,7 +261,15 @@ export default function RecordingsPage() {
 
   return (
     <div className="flex flex-col gap-6 p-6">
-      {/* Header */}
+      {featureDisabled && (
+        <div className="flex items-center gap-3 p-4 rounded-lg border border-amber-500/30 bg-amber-500/5" data-testid="banner-feature-disabled">
+          <AlertCircle className="w-5 h-5 text-amber-500 shrink-0" />
+          <div>
+            <p className="text-sm font-medium text-amber-700">Recordings Discovery is disabled</p>
+            <p className="text-xs text-muted-foreground">Enable this feature in Tenant Settings to discover meeting recordings.</p>
+          </div>
+        </div>
+      )}
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Recordings Discovery</h1>
@@ -270,7 +279,8 @@ export default function RecordingsPage() {
         </div>
         <Button
           onClick={() => syncMutation.mutate()}
-          disabled={isRunning || !tenantConnectionId}
+          disabled={isRunning || !tenantConnectionId || featureDisabled}
+          title={featureDisabled ? "Enable Recordings Discovery in Feature Settings" : undefined}
         >
           {isRunning ? (
             <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Scanning…</>

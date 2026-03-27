@@ -201,6 +201,11 @@ export const tenantConnections = pgTable("tenant_connections", {
   consentGranted: boolean("consent_granted").notNull().default(false),
   isDemo: boolean("is_demo").notNull().default(false),
   dataMaskingEnabled: boolean("data_masking_enabled").notNull().default(false),
+  onedriveInventoryEnabled: boolean("onedrive_inventory_enabled").notNull().default(false),
+  recordingsDiscoveryEnabled: boolean("recordings_discovery_enabled").notNull().default(false),
+  teamsDiscoveryEnabled: boolean("teams_discovery_enabled").notNull().default(false),
+  telemetryEnabled: boolean("telemetry_enabled").notNull().default(false),
+  speDiscoveryEnabled: boolean("spe_discovery_enabled").notNull().default(false),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -329,6 +334,25 @@ export const insertRetentionLabelSchema = createInsertSchema(retentionLabels).om
 
 export type InsertRetentionLabel = z.infer<typeof insertRetentionLabelSchema>;
 export type RetentionLabel = typeof retentionLabels.$inferSelect;
+
+export const FEATURE_TOGGLES = {
+  onedriveInventory: "onedriveInventoryEnabled",
+  recordingsDiscovery: "recordingsDiscoveryEnabled",
+  teamsDiscovery: "teamsDiscoveryEnabled",
+  telemetry: "telemetryEnabled",
+  speDiscovery: "speDiscoveryEnabled",
+} as const;
+
+export type FeatureToggleKey = keyof typeof FEATURE_TOGGLES;
+export type FeatureToggleColumn = typeof FEATURE_TOGGLES[FeatureToggleKey];
+
+export const FEATURE_TOGGLE_LABELS: Record<FeatureToggleKey, string> = {
+  onedriveInventory: "OneDrive Inventory",
+  recordingsDiscovery: "Meeting Recordings Discovery",
+  teamsDiscovery: "Teams & Channels Discovery",
+  telemetry: "Workspace Telemetry",
+  speDiscovery: "SPE Container Discovery",
+};
 
 export const SERVICE_PLANS = ["TRIAL", "STANDARD", "PROFESSIONAL", "ENTERPRISE"] as const;
 export type ServicePlanTier = typeof SERVICE_PLANS[number];

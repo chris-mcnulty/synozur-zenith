@@ -86,6 +86,7 @@ type NavItem = {
   badge?: string;
   minRole?: string;
   isMock?: boolean;
+  featureToggle?: "onedriveInventory" | "recordingsDiscovery" | "teamsDiscovery" | "telemetry" | "speDiscovery";
 };
 
 type NavGroup = {
@@ -110,13 +111,13 @@ const navGroups: NavGroup[] = [
       { name: "Site Governance", href: "/app/governance", icon: ShieldCheck },
       { name: "Policy Builder", href: "/app/admin/policies", icon: ShieldCheck, badge: "Ent+", minRole: "governance_admin" },
       { name: "What-If Planner", href: "/app/admin/policy-whatif", icon: FlaskConical, badge: "Ent+", minRole: "governance_admin" },
-      { name: "Teams & Channels", href: "/app/teams-channels", icon: MessagesSquare },
-      { name: "OneDrive Inventory", href: "/app/onedrive-inventory", icon: HardDrive },
-      { name: "Recordings Discovery", href: "/app/recordings", icon: MonitorPlay },
+      { name: "Teams & Channels", href: "/app/teams-channels", icon: MessagesSquare, featureToggle: "teamsDiscovery" },
+      { name: "OneDrive Inventory", href: "/app/onedrive-inventory", icon: HardDrive, featureToggle: "onedriveInventory" },
+      { name: "Recordings Discovery", href: "/app/recordings", icon: MonitorPlay, featureToggle: "recordingsDiscovery" },
       { name: "Structures", href: "/app/structures", icon: Layers },
       { name: "Document Library", href: "/app/document-library", icon: Library },
       { name: "Content Types", href: "/app/content-types", icon: FileText, isMock: true },
-      { name: "Embedded Containers", href: "/app/embedded-containers", icon: Box },
+      { name: "Embedded Containers", href: "/app/embedded-containers", icon: Box, featureToggle: "speDiscovery" },
       { name: "Discover & Migrate", href: "/app/discover", icon: Search, badge: "Ent+", isMock: true },
       { name: "Archive & Backup", href: "/app/archive-backup", icon: Archive, isMock: true },
       { name: "Lifecycle", href: "/app/lifecycle", icon: Clock, isMock: true },
@@ -147,7 +148,7 @@ type OrgMembership = {
 export default function AppShell({ children }: AppShellProps) {
   const [location] = useLocation();
   const { theme, setTheme } = useTheme();
-  const { tenants, selectedTenant, setSelectedTenantId } = useTenant();
+  const { tenants, selectedTenant, setSelectedTenantId, isFeatureEnabled } = useTenant();
 
   const { data: authData, isLoading: authLoading } = useQuery<{
     user: { id: string; name: string | null; email: string; role: string; effectiveRole?: string; authProvider: string | null; organizationId: string | null };
@@ -231,7 +232,11 @@ export default function AppShell({ children }: AppShellProps) {
       .filter(group => !group.minRole || hasMinRole(effectiveRole, group.minRole))
       .map(group => ({
         ...group,
-        items: group.items.filter(item => !item.minRole || hasMinRole(effectiveRole, item.minRole)),
+        items: group.items.filter(item => {
+          if (item.minRole && !hasMinRole(effectiveRole, item.minRole)) return false;
+          if (item.featureToggle && !isFeatureEnabled(item.featureToggle)) return false;
+          return true;
+        }),
       }))
       .filter(group => group.items.length > 0);
 

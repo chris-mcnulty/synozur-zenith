@@ -11,6 +11,7 @@
 import { fetchAllOneDriveInventories } from "./graph";
 import { storage } from "../storage";
 import type { InsertOnedriveInventory } from "@shared/schema";
+import { isCancelled, clearCancellation } from "./discovery-cancellation";
 
 export interface OneDriveInventoryRunResult {
   drivesDiscovered: number;
@@ -36,7 +37,14 @@ export async function runOneDriveInventoryDiscovery(
     return { drivesDiscovered: 0, drivesWithoutOneDrive: 0, errors };
   }
 
+  clearCancellation(tenantConnectionId, "onedriveInventory");
+
   for (const inv of inventories) {
+    if (isCancelled(tenantConnectionId, "onedriveInventory")) {
+      console.log(`[onedrive-inventory] Discovery cancelled for tenant ${tenantConnectionId}`);
+      clearCancellation(tenantConnectionId, "onedriveInventory");
+      return { drivesDiscovered, drivesWithoutOneDrive, errors };
+    }
     try {
       const record: InsertOnedriveInventory = {
         tenantConnectionId,

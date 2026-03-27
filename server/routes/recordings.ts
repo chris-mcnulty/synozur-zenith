@@ -223,6 +223,10 @@ router.post(
     const conn = await storage.getTenantConnection(req.params.id);
     if (!conn) return res.status(404).json({ message: "Tenant connection not found" });
 
+    if (!conn.recordingsDiscoveryEnabled) {
+      return res.status(403).json({ message: "Recordings Discovery is disabled for this tenant. Enable it in Feature Settings before running a scan." });
+    }
+
     const allowedIds = await getOrgTenantConnectionIds(req.user);
     if (allowedIds && !allowedIds.includes(conn.id)) {
       return res.status(403).json({ message: "Access denied" });
@@ -249,6 +253,10 @@ router.post(
     const conn = await storage.getTenantConnection(req.params.id);
     if (!conn) return res.status(404).json({ message: "Tenant connection not found" });
 
+    if (!conn.teamsDiscoveryEnabled) {
+      return res.status(403).json({ message: "Teams & Channels Discovery is disabled for this tenant. Enable it in Feature Settings before running a scan." });
+    }
+
     const allowedIds = await getOrgTenantConnectionIds(req.user);
     if (allowedIds && !allowedIds.includes(conn.id)) {
       return res.status(403).json({ message: "Access denied" });
@@ -274,6 +282,10 @@ router.post(
   async (req: AuthenticatedRequest, res) => {
     const conn = await storage.getTenantConnection(req.params.id);
     if (!conn) return res.status(404).json({ message: "Tenant connection not found" });
+
+    if (!conn.onedriveInventoryEnabled) {
+      return res.status(403).json({ message: "OneDrive Inventory is disabled for this tenant. Enable it in Feature Settings before running a scan." });
+    }
 
     const allowedIds = await getOrgTenantConnectionIds(req.user);
     if (allowedIds && !allowedIds.includes(conn.id)) {

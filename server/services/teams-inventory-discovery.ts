@@ -15,6 +15,7 @@ import {
 } from "./graph";
 import { storage } from "../storage";
 import type { InsertTeamsInventory, InsertChannelsInventory } from "@shared/schema";
+import { isCancelled, clearCancellation } from "./discovery-cancellation";
 
 export interface TeamsInventoryRunResult {
   teamsDiscovered: number;
@@ -41,7 +42,14 @@ export async function runTeamsInventoryDiscovery(
     return { teamsDiscovered: 0, channelsDiscovered: 0, errors };
   }
 
+  clearCancellation(tenantConnectionId, "teamsDiscovery");
+
   for (const team of teams) {
+    if (isCancelled(tenantConnectionId, "teamsDiscovery")) {
+      console.log(`[teams-inventory] Discovery cancelled for tenant ${tenantConnectionId}`);
+      clearCancellation(tenantConnectionId, "teamsDiscovery");
+      return { teamsDiscovered, channelsDiscovered, errors };
+    }
     try {
       const record: InsertTeamsInventory = {
         tenantConnectionId,

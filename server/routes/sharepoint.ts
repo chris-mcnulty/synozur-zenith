@@ -222,6 +222,11 @@ router.post("/api/workspaces/:id/telemetry/snapshot", requireRole(ZENITH_ROLES.G
   if (!workspace) return res.status(404).json({ message: "Workspace not found" });
   if (!workspace.tenantConnectionId) return res.status(400).json({ message: "No tenant connection" });
 
+  const tenantConn = await storage.getTenantConnection(workspace.tenantConnectionId);
+  if (tenantConn && !tenantConn.telemetryEnabled) {
+    return res.status(403).json({ message: "Workspace Telemetry is disabled for this tenant. Enable it in Feature Settings before capturing snapshots." });
+  }
+
   const conn = await storage.getTenantConnection(workspace.tenantConnectionId);
   if (!conn) return res.status(400).json({ message: "Tenant connection not found" });
 

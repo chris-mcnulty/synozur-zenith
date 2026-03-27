@@ -24,6 +24,7 @@ import {
 } from "./graph";
 import { storage } from "../storage";
 import type { InsertTeamsRecording } from "@shared/schema";
+import { isCancelled, clearCancellation } from "./discovery-cancellation";
 
 const HIGHLY_CONFIDENTIAL_PATTERN = /highly\s*confidential/i;
 
@@ -82,11 +83,18 @@ export async function runTeamsRecordingsDiscovery(
   let onedrivesSkipped = 0;
   const errors: Array<{ context: string; message: string }> = [];
 
+  clearCancellation(tenantConnectionId, "recordingsDiscovery");
+
   // ── Phase 1: Teams channel recordings ────────────────────────────────────
   try {
     const teams = await fetchAllTeams(tenantId, clientId, clientSecret);
 
     for (const team of teams) {
+      if (isCancelled(tenantConnectionId, "recordingsDiscovery")) {
+        console.log(`[recordings] Discovery cancelled for tenant ${tenantConnectionId}`);
+        clearCancellation(tenantConnectionId, "recordingsDiscovery");
+        break;
+      }
       let channels: Awaited<ReturnType<typeof fetchTeamChannels>> = [];
       try {
         channels = await fetchTeamChannels(team.id, tenantId, clientId, clientSecret);
@@ -157,9 +165,18 @@ export async function runTeamsRecordingsDiscovery(
 
   // ── Phase 2: OneDrive personal recordings ─────────────────────────────────
   try {
+    if (isCancelled(tenantConnectionId, "recordingsDiscovery")) {
+      console.log(`[recordings] Skipping Phase 2 — discovery cancelled`);
+      clearCancellation(tenantConnectionId, "recordingsDiscovery");
+    } else {
     const users = await fetchTenantUsers(tenantId, clientId, clientSecret);
 
     for (const user of users) {
+      if (isCancelled(tenantConnectionId, "recordingsDiscovery")) {
+        console.log(`[recordings] Discovery cancelled during Phase 2`);
+        clearCancellation(tenantConnectionId, "recordingsDiscovery");
+        break;
+      }
       let result: Awaited<ReturnType<typeof fetchUserOneDriveRecordingItems>>;
       try {
         result = await fetchUserOneDriveRecordingItems(
@@ -215,6 +232,7 @@ export async function runTeamsRecordingsDiscovery(
         if (item.fileType === "RECORDING") recordingsFound++;
         else transcriptsFound++;
       }
+    }
     }
   } catch (err: any) {
     errors.push({ context: "phase2:onedrive", message: err.message });

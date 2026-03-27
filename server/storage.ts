@@ -321,6 +321,20 @@ export interface IStorage {
   getTenantEncryptionKey(tenantConnectionId: string): Promise<TenantEncryptionKey | undefined>;
   upsertTenantEncryptionKey(data: InsertTenantEncryptionKey): Promise<TenantEncryptionKey>;
   deleteTenantEncryptionKey(tenantConnectionId: string): Promise<void>;
+
+  // Data purge methods
+  purgeOnedriveInventory(tenantConnectionId: string): Promise<number>;
+  purgeTeamsRecordings(tenantConnectionId: string): Promise<number>;
+  purgeTeamsInventory(tenantConnectionId: string): Promise<number>;
+  purgeWorkspaceTelemetry(tenantConnectionId: string): Promise<number>;
+  purgeSpeData(tenantConnectionId: string): Promise<number>;
+
+  // Data counts for purge confirmation
+  countOnedriveInventory(tenantConnectionId: string): Promise<number>;
+  countTeamsRecordings(tenantConnectionId: string): Promise<number>;
+  countTeamsInventory(tenantConnectionId: string): Promise<number>;
+  countWorkspaceTelemetry(tenantConnectionId: string): Promise<number>;
+  countSpeData(tenantConnectionId: string): Promise<number>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -2248,6 +2262,98 @@ export class DatabaseStorage implements IStorage {
   async deleteTenantEncryptionKey(tenantConnectionId: string): Promise<void> {
     await db.delete(tenantEncryptionKeys)
       .where(eq(tenantEncryptionKeys.tenantConnectionId, tenantConnectionId));
+  }
+
+  async purgeOnedriveInventory(tenantConnectionId: string): Promise<number> {
+    const result = await db.delete(onedriveInventory)
+      .where(eq(onedriveInventory.tenantConnectionId, tenantConnectionId))
+      .returning({ id: onedriveInventory.id });
+    return result.length;
+  }
+
+  async purgeTeamsRecordings(tenantConnectionId: string): Promise<number> {
+    const recordings = await db.delete(teamsRecordings)
+      .where(eq(teamsRecordings.tenantConnectionId, tenantConnectionId))
+      .returning({ id: teamsRecordings.id });
+    await db.delete(teamsDiscoveryRuns)
+      .where(eq(teamsDiscoveryRuns.tenantConnectionId, tenantConnectionId));
+    return recordings.length;
+  }
+
+  async purgeTeamsInventory(tenantConnectionId: string): Promise<number> {
+    const channels = await db.delete(channelsInventory)
+      .where(eq(channelsInventory.tenantConnectionId, tenantConnectionId))
+      .returning({ id: channelsInventory.id });
+    const teams = await db.delete(teamsInventory)
+      .where(eq(teamsInventory.tenantConnectionId, tenantConnectionId))
+      .returning({ id: teamsInventory.id });
+    return teams.length + channels.length;
+  }
+
+  async purgeWorkspaceTelemetry(tenantConnectionId: string): Promise<number> {
+    const result = await db.delete(workspaceTelemetry)
+      .where(eq(workspaceTelemetry.tenantConnectionId, tenantConnectionId))
+      .returning({ id: workspaceTelemetry.id });
+    return result.length;
+  }
+
+  async purgeSpeData(tenantConnectionId: string): Promise<number> {
+    const containers = await db.select({ id: speContainers.id })
+      .from(speContainers)
+      .where(eq(speContainers.tenantConnectionId, tenantConnectionId));
+    if (containers.length > 0) {
+      const containerIds = containers.map(c => c.id);
+      await db.delete(speContainerUsage)
+        .where(inArray(speContainerUsage.containerId, containerIds));
+    }
+    const deletedContainers = await db.delete(speContainers)
+      .where(eq(speContainers.tenantConnectionId, tenantConnectionId))
+      .returning({ id: speContainers.id });
+    const deletedTypes = await db.delete(speContainerTypes)
+      .where(eq(speContainerTypes.tenantConnectionId, tenantConnectionId))
+      .returning({ id: speContainerTypes.id });
+    return deletedContainers.length + deletedTypes.length;
+  }
+
+  async countOnedriveInventory(tenantConnectionId: string): Promise<number> {
+    const [result] = await db.select({ count: sql<number>`count(*)::int` })
+      .from(onedriveInventory)
+      .where(eq(onedriveInventory.tenantConnectionId, tenantConnectionId));
+    return result?.count ?? 0;
+  }
+
+  async countTeamsRecordings(tenantConnectionId: string): Promise<number> {
+    const [result] = await db.select({ count: sql<number>`count(*)::int` })
+      .from(teamsRecordings)
+      .where(eq(teamsRecordings.tenantConnectionId, tenantConnectionId));
+    return result?.count ?? 0;
+  }
+
+  async countTeamsInventory(tenantConnectionId: string): Promise<number> {
+    const [teams] = await db.select({ count: sql<number>`count(*)::int` })
+      .from(teamsInventory)
+      .where(eq(teamsInventory.tenantConnectionId, tenantConnectionId));
+    const [channels] = await db.select({ count: sql<number>`count(*)::int` })
+      .from(channelsInventory)
+      .where(eq(channelsInventory.tenantConnectionId, tenantConnectionId));
+    return (teams?.count ?? 0) + (channels?.count ?? 0);
+  }
+
+  async countWorkspaceTelemetry(tenantConnectionId: string): Promise<number> {
+    const [result] = await db.select({ count: sql<number>`count(*)::int` })
+      .from(workspaceTelemetry)
+      .where(eq(workspaceTelemetry.tenantConnectionId, tenantConnectionId));
+    return result?.count ?? 0;
+  }
+
+  async countSpeData(tenantConnectionId: string): Promise<number> {
+    const [containers] = await db.select({ count: sql<number>`count(*)::int` })
+      .from(speContainers)
+      .where(eq(speContainers.tenantConnectionId, tenantConnectionId));
+    const [types] = await db.select({ count: sql<number>`count(*)::int` })
+      .from(speContainerTypes)
+      .where(eq(speContainerTypes.tenantConnectionId, tenantConnectionId));
+    return (containers?.count ?? 0) + (types?.count ?? 0);
   }
 }
 

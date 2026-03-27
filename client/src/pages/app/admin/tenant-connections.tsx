@@ -83,6 +83,7 @@ export default function TenantConnectionsPage() {
   const [permError, setPermError] = useState<string | null>(null);
   const [reconsentingId, setReconsentingId] = useState<string | null>(null);
   const [metadataDialogTenantId, setMetadataDialogTenantId] = useState<string | null>(null);
+  const [featureSettingsDialogId, setFeatureSettingsDialogId] = useState<string | null>(null);
   const [accessDialogTenantId, setAccessDialogTenantId] = useState<string | null>(null);
   const [showClaimDialog, setShowClaimDialog] = useState(false);
   const [claimCode, setClaimCode] = useState("");
@@ -747,6 +748,11 @@ export default function TenantConnectionsPage() {
                               <EyeOff className="w-4 h-4" /> Data Masking
                             </DropdownMenuItem>
                           )}
+                          {!isBlocked && (
+                            <DropdownMenuItem className="gap-2" onClick={() => setFeatureSettingsDialogId(conn.id)} data-testid={`button-feature-settings-${conn.id}`}>
+                              <Activity className="w-4 h-4" /> Feature Settings
+                            </DropdownMenuItem>
+                          )}
                           <DropdownMenuItem className="gap-2" onClick={() => navigator.clipboard.writeText(conn.tenantId)}>
                             <Copy className="w-4 h-4" /> Copy Tenant ID
                           </DropdownMenuItem>
@@ -1239,6 +1245,23 @@ export default function TenantConnectionsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <Dialog open={featureSettingsDialogId !== null} onOpenChange={(open) => { if (!open) setFeatureSettingsDialogId(null); }}>
+        <DialogContent className="sm:max-w-[650px] max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2" data-testid="text-feature-settings-title">
+              <Activity className="w-5 h-5 text-primary" />
+              Feature Settings
+            </DialogTitle>
+            <DialogDescription>
+              Enable or disable data-gathering modules for this tenant. Disabling a feature will cancel any running scan and optionally purge all gathered data.
+            </DialogDescription>
+          </DialogHeader>
+          {featureSettingsDialogId && (
+            <FeatureSettingsPanel tenantConnectionId={featureSettingsDialogId} />
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -1699,6 +1722,220 @@ function MspAccessPanel({ tenantConnectionId }: { tenantConnectionId: string }) 
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+const FEATURE_KEYS = [
+  { key: "onedriveInventory", label: "OneDrive Inventory", description: "Discover and inventory all OneDrive for Business drives in the tenant." },
+  { key: "recordingsDiscovery", label: "Meeting Recordings Discovery", description: "Scan Teams channels and OneDrive folders for meeting recordings and transcripts." },
+  { key: "teamsDiscovery", label: "Teams & Channels Discovery", description: "Discover all Teams and Channels with rich properties and metadata." },
+  { key: "telemetry", label: "Workspace Telemetry", description: "Capture storage usage, file counts, and activity telemetry for SharePoint sites." },
+  { key: "speDiscovery", label: "SPE Container Discovery", description: "Discover and monitor SharePoint Embedded containers and their usage." },
+] as const;
+
+function FeatureSettingsPanel({ tenantConnectionId }: { tenantConnectionId: string }) {
+  const { toast } = useToast();
+  const qc = useQueryClient();
+  const [confirmDisable, setConfirmDisable] = useState<string | null>(null);
+  const [confirmPurge, setConfirmPurge] = useState<string | null>(null);
+  const [purging, setPurging] = useState<string | null>(null);
+
+  const { data: toggles, isLoading: togglesLoading } = useQuery<Record<string, { enabled: boolean; label: string }>>({
+    queryKey: [`/api/admin/tenants/${tenantConnectionId}/feature-toggles`],
+    queryFn: async () => {
+      const res = await fetch(`/api/admin/tenants/${tenantConnectionId}/feature-toggles`, { credentials: "include" });
+      if (!res.ok) return {};
+      return res.json();
+    },
+  });
+
+  const { data: dataCounts, refetch: refetchCounts } = useQuery<Record<string, number>>({
+    queryKey: [`/api/admin/tenants/${tenantConnectionId}/data-counts`],
+    queryFn: async () => {
+      const res = await fetch(`/api/admin/tenants/${tenantConnectionId}/data-counts`, { credentials: "include" });
+      if (!res.ok) return {};
+      return res.json();
+    },
+  });
+
+  const toggleMutation = useMutation({
+    mutationFn: async ({ feature, enabled }: { feature: string; enabled: boolean }) => {
+      const res = await apiRequest("PATCH", `/api/admin/tenants/${tenantConnectionId}/feature-toggles/${feature}`, { enabled });
+      return res.json();
+    },
+    onSuccess: (_, { feature, enabled }) => {
+      qc.invalidateQueries({ queryKey: [`/api/admin/tenants/${tenantConnectionId}/feature-toggles`] });
+      qc.invalidateQueries({ queryKey: ["/api/admin/tenants"] });
+      const label = FEATURE_KEYS.find(f => f.key === feature)?.label || feature;
+      toast({ title: enabled ? "Feature Enabled" : "Feature Disabled", description: `${label} has been ${enabled ? "enabled" : "disabled"}.` });
+    },
+    onError: (err: any) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const purgeMutation = useMutation({
+    mutationFn: async (section: string) => {
+      setPurging(section);
+      const res = await apiRequest("DELETE", `/api/admin/tenants/${tenantConnectionId}/data/${section}`);
+      return res.json();
+    },
+    onSuccess: (data: { recordsDeleted: number; label: string }) => {
+      setPurging(null);
+      setConfirmPurge(null);
+      setConfirmDisable(null);
+      refetchCounts();
+      qc.invalidateQueries({ queryKey: [`/api/admin/tenants/${tenantConnectionId}/feature-toggles`] });
+      toast({ title: "Data Purged", description: `${data.recordsDeleted} ${data.label} records deleted.` });
+    },
+    onError: (err: any) => {
+      setPurging(null);
+      toast({ title: "Purge Failed", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const handleToggle = (feature: string, newEnabled: boolean) => {
+    if (!newEnabled) {
+      setConfirmDisable(feature);
+    } else {
+      toggleMutation.mutate({ feature, enabled: true });
+    }
+  };
+
+  const handleConfirmDisable = (purgeData: boolean) => {
+    if (!confirmDisable) return;
+    toggleMutation.mutate({ feature: confirmDisable, enabled: false });
+    if (purgeData) {
+      purgeMutation.mutate(confirmDisable);
+    } else {
+      setConfirmDisable(null);
+    }
+  };
+
+  if (togglesLoading) {
+    return (
+      <div className="flex items-center justify-center py-8">
+        <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      {confirmDisable && (
+        <Card className="border-amber-500/30 bg-amber-500/5">
+          <CardContent className="p-4 space-y-3">
+            <div className="flex items-start gap-2">
+              <AlertTriangle className="w-5 h-5 text-amber-500 mt-0.5 shrink-0" />
+              <div>
+                <p className="text-sm font-medium" data-testid="text-confirm-disable">
+                  Disable {FEATURE_KEYS.find(f => f.key === confirmDisable)?.label}?
+                </p>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Any running scan will be cancelled. Would you also like to delete all gathered data for this feature?
+                </p>
+                {dataCounts && dataCounts[confirmDisable] > 0 && (
+                  <p className="text-xs text-amber-600 mt-1 font-medium">
+                    {dataCounts[confirmDisable].toLocaleString()} records will be permanently deleted if you choose to purge.
+                  </p>
+                )}
+              </div>
+            </div>
+            <div className="flex gap-2 justify-end">
+              <Button variant="outline" size="sm" onClick={() => setConfirmDisable(null)} data-testid="button-cancel-disable">
+                Cancel
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => handleConfirmDisable(false)} data-testid="button-disable-keep-data">
+                Disable, Keep Data
+              </Button>
+              <Button variant="destructive" size="sm" onClick={() => handleConfirmDisable(true)} disabled={purging === confirmDisable} data-testid="button-disable-purge">
+                {purging === confirmDisable && <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" />}
+                Disable & Purge Data
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      <div className="space-y-3">
+        <h4 className="text-sm font-medium text-muted-foreground">Data Modules</h4>
+        {FEATURE_KEYS.map(({ key, label, description }) => {
+          const isEnabled = toggles?.[key]?.enabled ?? false;
+          const count = dataCounts?.[key] ?? 0;
+          return (
+            <div key={key} className="flex items-center justify-between p-3 rounded-lg border border-border/50 bg-card/50" data-testid={`feature-toggle-row-${key}`}>
+              <div className="flex-1 min-w-0 mr-4">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-medium" data-testid={`text-feature-label-${key}`}>{label}</span>
+                  {count > 0 && (
+                    <Badge variant="secondary" className="text-[10px]" data-testid={`badge-count-${key}`}>
+                      {count.toLocaleString()} records
+                    </Badge>
+                  )}
+                </div>
+                <p className="text-xs text-muted-foreground mt-0.5">{description}</p>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                {isEnabled && count > 0 && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="text-destructive hover:text-destructive text-xs h-7 px-2"
+                    onClick={() => setConfirmPurge(key)}
+                    disabled={purging === key}
+                    data-testid={`button-purge-${key}`}
+                  >
+                    {purging === key ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : <Trash2 className="w-3 h-3 mr-1" />}
+                    Delete All
+                  </Button>
+                )}
+                <Switch
+                  checked={isEnabled}
+                  onCheckedChange={(checked) => handleToggle(key, checked)}
+                  disabled={toggleMutation.isPending && toggleMutation.variables?.feature === key}
+                  data-testid={`switch-feature-${key}`}
+                />
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {confirmPurge && (
+        <Dialog open={confirmPurge !== null} onOpenChange={(open) => { if (!open) setConfirmPurge(null); }}>
+          <DialogContent className="sm:max-w-[400px]">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2 text-destructive">
+                <Trash2 className="w-5 h-5" />
+                Delete All Data
+              </DialogTitle>
+              <DialogDescription>
+                This will permanently delete all {FEATURE_KEYS.find(f => f.key === confirmPurge)?.label} data for this tenant.
+                {dataCounts && dataCounts[confirmPurge] > 0 && (
+                  <span className="block mt-1 font-medium text-destructive">
+                    {dataCounts[confirmPurge].toLocaleString()} records will be deleted.
+                  </span>
+                )}
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setConfirmPurge(null)} data-testid="button-cancel-purge">
+                Cancel
+              </Button>
+              <Button
+                variant="destructive"
+                onClick={() => purgeMutation.mutate(confirmPurge)}
+                disabled={purging === confirmPurge}
+                data-testid="button-confirm-purge"
+              >
+                {purging === confirmPurge && <Loader2 className="w-4 h-4 animate-spin mr-1" />}
+                Delete All Data
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
     </div>
   );
 }

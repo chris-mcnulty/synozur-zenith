@@ -13,6 +13,11 @@ interface TenantConnection {
   status: string;
   isDemo: boolean;
   mspAccessDenied?: boolean;
+  onedriveInventoryEnabled?: boolean;
+  recordingsDiscoveryEnabled?: boolean;
+  teamsDiscoveryEnabled?: boolean;
+  telemetryEnabled?: boolean;
+  speDiscoveryEnabled?: boolean;
 }
 
 interface TenantContextType {
@@ -20,13 +25,23 @@ interface TenantContextType {
   selectedTenant: TenantConnection | undefined;
   setSelectedTenantId: (id: string) => void;
   selectedTenantId: string | null;
+  isFeatureEnabled: (feature: "onedriveInventory" | "recordingsDiscovery" | "teamsDiscovery" | "telemetry" | "speDiscovery") => boolean;
 }
+
+const FEATURE_FIELD_MAP: Record<string, keyof TenantConnection> = {
+  onedriveInventory: "onedriveInventoryEnabled",
+  recordingsDiscovery: "recordingsDiscoveryEnabled",
+  teamsDiscovery: "teamsDiscoveryEnabled",
+  telemetry: "telemetryEnabled",
+  speDiscovery: "speDiscoveryEnabled",
+};
 
 const TenantContext = createContext<TenantContextType>({
   tenants: [],
   selectedTenant: undefined,
   setSelectedTenantId: () => {},
   selectedTenantId: null,
+  isFeatureEnabled: () => false,
 });
 
 function readStoredTenantId(): string | null {
@@ -67,8 +82,14 @@ export function TenantProvider({ children }: { children: ReactNode }) {
     }
   }, [tenants, selectedTenant, storedId, setSelectedTenantId]);
 
+  const isFeatureEnabled = useCallback((feature: "onedriveInventory" | "recordingsDiscovery" | "teamsDiscovery" | "telemetry" | "speDiscovery"): boolean => {
+    if (!selectedTenant) return false;
+    const field = FEATURE_FIELD_MAP[feature];
+    return !!(selectedTenant as any)[field];
+  }, [selectedTenant]);
+
   return (
-    <TenantContext.Provider value={{ tenants, selectedTenant, setSelectedTenantId, selectedTenantId }}>
+    <TenantContext.Provider value={{ tenants, selectedTenant, setSelectedTenantId, selectedTenantId, isFeatureEnabled }}>
       {children}
     </TenantContext.Provider>
   );
