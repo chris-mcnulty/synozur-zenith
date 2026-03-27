@@ -11,6 +11,8 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import heroBg from "@/assets/images/hero-login-bg.jpeg";
 
+import { CheckCircle2 } from "lucide-react";
+
 const SSO_ERROR_MESSAGES: Record<string, string> = {
   tenant_mismatch: "Your account belongs to a different Microsoft tenant. Please contact your administrator.",
   domain_not_allowed: "Your email domain is not permitted to access this organization. Please contact your administrator.",
@@ -29,8 +31,10 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [name, setName] = useState("");
 
-  const ssoErrorCode = new URLSearchParams(window.location.search).get("error");
+  const urlParams = new URLSearchParams(window.location.search);
+  const ssoErrorCode = urlParams.get("error");
   const ssoErrorMessage = ssoErrorCode ? (SSO_ERROR_MESSAGES[ssoErrorCode] ?? `Sign-in failed (${ssoErrorCode}). Please try again.`) : "";
+  const accountCancelled = urlParams.get("cancelled") === "true";
   const [error, setError] = useState(ssoErrorMessage);
 
   const ssoStatus = useQuery({
@@ -130,6 +134,13 @@ export default function LoginPage() {
                 </span>
               </div>
             </>
+          )}
+
+          {accountCancelled && (
+            <div className="flex items-center gap-2 p-3 rounded-lg bg-emerald-500/10 text-emerald-600 text-sm" data-testid="text-account-cancelled">
+              <CheckCircle2 className="w-4 h-4 shrink-0" />
+              Your account has been cancelled and all organization data has been permanently deleted.
+            </div>
           )}
 
           {error && (

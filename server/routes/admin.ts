@@ -237,15 +237,44 @@ router.post("/api/admin/organizations", requireRole(ZENITH_ROLES.PLATFORM_OWNER)
   res.status(201).json(org);
 });
 
+router.get("/api/admin/organizations/:id/data-counts", requireRole(ZENITH_ROLES.PLATFORM_OWNER), async (req: AuthenticatedRequest, res) => {
+  const id = req.params.id as string;
+  const target = await storage.getOrganization(id);
+  if (!target) return res.status(404).json({ error: "Organization not found." });
+  const counts = await storage.getOrganizationDataCounts(id);
+  res.json(counts);
+});
+
 router.delete("/api/admin/organizations/:id", requireRole(ZENITH_ROLES.PLATFORM_OWNER), async (req: AuthenticatedRequest, res) => {
   const { id } = req.params;
+  const purgeData = req.query.purgeData !== 'false';
   const callerOrg = await storage.getOrganization(req.user!.organizationId!);
   if (callerOrg?.id === id) {
     return res.status(400).json({ error: "You cannot delete your own organization." });
   }
   const target = await storage.getOrganization(id);
   if (!target) return res.status(404).json({ error: "Organization not found." });
-  await storage.deleteOrganization(id);
+
+  const targetName = target.name;
+
+  if (purgeData) {
+    await storage.purgeOrganizationData(id);
+  } else {
+    await storage.deleteOrganization(id);
+  }
+
+  await storage.createAuditEntry({
+    userId: req.user!.id,
+    userEmail: req.user!.email,
+    action: 'ORG_DELETED_BY_ADMIN',
+    resource: 'organization',
+    resourceId: id,
+    organizationId: undefined,
+    details: { organizationName: targetName, deletedBy: req.user!.email, purgeData },
+    result: 'SUCCESS',
+    ipAddress: req.ip || null,
+  });
+
   res.json({ ok: true });
 });
 

@@ -5,6 +5,14 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import { 
   Building2, 
@@ -16,9 +24,11 @@ import {
   Plus,
   Loader2,
   UserPlus,
-  Lock
+  Lock,
+  AlertTriangle,
+  Trash2
 } from "lucide-react";
-import { Link } from "wouter";
+import { Link, useLocation } from "wouter";
 import { useServicePlan } from "@/hooks/use-service-plan";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient } from "@/lib/queryClient";
@@ -26,6 +36,7 @@ import { queryClient } from "@/lib/queryClient";
 export default function OrganizationSettingsPage() {
   const { plan, features, org } = useServicePlan();
   const { toast } = useToast();
+  const [, setLocation] = useLocation();
 
   const { data: authData } = useQuery<{
     user: any;
@@ -37,10 +48,47 @@ export default function OrganizationSettingsPage() {
   });
 
   const activeOrg = authData?.organization;
+  const userRole = authData?.user?.role || authData?.user?.effectiveRole;
+  const isTenantAdmin = userRole === 'tenant_admin' || userRole === 'platform_owner';
 
   const [inviteOnly, setInviteOnly] = useState(false);
   const [allowedDomains, setAllowedDomains] = useState<string[]>([]);
   const [newDomain, setNewDomain] = useState("");
+  const [showCancelDialog, setShowCancelDialog] = useState(false);
+  const [cancelConfirmName, setCancelConfirmName] = useState("");
+
+  const { data: dataCounts } = useQuery<Record<string, number>>({
+    queryKey: ["/api/orgs", activeOrg?.id, "data-counts"],
+    queryFn: async () => {
+      if (!activeOrg?.id) return {};
+      const res = await fetch(`/api/orgs/${activeOrg.id}/data-counts`, { credentials: "include" });
+      if (!res.ok) return {};
+      return res.json();
+    },
+    enabled: showCancelDialog && !!activeOrg?.id,
+  });
+
+  const cancelMutation = useMutation({
+    mutationFn: async () => {
+      if (!activeOrg?.id) throw new Error("No active organization");
+      const res = await fetch(`/api/orgs/${activeOrg.id}/cancel`, {
+        method: "DELETE",
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || "Failed to cancel organization");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      setShowCancelDialog(false);
+      window.location.href = "/auth?cancelled=true";
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
 
   useEffect(() => {
     if (activeOrg) {
@@ -296,6 +344,109 @@ export default function OrganizationSettingsPage() {
           </Card>
         </div>
       </div>
+
+      {isTenantAdmin && activeOrg && (
+        <Card className="border-destructive/30 shadow-xl bg-destructive/5">
+          <CardHeader className="border-b border-destructive/20 bg-destructive/5 pb-4">
+            <CardTitle className="flex items-center gap-2 text-destructive">
+              <AlertTriangle className="w-5 h-5" />
+              Danger Zone
+            </CardTitle>
+            <CardDescription>Irreversible actions that affect your entire organization.</CardDescription>
+          </CardHeader>
+          <CardContent className="pt-6">
+            <div className="flex items-center justify-between p-4 rounded-xl border border-destructive/30 bg-background/50">
+              <div>
+                <h4 className="font-semibold text-sm">Cancel Account & Delete All Data</h4>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Permanently delete this organization and all associated data including tenants, workspaces, users, policies, tickets, and inventory. This action is immediate and cannot be undone.
+                </p>
+              </div>
+              <Button
+                variant="destructive"
+                className="shrink-0 gap-2 ml-4"
+                onClick={() => { setShowCancelDialog(true); setCancelConfirmName(""); }}
+                data-testid="button-cancel-account"
+              >
+                <Trash2 className="w-4 h-4" />
+                Cancel Account
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      <Dialog open={showCancelDialog} onOpenChange={open => { if (!open) { setShowCancelDialog(false); setCancelConfirmName(""); } }}>
+        <DialogContent className="sm:max-w-[520px]">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-destructive">
+              <AlertTriangle className="w-5 h-5" />
+              Cancel Account & Delete All Data
+            </DialogTitle>
+            <DialogDescription>
+              This will permanently delete <strong>{activeOrg?.name}</strong> and all associated data.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 py-2">
+            <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-4 space-y-2">
+              <p className="text-sm font-semibold text-destructive">The following data will be permanently deleted:</p>
+              <ul className="text-sm text-muted-foreground space-y-1 list-disc list-inside">
+                <li>Tenant connections ({dataCounts?.tenantConnections ?? '...'})</li>
+                <li>Workspaces ({dataCounts?.workspaces ?? '...'})</li>
+                <li>Users & memberships ({dataCounts?.users ?? '...'} users, {dataCounts?.memberships ?? '...'} memberships)</li>
+                <li>Governance policies ({dataCounts?.policies ?? '...'})</li>
+                <li>Support tickets ({dataCounts?.tickets ?? '...'})</li>
+                <li>Audit log entries ({dataCounts?.auditEntries ?? '...'})</li>
+                <li>All inventory data (Teams, OneDrive, SPE containers, etc.)</li>
+                <li>All MSP access grants (granted and received)</li>
+              </ul>
+            </div>
+
+            <div className="rounded-lg border border-destructive/50 bg-destructive/10 p-3 flex gap-2">
+              <AlertTriangle className="w-5 h-5 text-destructive shrink-0 mt-0.5" />
+              <p className="text-sm font-bold text-destructive">
+                This action is immediate and cannot be undone. All data will be permanently lost.
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <Label>Type <strong>{activeOrg?.name}</strong> to confirm</Label>
+              <Input
+                value={cancelConfirmName}
+                onChange={e => setCancelConfirmName(e.target.value)}
+                placeholder={activeOrg?.name || "Organization name"}
+                data-testid="input-cancel-confirm-name"
+              />
+            </div>
+          </div>
+
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button
+              variant="outline"
+              onClick={() => { setShowCancelDialog(false); setCancelConfirmName(""); }}
+              disabled={cancelMutation.isPending}
+              data-testid="button-cancel-dismiss"
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => cancelMutation.mutate()}
+              disabled={cancelConfirmName !== activeOrg?.name || cancelMutation.isPending}
+              className="gap-2"
+              data-testid="button-confirm-cancel-account"
+            >
+              {cancelMutation.isPending ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <Trash2 className="w-4 h-4" />
+              )}
+              Permanently Delete Everything
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

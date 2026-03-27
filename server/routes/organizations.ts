@@ -341,6 +341,73 @@ router.patch('/api/orgs/:id/settings', requireAuth(), requirePermission('setting
   }
 });
 
+router.get('/api/orgs/:id/data-counts', requireAuth(), requirePermission('settings:manage'), async (req: AuthenticatedRequest, res) => {
+  try {
+    const user = req.user!;
+    const orgId = req.params.id as string;
+
+    const membership = await storage.getOrgMembership(user.id, orgId);
+    if (!membership && user.organizationId !== orgId) {
+      return res.status(403).json({ error: 'You are not a member of this organization' });
+    }
+
+    const counts = await storage.getOrganizationDataCounts(orgId);
+    return res.json(counts);
+  } catch (error: any) {
+    console.error('[Orgs] Get data counts error:', error);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.delete('/api/orgs/:id/cancel', requireAuth(), requirePermission('settings:manage'), async (req: AuthenticatedRequest, res) => {
+  try {
+    const user = req.user!;
+    const orgId = req.params.id as string;
+
+    const membership = await storage.getOrgMembership(user.id, orgId);
+    const isTenantAdmin = membership?.role === 'tenant_admin' || user.role === 'tenant_admin' || user.role === 'platform_owner';
+    if (!isTenantAdmin) {
+      return res.status(403).json({ error: 'Only tenant administrators can cancel an organization' });
+    }
+
+    if (!membership && user.organizationId !== orgId) {
+      return res.status(403).json({ error: 'You are not a member of this organization' });
+    }
+
+    const org = await storage.getOrganization(orgId);
+    if (!org) {
+      return res.status(404).json({ error: 'Organization not found' });
+    }
+
+    const orgName = org.name;
+
+    await storage.purgeOrganizationData(orgId);
+
+    await storage.createAuditEntry({
+      userId: user.id,
+      userEmail: user.email,
+      action: 'ORG_CANCELLED',
+      resource: 'organization',
+      resourceId: orgId,
+      organizationId: undefined,
+      details: { organizationName: orgName, cancelledBy: user.email, selfService: true },
+      result: 'SUCCESS',
+      ipAddress: req.ip || null,
+    });
+
+    if (req.session) {
+      req.session.destroy((err: any) => {
+        if (err) console.error('[Orgs] Session destroy error:', err);
+      });
+    }
+
+    return res.json({ success: true, message: 'Organization and all associated data have been permanently deleted.' });
+  } catch (error: any) {
+    console.error('[Orgs] Cancel org error:', error);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 router.get('/api/orgs/:id/entra-users', requireAuth(), requirePermission('users:manage'), async (req: AuthenticatedRequest, res) => {
   try {
     const adminUser = req.user!;

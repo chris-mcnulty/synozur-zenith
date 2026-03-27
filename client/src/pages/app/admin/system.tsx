@@ -15,6 +15,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Select,
   SelectContent,
@@ -33,6 +34,7 @@ import {
   Trash2,
   Loader2,
   AlertCircle,
+  AlertTriangle,
   CheckCircle2,
   Settings2,
 } from "lucide-react";
@@ -87,6 +89,8 @@ export default function SystemAdminPage() {
   const [pendingSignupPlan, setPendingSignupPlan] = useState<string | null>(null);
   const [showCreateOrgDialog, setShowCreateOrgDialog] = useState(false);
   const [deleteOrgTarget, setDeleteOrgTarget] = useState<{ id: string; name: string } | null>(null);
+  const [purgeData, setPurgeData] = useState(true);
+  const [deleteConfirmName, setDeleteConfirmName] = useState("");
   const [createOrgForm, setCreateOrgForm] = useState({
     name: "",
     domain: "",
@@ -223,9 +227,23 @@ export default function SystemAdminPage() {
     },
   });
 
+  const { data: adminDeleteCounts } = useQuery<Record<string, number>>({
+    queryKey: ["/api/admin/organizations", deleteOrgTarget?.id, "data-counts"],
+    queryFn: async () => {
+      if (!deleteOrgTarget?.id) return {};
+      const res = await fetch(`/api/admin/organizations/${deleteOrgTarget.id}/data-counts`);
+      if (!res.ok) return {};
+      return res.json();
+    },
+    enabled: !!deleteOrgTarget?.id && purgeData,
+  });
+
   const deleteOrgMutation = useMutation({
     mutationFn: async (id: string) => {
-      const res = await fetch(`/api/admin/organizations/${id}`, { method: "DELETE" });
+      const url = purgeData
+        ? `/api/admin/organizations/${id}`
+        : `/api/admin/organizations/${id}?purgeData=false`;
+      const res = await fetch(url, { method: "DELETE" });
       if (!res.ok) {
         const data = await res.json();
         throw new Error(data.error || "Failed to delete organization");
@@ -236,6 +254,8 @@ export default function SystemAdminPage() {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/platform/org-stats"] });
       const name = deleteOrgTarget?.name;
       setDeleteOrgTarget(null);
+      setDeleteConfirmName("");
+      setPurgeData(true);
       toast({ title: "Organization deleted", description: `${name} and all its data have been permanently removed.` });
     },
     onError: (err: Error) => {
@@ -672,21 +692,75 @@ export default function SystemAdminPage() {
         </Dialog>
       )}
 
-      <Dialog open={!!deleteOrgTarget} onOpenChange={open => { if (!open) setDeleteOrgTarget(null); }}>
-        <DialogContent className="sm:max-w-[420px]">
+      <Dialog open={!!deleteOrgTarget} onOpenChange={open => { if (!open) { setDeleteOrgTarget(null); setDeleteConfirmName(""); setPurgeData(true); } }}>
+        <DialogContent className="sm:max-w-[520px]">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-destructive">
               <Trash2 className="w-5 h-5" />
               Delete Organization
             </DialogTitle>
             <DialogDescription>
-              This will permanently delete <strong>{deleteOrgTarget?.name}</strong> and all associated data — users, tenant connections, workspaces, and policies. This cannot be undone.
+              This will permanently delete <strong>{deleteOrgTarget?.name}</strong>. Configure data handling below.
             </DialogDescription>
           </DialogHeader>
+
+          <div className="space-y-4 py-2">
+            <div className="flex items-start gap-3 p-4 rounded-lg border border-border/50 bg-muted/20">
+              <Checkbox
+                id="purge-data"
+                checked={purgeData}
+                onCheckedChange={(checked) => setPurgeData(checked === true)}
+                data-testid="checkbox-purge-data"
+              />
+              <div>
+                <label htmlFor="purge-data" className="text-sm font-semibold cursor-pointer">
+                  Purge all organization data
+                </label>
+                <p className="text-xs text-muted-foreground mt-1">
+                  When enabled, all associated data (tenants, workspaces, users, policies, tickets, inventory, etc.) will be permanently deleted. When disabled, only the organization record is removed.
+                </p>
+              </div>
+            </div>
+
+            {purgeData && (
+              <>
+                <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-4 space-y-2">
+                  <p className="text-sm font-semibold text-destructive">Data that will be permanently deleted:</p>
+                  <ul className="text-sm text-muted-foreground space-y-1 list-disc list-inside">
+                    <li>Tenant connections ({adminDeleteCounts?.tenantConnections ?? '...'})</li>
+                    <li>Workspaces ({adminDeleteCounts?.workspaces ?? '...'})</li>
+                    <li>Users & memberships ({adminDeleteCounts?.users ?? '...'} users, {adminDeleteCounts?.memberships ?? '...'} memberships)</li>
+                    <li>Governance policies ({adminDeleteCounts?.policies ?? '...'})</li>
+                    <li>Support tickets ({adminDeleteCounts?.tickets ?? '...'})</li>
+                    <li>Audit log entries ({adminDeleteCounts?.auditEntries ?? '...'})</li>
+                    <li>All inventory data, MSP access grants</li>
+                  </ul>
+                </div>
+
+                <div className="rounded-lg border border-destructive/50 bg-destructive/10 p-3 flex gap-2">
+                  <AlertTriangle className="w-5 h-5 text-destructive shrink-0 mt-0.5" />
+                  <p className="text-sm font-bold text-destructive">
+                    This action is immediate and cannot be undone.
+                  </p>
+                </div>
+
+                <div className="space-y-2">
+                  <Label>Type <strong>{deleteOrgTarget?.name}</strong> to confirm</Label>
+                  <Input
+                    value={deleteConfirmName}
+                    onChange={e => setDeleteConfirmName(e.target.value)}
+                    placeholder={deleteOrgTarget?.name || "Organization name"}
+                    data-testid="input-delete-confirm-name"
+                  />
+                </div>
+              </>
+            )}
+          </div>
+
           <DialogFooter className="gap-2 sm:gap-0">
             <Button
               variant="outline"
-              onClick={() => setDeleteOrgTarget(null)}
+              onClick={() => { setDeleteOrgTarget(null); setDeleteConfirmName(""); setPurgeData(true); }}
               disabled={deleteOrgMutation.isPending}
               data-testid="button-cancel-delete-org"
             >
@@ -695,7 +769,7 @@ export default function SystemAdminPage() {
             <Button
               variant="destructive"
               onClick={() => deleteOrgTarget && deleteOrgMutation.mutate(deleteOrgTarget.id)}
-              disabled={deleteOrgMutation.isPending}
+              disabled={deleteOrgMutation.isPending || (purgeData && deleteConfirmName !== deleteOrgTarget?.name)}
               className="gap-2"
               data-testid="button-confirm-delete-org"
             >
@@ -704,7 +778,7 @@ export default function SystemAdminPage() {
               ) : (
                 <Trash2 className="w-4 h-4" />
               )}
-              Delete Permanently
+              {purgeData ? "Permanently Delete Everything" : "Delete Organization Only"}
             </Button>
           </DialogFooter>
         </DialogContent>

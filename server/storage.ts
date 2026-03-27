@@ -170,6 +170,8 @@ export interface IStorage {
   createOrganization(org: InsertOrganization): Promise<Organization>;
   upsertOrganization(org: InsertOrganization): Promise<Organization>;
   deleteOrganization(id: string): Promise<void>;
+  purgeOrganizationData(id: string): Promise<void>;
+  getOrganizationDataCounts(id: string): Promise<Record<string, number>>;
   updateOrganizationPlan(id: string, plan: string): Promise<Organization | undefined>;
 
   getUser(id: string): Promise<User | undefined>;
@@ -872,6 +874,111 @@ export class DatabaseStorage implements IStorage {
 
   async deleteOrganization(id: string): Promise<void> {
     await db.delete(organizations).where(eq(organizations.id, id));
+  }
+
+  async getOrganizationDataCounts(id: string): Promise<Record<string, number>> {
+    const tenantConns = await db.select({ id: tenantConnections.id }).from(tenantConnections).where(eq(tenantConnections.organizationId, id));
+    const tenantIds = tenantConns.map(t => t.id);
+
+    const counts: Record<string, number> = {};
+
+    counts.tenantConnections = tenantIds.length;
+
+    if (tenantIds.length > 0) {
+      const [wsCount] = await db.select({ count: sql<number>`count(*)::int` }).from(workspaces).where(inArray(workspaces.tenantConnectionId, tenantIds));
+      counts.workspaces = wsCount?.count ?? 0;
+    } else {
+      counts.workspaces = 0;
+    }
+
+    const [userCount] = await db.select({ count: sql<number>`count(*)::int` }).from(users).where(eq(users.organizationId, id));
+    counts.users = userCount?.count ?? 0;
+
+    const [memberCount] = await db.select({ count: sql<number>`count(*)::int` }).from(organizationUsers).where(eq(organizationUsers.organizationId, id));
+    counts.memberships = memberCount?.count ?? 0;
+
+    const [policyCount] = await db.select({ count: sql<number>`count(*)::int` }).from(governancePolicies).where(eq(governancePolicies.organizationId, id));
+    counts.policies = policyCount?.count ?? 0;
+
+    const [ticketCount] = await db.select({ count: sql<number>`count(*)::int` }).from(supportTickets).where(eq(supportTickets.organizationId, id));
+    counts.tickets = ticketCount?.count ?? 0;
+
+    const [auditCount] = await db.select({ count: sql<number>`count(*)::int` }).from(auditLog).where(eq(auditLog.organizationId, id));
+    counts.auditEntries = auditCount?.count ?? 0;
+
+    return counts;
+  }
+
+  async purgeOrganizationData(id: string): Promise<void> {
+    await db.transaction(async (tx) => {
+      const tenantConns = await tx.select({ id: tenantConnections.id, tenantId: tenantConnections.tenantId }).from(tenantConnections).where(eq(tenantConnections.organizationId, id));
+      const connIds = tenantConns.map(t => t.id);
+      const azureTenantIds = Array.from(new Set(tenantConns.map(t => t.tenantId)));
+
+      if (connIds.length > 0) {
+        const ws = await tx.select({ id: workspaces.id }).from(workspaces).where(inArray(workspaces.tenantConnectionId, connIds));
+        const wsIds = ws.map(w => w.id);
+
+        if (wsIds.length > 0) {
+          await tx.delete(documentLibraries).where(inArray(documentLibraries.workspaceId, wsIds));
+          await tx.delete(copilotRules).where(inArray(copilotRules.workspaceId, wsIds));
+          await tx.delete(workspaceTelemetry).where(inArray(workspaceTelemetry.workspaceId, wsIds));
+          await tx.delete(workspaces).where(inArray(workspaces.id, wsIds));
+        }
+
+        await tx.delete(teamsRecordings).where(inArray(teamsRecordings.tenantConnectionId, connIds));
+        await tx.delete(teamsDiscoveryRuns).where(inArray(teamsDiscoveryRuns.tenantConnectionId, connIds));
+        await tx.delete(channelsInventory).where(inArray(channelsInventory.tenantConnectionId, connIds));
+        await tx.delete(teamsInventory).where(inArray(teamsInventory.tenantConnectionId, connIds));
+        await tx.delete(onedriveInventory).where(inArray(onedriveInventory.tenantConnectionId, connIds));
+        await tx.delete(contentTypes).where(inArray(contentTypes.tenantConnectionId, connIds));
+
+        if (azureTenantIds.length > 0) {
+          await tx.delete(sensitivityLabels).where(inArray(sensitivityLabels.tenantId, azureTenantIds));
+          await tx.delete(retentionLabels).where(inArray(retentionLabels.tenantId, azureTenantIds));
+          await tx.delete(tenantDataDictionaries).where(inArray(tenantDataDictionaries.tenantId, azureTenantIds));
+          await tx.delete(tenantDepartments).where(inArray(tenantDepartments.tenantId, azureTenantIds));
+          await tx.delete(customFieldDefinitions).where(inArray(customFieldDefinitions.tenantId, azureTenantIds));
+        }
+
+        const speContainerRows = await tx.select({ id: speContainers.id }).from(speContainers).where(inArray(speContainers.tenantConnectionId, connIds));
+        if (speContainerRows.length > 0) {
+          await tx.delete(speContainerUsage).where(inArray(speContainerUsage.containerId, speContainerRows.map(c => c.id)));
+        }
+        await tx.delete(speContainers).where(inArray(speContainers.tenantConnectionId, connIds));
+        await tx.delete(speContainerTypes).where(inArray(speContainerTypes.tenantConnectionId, connIds));
+
+        await tx.delete(tenantAccessCodes).where(inArray(tenantAccessCodes.tenantConnectionId, connIds));
+        await tx.delete(tenantAccessGrants).where(inArray(tenantAccessGrants.tenantConnectionId, connIds));
+        await tx.delete(mspAccessGrants).where(inArray(mspAccessGrants.tenantConnectionId, connIds));
+
+        await tx.delete(tenantConnections).where(inArray(tenantConnections.id, connIds));
+      }
+
+      await tx.delete(mspAccessGrants).where(
+        or(eq(mspAccessGrants.grantingOrgId, id), eq(mspAccessGrants.grantedToOrgId, id))
+      );
+      await tx.delete(tenantAccessGrants).where(eq(tenantAccessGrants.grantedOrganizationId, id));
+
+      await tx.delete(provisioningRequests).where(eq(provisioningRequests.organizationId, id));
+
+      await tx.delete(policyOutcomes).where(eq(policyOutcomes.organizationId, id));
+      await tx.delete(governancePolicies).where(eq(governancePolicies.organizationId, id));
+
+      const ticketRows = await tx.select({ id: supportTickets.id }).from(supportTickets).where(eq(supportTickets.organizationId, id));
+      if (ticketRows.length > 0) {
+        await tx.delete(supportTicketReplies).where(inArray(supportTicketReplies.ticketId, ticketRows.map(t => t.id)));
+        await tx.delete(supportTickets).where(eq(supportTickets.organizationId, id));
+      }
+
+      await tx.delete(graphTokens).where(eq(graphTokens.organizationId, id));
+      await tx.delete(organizationUsers).where(eq(organizationUsers.organizationId, id));
+      await tx.delete(auditLog).where(eq(auditLog.organizationId, id));
+
+      await tx.delete(users).where(eq(users.organizationId, id));
+
+      await tx.delete(organizations).where(eq(organizations.id, id));
+    });
   }
 
   async updateOrganizationPlan(id: string, plan: string): Promise<Organization | undefined> {
