@@ -100,6 +100,11 @@ export default function TenantConnectionsPage() {
   const [maskingDialogTenantId, setMaskingDialogTenantId] = useState<string | null>(null);
   const [maskingToggling, setMaskingToggling] = useState(false);
 
+  const [deleteDialogId, setDeleteDialogId] = useState<string | null>(null);
+  const [deletionSummary, setDeletionSummary] = useState<{ tenantName: string; domain: string; summary: Record<string, number> } | null>(null);
+  const [deletionSummaryLoading, setDeletionSummaryLoading] = useState(false);
+  const [deleteAcknowledged, setDeleteAcknowledged] = useState(false);
+
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     if (params.get("consent_success") === "true") {
@@ -748,9 +753,20 @@ export default function TenantConnectionsPage() {
                           <DropdownMenuSeparator />
                           <DropdownMenuItem
                             className="gap-2 text-destructive focus:text-destructive"
-                            onClick={() => {
-                              if (confirm("Are you sure you want to disconnect this tenant?")) {
-                                deleteMutation.mutate(conn.id);
+                            data-testid={`button-delete-tenant-${conn.id}`}
+                            onClick={async () => {
+                              setDeleteDialogId(conn.id);
+                              setDeletionSummary(null);
+                              setDeletionSummaryLoading(true);
+                              setDeleteAcknowledged(false);
+                              try {
+                                const res = await apiRequest("GET", `/api/admin/tenants/${conn.id}/deletion-summary`);
+                                const data = await res.json();
+                                setDeletionSummary(data);
+                              } catch {
+                                setDeletionSummary(null);
+                              } finally {
+                                setDeletionSummaryLoading(false);
                               }
                             }}
                           >
@@ -1086,6 +1102,141 @@ export default function TenantConnectionsPage() {
               </>
             );
           })()}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={deleteDialogId !== null} onOpenChange={(open) => { if (!open) { setDeleteDialogId(null); setDeletionSummary(null); setDeleteAcknowledged(false); } }}>
+        <DialogContent className="sm:max-w-[520px]">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-destructive">
+              <AlertTriangle className="w-5 h-5" />
+              Disconnect Tenant
+            </DialogTitle>
+            <DialogDescription>
+              This action will permanently remove the tenant connection and all associated data. This cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="py-2">
+            {deletionSummaryLoading ? (
+              <div className="flex items-center justify-center py-8" data-testid="loading-deletion-summary">
+                <Loader2 className="w-5 h-5 animate-spin text-muted-foreground mr-2" />
+                <span className="text-sm text-muted-foreground">Calculating data to be removed...</span>
+              </div>
+            ) : deletionSummary ? (
+              <div className="space-y-3">
+                <div className="text-sm font-medium">
+                  Tenant: <span className="text-foreground">{deletionSummary.tenantName}</span>
+                  <span className="text-muted-foreground ml-1">({deletionSummary.domain})</span>
+                </div>
+                {(() => {
+                  const labels: Record<string, string> = {
+                    sites: "Sites / Workspaces",
+                    documentLibraries: "Document Libraries",
+                    speContainerTypes: "SPE Container Types",
+                    speContainers: "SPE Containers",
+                    teamsTeams: "Teams",
+                    teamsChannels: "Channels",
+                    teamsRecordings: "Teams Recordings",
+                    teamsDiscoveryRuns: "Discovery Runs",
+                    onedriveInventory: "OneDrive Inventory",
+                    contentTypes: "Content Types",
+                    workspaceTelemetry: "Telemetry Snapshots",
+                    provisioningRequests: "Provisioning Requests",
+                    mspAccessGrants: "MSP Access Grants",
+                    tenantAccessGrants: "Access Grants",
+                    tenantAccessCodes: "Access Codes",
+                    departments: "Departments",
+                    dataDictionaries: "Data Dictionary Entries",
+                    sensitivityLabels: "Sensitivity Labels",
+                    retentionLabels: "Retention Labels",
+                    customFields: "Custom Field Definitions",
+                    governancePolicies: "Governance Policies",
+                    graphTokens: "Graph Tokens",
+                  };
+                  const nonZero = Object.entries(deletionSummary.summary).filter(([, v]) => v > 0);
+                  const totalItems = nonZero.reduce((sum, [, v]) => sum + v, 0);
+                  return (
+                    <>
+                      {nonZero.length > 0 ? (
+                        <div className="rounded-lg border border-destructive/20 bg-destructive/5 p-3">
+                          <div className="text-sm font-medium text-destructive mb-2">
+                            The following data ({totalItems.toLocaleString()} items) will be permanently deleted:
+                          </div>
+                          <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+                            {nonZero.map(([key, count]) => (
+                              <div key={key} className="flex items-center justify-between text-sm py-0.5" data-testid={`deletion-count-${key}`}>
+                                <span className="text-muted-foreground">{labels[key] || key}</span>
+                                <span className="font-medium tabular-nums">{count.toLocaleString()}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="rounded-lg border p-3 text-sm text-muted-foreground">
+                          No additional data is associated with this tenant connection.
+                        </div>
+                      )}
+                    </>
+                  );
+                })()}
+              </div>
+            ) : (
+              <div className="text-sm text-muted-foreground py-4 text-center">
+                Unable to load deletion summary. You can still proceed with deletion.
+              </div>
+            )}
+          </div>
+          {!deletionSummaryLoading && (
+            <label className="flex items-start gap-2 cursor-pointer select-none" data-testid="label-acknowledge-delete">
+              <input
+                type="checkbox"
+                checked={deleteAcknowledged}
+                onChange={(e) => setDeleteAcknowledged(e.target.checked)}
+                className="mt-0.5 h-4 w-4 rounded border-border accent-destructive"
+                data-testid="checkbox-acknowledge-delete"
+              />
+              <span className="text-sm text-muted-foreground">
+                I understand that this action is permanent and all associated data will be irreversibly deleted.
+              </span>
+            </label>
+          )}
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button
+              variant="outline"
+              onClick={() => { setDeleteDialogId(null); setDeletionSummary(null); setDeleteAcknowledged(false); }}
+              data-testid="button-cancel-delete"
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={deleteMutation.isPending || deletionSummaryLoading || !deleteAcknowledged}
+              onClick={() => {
+                if (deleteDialogId) {
+                  deleteMutation.mutate(deleteDialogId, {
+                    onSuccess: () => {
+                      setDeleteDialogId(null);
+                      setDeletionSummary(null);
+                      setDeleteAcknowledged(false);
+                    },
+                  });
+                }
+              }}
+              data-testid="button-confirm-delete"
+            >
+              {deleteMutation.isPending ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin mr-1" />
+                  Deleting...
+                </>
+              ) : (
+                <>
+                  <Trash2 className="w-4 h-4 mr-1" />
+                  Permanently Delete
+                </>
+              )}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

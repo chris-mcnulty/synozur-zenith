@@ -163,6 +163,7 @@ export interface IStorage {
   createTenantConnection(connection: InsertTenantConnection): Promise<TenantConnection>;
   updateTenantConnection(id: string, updates: Partial<TenantConnection>): Promise<TenantConnection | undefined>;
   deleteTenantConnection(id: string): Promise<void>;
+  getTenantConnectionDeletionSummary(id: string): Promise<Record<string, number>>;
 
   getOrganization(id?: string): Promise<Organization | undefined>;
   getOrganizations(): Promise<Organization[]>;
@@ -682,26 +683,163 @@ export class DatabaseStorage implements IStorage {
     return updated;
   }
 
-  async deleteTenantConnection(id: string): Promise<void> {
-    const tenantWorkspaces = await db.select({ id: workspaces.id }).from(workspaces).where(eq(workspaces.tenantConnectionId, id));
-    const workspaceIds = tenantWorkspaces.map(w => w.id);
+  async getTenantConnectionDeletionSummary(id: string): Promise<Record<string, number>> {
+    const [conn] = await db.select().from(tenantConnections).where(eq(tenantConnections.id, id));
+    if (!conn) return {};
 
-    if (workspaceIds.length > 0) {
-      for (const wId of workspaceIds) {
-        await db.delete(copilotRules).where(eq(copilotRules.workspaceId, wId));
-      }
-      await db.delete(workspaces).where(eq(workspaces.tenantConnectionId, id));
+    const ct = sql<number>`count(*)::int`;
+
+    const [
+      [{ count: sitesCount }], [{ count: docLibsCount }], [{ count: speContainerTypesCount }],
+      [{ count: speContainersCount }], [{ count: teamsTeamsCount }], [{ count: teamsChannelsCount }],
+      [{ count: teamsRecordingsCount }], [{ count: teamsDiscoveryRunsCount }], [{ count: onedriveCount }],
+      [{ count: contentTypesCount }], [{ count: workspaceTelemetryCount }],
+      [{ count: provisioningRequestsCount }], [{ count: mspAccessGrantsCount }],
+      [{ count: tenantAccessGrantsCount }], [{ count: tenantAccessCodesCount }],
+    ] = await Promise.all([
+      db.select({ count: ct }).from(workspaces).where(eq(workspaces.tenantConnectionId, id)),
+      db.select({ count: ct }).from(documentLibraries).where(eq(documentLibraries.tenantConnectionId, id)),
+      db.select({ count: ct }).from(speContainerTypes).where(eq(speContainerTypes.tenantConnectionId, id)),
+      db.select({ count: ct }).from(speContainers).where(eq(speContainers.tenantConnectionId, id)),
+      db.select({ count: ct }).from(teamsInventory).where(eq(teamsInventory.tenantConnectionId, id)),
+      db.select({ count: ct }).from(channelsInventory).where(eq(channelsInventory.tenantConnectionId, id)),
+      db.select({ count: ct }).from(teamsRecordings).where(eq(teamsRecordings.tenantConnectionId, id)),
+      db.select({ count: ct }).from(teamsDiscoveryRuns).where(eq(teamsDiscoveryRuns.tenantConnectionId, id)),
+      db.select({ count: ct }).from(onedriveInventory).where(eq(onedriveInventory.tenantConnectionId, id)),
+      db.select({ count: ct }).from(contentTypes).where(eq(contentTypes.tenantConnectionId, id)),
+      db.select({ count: ct }).from(workspaceTelemetry).where(eq(workspaceTelemetry.tenantConnectionId, id)),
+      db.select({ count: ct }).from(provisioningRequests).where(eq(provisioningRequests.tenantConnectionId, id)),
+      db.select({ count: ct }).from(mspAccessGrants).where(eq(mspAccessGrants.tenantConnectionId, id)),
+      db.select({ count: ct }).from(tenantAccessGrants).where(eq(tenantAccessGrants.tenantConnectionId, id)),
+      db.select({ count: ct }).from(tenantAccessCodes).where(eq(tenantAccessCodes.tenantConnectionId, id)),
+    ]);
+
+    const otherConns = await db.select({ id: tenantConnections.id }).from(tenantConnections)
+      .where(and(eq(tenantConnections.tenantId, conn.tenantId), sql`${tenantConnections.id} != ${id}`));
+    const isLastConnection = otherConns.length === 0;
+
+    let departmentsCount = 0, dataDictionariesCount = 0, sensitivityLabelsCount = 0,
+      retentionLabelsCount = 0, customFieldsCount = 0;
+
+    if (isLastConnection) {
+      const [
+        [{ count: dc }], [{ count: ddc }], [{ count: slc }], [{ count: rlc }], [{ count: cfc }],
+      ] = await Promise.all([
+        db.select({ count: ct }).from(tenantDepartments).where(eq(tenantDepartments.tenantId, conn.tenantId)),
+        db.select({ count: ct }).from(tenantDataDictionaries).where(eq(tenantDataDictionaries.tenantId, conn.tenantId)),
+        db.select({ count: ct }).from(sensitivityLabels).where(eq(sensitivityLabels.tenantId, conn.tenantId)),
+        db.select({ count: ct }).from(retentionLabels).where(eq(retentionLabels.tenantId, conn.tenantId)),
+        db.select({ count: ct }).from(customFieldDefinitions).where(eq(customFieldDefinitions.tenantId, conn.tenantId)),
+      ]);
+      departmentsCount = dc;
+      dataDictionariesCount = ddc;
+      sensitivityLabelsCount = slc;
+      retentionLabelsCount = rlc;
+      customFieldsCount = cfc;
     }
 
+    let governancePoliciesCount = 0, graphTokensCount = 0;
+    if (conn.organizationId) {
+      const otherOrgConns = await db.select({ id: tenantConnections.id }).from(tenantConnections)
+        .where(and(eq(tenantConnections.organizationId, conn.organizationId), sql`${tenantConnections.id} != ${id}`));
+      if (otherOrgConns.length === 0) {
+        const [
+          [{ count: gpc }], [{ count: gtc }],
+        ] = await Promise.all([
+          db.select({ count: ct }).from(governancePolicies).where(eq(governancePolicies.organizationId, conn.organizationId)),
+          db.select({ count: ct }).from(graphTokens).where(eq(graphTokens.organizationId, conn.organizationId)),
+        ]);
+        governancePoliciesCount = gpc;
+        graphTokensCount = gtc;
+      }
+    }
+
+    return {
+      sites: sitesCount,
+      documentLibraries: docLibsCount,
+      speContainerTypes: speContainerTypesCount,
+      speContainers: speContainersCount,
+      teamsTeams: teamsTeamsCount,
+      teamsChannels: teamsChannelsCount,
+      teamsRecordings: teamsRecordingsCount,
+      teamsDiscoveryRuns: teamsDiscoveryRunsCount,
+      onedriveInventory: onedriveCount,
+      contentTypes: contentTypesCount,
+      workspaceTelemetry: workspaceTelemetryCount,
+      provisioningRequests: provisioningRequestsCount,
+      mspAccessGrants: mspAccessGrantsCount,
+      tenantAccessGrants: tenantAccessGrantsCount,
+      tenantAccessCodes: tenantAccessCodesCount,
+      departments: departmentsCount,
+      dataDictionaries: dataDictionariesCount,
+      sensitivityLabels: sensitivityLabelsCount,
+      retentionLabels: retentionLabelsCount,
+      customFields: customFieldsCount,
+      governancePolicies: governancePoliciesCount,
+      graphTokens: graphTokensCount,
+    };
+  }
+
+  async deleteTenantConnection(id: string): Promise<void> {
     const [conn] = await db.select().from(tenantConnections).where(eq(tenantConnections.id, id));
-    if (conn) {
-      const otherConns = await db.select({ id: tenantConnections.id }).from(tenantConnections)
+    if (!conn) return;
+
+    await db.transaction(async (tx) => {
+      const tenantWorkspaces = await tx.select({ id: workspaces.id }).from(workspaces).where(eq(workspaces.tenantConnectionId, id));
+      const workspaceIds = tenantWorkspaces.map(w => w.id);
+
+      if (workspaceIds.length > 0) {
+        for (const wId of workspaceIds) {
+          await tx.delete(copilotRules).where(eq(copilotRules.workspaceId, wId));
+        }
+        await tx.delete(workspaces).where(eq(workspaces.tenantConnectionId, id));
+      }
+      await tx.delete(workspaceTelemetry).where(eq(workspaceTelemetry.tenantConnectionId, id));
+
+      await tx.delete(documentLibraries).where(eq(documentLibraries.tenantConnectionId, id));
+
+      const speContainerIds = await tx.select({ id: speContainers.id }).from(speContainers).where(eq(speContainers.tenantConnectionId, id));
+      if (speContainerIds.length > 0) {
+        await tx.delete(speContainerUsage).where(inArray(speContainerUsage.containerId, speContainerIds.map(c => c.id)));
+      }
+      await tx.delete(speContainers).where(eq(speContainers.tenantConnectionId, id));
+      await tx.delete(speContainerTypes).where(eq(speContainerTypes.tenantConnectionId, id));
+
+      await tx.delete(teamsRecordings).where(eq(teamsRecordings.tenantConnectionId, id));
+      await tx.delete(teamsDiscoveryRuns).where(eq(teamsDiscoveryRuns.tenantConnectionId, id));
+      await tx.delete(teamsInventory).where(eq(teamsInventory.tenantConnectionId, id));
+      await tx.delete(channelsInventory).where(eq(channelsInventory.tenantConnectionId, id));
+      await tx.delete(onedriveInventory).where(eq(onedriveInventory.tenantConnectionId, id));
+      await tx.delete(contentTypes).where(eq(contentTypes.tenantConnectionId, id));
+
+      await tx.delete(provisioningRequests).where(eq(provisioningRequests.tenantConnectionId, id));
+      await tx.delete(mspAccessGrants).where(eq(mspAccessGrants.tenantConnectionId, id));
+      await tx.delete(tenantAccessGrants).where(eq(tenantAccessGrants.tenantConnectionId, id));
+      await tx.delete(tenantAccessCodes).where(eq(tenantAccessCodes.tenantConnectionId, id));
+
+      const otherConns = await tx.select({ id: tenantConnections.id }).from(tenantConnections)
         .where(and(eq(tenantConnections.tenantId, conn.tenantId), sql`${tenantConnections.id} != ${id}`));
       if (otherConns.length === 0) {
-        await db.delete(tenantDepartments).where(eq(tenantDepartments.tenantId, conn.tenantId));
+        await tx.delete(tenantDepartments).where(eq(tenantDepartments.tenantId, conn.tenantId));
+        await tx.delete(tenantDataDictionaries).where(eq(tenantDataDictionaries.tenantId, conn.tenantId));
+        await tx.delete(sensitivityLabels).where(eq(sensitivityLabels.tenantId, conn.tenantId));
+        await tx.delete(retentionLabels).where(eq(retentionLabels.tenantId, conn.tenantId));
+        await tx.delete(customFieldDefinitions).where(eq(customFieldDefinitions.tenantId, conn.tenantId));
       }
-    }
-    await db.delete(tenantConnections).where(eq(tenantConnections.id, id));
+
+      if (conn.organizationId) {
+        const otherOrgConns = await tx.select({ id: tenantConnections.id }).from(tenantConnections)
+          .where(and(eq(tenantConnections.organizationId, conn.organizationId), sql`${tenantConnections.id} != ${id}`));
+        if (otherOrgConns.length === 0) {
+          await tx.delete(governancePolicies).where(eq(governancePolicies.organizationId, conn.organizationId));
+          await tx.delete(graphTokens).where(eq(graphTokens.organizationId, conn.organizationId));
+        }
+      }
+
+      await tx.update(auditLog).set({ tenantConnectionId: null }).where(eq(auditLog.tenantConnectionId, id));
+
+      await tx.delete(tenantConnections).where(eq(tenantConnections.id, id));
+    });
   }
 
   async getOrganization(id?: string): Promise<Organization | undefined> {

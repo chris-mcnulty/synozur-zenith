@@ -330,16 +330,63 @@ router.patch("/api/admin/tenants/:id", requireRole(ZENITH_ROLES.TENANT_ADMIN), a
   res.json({ ...connection, clientSecret: undefined });
 });
 
+router.get("/api/admin/tenants/:id/deletion-summary", requireRole(ZENITH_ROLES.TENANT_ADMIN), async (req: AuthenticatedRequest, res) => {
+  const conn = await storage.getTenantConnection(req.params.id);
+  if (!conn) {
+    return res.status(404).json({ message: "Tenant connection not found" });
+  }
+  if (req.user?.role !== ZENITH_ROLES.PLATFORM_OWNER && conn.organizationId !== req.user?.organizationId) {
+    return res.status(404).json({ message: "Tenant connection not found" });
+  }
+  const summary = await storage.getTenantConnectionDeletionSummary(req.params.id);
+  res.json({ tenantName: conn.tenantName, domain: conn.domain, summary });
+});
+
 router.delete("/api/admin/tenants/:id", requireRole(ZENITH_ROLES.TENANT_ADMIN), async (req: AuthenticatedRequest, res) => {
   const conn = await storage.getTenantConnection(req.params.id);
   if (conn && req.user?.role !== ZENITH_ROLES.PLATFORM_OWNER && conn.organizationId !== req.user?.organizationId) {
     return res.status(404).json({ message: "Tenant connection not found" });
   }
   if (conn) {
-    const cid = conn.clientId || process.env.AZURE_CLIENT_ID;
-    if (cid) clearTokenCache(conn.tenantId, cid);
+    const summary = await storage.getTenantConnectionDeletionSummary(req.params.id);
+    const auditDetails = {
+      tenantId: conn.tenantId,
+      tenantName: conn.tenantName,
+      domain: conn.domain,
+      dataPurged: summary,
+    };
+    try {
+      await storage.deleteTenantConnection(req.params.id);
+      await storage.createAuditEntry({
+        userId: req.user?.id ?? null,
+        userEmail: req.user?.email ?? null,
+        action: "TENANT_DELETED",
+        resource: "tenant_connection",
+        resourceId: req.params.id,
+        organizationId: req.user?.organizationId ?? conn.organizationId ?? null,
+        tenantConnectionId: null,
+        details: auditDetails,
+        result: "SUCCESS",
+      });
+      const cid = conn.clientId || process.env.AZURE_CLIENT_ID;
+      if (cid) clearTokenCache(conn.tenantId, cid);
+    } catch (err) {
+      await storage.createAuditEntry({
+        userId: req.user?.id ?? null,
+        userEmail: req.user?.email ?? null,
+        action: "TENANT_DELETED",
+        resource: "tenant_connection",
+        resourceId: req.params.id,
+        organizationId: req.user?.organizationId ?? conn.organizationId ?? null,
+        tenantConnectionId: null,
+        details: { ...auditDetails, error: String(err) },
+        result: "FAILURE",
+      });
+      throw err;
+    }
+  } else {
+    await storage.deleteTenantConnection(req.params.id);
   }
-  await storage.deleteTenantConnection(req.params.id);
   res.status(204).send();
 });
 
