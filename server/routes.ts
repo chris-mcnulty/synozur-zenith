@@ -11,6 +11,7 @@ import organizationsRouter from "./routes/organizations";
 import speRouter from "./routes/spe";
 import recordingsRouter from "./routes/recordings";
 import supportRouter from "./routes/support";
+import aiChatRouter from "./routes/ai-chat";
 
 export async function registerRoutes(
   httpServer: Server,
@@ -29,6 +30,7 @@ export async function registerRoutes(
   app.use(speRouter);
   app.use(recordingsRouter);
   app.use(supportRouter);
+  app.use(aiChatRouter);
 
   return httpServer;
 }
