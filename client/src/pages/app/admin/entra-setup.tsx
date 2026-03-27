@@ -52,9 +52,9 @@ export default function EntraSetupPage() {
   const [testResults, setTestResults] = useState<CheckResult[] | null>(null);
 
   const ssoStatus = useQuery({
-    queryKey: ["/auth/entra/status"],
+    queryKey: ["/auth/entra/status/detail"],
     queryFn: async () => {
-      const res = await fetch("/auth/entra/status");
+      const res = await fetch("/auth/entra/status/detail");
       return res.json();
     },
   });
@@ -74,7 +74,7 @@ export default function EntraSetupPage() {
     },
     onSuccess: (data) => {
       toast({ title: "Configuration Saved", description: data.message });
-      queryClient.invalidateQueries({ queryKey: ["/auth/entra/status"] });
+      queryClient.invalidateQueries({ queryKey: ["/auth/entra/status/detail"] });
     },
     onError: (err: Error) => {
       toast({ title: "Error", description: err.message, variant: "destructive" });
@@ -94,7 +94,7 @@ export default function EntraSetupPage() {
       } else {
         toast({ title: "Verification Issues", description: data.message, variant: "destructive" });
       }
-      queryClient.invalidateQueries({ queryKey: ["/auth/entra/status"] });
+      queryClient.invalidateQueries({ queryKey: ["/auth/entra/status/detail"] });
     },
     onError: (err: Error) => {
       toast({ title: "Error", description: err.message, variant: "destructive" });

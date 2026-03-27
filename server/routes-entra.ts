@@ -134,7 +134,14 @@ export async function getDelegatedSpoToken(userId: string, spoHost: string): Pro
   return null;
 }
 
-router.get('/status', requireAuth(), (_req: AuthenticatedRequest, res: Response) => {
+// Public endpoint — no auth required so the login page can show the SSO button
+router.get('/status', (_req: AuthenticatedRequest, res: Response) => {
+  const configured = !!(process.env.AZURE_CLIENT_ID && process.env.AZURE_CLIENT_SECRET);
+  return res.json({ configured });
+});
+
+// Auth-protected endpoint with full diagnostic detail for admin use
+router.get('/status/detail', requireAuth(), (_req: AuthenticatedRequest, res: Response) => {
   const configured = !!(process.env.AZURE_CLIENT_ID && process.env.AZURE_CLIENT_SECRET);
   return res.json({
     configured,
