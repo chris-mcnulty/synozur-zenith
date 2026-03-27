@@ -10,6 +10,7 @@ import { BUILT_IN_OUTCOMES } from "@shared/schema";
 import { DEFAULT_COPILOT_READINESS_RULES } from "./services/policy-engine";
 import { isEncryptionConfigured, encryptToken, isEncrypted } from "./utils/encryption";
 import crypto from "crypto";
+import { pool } from "./db";
 
 const app = express();
 app.set('trust proxy', 1);
@@ -106,6 +107,50 @@ function checkEncryptionStartupGuard() {
     process.exit(1);
   }
   log('Encryption key configured — client secrets will be encrypted at rest');
+}
+
+async function ensureTenantConnectionsSchema() {
+  const client = await pool.connect();
+  try {
+    await client.query("SELECT pg_advisory_lock(hashtext('ensureTenantConnectionsSchema'))");
+
+    const alterStatements = [
+      "ALTER TABLE tenant_connections ADD COLUMN IF NOT EXISTS install_mode text NOT NULL DEFAULT 'MSP'",
+      "ALTER TABLE tenant_connections ADD COLUMN IF NOT EXISTS data_masking_enabled boolean NOT NULL DEFAULT false",
+      "ALTER TABLE tenant_connections ADD COLUMN IF NOT EXISTS onedrive_inventory_enabled boolean NOT NULL DEFAULT false",
+      "ALTER TABLE tenant_connections ADD COLUMN IF NOT EXISTS recordings_discovery_enabled boolean NOT NULL DEFAULT false",
+      "ALTER TABLE tenant_connections ADD COLUMN IF NOT EXISTS teams_discovery_enabled boolean NOT NULL DEFAULT false",
+      "ALTER TABLE tenant_connections ADD COLUMN IF NOT EXISTS telemetry_enabled boolean NOT NULL DEFAULT false",
+      "ALTER TABLE tenant_connections ADD COLUMN IF NOT EXISTS spe_discovery_enabled boolean NOT NULL DEFAULT false",
+    ];
+
+    for (const stmt of alterStatements) {
+      await client.query(stmt);
+    }
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS msp_access_grants (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        tenant_connection_id varchar NOT NULL,
+        granting_org_id text NOT NULL,
+        granted_to_org_id text,
+        access_code text NOT NULL,
+        code_expires_at timestamp NOT NULL,
+        status text NOT NULL DEFAULT 'PENDING',
+        granted_at timestamp,
+        revoked_at timestamp,
+        created_at timestamp DEFAULT now()
+      )
+    `);
+
+    log('Schema migration ensureTenantConnectionsSchema completed');
+  } catch (err) {
+    console.error('[Migration] Failed to ensure tenant_connections schema:', err);
+    throw err;
+  } finally {
+    await client.query("SELECT pg_advisory_unlock(hashtext('ensureTenantConnectionsSchema'))").catch(() => {});
+    client.release();
+  }
 }
 
 async function migrateClientSecretsToEncrypted() {
@@ -226,6 +271,7 @@ async function backfillOrgMemberships() {
 
   await registerRoutes(httpServer, app);
 
+  await ensureTenantConnectionsSchema();
   await backfillOrgMemberships();
   await seedBuiltInOutcomes();
   await migrateClientSecretsToEncrypted();
