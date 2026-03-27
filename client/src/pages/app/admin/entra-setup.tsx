@@ -26,17 +26,29 @@ import {
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
-const REQUIRED_PERMISSIONS = [
-  { name: "openid", type: "Delegated", description: "Sign users in" },
-  { name: "profile", type: "Delegated", description: "View users' basic profile" },
-  { name: "email", type: "Delegated", description: "View users' email address" },
-  { name: "User.Read", type: "Delegated", description: "Sign in and read user profile" },
+const DELEGATED_PERMISSIONS = [
+  { name: "openid", description: "Sign users in via SSO" },
+  { name: "profile", description: "Read user's basic profile" },
+  { name: "email", description: "Read user's email address" },
+  { name: "User.Read", description: "Sign in and read user profile" },
+  { name: "offline_access", description: "Maintain access via refresh tokens" },
+  { name: "RecordsManagement.Read.All", description: "Purview retention label sync" },
+  { name: "Group.ReadWrite.All", description: "Sensitivity label write-back to groups" },
+];
+
+const SPO_DELEGATED_PERMISSIONS = [
+  { name: "AllSites.FullControl", description: "SPE container management and SharePoint operations (delegated)" },
 ];
 
 const GRAPH_PERMISSIONS = [
-  { name: "Sites.Read.All", type: "Application", description: "Read all site collections" },
-  { name: "Group.Read.All", type: "Application", description: "Read all groups" },
-  { name: "Directory.Read.All", type: "Application", description: "Read directory data" },
+  { name: "Sites.Read.All", description: "Site inventory — read all site collections" },
+  { name: "Sites.ReadWrite.All", description: "SPE container management — read/write site collections" },
+  { name: "Group.Read.All", description: "Site inventory — read all Microsoft 365 groups" },
+  { name: "Group.ReadWrite.All", description: "Sensitivity label write-back — update group properties" },
+  { name: "Directory.Read.All", description: "Site inventory — read directory and tenant data" },
+  { name: "Reports.Read.All", description: "Usage analytics — read Microsoft 365 usage reports" },
+  { name: "InformationProtectionPolicy.Read.All", description: "Purview sensitivity label sync" },
+  { name: "RecordsManagement.Read.All", description: "Purview retention label sync (requires M365 E5 Compliance)" },
 ];
 
 type CheckResult = { step: string; status: "pass" | "fail" | "warn"; message: string };
@@ -270,32 +282,72 @@ export default function EntraSetupPage() {
             </CardHeader>
             <CardContent className="space-y-4 pt-6">
               <div>
-                <h4 className="text-sm font-medium mb-2">Delegated Permissions (User Sign-In)</h4>
+                <h4 className="text-sm font-medium mb-1">Delegated Permissions (Microsoft Graph)</h4>
+                <p className="text-xs text-muted-foreground mb-2">
+                  Added under <strong>API permissions</strong> → <strong>Microsoft Graph</strong> → <strong>Delegated permissions</strong>.
+                </p>
                 <div className="space-y-1">
-                  {REQUIRED_PERMISSIONS.map((perm) => (
+                  {DELEGATED_PERMISSIONS.map((perm) => (
                     <div key={perm.name} className="flex items-center gap-2 text-sm py-1.5 px-3 rounded bg-muted/30">
-                      <CheckCircle2 className="w-4 h-4 text-green-500" />
-                      <span className="font-mono text-xs">{perm.name}</span>
-                      <span className="text-muted-foreground ml-auto">{perm.description}</span>
+                      <CheckCircle2 className="w-4 h-4 text-green-500 shrink-0" />
+                      <span className="font-mono text-xs shrink-0">{perm.name}</span>
+                      <span className="text-muted-foreground ml-auto text-right text-xs">{perm.description}</span>
                     </div>
                   ))}
                 </div>
               </div>
               <Separator />
               <div>
-                <h4 className="text-sm font-medium mb-2">Application Permissions (Inventory Sync)</h4>
+                <h4 className="text-sm font-medium mb-1">Application Permissions (Microsoft Graph)</h4>
                 <p className="text-xs text-muted-foreground mb-2">
-                  These are required for server-side SharePoint inventory sync. Admin consent is required.
+                  Added under <strong>API permissions</strong> → <strong>Microsoft Graph</strong> → <strong>Application permissions</strong>. Admin consent is required.
                 </p>
                 <div className="space-y-1">
                   {GRAPH_PERMISSIONS.map((perm) => (
                     <div key={perm.name} className="flex items-center gap-2 text-sm py-1.5 px-3 rounded bg-muted/30">
-                      <Circle className="w-4 h-4 text-amber-500" />
-                      <span className="font-mono text-xs">{perm.name}</span>
-                      <Badge variant="outline" className="text-[10px] ml-1">{perm.type}</Badge>
-                      <span className="text-muted-foreground ml-auto">{perm.description}</span>
+                      <Circle className="w-4 h-4 text-amber-500 shrink-0" />
+                      <span className="font-mono text-xs shrink-0">{perm.name}</span>
+                      <span className="text-muted-foreground ml-auto text-right text-xs">{perm.description}</span>
                     </div>
                   ))}
+                </div>
+              </div>
+              <Separator />
+              <div>
+                <h4 className="text-sm font-medium mb-1 flex items-center gap-2">
+                  SharePoint REST API Permissions
+                  <Badge variant="outline" className="text-[10px]">SharePoint</Badge>
+                </h4>
+                <p className="text-xs text-muted-foreground mb-2">
+                  Added separately under <strong>API permissions</strong> → <strong>APIs my organization uses</strong> → <strong>SharePoint</strong>. Use both delegated and application types.
+                </p>
+                <div className="space-y-1 mb-3">
+                  {SPO_DELEGATED_PERMISSIONS.map((perm) => (
+                    <div key={perm.name} className="flex items-center gap-2 text-sm py-1.5 px-3 rounded bg-muted/30">
+                      <CheckCircle2 className="w-4 h-4 text-green-500 shrink-0" />
+                      <span className="font-mono text-xs shrink-0">{perm.name}</span>
+                      <Badge variant="outline" className="text-[10px] ml-1 shrink-0">Delegated</Badge>
+                      <span className="text-muted-foreground ml-auto text-right text-xs">{perm.description}</span>
+                    </div>
+                  ))}
+                  <div className="flex items-center gap-2 text-sm py-1.5 px-3 rounded bg-muted/30">
+                    <Circle className="w-4 h-4 text-amber-500 shrink-0" />
+                    <span className="font-mono text-xs shrink-0">Sites.FullControl.All</span>
+                    <Badge variant="outline" className="text-[10px] ml-1 shrink-0">Application</Badge>
+                    <span className="text-muted-foreground ml-auto text-right text-xs">SPE container management (application)</span>
+                  </div>
+                </div>
+                <div className="p-3 rounded-lg bg-blue-500/5 border border-blue-500/20 text-xs">
+                  <p className="font-medium text-blue-700 dark:text-blue-400 mb-1">SharePoint Scope URL</p>
+                  <p className="text-muted-foreground mb-2">
+                    SharePoint REST API permissions require a tenant-specific scope URL, not the standard Graph endpoint. Construct the URL using your SharePoint tenant domain:
+                  </p>
+                  <code className="block p-2 bg-background rounded font-mono break-all">
+                    https://&#123;tenant&#125;.sharepoint.com/.default
+                  </code>
+                  <p className="text-muted-foreground mt-2">
+                    For example: <code className="font-mono">https://contoso.sharepoint.com/.default</code>
+                  </p>
                 </div>
               </div>
             </CardContent>
