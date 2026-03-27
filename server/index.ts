@@ -8,6 +8,7 @@ import { loadCurrentUser } from "./middleware/rbac";
 import { storage } from "./storage";
 import { BUILT_IN_OUTCOMES } from "@shared/schema";
 import { DEFAULT_COPILOT_READINESS_RULES } from "./services/policy-engine";
+import { isEncryptionConfigured, encryptToken, isEncrypted } from "./utils/encryption";
 import crypto from "crypto";
 
 const app = express();
@@ -94,6 +95,41 @@ app.use((req, res, next) => {
 
   next();
 });
+
+function checkEncryptionStartupGuard() {
+  const secret = process.env.TOKEN_ENCRYPTION_SECRET;
+  if (!secret || secret.length < 32) {
+    console.error(
+      '[FATAL] TOKEN_ENCRYPTION_SECRET is missing or too short (must be at least 32 characters). ' +
+      'Client secrets cannot be encrypted at rest. Set this environment variable before starting the server.'
+    );
+    process.exit(1);
+  }
+  log('Encryption key configured — client secrets will be encrypted at rest');
+}
+
+async function migrateClientSecretsToEncrypted() {
+  if (!isEncryptionConfigured()) return;
+
+  try {
+    const connections = await storage.getTenantConnections();
+    let migrated = 0;
+
+    for (const conn of connections) {
+      if (conn.clientSecret && !isEncrypted(conn.clientSecret)) {
+        const encrypted = encryptToken(conn.clientSecret);
+        await storage.updateTenantConnection(conn.id, { clientSecret: encrypted });
+        migrated++;
+      }
+    }
+
+    if (migrated > 0) {
+      log(`Migrated ${migrated} tenant connection client secret(s) to encrypted form`);
+    }
+  } catch (err) {
+    console.error('[Migration] Failed to migrate client secrets to encrypted form:', err);
+  }
+}
 
 async function seedBuiltInOutcomes() {
   try {
@@ -186,10 +222,13 @@ async function backfillOrgMemberships() {
 }
 
 (async () => {
+  checkEncryptionStartupGuard();
+
   await registerRoutes(httpServer, app);
 
   await backfillOrgMemberships();
   await seedBuiltInOutcomes();
+  await migrateClientSecretsToEncrypted();
   try {
     await storage.getPlatformSettings();
     log('Platform settings initialized');

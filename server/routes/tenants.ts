@@ -6,7 +6,7 @@ import { checkTenantPermissions, REQUIRED_PERMISSIONS, PERMISSIONS_VERSION } fro
 import { METADATA_CATEGORIES, ZENITH_ROLES } from "@shared/schema";
 import { refreshDelegatedToken } from "../routes-entra";
 import { requireAuth, requireRole, requirePermission, type AuthenticatedRequest } from "../middleware/rbac";
-import { encryptToken, decryptToken, isEncryptionConfigured } from "../utils/encryption";
+import { encryptToken, decryptToken, isEncryptionConfigured, isEncrypted } from "../utils/encryption";
 
 const router = Router();
 
@@ -220,10 +220,13 @@ router.get("/api/admin/tenants/:id", requirePermission('inventory:read'), async 
 });
 
 router.post("/api/admin/tenants", requireRole(ZENITH_ROLES.TENANT_ADMIN), async (req: AuthenticatedRequest, res) => {
-  const { tenantId, tenantName, domain, ownershipType } = req.body;
+  const { tenantId, tenantName, domain, ownershipType, clientId, clientSecret } = req.body;
   if (!tenantId || !domain) {
     return res.status(400).json({ message: "tenantId and domain are required" });
   }
+  const encryptedSecret = clientSecret && isEncryptionConfigured() && !isEncrypted(clientSecret)
+    ? encryptToken(clientSecret)
+    : clientSecret || undefined;
   const connection = await storage.createTenantConnection({
     tenantId,
     tenantName: tenantName || domain.split('.')[0],
@@ -232,6 +235,8 @@ router.post("/api/admin/tenants", requireRole(ZENITH_ROLES.TENANT_ADMIN), async 
     organizationId: req.user?.organizationId || null,
     status: 'PENDING',
     consentGranted: false,
+    clientId: clientId || undefined,
+    clientSecret: encryptedSecret,
   });
   res.status(201).json({ ...connection, clientSecret: undefined });
 });
@@ -243,7 +248,7 @@ router.patch("/api/admin/tenants/:id", requireRole(ZENITH_ROLES.TENANT_ADMIN), a
     return res.status(404).json({ message: "Tenant connection not found" });
   }
   const updates = { ...req.body };
-  if (updates.clientSecret && isEncryptionConfigured()) {
+  if (updates.clientSecret && isEncryptionConfigured() && !isEncrypted(updates.clientSecret)) {
     updates.clientSecret = encryptToken(updates.clientSecret);
   }
   const connection = await storage.updateTenantConnection(req.params.id, updates);
