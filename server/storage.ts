@@ -109,15 +109,18 @@ export interface TeamsChannelsSummary {
 }
 
 export interface IStorage {
-  getWorkspaces(search?: string, tenantConnectionId?: string): Promise<Workspace[]>;
+  getWorkspaces(search?: string, tenantConnectionId?: string, organizationId?: string): Promise<Workspace[]>;
   getWorkspace(id: string): Promise<Workspace | undefined>;
   getWorkspaceByM365ObjectId(m365ObjectId: string): Promise<Workspace | undefined>;
   createWorkspace(workspace: InsertWorkspace): Promise<Workspace>;
   updateWorkspace(id: string, updates: Partial<InsertWorkspace>): Promise<Workspace | undefined>;
+  updateWorkspaceScoped(id: string, updates: Partial<InsertWorkspace>, allowedTenantConnectionIds: string[]): Promise<Workspace | undefined>;
   deleteWorkspace(id: string): Promise<void>;
+  deleteWorkspaceScoped(id: string, allowedTenantConnectionIds: string[]): Promise<boolean>;
   bulkUpdateWorkspaces(ids: string[], updates: Partial<InsertWorkspace>): Promise<void>;
+  bulkUpdateWorkspacesScoped(ids: string[], updates: Partial<InsertWorkspace>, allowedTenantConnectionIds: string[]): Promise<void>;
 
-  getProvisioningRequests(orgId?: string): Promise<ProvisioningRequest[]>;
+  getProvisioningRequests(orgId: string | null): Promise<ProvisioningRequest[]>;
   getProvisioningRequest(id: string): Promise<ProvisioningRequest | undefined>;
   createProvisioningRequest(request: InsertProvisioningRequest): Promise<ProvisioningRequest>;
   updateProvisioningRequestStatus(id: string, status: string): Promise<ProvisioningRequest | undefined>;
@@ -281,7 +284,7 @@ export interface IStorage {
 }
 
 export class DatabaseStorage implements IStorage {
-  async getWorkspaces(search?: string, tenantConnectionId?: string): Promise<Workspace[]> {
+  async getWorkspaces(search?: string, tenantConnectionId?: string, organizationId?: string): Promise<Workspace[]> {
     const conditions = [];
 
     if (search) {
@@ -296,6 +299,16 @@ export class DatabaseStorage implements IStorage {
 
     if (tenantConnectionId) {
       conditions.push(eq(workspaces.tenantConnectionId, tenantConnectionId));
+    }
+
+    if (organizationId) {
+      const orgConnections = await db
+        .select({ id: tenantConnections.id })
+        .from(tenantConnections)
+        .where(eq(tenantConnections.organizationId, organizationId));
+      const orgConnectionIds = orgConnections.map(c => c.id);
+      if (orgConnectionIds.length === 0) return [];
+      conditions.push(sql`${workspaces.tenantConnectionId} = ANY(ARRAY[${sql.join(orgConnectionIds.map(id => sql`${id}`), sql`, `)}]::text[])`);
     }
 
     if (conditions.length > 0) {
@@ -324,8 +337,30 @@ export class DatabaseStorage implements IStorage {
     return updated;
   }
 
+  async updateWorkspaceScoped(id: string, updates: Partial<InsertWorkspace>, allowedTenantConnectionIds: string[]): Promise<Workspace | undefined> {
+    if (allowedTenantConnectionIds.length === 0) return undefined;
+    const [updated] = await db.update(workspaces).set(updates).where(
+      and(
+        eq(workspaces.id, id),
+        sql`${workspaces.tenantConnectionId} = ANY(ARRAY[${sql.join(allowedTenantConnectionIds.map(tid => sql`${tid}`), sql`, `)}]::text[])`
+      )
+    ).returning();
+    return updated;
+  }
+
   async deleteWorkspace(id: string): Promise<void> {
     await db.delete(workspaces).where(eq(workspaces.id, id));
+  }
+
+  async deleteWorkspaceScoped(id: string, allowedTenantConnectionIds: string[]): Promise<boolean> {
+    if (allowedTenantConnectionIds.length === 0) return false;
+    const result = await db.delete(workspaces).where(
+      and(
+        eq(workspaces.id, id),
+        sql`${workspaces.tenantConnectionId} = ANY(ARRAY[${sql.join(allowedTenantConnectionIds.map(tid => sql`${tid}`), sql`, `)}]::text[])`
+      )
+    ).returning({ id: workspaces.id });
+    return result.length > 0;
   }
 
   async bulkUpdateWorkspaces(ids: string[], updates: Partial<InsertWorkspace>): Promise<void> {
@@ -334,7 +369,19 @@ export class DatabaseStorage implements IStorage {
     }
   }
 
-  async getProvisioningRequests(orgId?: string): Promise<ProvisioningRequest[]> {
+  async bulkUpdateWorkspacesScoped(ids: string[], updates: Partial<InsertWorkspace>, allowedTenantConnectionIds: string[]): Promise<void> {
+    if (allowedTenantConnectionIds.length === 0) return;
+    for (const id of ids) {
+      await db.update(workspaces).set(updates).where(
+        and(
+          eq(workspaces.id, id),
+          sql`${workspaces.tenantConnectionId} = ANY(ARRAY[${sql.join(allowedTenantConnectionIds.map(tid => sql`${tid}`), sql`, `)}]::text[])`
+        )
+      );
+    }
+  }
+
+  async getProvisioningRequests(orgId: string | null): Promise<ProvisioningRequest[]> {
     if (orgId) {
       return db.select().from(provisioningRequests)
         .where(eq(provisioningRequests.organizationId, orgId))

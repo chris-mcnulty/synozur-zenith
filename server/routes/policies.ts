@@ -3,6 +3,7 @@ import { requireAuth, requireRole, type AuthenticatedRequest } from "../middlewa
 import { ZENITH_ROLES, insertGovernancePolicySchema, insertPolicyOutcomeSchema, type PolicyRuleDefinition, type GovernancePolicy } from "@shared/schema";
 import { storage } from "../storage";
 import { evaluatePolicy, evaluationResultsToCopilotRules, formatPolicyBagValue, type EvaluationContext } from "../services/policy-engine";
+import { getOrgTenantConnectionIds, isWorkspaceInScope } from "./scope-helpers";
 
 const router = Router();
 
@@ -121,6 +122,11 @@ router.post("/api/policies/simulate", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN,
       return res.status(400).json({ message: "tenantConnectionId and rules array are required" });
     }
 
+    const allowedTenantIds = await getOrgTenantConnectionIds(req);
+    if (allowedTenantIds !== null && !allowedTenantIds.includes(tenantConnectionId)) {
+      return res.status(403).json({ message: "Tenant connection is outside your organization scope" });
+    }
+
     const connection = await storage.getTenantConnection(tenantConnectionId);
     if (!connection) return res.status(404).json({ message: "Tenant connection not found" });
 
@@ -233,6 +239,8 @@ router.post("/api/policies/:id/evaluate", requireRole(ZENITH_ROLES.GOVERNANCE_AD
     return res.status(400).json({ message: "workspaceIds array is required" });
   }
 
+  const allowedTenantIds = await getOrgTenantConnectionIds(req);
+
   const outcome = policy.outcomeId ? await storage.getPolicyOutcome(policy.outcomeId) : null;
   const tenantMetadataCache = new Map<string, string[]>();
 
@@ -240,6 +248,7 @@ router.post("/api/policies/:id/evaluate", requireRole(ZENITH_ROLES.GOVERNANCE_AD
   for (const wsId of workspaceIds) {
     const workspace = await storage.getWorkspace(wsId);
     if (!workspace) continue;
+    if (allowedTenantIds !== null && (!workspace.tenantConnectionId || !allowedTenantIds.includes(workspace.tenantConnectionId))) continue;
 
     let requiredMetadataFields: string[] = [];
     if (workspace.tenantConnectionId) {
@@ -284,6 +293,11 @@ router.post("/api/policies/:id/evaluate", requireRole(ZENITH_ROLES.GOVERNANCE_AD
 
 router.post("/api/admin/tenants/:id/evaluate-policies", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN), async (req: AuthenticatedRequest, res) => {
   try {
+    const allowedTenantIds = await getOrgTenantConnectionIds(req);
+    if (allowedTenantIds !== null && !allowedTenantIds.includes(req.params.id)) {
+      return res.status(403).json({ message: "Tenant connection is outside your organization scope" });
+    }
+
     const connection = await storage.getTenantConnection(req.params.id);
     if (!connection) return res.status(404).json({ message: "Tenant connection not found" });
 
@@ -335,6 +349,9 @@ router.post("/api/admin/tenants/:id/evaluate-policies", requireRole(ZENITH_ROLES
 });
 
 router.get("/api/workspaces/:id/policy-results", requireAuth(), async (req: AuthenticatedRequest, res) => {
+  if (!(await isWorkspaceInScope(req, req.params.id))) {
+    return res.status(404).json({ message: "Workspace not found" });
+  }
   const workspace = await storage.getWorkspace(req.params.id);
   if (!workspace) return res.status(404).json({ message: "Workspace not found" });
 

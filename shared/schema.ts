@@ -68,6 +68,7 @@ export type Workspace = typeof workspaces.$inferSelect;
 
 export const provisioningRequests = pgTable("provisioning_requests", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  organizationId: varchar("organization_id"),
   workspaceName: text("workspace_name").notNull(),
   workspaceType: text("workspace_type").notNull(),
   projectType: text("project_type").notNull().default("DEAL"),
