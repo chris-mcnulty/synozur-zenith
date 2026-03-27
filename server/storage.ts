@@ -85,6 +85,7 @@ import {
   supportTickets,
   supportTicketReplies,
   type SupportTicket,
+  type InsertSupportTicket,
   type SupportTicketReply,
   contentTypes,
   type ContentType,

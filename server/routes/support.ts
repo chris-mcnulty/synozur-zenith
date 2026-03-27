@@ -3,6 +3,7 @@ import { requireAuth, requireRole, type AuthenticatedRequest } from "../middlewa
 import { ZENITH_ROLES } from "@shared/schema";
 import { storage } from "../storage";
 import { z } from "zod";
+import { sendSupportTicketNotification, sendTicketConfirmationToSubmitter } from "../email-support";
 
 const router = Router();
 
@@ -59,6 +60,21 @@ router.post("/api/support/tickets", requireAuth(), async (req: AuthenticatedRequ
       applicationSource: "Zenith",
       status: "open",
     });
+
+    let org = null;
+    try {
+      org = await storage.getOrganization(orgId);
+    } catch (_) {}
+
+    Promise.all([
+      sendSupportTicketNotification(ticket, user, org).catch(err =>
+        console.error("[SUPPORT] Failed to send team notification:", err)
+      ),
+      sendTicketConfirmationToSubmitter(ticket, user).catch(err =>
+        console.error("[SUPPORT] Failed to send confirmation:", err)
+      ),
+    ]);
+
     return res.status(201).json(ticket);
   } catch (err) {
     console.error("[support] POST /api/support/tickets error:", err);
