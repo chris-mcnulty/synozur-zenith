@@ -120,6 +120,9 @@ router.post('/api/orgs/switch', requireAuth(), async (req: AuthenticatedRequest,
   }
 });
 
+// These org-member routes manage multi-org memberships in the organizationUsers junction table.
+// The canonical user management API (add/role/deactivate/reactivate) lives in routes-auth.ts under /api/auth/users/*.
+// These routes are used for users who belong to multiple organizations and are NOT duplicates of the auth routes.
 router.get('/api/orgs/:id/members', requireAuth(), async (req: AuthenticatedRequest, res) => {
   try {
     const user = req.user!;

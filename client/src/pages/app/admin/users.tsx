@@ -190,7 +190,7 @@ export default function UserManagementPage() {
   const orgName = authData?.organization?.name || "your organization";
 
   const addUserMutation = useMutation({
-    mutationFn: async (data: { email: string; name: string; role: string }) => {
+    mutationFn: async (data: { email: string; name: string; role: string; azureObjectId?: string; azureTenantId?: string }) => {
       const res = await apiRequest("POST", "/api/auth/users/add", data);
       return res.json();
     },
@@ -576,7 +576,12 @@ export default function UserManagementPage() {
               Cancel
             </Button>
             <Button
-              onClick={() => addUserMutation.mutate({ email: newUserEmail, name: newUserName, role: newUserRole })}
+              onClick={() => addUserMutation.mutate({
+                email: newUserEmail,
+                name: newUserName,
+                role: newUserRole,
+                azureObjectId: selectedEntraUser?.id || undefined,
+              })}
               disabled={!newUserEmail || addUserMutation.isPending}
               data-testid="button-confirm-add-user"
             >

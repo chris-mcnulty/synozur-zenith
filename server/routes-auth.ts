@@ -226,13 +226,13 @@ router.get('/me', requireAuth(), async (req: AuthenticatedRequest, res) => {
 
 router.get('/users', requireAuth(), requirePermission('users:manage'), async (req: AuthenticatedRequest, res) => {
   try {
-    const user = req.user!;
-
-    if (!user.organizationId) {
-      return res.status(403).json({ error: 'No organization context' });
+    const adminUser = req.user!;
+    const orgId = (req.activeOrganizationId || adminUser.organizationId) as string;
+    if (!orgId) {
+      return res.status(400).json({ error: 'No organization context' });
     }
 
-    const orgUsers = await storage.getUsersByOrganization(user.organizationId);
+    const orgUsers = await storage.getUsersByOrganization(orgId);
     const safeUsers = orgUsers.map(u => sanitizeUser(u));
     return res.json(safeUsers);
   } catch (error: any) {
@@ -368,11 +368,12 @@ const VALID_ROLES: ZenithRole[] = Object.values(ZENITH_ROLES);
 router.post('/users/add', requireAuth(), requirePermission('users:manage'), async (req: AuthenticatedRequest, res) => {
   try {
     const adminUser = req.user!;
-    if (!adminUser.organizationId) {
+    const orgId = (req.activeOrganizationId || adminUser.organizationId) as string;
+    if (!orgId) {
       return res.status(400).json({ error: 'No organization context' });
     }
 
-    const { email, name, role } = req.body;
+    const { email, name, role, azureObjectId, azureTenantId } = req.body;
 
     if (!email) {
       return res.status(400).json({ error: 'Email is required' });
@@ -394,6 +395,7 @@ router.post('/users/add', requireAuth(), requirePermission('users:manage'), asyn
       return res.status(409).json({ error: 'A user with this email already exists' });
     }
 
+    const isEntraUser = !!azureObjectId;
     const tempPassword = generateToken().slice(0, 16);
     const hashedPassword = await hashPassword(tempPassword);
 
@@ -402,10 +404,12 @@ router.post('/users/add', requireAuth(), requirePermission('users:manage'), asyn
       password: hashedPassword,
       name: name || null,
       role: assignedRole,
-      organizationId: adminUser.organizationId,
+      organizationId: orgId,
       emailVerified: false,
       verificationToken: generateToken(),
-      authProvider: 'local',
+      authProvider: isEntraUser ? 'entra' : 'local',
+      azureObjectId: azureObjectId || null,
+      azureTenantId: azureTenantId || null,
     });
 
     await storage.createAuditEntry({
@@ -414,8 +418,8 @@ router.post('/users/add', requireAuth(), requirePermission('users:manage'), asyn
       action: 'USER_CREATED',
       resource: 'user',
       resourceId: newUser.id,
-      organizationId: adminUser.organizationId,
-      details: { targetEmail: email, assignedRole, createdBy: adminUser.email },
+      organizationId: orgId,
+      details: { targetEmail: email, assignedRole, createdBy: adminUser.email, isEntraUser },
       result: 'SUCCESS',
       ipAddress: req.ip || null,
     });
@@ -430,7 +434,8 @@ router.post('/users/add', requireAuth(), requirePermission('users:manage'), asyn
 router.patch('/users/:id/role', requireAuth(), requirePermission('users:manage'), async (req: AuthenticatedRequest, res) => {
   try {
     const adminUser = req.user!;
-    const targetUserId = req.params.id;
+    const orgId = (req.activeOrganizationId || adminUser.organizationId) as string;
+    const targetUserId = req.params.id as string;
     const { role } = req.body;
 
     if (!role || !VALID_ROLES.includes(role)) {
@@ -446,7 +451,7 @@ router.patch('/users/:id/role', requireAuth(), requirePermission('users:manage')
       return res.status(404).json({ error: 'User not found' });
     }
 
-    if (targetUser.organizationId !== adminUser.organizationId) {
+    if (targetUser.organizationId !== orgId) {
       return res.status(403).json({ error: 'Cannot modify users outside your organization' });
     }
 
@@ -463,7 +468,7 @@ router.patch('/users/:id/role', requireAuth(), requirePermission('users:manage')
       action: 'USER_ROLE_CHANGED',
       resource: 'user',
       resourceId: targetUserId,
-      organizationId: adminUser.organizationId,
+      organizationId: orgId,
       details: { targetEmail: targetUser.email, previousRole, newRole: role, changedBy: adminUser.email },
       result: 'SUCCESS',
       ipAddress: req.ip || null,
@@ -479,14 +484,15 @@ router.patch('/users/:id/role', requireAuth(), requirePermission('users:manage')
 router.patch('/users/:id/deactivate', requireAuth(), requirePermission('users:manage'), async (req: AuthenticatedRequest, res) => {
   try {
     const adminUser = req.user!;
-    const targetUserId = req.params.id;
+    const orgId = (req.activeOrganizationId || adminUser.organizationId) as string;
+    const targetUserId = req.params.id as string;
 
     const targetUser = await storage.getUser(targetUserId);
     if (!targetUser) {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    if (targetUser.organizationId !== adminUser.organizationId) {
+    if (targetUser.organizationId !== orgId) {
       return res.status(403).json({ error: 'Cannot modify users outside your organization' });
     }
 
@@ -506,7 +512,7 @@ router.patch('/users/:id/deactivate', requireAuth(), requirePermission('users:ma
       action: 'USER_DEACTIVATED',
       resource: 'user',
       resourceId: targetUserId,
-      organizationId: adminUser.organizationId,
+      organizationId: orgId,
       details: { targetEmail: targetUser.email, previousRole: targetUser.role, deactivatedBy: adminUser.email },
       result: 'SUCCESS',
       ipAddress: req.ip || null,
@@ -522,14 +528,15 @@ router.patch('/users/:id/deactivate', requireAuth(), requirePermission('users:ma
 router.patch('/users/:id/reactivate', requireAuth(), requirePermission('users:manage'), async (req: AuthenticatedRequest, res) => {
   try {
     const adminUser = req.user!;
-    const targetUserId = req.params.id;
+    const orgId = (req.activeOrganizationId || adminUser.organizationId) as string;
+    const targetUserId = req.params.id as string;
 
     const targetUser = await storage.getUser(targetUserId);
     if (!targetUser) {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    if (targetUser.organizationId !== adminUser.organizationId) {
+    if (targetUser.organizationId !== orgId) {
       return res.status(403).json({ error: 'Cannot modify users outside your organization' });
     }
 
@@ -541,7 +548,7 @@ router.patch('/users/:id/reactivate', requireAuth(), requirePermission('users:ma
       action: 'USER_REACTIVATED',
       resource: 'user',
       resourceId: targetUserId,
-      organizationId: adminUser.organizationId,
+      organizationId: orgId,
       details: { targetEmail: targetUser.email, reactivatedBy: adminUser.email },
       result: 'SUCCESS',
       ipAddress: req.ip || null,
