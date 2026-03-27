@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { storage } from "../storage";
 import { insertWorkspaceSchema, insertProvisioningRequestSchema, type ServicePlanTier, ZENITH_ROLES } from "@shared/schema";
-import { fetchSharePointSites, fetchSiteUsageReport, fetchSiteDriveOwner, fetchSiteAnalytics, fetchSiteGroupOwners, fetchSiteCollectionAdmins, getAppToken, writeSitePropertyBag, requestSiteReindex, fetchSitePropertyBag, fetchSensitivityLabels, fetchRetentionLabels, fetchHubSites, fetchSiteHubAssociation, fetchHubSitesViaSearch, applySensitivityLabelToSite, removeSensitivityLabelFromSite, joinHubSite, leaveHubSite, fetchSiteLockState, fetchSiteArchiveStatus, batchToggleNoScript, fetchSiteDocumentLibraries, enumerateSiteDocumentLibraries, fetchLibraryDetails, fetchSiteTelemetry, fetchContentTypes } from "../services/graph";
+import { fetchSharePointSites, fetchSiteUsageReport, fetchSiteDriveOwner, fetchSiteAnalytics, fetchSiteGroupOwners, fetchSiteCollectionAdmins, getAppToken, writeSitePropertyBag, requestSiteReindex, fetchSitePropertyBag, fetchSensitivityLabels, fetchRetentionLabels, fetchHubSites, fetchSiteHubAssociation, fetchHubSitesViaSearch, applySensitivityLabelToSite, removeSensitivityLabelFromSite, joinHubSite, leaveHubSite, fetchSiteLockState, fetchSiteArchiveStatus, batchToggleNoScript, fetchSiteDocumentLibraries, enumerateSiteDocumentLibraries, fetchLibraryDetails, fetchSiteTelemetry, fetchContentTypes, createSharePointSite, createM365Group, createTeam, assignSensitivityLabelToGroup, resolveOwnerIds } from "../services/graph";
 import { getPlanFeatures } from "../services/feature-gate";
 import { refreshDelegatedToken, getDelegatedSpoToken } from "../routes-entra";
 import { requireAuth, requireRole, requirePermission, type AuthenticatedRequest } from "../middleware/rbac";
@@ -406,7 +406,7 @@ router.patch("/api/workspaces/:id", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, Z
 
   const finalWorkspace = await storage.getWorkspace(req.params.id);
 
-  const metadataFields = ['department', 'costCenter', 'projectCode', 'description', 'primarySteward', 'secondarySteward'];
+  const metadataFields = ['department', 'costCenter', 'projectCode', 'description'];
   const hasMetadataChange = metadataFields.some(f => f in req.body && req.body[f] !== (existing as any)[f]);
   const hasSharingChange = 'externalSharing' in req.body && req.body.externalSharing !== existing.externalSharing;
 
@@ -1025,9 +1025,10 @@ router.post("/api/provisioning-requests", requireRole(ZENITH_ROLES.OPERATOR, ZEN
 
 router.patch("/api/provisioning-requests/:id/status", requireRole(ZENITH_ROLES.TENANT_ADMIN), async (req: AuthenticatedRequest, res) => {
   const { status } = req.body;
-  if (!["PENDING", "APPROVED", "PROVISIONED", "REJECTED"].includes(status)) {
+  if (!["PENDING", "APPROVED", "PROVISIONED", "REJECTED", "FAILED"].includes(status)) {
     return res.status(400).json({ message: "Invalid status" });
   }
+
   const existing = await storage.getProvisioningRequest(req.params.id);
   if (!existing) return res.status(404).json({ message: "Request not found" });
   const isPlatformOwner = req.user?.role === ZENITH_ROLES.PLATFORM_OWNER;
@@ -1037,6 +1038,15 @@ router.patch("/api/provisioning-requests/:id/status", requireRole(ZENITH_ROLES.T
       return res.status(403).json({ message: "Forbidden" });
     }
   }
+
+  // Validate owner count on approval too
+  if (status === "APPROVED" || status === "PROVISIONED") {
+    const owners = (existing.siteOwners as Array<{ displayName: string }> | null) || [];
+    if (owners.length < 2) {
+      return res.status(400).json({ message: "Cannot approve: provisioning request requires at least two owners in siteOwners." });
+    }
+  }
+
   if (status === "PROVISIONED") {
     const org = await storage.getOrganization(req.activeOrganizationId || req.user?.organizationId);
     const plan = (org?.servicePlan || "TRIAL") as ServicePlanTier;
@@ -1049,17 +1059,224 @@ router.patch("/api/provisioning-requests/:id/status", requireRole(ZENITH_ROLES.T
         requiredFeature: "m365WriteBack",
       });
     }
+
+    // ── Graph API provisioning ───────────────────────────────────────────────
+    const tenantConnectionId = existing.tenantConnectionId || req.body.tenantConnectionId;
+    if (!tenantConnectionId) {
+      return res.status(400).json({ message: "No tenantConnectionId on provisioning request — cannot provision to M365. Set tenantConnectionId first." });
+    }
+
+    const conn = await storage.getTenantConnection(tenantConnectionId);
+    if (!conn) {
+      return res.status(400).json({ message: "Tenant connection not found" });
+    }
+
+    const clientId = conn.clientId || process.env.AZURE_CLIENT_ID!;
+    const clientSecret = getEffectiveClientSecret(conn);
+
+    let graphToken: string;
+    try {
+      graphToken = await getAppToken(conn.tenantId, clientId, clientSecret);
+    } catch (err: any) {
+      const failed = await storage.updateProvisioningRequestStatus(req.params.id, "FAILED", { errorMessage: `Token acquisition failed: ${err.message}` });
+      await storage.createAuditEntry({
+        userId: req.user?.id || null,
+        userEmail: req.user?.email || null,
+        action: 'PROVISIONING_FAILED',
+        resource: 'provisioning_request',
+        resourceId: existing.id,
+        organizationId: req.user?.organizationId || null,
+        tenantConnectionId,
+        details: { workspaceName: existing.workspaceName, error: err.message, reason: "Token acquisition failed" },
+        result: 'FAILURE',
+        ipAddress: req.ip || null,
+      });
+      return res.status(502).json({ message: `Failed to acquire Graph token: ${err.message}`, request: failed });
+    }
+
+    const siteOwners = (existing.siteOwners as Array<{ displayName: string; mail?: string; userPrincipalName?: string }>) || [];
+    const spoHost = conn.domain.includes('.sharepoint.com') ? conn.domain : `${conn.domain.replace(/\..*$/, '')}.sharepoint.com`;
+    const alias = existing.governedName.replace(/[^a-zA-Z0-9]/g, '').toLowerCase().substring(0, 60);
+    const workspaceType = existing.workspaceType;
+
+    let provisionResult: { success: boolean; siteUrl?: string; graphSiteId?: string; groupId?: string; error?: string };
+
+    try {
+      if (workspaceType === "COMMUNICATION_SITE") {
+        // Communication sites: SharePoint REST provisioning
+        const result = await createSharePointSite(graphToken, spoHost, existing.governedName, alias, existing.workspaceName);
+        provisionResult = result;
+      } else {
+        // Team Site: M365 Group + optional Teams
+        const ownerIds = await resolveOwnerIds(graphToken, siteOwners);
+        if (ownerIds.length === 0) {
+          // Fall back to creating the group without resolved owners — UPNs not in this tenant
+          console.warn(`[provisioning] Could not resolve any owner IDs for ${existing.governedName}. Creating group without pre-set owners.`);
+        }
+        const groupResult = await createM365Group(
+          graphToken,
+          existing.governedName,
+          alias,
+          existing.workspaceName,
+          ownerIds,
+          "Private",
+        );
+        provisionResult = groupResult;
+
+        if (groupResult.success && groupResult.groupId) {
+          // Assign sensitivity label if available
+          const sensitivityMap: Record<string, string> = {
+            HIGHLY_CONFIDENTIAL: "Highly Confidential",
+            CONFIDENTIAL: "Confidential",
+            INTERNAL: "Internal",
+            PUBLIC: "Public",
+          };
+          const labelName = sensitivityMap[existing.sensitivity] || existing.sensitivity;
+          const labels = await storage.getSensitivityLabelsByTenantId(conn.tenantId);
+          const matchedLabel = labels.find(l =>
+            l.appliesToGroupsSites &&
+            (l.name.toLowerCase().includes(labelName.toLowerCase()) || l.labelId === existing.sensitivity)
+          );
+          if (matchedLabel?.labelId) {
+            const labelResult = await assignSensitivityLabelToGroup(graphToken, groupResult.groupId, matchedLabel.labelId);
+            if (!labelResult.success) {
+              console.warn(`[provisioning] Could not assign sensitivity label to group ${groupResult.groupId}: ${labelResult.error}`);
+            } else {
+              console.log(`[provisioning] Assigned sensitivity label ${matchedLabel.labelId} to group ${groupResult.groupId}`);
+            }
+          }
+
+          // Teams-connected: provision a Team on top of the Group
+          if (existing.workspaceType === "TEAM_SITE" && req.body.teamsConnected !== false) {
+            const teamResult = await createTeam(graphToken, groupResult.groupId);
+            if (!teamResult.success) {
+              console.warn(`[provisioning] Team provisioning failed for group ${groupResult.groupId}: ${teamResult.error}`);
+            } else {
+              console.log(`[provisioning] Provisioned Teams team for group ${groupResult.groupId}`);
+            }
+          }
+        }
+      }
+    } catch (err: any) {
+      provisionResult = { success: false, error: err.message };
+    }
+
+    if (!provisionResult.success) {
+      const failed = await storage.updateProvisioningRequestStatus(req.params.id, "FAILED", {
+        errorMessage: provisionResult.error || "Unknown provisioning error",
+      });
+      await storage.createAuditEntry({
+        userId: req.user?.id || null,
+        userEmail: req.user?.email || null,
+        action: 'PROVISIONING_FAILED',
+        resource: 'provisioning_request',
+        resourceId: existing.id,
+        organizationId: req.user?.organizationId || null,
+        tenantConnectionId,
+        details: {
+          workspaceName: existing.workspaceName,
+          workspaceType: existing.workspaceType,
+          governedName: existing.governedName,
+          tenantId: conn.tenantId,
+          error: provisionResult.error,
+        },
+        result: 'FAILURE',
+        ipAddress: req.ip || null,
+      });
+      return res.status(502).json({ message: `M365 provisioning failed: ${provisionResult.error}`, request: failed });
+    }
+
+    // ── Success: write property bag, upsert inventory ───────────────────────
+    const siteUrl = provisionResult.siteUrl;
+    const graphSiteId = provisionResult.graphSiteId;
+
+    if (siteUrl) {
+      // Write Zenith property bag metadata to new site
+      try {
+        const spoToken = await getDelegatedSpoTokenForOrg(spoHost, req.user?.id, conn.organizationId);
+        if (spoToken) {
+          const bagKeys: Record<string, string> = {
+            ZenithWorkspaceName: existing.governedName,
+            ZenithProjectType: existing.projectType,
+            ZenithSensitivity: existing.sensitivity,
+            ZenithRequestedBy: existing.requestedBy,
+            ZenithProvisionedAt: new Date().toISOString(),
+          };
+          await writeSitePropertyBag(spoToken, siteUrl, bagKeys, req.user?.id);
+          console.log(`[provisioning] Wrote property bag to ${siteUrl}`);
+        }
+      } catch (pbErr: any) {
+        console.warn(`[provisioning] Property bag write failed for ${siteUrl}: ${pbErr.message}`);
+      }
+
+      // Upsert workspace inventory record
+      try {
+        const existingByUrl = (await storage.getWorkspaces()).find(w => w.siteUrl === siteUrl);
+        if (!existingByUrl) {
+          await storage.createWorkspace({
+            displayName: existing.governedName,
+            type: existing.workspaceType === "COMMUNICATION_SITE" ? "COMMUNICATION_SITE" : "TEAM_SITE",
+            teamsConnected: existing.workspaceType === "TEAM_SITE",
+            projectType: existing.projectType as any,
+            sensitivity: existing.sensitivity as any,
+            retentionPolicy: "Default 7 Year",
+            metadataStatus: "COMPLETE",
+            copilotReady: false,
+            owners: siteOwners.length,
+            siteOwners,
+            siteUrl,
+            m365ObjectId: graphSiteId || undefined,
+            tenantConnectionId,
+            externalSharing: existing.externalSharing,
+          });
+          console.log(`[provisioning] Created workspace inventory entry for ${siteUrl}`);
+        }
+      } catch (invErr: any) {
+        console.warn(`[provisioning] Could not upsert workspace inventory: ${invErr.message}`);
+      }
+    }
+
+    const provisioned = await storage.updateProvisioningRequestStatus(req.params.id, "PROVISIONED", {
+      provisionedSiteUrl: siteUrl,
+    });
+
+    await storage.createAuditEntry({
+      userId: req.user?.id || null,
+      userEmail: req.user?.email || null,
+      action: 'WORKSPACE_PROVISIONED',
+      resource: 'provisioning_request',
+      resourceId: existing.id,
+      organizationId: req.user?.organizationId || null,
+      tenantConnectionId,
+      details: {
+        workspaceName: existing.workspaceName,
+        workspaceType: existing.workspaceType,
+        governedName: existing.governedName,
+        tenantId: conn.tenantId,
+        siteUrl,
+        graphSiteId,
+        groupId: provisionResult.groupId,
+        ownersCount: siteOwners.length,
+        requestedBy: existing.requestedBy,
+      },
+      result: 'SUCCESS',
+      ipAddress: req.ip || null,
+    });
+
+    return res.json(provisioned);
   }
+
+  // ── Non-provisioning status transitions ─────────────────────────────────────
   const request = await storage.updateProvisioningRequestStatus(req.params.id, status);
   if (!request) return res.status(404).json({ message: "Request not found" });
 
-  const actionMap: Record<string, string> = {
+  const auditActionMap: Record<string, string> = {
     APPROVED: 'WORKSPACE_PROVISIONED',
     REJECTED: 'PROVISIONING_REJECTED',
-    PROVISIONED: 'WORKSPACE_PROVISIONED',
-    PENDING: 'PROVISIONING_FAILED',
+    FAILED: 'PROVISIONING_FAILED',
+    PENDING: 'PROVISIONING_REQUEST_UPDATED',
   };
-  const action = actionMap[status] || 'PROVISIONING_FAILED';
+  const action = auditActionMap[status] || 'PROVISIONING_REQUEST_UPDATED';
   const auditResult = status === 'REJECTED' ? 'FAILURE' : 'SUCCESS';
 
   await storage.createAuditEntry({

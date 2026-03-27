@@ -14,8 +14,6 @@ export const workspaces = pgTable("workspaces", {
   metadataStatus: text("metadata_status").notNull().default("MISSING_REQUIRED"), // COMPLETE, MISSING_REQUIRED
   copilotReady: boolean("copilot_ready").notNull().default(false),
   owners: integer("owners").notNull().default(1),
-  primarySteward: text("primary_steward"),
-  secondarySteward: text("secondary_steward"),
   size: text("size").notNull().default("0 MB"),
   usage: text("usage").notNull().default("Low"), // Low, Medium, High, Very High
   lastActive: text("last_active").notNull().default("Never"),
@@ -74,11 +72,13 @@ export const provisioningRequests = pgTable("provisioning_requests", {
   projectType: text("project_type").notNull().default("DEAL"),
   sensitivity: text("sensitivity").notNull().default("HIGHLY_CONFIDENTIAL"),
   externalSharing: boolean("external_sharing").notNull().default(false),
-  primarySteward: text("primary_steward").notNull(),
-  secondarySteward: text("secondary_steward").notNull(),
-  status: text("status").notNull().default("PENDING"), // PENDING, APPROVED, PROVISIONED, REJECTED
+  siteOwners: jsonb("site_owners").$type<Array<{ displayName: string; mail?: string; userPrincipalName?: string }>>().notNull().default(sql`'[]'::jsonb`),
+  status: text("status").notNull().default("PENDING"), // PENDING, APPROVED, PROVISIONED, REJECTED, FAILED
   requestedBy: text("requested_by").notNull().default("admin@synozur.demo"),
   governedName: text("governed_name").notNull(),
+  tenantConnectionId: varchar("tenant_connection_id"),
+  provisionedSiteUrl: text("provisioned_site_url"),
+  errorMessage: text("error_message"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -87,6 +87,18 @@ export const insertProvisioningRequestSchema = createInsertSchema(provisioningRe
   createdAt: true,
   status: true,
   requestedBy: true,
+  provisionedSiteUrl: true,
+  errorMessage: true,
+}).extend({
+  siteOwners: z.array(z.object({
+    displayName: z.string().min(1),
+    mail: z.string().optional(),
+    userPrincipalName: z.string().optional(),
+  })).min(2, "At least two owners are required"),
+  governedName: z.string().refine(
+    (val) => val.startsWith("DEAL-") || val.startsWith("PORTCO-") || val.startsWith("GEN-"),
+    { message: "Governed name must start with DEAL-, PORTCO-, or GEN-" }
+  ),
 });
 
 export type InsertProvisioningRequest = z.infer<typeof insertProvisioningRequestSchema>;

@@ -123,7 +123,7 @@ export interface IStorage {
   getProvisioningRequests(orgId: string | null): Promise<ProvisioningRequest[]>;
   getProvisioningRequest(id: string): Promise<ProvisioningRequest | undefined>;
   createProvisioningRequest(request: InsertProvisioningRequest): Promise<ProvisioningRequest>;
-  updateProvisioningRequestStatus(id: string, status: string): Promise<ProvisioningRequest | undefined>;
+  updateProvisioningRequestStatus(id: string, status: string, extra?: { provisionedSiteUrl?: string; errorMessage?: string }): Promise<ProvisioningRequest | undefined>;
 
   getCopilotRules(workspaceId: string): Promise<CopilotRule[]>;
   setCopilotRules(workspaceId: string, rules: InsertCopilotRule[]): Promise<CopilotRule[]>;
@@ -292,7 +292,12 @@ export class DatabaseStorage implements IStorage {
         or(
           ilike(workspaces.displayName, `%${search}%`),
           ilike(workspaces.department, `%${search}%`),
-          ilike(workspaces.primarySteward, `%${search}%`)
+          sql`EXISTS (
+            SELECT 1 FROM jsonb_array_elements(${workspaces.siteOwners}) AS owner
+            WHERE owner->>'displayName' ILIKE ${`%${search}%`}
+               OR owner->>'mail' ILIKE ${`%${search}%`}
+               OR owner->>'userPrincipalName' ILIKE ${`%${search}%`}
+          )`
         )
       );
     }
@@ -400,8 +405,8 @@ export class DatabaseStorage implements IStorage {
     return created;
   }
 
-  async updateProvisioningRequestStatus(id: string, status: string): Promise<ProvisioningRequest | undefined> {
-    const [updated] = await db.update(provisioningRequests).set({ status }).where(eq(provisioningRequests.id, id)).returning();
+  async updateProvisioningRequestStatus(id: string, status: string, extra?: { provisionedSiteUrl?: string; errorMessage?: string }): Promise<ProvisioningRequest | undefined> {
+    const [updated] = await db.update(provisioningRequests).set({ status, ...extra }).where(eq(provisioningRequests.id, id)).returning();
     return updated;
   }
 

@@ -3410,3 +3410,232 @@ export async function fetchContentTypes(graphToken: string, siteId: string): Pro
     return { contentTypes: [], error: err.message };
   }
 }
+
+// ── Provisioning: Site / Group / Team Creation ───────────────────────────────
+
+export interface ProvisionedSite {
+  siteUrl: string;
+  graphSiteId: string;
+  groupId?: string;
+}
+
+/**
+ * Create a Communication Site via SharePoint REST API.
+ * Requires Sites.FullControl.All or Sites.Manage.All application permission.
+ */
+export async function createSharePointSite(
+  graphToken: string,
+  spoHost: string,
+  displayName: string,
+  alias: string,
+  description: string = "",
+): Promise<{ success: boolean; siteUrl?: string; graphSiteId?: string; error?: string }> {
+  const url = `https://${spoHost}/_api/SPSiteManager/create`;
+  const body = {
+    request: {
+      Title: displayName,
+      Url: `https://${spoHost}/sites/${alias}`,
+      Lcid: 1033,
+      ShareByEmailEnabled: false,
+      Description: description,
+      WebTemplate: "SITEPAGEPUBLISHING#0",
+      SiteDesignId: "00000000-0000-0000-0000-000000000000",
+    },
+  };
+
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${graphToken}`,
+        "Content-Type": "application/json;odata=verbose",
+        Accept: "application/json;odata=nometadata",
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!res.ok) {
+      const errText = await res.text();
+      return { success: false, error: `SPO create site ${res.status}: ${errText.substring(0, 400)}` };
+    }
+
+    const data = await res.json();
+    const siteUrl = data.SiteUrl || data.SiteStatus?.SiteUrl;
+    if (!siteUrl) {
+      return { success: false, error: "Site created but URL not returned" };
+    }
+
+    const graphSiteRes = await fetch(`https://graph.microsoft.com/v1.0/sites/${spoHost}:/sites/${alias}?$select=id,webUrl`, {
+      headers: { Authorization: `Bearer ${graphToken}` },
+    });
+    let graphSiteId = "";
+    if (graphSiteRes.ok) {
+      const siteData = await graphSiteRes.json();
+      graphSiteId = siteData.id || "";
+    }
+
+    return { success: true, siteUrl, graphSiteId };
+  } catch (err: any) {
+    return { success: false, error: err.message };
+  }
+}
+
+/**
+ * Create an M365 Group (Team Site) via Graph API.
+ * owners should be an array of UPNs or object IDs.
+ */
+export async function createM365Group(
+  graphToken: string,
+  displayName: string,
+  mailNickname: string,
+  description: string = "",
+  ownerIds: string[],
+  visibility: "Private" | "Public" = "Private",
+): Promise<{ success: boolean; groupId?: string; siteUrl?: string; graphSiteId?: string; error?: string }> {
+  const body: Record<string, any> = {
+    displayName,
+    mailNickname,
+    description,
+    groupTypes: ["Unified"],
+    mailEnabled: true,
+    securityEnabled: false,
+    visibility,
+    "members@odata.bind": ownerIds.map(id => `https://graph.microsoft.com/v1.0/users/${id}`),
+    "owners@odata.bind": ownerIds.map(id => `https://graph.microsoft.com/v1.0/users/${id}`),
+  };
+
+  try {
+    const res = await fetch("https://graph.microsoft.com/v1.0/groups", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${graphToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!res.ok) {
+      const errText = await res.text();
+      return { success: false, error: `Graph create group ${res.status}: ${errText.substring(0, 400)}` };
+    }
+
+    const data = await res.json();
+    const groupId = data.id;
+    if (!groupId) {
+      return { success: false, error: "Group created but ID not returned" };
+    }
+
+    // Wait for provisioning then fetch site URL
+    let siteUrl: string | undefined;
+    let graphSiteId: string | undefined;
+    for (let attempt = 0; attempt < 6; attempt++) {
+      await new Promise(r => setTimeout(r, 5000));
+      const siteRes = await fetch(`https://graph.microsoft.com/v1.0/groups/${groupId}/sites/root?$select=id,webUrl`, {
+        headers: { Authorization: `Bearer ${graphToken}` },
+      });
+      if (siteRes.ok) {
+        const siteData = await siteRes.json();
+        siteUrl = siteData.webUrl;
+        graphSiteId = siteData.id;
+        break;
+      }
+    }
+
+    return { success: true, groupId, siteUrl, graphSiteId };
+  } catch (err: any) {
+    return { success: false, error: err.message };
+  }
+}
+
+/**
+ * Provision a Team on top of an existing M365 Group.
+ */
+export async function createTeam(
+  graphToken: string,
+  groupId: string,
+): Promise<{ success: boolean; teamId?: string; error?: string }> {
+  const body = {
+    "template@odata.bind": "https://graph.microsoft.com/v1.0/teamsTemplates('standard')",
+    group: { id: groupId },
+  };
+
+  try {
+    const res = await fetch("https://graph.microsoft.com/v1.0/teams", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${graphToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+
+    // Teams provisioning returns 202 Accepted with a Location header
+    if (res.status === 202 || res.ok) {
+      const location = res.headers.get("Location");
+      // Extract operation ID from location header if available
+      const teamId = location ? location.split("/").pop() : groupId;
+      return { success: true, teamId };
+    }
+
+    const errText = await res.text();
+    return { success: false, error: `Graph create team ${res.status}: ${errText.substring(0, 400)}` };
+  } catch (err: any) {
+    return { success: false, error: err.message };
+  }
+}
+
+/**
+ * Assign a sensitivity label to an M365 Group/Site via Graph API.
+ */
+export async function assignSensitivityLabelToGroup(
+  graphToken: string,
+  groupId: string,
+  labelId: string,
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const res = await fetch(`https://graph.microsoft.com/v1.0/groups/${groupId}`, {
+      method: "PATCH",
+      headers: {
+        Authorization: `Bearer ${graphToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        assignedLabels: [{ labelId }],
+      }),
+    });
+
+    if (res.ok || res.status === 204) {
+      return { success: true };
+    }
+
+    const errText = await res.text();
+    return { success: false, error: `Graph assign label ${res.status}: ${errText.substring(0, 300)}` };
+  } catch (err: any) {
+    return { success: false, error: err.message };
+  }
+}
+
+/**
+ * Resolve owner UPNs/emails to Graph user object IDs.
+ * Returns the subset that could be resolved.
+ */
+export async function resolveOwnerIds(
+  graphToken: string,
+  owners: Array<{ displayName: string; mail?: string; userPrincipalName?: string }>,
+): Promise<string[]> {
+  const ids: string[] = [];
+  for (const owner of owners) {
+    const upn = owner.userPrincipalName || owner.mail;
+    if (!upn) continue;
+    try {
+      const res = await fetch(`https://graph.microsoft.com/v1.0/users/${encodeURIComponent(upn)}?$select=id`, {
+        headers: { Authorization: `Bearer ${graphToken}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.id) ids.push(data.id);
+      }
+    } catch {}
+  }
+  return ids;
+}

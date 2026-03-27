@@ -71,6 +71,10 @@ export default function ProvisionNewPage() {
         externalSharing: sensitivity !== "highly_confidential",
         requestedBy: owner,
         governedName: getPolicyPreview(),
+        siteOwners: [
+          { displayName: owner, userPrincipalName: owner },
+          { displayName: secondaryOwner, userPrincipalName: secondaryOwner },
+        ],
       });
     },
     onSuccess: () => {
