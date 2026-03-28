@@ -41,6 +41,8 @@ import {
   FlaskConical,
   HardDrive,
   ClipboardList,
+  Loader2,
+  KeySquare,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -55,9 +57,12 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
 import SynozurAppSwitcher from "@/components/synozur-app-switcher";
 import { useTenant } from "@/lib/tenant-context";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
+import { queryClient } from "@/lib/queryClient";
 
 interface AppShellProps {
   children: React.ReactNode;
@@ -137,6 +142,34 @@ export default function AppShell({ children }: AppShellProps) {
   const [location] = useLocation();
   const { theme, setTheme } = useTheme();
   const { tenants, selectedTenant, setSelectedTenantId, isFeatureEnabled } = useTenant();
+  const [mspDialogOpen, setMspDialogOpen] = useState(false);
+  const [mspCode, setMspCode] = useState("");
+  const [mspError, setMspError] = useState<string | null>(null);
+
+  const redeemMspCodeMutation = useMutation({
+    mutationFn: async (code: string) => {
+      const res = await fetch("/api/admin/msp-access/redeem", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ code }),
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || "Failed to redeem code");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/tenants"] });
+      setMspDialogOpen(false);
+      setMspCode("");
+      setMspError(null);
+    },
+    onError: (err: Error) => {
+      setMspError(err.message);
+    },
+  });
 
   const { data: authData, isLoading: authLoading } = useQuery<{
     user: { id: string; name: string | null; email: string; role: string; effectiveRole?: string; authProvider: string | null; organizationId: string | null };
@@ -373,14 +406,21 @@ export default function AppShell({ children }: AppShellProps) {
                               onClick={() => tenant.id !== selectedTenant?.id && setSelectedTenantId(tenant.id)}
                             >
                               <Cloud className="w-3.5 h-3.5 mr-2 text-muted-foreground shrink-0" />
-                              <div className="flex flex-col">
+                              <div className="flex flex-col flex-1">
                                 <span className={`font-medium text-sm ${selectedTenant?.id === tenant.id ? 'text-secondary' : ''}`}>{tenant.domain}</span>
                                 <span className="text-[10px] text-muted-foreground">{tenant.tenantName}</span>
                               </div>
+                              {tenant.isGrantedAccess && <Badge variant="outline" className="text-[10px] uppercase tracking-wider h-4 px-1 border-amber-500/40 text-amber-500 ml-1">Managed</Badge>}
                               {selectedTenant?.id === tenant.id && <Check className="w-4 h-4 text-secondary ml-auto shrink-0" />}
                             </DropdownMenuItem>
                           ))}
                           <DropdownMenuSeparator className="my-1" />
+                          <DropdownMenuItem
+                            className="rounded-lg p-2.5 cursor-pointer text-muted-foreground"
+                            onSelect={() => { setMspCode(""); setMspError(null); setMspDialogOpen(true); }}
+                          >
+                            <KeySquare className="w-4 h-4 mr-2" /> Enter MSP access code...
+                          </DropdownMenuItem>
                           <DropdownMenuItem asChild className="rounded-lg p-2.5 cursor-pointer">
                             <Link href="/app/admin/tenants" className="flex items-center text-muted-foreground">
                               <Settings className="w-4 h-4 mr-2" /> Manage connections
@@ -450,9 +490,14 @@ export default function AppShell({ children }: AppShellProps) {
                         <span className={`font-semibold block ${selectedTenant?.id === tenant.id ? 'text-secondary' : ''}`}>{tenant.domain}</span>
                         <span className="text-xs text-muted-foreground block">{tenant.tenantName}{tenant.isDemo ? ' (Demo)' : ''}</span>
                       </div>
-                      {selectedTenant?.id === tenant.id && (
-                        <Badge variant="default" className="text-[10px] bg-secondary text-secondary-foreground hover:bg-secondary uppercase tracking-wider h-5 px-1.5 shadow-sm shadow-secondary/20">Active</Badge>
-                      )}
+                      <div className="flex flex-col items-end gap-1">
+                        {selectedTenant?.id === tenant.id && (
+                          <Badge variant="default" className="text-[10px] bg-secondary text-secondary-foreground hover:bg-secondary uppercase tracking-wider h-5 px-1.5 shadow-sm shadow-secondary/20">Active</Badge>
+                        )}
+                        {tenant.isGrantedAccess && (
+                          <Badge variant="outline" className="text-[10px] uppercase tracking-wider h-5 px-1.5 border-amber-500/40 text-amber-500">Managed</Badge>
+                        )}
+                      </div>
                     </DropdownMenuItem>
                   ))}
                   {tenants.length === 0 && (
@@ -461,6 +506,14 @@ export default function AppShell({ children }: AppShellProps) {
                     </DropdownMenuItem>
                   )}
                   <DropdownMenuSeparator className="my-2" />
+                  <DropdownMenuItem
+                    className="rounded-lg p-2.5 cursor-pointer text-muted-foreground"
+                    onSelect={() => { setMspCode(""); setMspError(null); setMspDialogOpen(true); }}
+                    data-testid="button-enter-msp-code"
+                  >
+                    <KeySquare className="w-4 h-4 mr-2" />
+                    Enter MSP access code...
+                  </DropdownMenuItem>
                   <DropdownMenuItem asChild className="rounded-lg p-2.5 cursor-pointer group">
                     <Link href="/app/admin/tenants" className="flex items-center text-muted-foreground">
                       <Settings className="w-4 h-4 mr-2" />
@@ -560,6 +613,50 @@ export default function AppShell({ children }: AppShellProps) {
           </Button>
         </div>
       </main>
+
+      {/* MSP Access Code Dialog */}
+      <Dialog open={mspDialogOpen} onOpenChange={(open) => { setMspDialogOpen(open); if (!open) { setMspCode(""); setMspError(null); } }}>
+        <DialogContent className="sm:max-w-sm rounded-2xl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <KeySquare className="w-5 h-5 text-primary" />
+              Enter MSP Access Code
+            </DialogTitle>
+            <DialogDescription>
+              Enter the 6-digit access code provided by your customer to gain access to their M365 tenant.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="msp-code">Access code</Label>
+              <Input
+                id="msp-code"
+                placeholder="e.g. 482913"
+                value={mspCode}
+                onChange={e => { setMspCode(e.target.value.replace(/\D/g, "").slice(0, 6)); setMspError(null); }}
+                maxLength={6}
+                className="text-center text-lg tracking-widest font-mono"
+                data-testid="input-msp-access-code"
+                onKeyDown={e => { if (e.key === "Enter" && mspCode.length === 6) redeemMspCodeMutation.mutate(mspCode); }}
+              />
+            </div>
+            {mspError && (
+              <p className="text-sm text-destructive">{mspError}</p>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setMspDialogOpen(false)} disabled={redeemMspCodeMutation.isPending}>Cancel</Button>
+            <Button
+              onClick={() => redeemMspCodeMutation.mutate(mspCode)}
+              disabled={mspCode.length !== 6 || redeemMspCodeMutation.isPending}
+              data-testid="button-redeem-msp-code"
+            >
+              {redeemMspCodeMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
+              Confirm access
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

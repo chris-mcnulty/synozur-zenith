@@ -13,6 +13,7 @@ interface TenantConnection {
   status: string;
   isDemo: boolean;
   mspAccessDenied?: boolean;
+  isGrantedAccess?: boolean;
   onedriveInventoryEnabled?: boolean;
   recordingsDiscoveryEnabled?: boolean;
   teamsDiscoveryEnabled?: boolean;

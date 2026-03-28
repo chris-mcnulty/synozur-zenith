@@ -314,6 +314,7 @@ export interface IStorage {
   getMspAccessGrantByCode(code: string): Promise<MspAccessGrant | undefined>;
   getMspAccessGrantsForTenant(tenantConnectionId: string): Promise<MspAccessGrant[]>;
   getActiveMspGrantForOrg(tenantConnectionId: string, grantedToOrgId: string): Promise<MspAccessGrant | undefined>;
+  getActiveMspGrantsForGrantee(grantedToOrgId: string): Promise<MspAccessGrant[]>;
   updateMspAccessGrant(id: string, updates: Partial<MspAccessGrant>): Promise<MspAccessGrant | undefined>;
   invalidatePendingMspCodes(tenantConnectionId: string): Promise<void>;
 
@@ -2226,6 +2227,14 @@ export class DatabaseStorage implements IStorage {
         eq(mspAccessGrants.status, "ACTIVE")
       ));
     return grant;
+  }
+
+  async getActiveMspGrantsForGrantee(grantedToOrgId: string): Promise<MspAccessGrant[]> {
+    return db.select().from(mspAccessGrants)
+      .where(and(
+        eq(mspAccessGrants.grantedToOrgId, grantedToOrgId),
+        eq(mspAccessGrants.status, "ACTIVE")
+      ));
   }
 
   async updateMspAccessGrant(id: string, updates: Partial<MspAccessGrant>): Promise<MspAccessGrant | undefined> {

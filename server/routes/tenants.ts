@@ -65,25 +65,33 @@ router.get("/api/admin/tenants", requirePermission('inventory:read'), async (req
   const orgId = req.activeOrganizationId || req.user?.organizationId;
   const isPlatformOwner = req.user?.role === ZENITH_ROLES.PLATFORM_OWNER;
 
-  // When a specific org is active (always the case in normal use), scope to that org only.
-  // Platform owners only see everything when there is genuinely no org context.
-  const allConnections = orgId
+  // Load own-org connections
+  const ownConnections = orgId
     ? await storage.getTenantConnections(orgId)
     : await storage.getTenantConnections(undefined);
 
-  const filtered: (typeof allConnections[0] & { mspAccessDenied?: boolean })[] = [];
-  for (const c of allConnections) {
+  type EnrichedConnection = typeof ownConnections[0] & { mspAccessDenied?: boolean; isGrantedAccess?: boolean };
+  const filtered: EnrichedConnection[] = [];
+
+  // Add own-org tenants
+  for (const c of ownConnections) {
     if (c.organizationId === orgId) {
       filtered.push(c);
     } else if (isPlatformOwner && !orgId) {
-      // No org context at all — platform owner sees everything
       filtered.push(c);
-    } else if (c.installMode === "CUSTOMER") {
-      const grant = orgId ? await storage.getActiveMspGrantForOrg(c.id, orgId) : null;
-      if (grant) {
-        filtered.push(c);
-      } else {
-        filtered.push({ ...c, mspAccessDenied: true });
+    }
+  }
+
+  // Add cross-org CUSTOMER tenants the active org has been granted access to
+  if (orgId) {
+    const activeGrants = await storage.getActiveMspGrantsForGrantee(orgId);
+    for (const grant of activeGrants) {
+      const alreadyIncluded = filtered.some(f => f.id === grant.tenantConnectionId);
+      if (!alreadyIncluded) {
+        const conn = await storage.getTenantConnection(grant.tenantConnectionId);
+        if (conn) {
+          filtered.push({ ...conn, isGrantedAccess: true });
+        }
       }
     }
   }
