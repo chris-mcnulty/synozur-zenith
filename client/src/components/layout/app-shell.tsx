@@ -418,14 +418,52 @@ export default function AppShell({ children }: AppShellProps) {
                         </DropdownMenuContent>
                       </DropdownMenu>
                     )}
-                    <Link href="/app/admin/tenants" className="flex items-center gap-2.5 px-3 py-2 rounded-xl bg-secondary/5 hover:bg-secondary/10 transition-colors">
+                    <div className="flex items-center gap-2.5 px-3 py-2 rounded-xl bg-secondary/5">
                       <Cloud className="w-4 h-4 text-secondary shrink-0" />
                       <div className="flex flex-col -space-y-0.5">
                         <span className="text-[9px] font-bold text-muted-foreground uppercase tracking-widest">M365 Tenant</span>
-                        <span className="font-medium text-sm leading-none text-muted-foreground">Manage connections</span>
+                        <span className="font-semibold text-sm leading-none">{selectedTenant?.domain || 'No tenants'}</span>
                       </div>
-                      <Settings className="w-3.5 h-3.5 text-muted-foreground/50 ml-auto" />
-                    </Link>
+                    </div>
+                    {tenants.length > 1 && (
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <button className="flex items-center gap-2.5 px-3 py-2 rounded-xl bg-muted/30 hover:bg-muted/50 transition-colors w-full text-left">
+                            <Cloud className="w-4 h-4 text-muted-foreground shrink-0" />
+                            <span className="text-xs font-medium text-muted-foreground">Switch tenant...</span>
+                            <ChevronDown className="w-3 h-3 text-muted-foreground/50 ml-auto" />
+                          </button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="start" className="w-56 rounded-xl p-2">
+                          {tenants.map((tenant) => (
+                            <DropdownMenuItem
+                              key={tenant.id}
+                              className={`rounded-lg p-2.5 cursor-pointer ${selectedTenant?.id === tenant.id ? 'bg-secondary/10 cursor-default' : ''}`}
+                              onClick={() => tenant.id !== selectedTenant?.id && setSelectedTenantId(tenant.id)}
+                            >
+                              <Cloud className="w-3.5 h-3.5 mr-2 text-muted-foreground shrink-0" />
+                              <div className="flex flex-col">
+                                <span className={`font-medium text-sm ${selectedTenant?.id === tenant.id ? 'text-secondary' : ''}`}>{tenant.domain}</span>
+                                <span className="text-[10px] text-muted-foreground">{tenant.tenantName}</span>
+                              </div>
+                              {selectedTenant?.id === tenant.id && <Check className="w-4 h-4 text-secondary ml-auto shrink-0" />}
+                            </DropdownMenuItem>
+                          ))}
+                          <DropdownMenuSeparator className="my-1" />
+                          <DropdownMenuItem asChild className="rounded-lg p-2.5 cursor-pointer">
+                            <Link href="/app/admin/tenants" className="flex items-center text-muted-foreground">
+                              <Settings className="w-4 h-4 mr-2" /> Manage connections
+                            </Link>
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    )}
+                    {tenants.length <= 1 && (
+                      <Link href="/app/admin/tenants" className="flex items-center gap-2.5 px-3 py-2 rounded-xl bg-muted/30 hover:bg-muted/50 transition-colors">
+                        <Settings className="w-4 h-4 text-muted-foreground shrink-0" />
+                        <span className="text-xs font-medium text-muted-foreground">Manage connections</span>
+                      </Link>
+                    )}
                   </div>
                   <NavLinks />
                   <div className="mt-8 pt-4 border-t border-border/40">
