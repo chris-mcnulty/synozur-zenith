@@ -39,7 +39,6 @@ import {
   KeyRound,
   BookMarked,
   FlaskConical,
-  ArrowLeft,
   HardDrive,
   ClipboardList,
 } from "lucide-react";
@@ -58,8 +57,7 @@ import {
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 import SynozurAppSwitcher from "@/components/synozur-app-switcher";
 import { useTenant } from "@/lib/tenant-context";
-import { useQuery, useMutation } from "@tanstack/react-query";
-import { queryClient } from "@/lib/queryClient";
+import { useQuery } from "@tanstack/react-query";
 
 interface AppShellProps {
   children: React.ReactNode;
@@ -134,16 +132,6 @@ const navGroups: NavGroup[] = [
   }
 ];
 
-type OrgMembership = {
-  id: string;
-  name: string;
-  domain: string;
-  servicePlan: string;
-  role: string;
-  isPrimary: boolean;
-  membershipId: string | null;
-  platformAccess?: boolean;
-};
 
 export default function AppShell({ children }: AppShellProps) {
   const [location] = useLocation();
@@ -167,30 +155,6 @@ export default function AppShell({ children }: AppShellProps) {
     retry: false,
   });
 
-  const { data: myOrgs = [] } = useQuery<OrgMembership[]>({
-    queryKey: ["/api/orgs/mine"],
-    queryFn: () => fetch("/api/orgs/mine", { credentials: "include" }).then(r => r.ok ? r.json() : []),
-    staleTime: 5 * 60 * 1000,
-    enabled: !!authData?.user,
-  });
-
-  const switchOrgMutation = useMutation({
-    mutationFn: async (organizationId: string) => {
-      const res = await fetch("/api/orgs/switch", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({ organizationId }),
-      });
-      if (!res.ok) throw new Error("Failed to switch organization");
-      return res.json();
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/orgs/mine"] });
-      queryClient.invalidateQueries();
-    },
-  });
 
   if (!authLoading && !authData?.user) {
     return <Redirect to="/login" />;
@@ -203,13 +167,6 @@ export default function AppShell({ children }: AppShellProps) {
     : currentUser?.email?.[0]?.toUpperCase() || "?";
 
   const effectiveRole = currentUser?.effectiveRole || currentUser?.role || "viewer";
-  const homeOrgId = currentUser?.organizationId;
-  const isPlatformAdminVisiting =
-    currentUser?.role === 'platform_owner' &&
-    authData?.activeOrganizationId &&
-    homeOrgId &&
-    authData.activeOrganizationId !== homeOrgId;
-  const homeOrg = myOrgs.find(o => o.id === homeOrgId);
 
   const adminItems: Array<{ name: string; href: string; icon: any; matchExact?: boolean; minRole: string }> = [
     { name: "Provisioning Templates", href: "/app/admin", icon: LayoutTemplate, matchExact: true, minRole: "tenant_admin" },
@@ -392,32 +349,6 @@ export default function AppShell({ children }: AppShellProps) {
                         <span className="font-semibold text-sm leading-none">{activeOrg?.name || 'No organization'}</span>
                       </div>
                     </div>
-                    {myOrgs.length > 1 && (
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                          <button className="flex items-center gap-2.5 px-3 py-2 rounded-xl bg-muted/30 hover:bg-muted/50 transition-colors w-full text-left">
-                            <Building2 className="w-4 h-4 text-muted-foreground shrink-0" />
-                            <span className="text-xs font-medium text-muted-foreground">Switch organization...</span>
-                            <ChevronDown className="w-3 h-3 text-muted-foreground/50 ml-auto" />
-                          </button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="start" className="w-56 rounded-xl p-2">
-                          {myOrgs.filter(o => o.id !== activeOrg?.id).map((org) => (
-                            <DropdownMenuItem
-                              key={org.id}
-                              className="rounded-lg p-2.5 cursor-pointer"
-                              onClick={() => switchOrgMutation.mutate(org.id)}
-                            >
-                              <Building2 className="w-3.5 h-3.5 mr-2 text-muted-foreground" />
-                              <div className="flex flex-col">
-                                <span className="font-medium text-sm">{org.name}</span>
-                                <span className="text-[10px] text-muted-foreground capitalize">{org.role.replace(/_/g, ' ')}</span>
-                              </div>
-                            </DropdownMenuItem>
-                          ))}
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                    )}
                     <div className="flex items-center gap-2.5 px-3 py-2 rounded-xl bg-secondary/5">
                       <Cloud className="w-4 h-4 text-secondary shrink-0" />
                       <div className="flex flex-col -space-y-0.5">
@@ -483,52 +414,14 @@ export default function AppShell({ children }: AppShellProps) {
             {/* Master Selectors */}
             <div className="hidden md:flex items-center bg-card/40 border border-border/50 rounded-full shadow-sm p-0.5 backdrop-blur-md transition-colors hover:border-border/80">
               
-              {/* Company/Org Selector */}
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button variant="ghost" className="h-9 gap-2 rounded-full px-3 hover:bg-muted/60 data-[state=open]:bg-muted/60 text-left" data-testid="button-org-switcher">
-                    <Building2 className="w-4 h-4 text-primary shrink-0" />
-                    <div className="flex flex-col items-start -space-y-0.5">
-                      <span className="text-[9px] font-bold text-muted-foreground uppercase tracking-widest">Organization</span>
-                      <span className="font-semibold text-sm leading-none text-foreground" data-testid="text-active-org">{activeOrg?.name || 'No organization'}</span>
-                    </div>
-                    {myOrgs.length > 1 && <ChevronDown className="w-3 h-3 text-muted-foreground opacity-50 ml-1 shrink-0" />}
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="start" className="w-64 rounded-xl p-2">
-                  <DropdownMenuLabel className="text-xs text-muted-foreground uppercase tracking-wider">
-                    {myOrgs.length > 1 ? 'Switch Organization' : 'Organization'}
-                  </DropdownMenuLabel>
-                  <DropdownMenuSeparator className="mb-2 mt-1" />
-                  {myOrgs.map((org) => {
-                    const isActive = activeOrg?.id === org.id;
-                    return (
-                      <DropdownMenuItem
-                        key={org.id}
-                        className={`flex justify-between rounded-lg p-2.5 mt-1 ${isActive ? 'bg-primary/10 cursor-default' : 'cursor-pointer text-muted-foreground hover:text-foreground'}`}
-                        onClick={() => !isActive && switchOrgMutation.mutate(org.id)}
-                        data-testid={`button-switch-org-${org.id}`}
-                      >
-                        <div className="flex items-center gap-2.5">
-                          <div className={`w-6 h-6 rounded flex items-center justify-center ${isActive ? 'bg-primary/20' : 'bg-muted'}`}>
-                            <Building2 className={`w-3.5 h-3.5 ${isActive ? 'text-primary' : 'text-muted-foreground'}`} />
-                          </div>
-                          <div className="flex flex-col">
-                            <span className={`font-semibold text-sm ${isActive ? 'text-primary' : ''}`}>{org.name}</span>
-                            <span className="text-[10px] text-muted-foreground capitalize">{org.role.replace(/_/g, ' ')}</span>
-                          </div>
-                        </div>
-                        {isActive && <Check className="w-4 h-4 text-primary shrink-0" />}
-                      </DropdownMenuItem>
-                    );
-                  })}
-                  {myOrgs.length === 0 && (
-                    <DropdownMenuItem className="rounded-lg p-2.5 text-muted-foreground cursor-default">
-                      No organizations
-                    </DropdownMenuItem>
-                  )}
-                </DropdownMenuContent>
-              </DropdownMenu>
+              {/* Company/Org Display */}
+              <div className="flex items-center gap-2 px-3 h-9" data-testid="text-active-org-display">
+                <Building2 className="w-4 h-4 text-primary shrink-0" />
+                <div className="flex flex-col items-start -space-y-0.5">
+                  <span className="text-[9px] font-bold text-muted-foreground uppercase tracking-widest">Organization</span>
+                  <span className="font-semibold text-sm leading-none text-foreground" data-testid="text-active-org">{activeOrg?.name || 'No organization'}</span>
+                </div>
+              </div>
 
               <div className="w-px h-6 bg-border/80 mx-1"></div>
 
@@ -619,8 +512,8 @@ export default function AppShell({ children }: AppShellProps) {
                     {(currentUser?.effectiveRole || currentUser?.role) && (
                       <p className="text-[10px] leading-none text-muted-foreground/70 capitalize mt-0.5">
                         {(currentUser.effectiveRole || currentUser.role).replace(/_/g, " ")}
-                        {activeOrg && myOrgs.length > 1 && (
-                          <span className="text-muted-foreground/50"> in {activeOrg.name}</span>
+                        {activeOrg && (
+                          <span className="text-muted-foreground/50"> · {activeOrg.name}</span>
                         )}
                       </p>
                     )}
@@ -656,29 +549,6 @@ export default function AppShell({ children }: AppShellProps) {
         {/* Page Content */}
         <div className="flex-1 overflow-auto bg-background/50 p-4 sm:p-6 lg:p-8">
           <div className="max-w-[1600px] mx-auto">
-            {isPlatformAdminVisiting && (
-              <div className="mb-4 flex items-center justify-between gap-3 rounded-xl border border-violet-500/30 bg-violet-500/10 px-4 py-2.5 text-sm text-violet-400">
-                <div className="flex items-center gap-2">
-                  <ShieldCheck className="w-4 h-4 shrink-0" />
-                  <span>
-                    Viewing <strong className="text-violet-300">{activeOrg?.name}</strong> as Platform Admin
-                  </span>
-                </div>
-                {homeOrg && (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-7 gap-1.5 text-xs text-violet-400 hover:text-violet-200 hover:bg-violet-500/20 shrink-0"
-                    onClick={() => switchOrgMutation.mutate(homeOrgId!)}
-                    disabled={switchOrgMutation.isPending}
-                    data-testid="button-return-home-org"
-                  >
-                    <ArrowLeft className="w-3.5 h-3.5" />
-                    Back to {homeOrg.name}
-                  </Button>
-                )}
-              </div>
-            )}
             {children}
           </div>
         </div>
