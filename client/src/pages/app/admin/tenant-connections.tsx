@@ -100,6 +100,9 @@ export default function TenantConnectionsPage() {
   const [mspCodeSubmitting, setMspCodeSubmitting] = useState(false);
   const [maskingDialogTenantId, setMaskingDialogTenantId] = useState<string | null>(null);
   const [maskingToggling, setMaskingToggling] = useState(false);
+  const [editModeDialogId, setEditModeDialogId] = useState<string | null>(null);
+  const [editInstallMode, setEditInstallMode] = useState<string>("MSP");
+  const [editModeSubmitting, setEditModeSubmitting] = useState(false);
 
   const [deleteDialogId, setDeleteDialogId] = useState<string | null>(null);
   const [deletionSummary, setDeletionSummary] = useState<{ tenantName: string; domain: string; summary: Record<string, number> } | null>(null);
@@ -154,6 +157,22 @@ export default function TenantConnectionsPage() {
     } finally {
       setMaskingToggling(false);
       setMaskingDialogTenantId(null);
+    }
+  };
+
+  const handleSaveInstallMode = async () => {
+    if (!editModeDialogId) return;
+    setEditModeSubmitting(true);
+    try {
+      const res = await apiRequest("PATCH", `/api/admin/tenants/${editModeDialogId}`, { installMode: editInstallMode });
+      if (!res.ok) throw new Error("Failed to update access mode");
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/tenants"] });
+      toast({ title: "Access Mode Updated", description: `Tenant is now in ${editInstallMode} mode.` });
+      setEditModeDialogId(null);
+    } catch (err: any) {
+      toast({ title: "Error", description: err.message || "Failed to update access mode", variant: "destructive" });
+    } finally {
+      setEditModeSubmitting(false);
     }
   };
 
@@ -728,7 +747,12 @@ export default function TenantConnectionsPage() {
                               Update Permissions
                             </DropdownMenuItem>
                           )}
-                          {(conn as any).installMode === 'CUSTOMER' && !isBlocked && (
+                          {!isBlocked && (
+                            <DropdownMenuItem className="gap-2" onClick={() => { setEditModeDialogId(conn.id); setEditInstallMode((conn as any).installMode || "MSP"); }}>
+                              <ShieldCheck className="w-4 h-4" /> Access Mode
+                            </DropdownMenuItem>
+                          )}
+                          {!isBlocked && (
                             <DropdownMenuItem className="gap-2" onClick={() => setMspAccessDialogId(conn.id)}>
                               <Users className="w-4 h-4" /> MSP Access
                             </DropdownMenuItem>
@@ -994,6 +1018,54 @@ export default function TenantConnectionsPage() {
         </DialogContent>
       </Dialog>
 
+      {/* Edit Access Mode Dialog */}
+      <Dialog open={editModeDialogId !== null} onOpenChange={(open) => { if (!open) setEditModeDialogId(null); }}>
+        <DialogContent className="sm:max-w-[480px]">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <ShieldCheck className="w-5 h-5 text-primary" />
+              Access Mode
+            </DialogTitle>
+            <DialogDescription>
+              Controls how other organizations can access this tenant's data in Zenith.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="space-y-2">
+              <Label>Install Mode</Label>
+              <Select value={editInstallMode} onValueChange={setEditInstallMode}>
+                <SelectTrigger data-testid="select-install-mode">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="MSP">MSP — Managed by your organization</SelectItem>
+                  <SelectItem value="CUSTOMER">Customer — Requires consent code for MSP access</SelectItem>
+                  <SelectItem value="HYBRID">Hybrid — Both MSP and customer managed</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="rounded-lg border border-border/50 bg-muted/30 p-3 space-y-2 text-xs text-muted-foreground">
+              {editInstallMode === "MSP" && (
+                <p><strong>MSP mode:</strong> This tenant is fully managed by your organization. Other Zenith organizations cannot view it unless they have platform-level access.</p>
+              )}
+              {editInstallMode === "CUSTOMER" && (
+                <p><strong>Customer mode:</strong> MSP organizations that don't already have access will be blocked from viewing this tenant. They must enter a time-limited consent code that you generate from the MSP Access panel.</p>
+              )}
+              {editInstallMode === "HYBRID" && (
+                <p><strong>Hybrid mode:</strong> The tenant is co-managed between your organization and an MSP. Both parties can access it without a consent gate.</p>
+              )}
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEditModeDialogId(null)}>Cancel</Button>
+            <Button onClick={handleSaveInstallMode} disabled={editModeSubmitting} data-testid="button-save-install-mode">
+              {editModeSubmitting && <Loader2 className="w-4 h-4 animate-spin mr-2" />}
+              Save
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={showClaimDialog} onOpenChange={(open) => { setShowClaimDialog(open); if (!open) setClaimCode(""); }}>
         <DialogContent className="sm:max-w-[400px]">
           <DialogHeader>
@@ -1090,6 +1162,40 @@ export default function TenantConnectionsPage() {
                       <p className="text-xs text-muted-foreground">The code expires 10 minutes after it was generated.</p>
                     </div>
                   </div>
+                </>
+              );
+            }
+            const installMode = (conn as any).installMode || "MSP";
+            if (installMode !== "CUSTOMER") {
+              return (
+                <>
+                  <DialogHeader>
+                    <DialogTitle className="flex items-center gap-2">
+                      <Users className="w-5 h-5 text-primary" />
+                      MSP Access — {conn.tenantName}
+                    </DialogTitle>
+                    <DialogDescription>
+                      This tenant is in <strong>{installMode}</strong> mode. Consent-based access gates only apply to Customer-mode tenants.
+                    </DialogDescription>
+                  </DialogHeader>
+                  <div className="py-2 space-y-3">
+                    <div className="rounded-lg border border-border/50 bg-muted/30 p-4 text-sm text-muted-foreground">
+                      {installMode === "MSP" ? (
+                        <p>In <strong>MSP mode</strong>, this tenant is owned and managed by your organization. No cross-organization consent gates are enforced — access is controlled by Zenith platform membership and RBAC roles.</p>
+                      ) : (
+                        <p>In <strong>Hybrid mode</strong>, both your organization and external MSP orgs can access this tenant without a consent gate.</p>
+                      )}
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      To enable consent-code gating for external MSP access, change this tenant to <strong>Customer mode</strong> via <em>Access Mode</em> in the tenant menu.
+                    </p>
+                  </div>
+                  <DialogFooter>
+                    <Button variant="outline" onClick={() => setMspAccessDialogId(null)}>Close</Button>
+                    <Button variant="default" onClick={() => { setMspAccessDialogId(null); setEditModeDialogId(conn.id); setEditInstallMode(installMode); }}>
+                      <ShieldCheck className="w-4 h-4 mr-2" /> Change Access Mode
+                    </Button>
+                  </DialogFooter>
                 </>
               );
             }
