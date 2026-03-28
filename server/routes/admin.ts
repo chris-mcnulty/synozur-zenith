@@ -206,7 +206,7 @@ router.get("/api/organizations", requireAuth(), async (_req: AuthenticatedReques
   res.json(withFeatures);
 });
 
-router.get("/api/admin/platform/org-stats", requireRole(ZENITH_ROLES.PLATFORM_OWNER, ZENITH_ROLES.TENANT_ADMIN), async (_req: AuthenticatedRequest, res) => {
+router.get("/api/admin/platform/org-stats", requireRole(ZENITH_ROLES.PLATFORM_OWNER), async (_req: AuthenticatedRequest, res) => {
   const orgs = await storage.getOrganizations();
   const allTenants = await storage.getTenantConnections();
   const countByOrg: Record<string, number> = {};
@@ -335,7 +335,7 @@ router.patch("/api/admin/platform/settings", requireRole(ZENITH_ROLES.PLATFORM_O
 });
 
 // ── Domain Blocklist ──
-router.get("/api/admin/domain-blocklist", requireRole(ZENITH_ROLES.TENANT_ADMIN), async (_req: AuthenticatedRequest, res) => {
+router.get("/api/admin/domain-blocklist", requireRole(ZENITH_ROLES.PLATFORM_OWNER), async (_req: AuthenticatedRequest, res) => {
   try {
     const domains = await storage.getBlockedDomains();
     res.json(domains);
@@ -344,7 +344,7 @@ router.get("/api/admin/domain-blocklist", requireRole(ZENITH_ROLES.TENANT_ADMIN)
   }
 });
 
-router.post("/api/admin/domain-blocklist", requireRole(ZENITH_ROLES.TENANT_ADMIN), async (req: AuthenticatedRequest, res) => {
+router.post("/api/admin/domain-blocklist", requireRole(ZENITH_ROLES.PLATFORM_OWNER), async (req: AuthenticatedRequest, res) => {
   try {
     const { domain, reason } = req.body;
     if (!domain) {
@@ -369,7 +369,7 @@ router.post("/api/admin/domain-blocklist", requireRole(ZENITH_ROLES.TENANT_ADMIN
   }
 });
 
-router.delete("/api/admin/domain-blocklist/:domain", requireRole(ZENITH_ROLES.TENANT_ADMIN), async (req: AuthenticatedRequest, res) => {
+router.delete("/api/admin/domain-blocklist/:domain", requireRole(ZENITH_ROLES.PLATFORM_OWNER), async (req: AuthenticatedRequest, res) => {
   try {
     await storage.removeBlockedDomain(decodeURIComponent(req.params.domain));
     res.json({ success: true });

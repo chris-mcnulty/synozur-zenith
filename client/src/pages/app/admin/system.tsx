@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { useLocation } from "wouter";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -101,9 +102,16 @@ export default function SystemAdminPage() {
   const { data: authData } = useAuthQuery<{ user: { role: string; effectiveRole?: string; organizationId?: string } } | null>({
     queryKey: ["/api/auth/me"],
   });
+  const [, navigate] = useLocation();
   const effectiveRole = authData?.user?.effectiveRole || authData?.user?.role || "viewer";
   const isPlatformOwner = effectiveRole === "platform_owner";
   const myOrgId = authData?.user?.organizationId;
+
+  useEffect(() => {
+    if (authData !== undefined && !isPlatformOwner) {
+      navigate("/app/dashboard");
+    }
+  }, [authData, isPlatformOwner, navigate]);
 
   const { data: platformSettingsData } = useQuery<PlatformSettings>({
     queryKey: ["/api/admin/platform/settings"],
