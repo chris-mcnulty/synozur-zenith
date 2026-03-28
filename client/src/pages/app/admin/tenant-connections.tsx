@@ -747,21 +747,12 @@ export default function TenantConnectionsPage() {
                               Update Permissions
                             </DropdownMenuItem>
                           )}
-                          {!isBlocked && (
-                            <DropdownMenuItem className="gap-2" onClick={() => { setEditModeDialogId(conn.id); setEditInstallMode((conn as any).installMode || "MSP"); }}>
-                              <ShieldCheck className="w-4 h-4" /> Access Mode
-                            </DropdownMenuItem>
-                          )}
-                          {!isBlocked && (
-                            <DropdownMenuItem className="gap-2" onClick={() => setMspAccessDialogId(conn.id)}>
-                              <Users className="w-4 h-4" /> MSP Access
-                            </DropdownMenuItem>
-                          )}
-                          {isBlocked && (
-                            <DropdownMenuItem className="gap-2" onClick={() => { setMspAccessDialogId(conn.id); setMspCodeInput(""); }}>
-                              <ShieldOff className="w-4 h-4" /> Enter Access Code
-                            </DropdownMenuItem>
-                          )}
+                          <DropdownMenuItem className="gap-2" onClick={() => { setEditModeDialogId(conn.id); setEditInstallMode((conn as any).installMode || "MSP"); }}>
+                            <ShieldCheck className="w-4 h-4" /> Access Mode
+                          </DropdownMenuItem>
+                          <DropdownMenuItem className="gap-2" onClick={() => { setMspAccessDialogId(conn.id); setMspCodeInput(""); }}>
+                            <Users className="w-4 h-4" /> MSP Access
+                          </DropdownMenuItem>
                           {!isBlocked && (
                             <DropdownMenuItem className="gap-2" onClick={() => setMetadataDialogTenantId(conn.id)}>
                               <Settings2 className="w-4 h-4" /> Governance Settings
