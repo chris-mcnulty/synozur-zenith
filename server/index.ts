@@ -143,6 +143,16 @@ async function ensureTenantConnectionsSchema() {
       )
     `);
 
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS tenant_encryption_keys (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        tenant_connection_id varchar NOT NULL,
+        encrypted_key text NOT NULL,
+        created_at timestamp DEFAULT now(),
+        CONSTRAINT uq_tenant_encryption_key UNIQUE (tenant_connection_id)
+      )
+    `);
+
     log('Schema migration ensureTenantConnectionsSchema completed');
   } catch (err) {
     console.error('[Migration] Failed to ensure tenant_connections schema:', err);
