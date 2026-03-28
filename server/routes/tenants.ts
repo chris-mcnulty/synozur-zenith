@@ -82,13 +82,23 @@ router.get("/api/admin/tenants", requirePermission('inventory:read'), async (req
     }
   }
 
-  // Add cross-org CUSTOMER tenants the active org has been granted access to
+  // Add cross-org tenants the active org has been granted access to
+  // Check both the legacy msp_access_grants table and the newer tenant_access_grants table
   if (orgId) {
-    const activeGrants = await storage.getActiveMspGrantsForGrantee(orgId);
-    for (const grant of activeGrants) {
-      const alreadyIncluded = filtered.some(f => f.id === grant.tenantConnectionId);
+    const grantedConnIds = new Set<string>();
+
+    // Legacy MSP access grants
+    const legacyGrants = await storage.getActiveMspGrantsForGrantee(orgId);
+    for (const g of legacyGrants) grantedConnIds.add(g.tenantConnectionId);
+
+    // New tenant_access_grants (created by validateAndRedeemAccessCode)
+    const newGrantedIds = await storage.getGrantedTenantConnectionIds(orgId);
+    for (const id of newGrantedIds) grantedConnIds.add(id);
+
+    for (const connId of grantedConnIds) {
+      const alreadyIncluded = filtered.some(f => f.id === connId);
       if (!alreadyIncluded) {
-        const conn = await storage.getTenantConnection(grant.tenantConnectionId);
+        const conn = await storage.getTenantConnection(connId);
         if (conn) {
           filtered.push({ ...conn, isGrantedAccess: true });
         }

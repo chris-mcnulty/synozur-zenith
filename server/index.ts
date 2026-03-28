@@ -153,6 +153,32 @@ async function ensureTenantConnectionsSchema() {
       )
     `);
 
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS tenant_access_grants (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        tenant_connection_id varchar NOT NULL REFERENCES tenant_connections(id) ON DELETE CASCADE,
+        granted_organization_id varchar NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        status text NOT NULL DEFAULT 'ACTIVE',
+        granted_by varchar,
+        created_at timestamp DEFAULT now(),
+        revoked_at timestamp,
+        CONSTRAINT uq_tenant_org_grant UNIQUE (tenant_connection_id, granted_organization_id)
+      )
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS tenant_access_codes (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        tenant_connection_id varchar NOT NULL REFERENCES tenant_connections(id) ON DELETE CASCADE,
+        code text NOT NULL,
+        expires_at timestamp NOT NULL,
+        used boolean NOT NULL DEFAULT false,
+        used_by_organization_id varchar,
+        created_by varchar,
+        created_at timestamp DEFAULT now()
+      )
+    `);
+
     log('Schema migration ensureTenantConnectionsSchema completed');
   } catch (err) {
     console.error('[Migration] Failed to ensure tenant_connections schema:', err);

@@ -235,7 +235,7 @@ export default function TenantConnectionsPage() {
     }
     setMspCodeSubmitting(true);
     try {
-      const res = await apiRequest("POST", "/api/admin/msp-access/redeem", { code });
+      const res = await apiRequest("POST", "/api/admin/tenants/claim-access", { code });
       const data = await res.json();
       if (!res.ok) {
         toast({ title: "Code Failed", description: data.error || "Invalid or expired code.", variant: "destructive" });
