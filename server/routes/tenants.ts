@@ -65,13 +65,18 @@ router.get("/api/admin/tenants", requirePermission('inventory:read'), async (req
   const orgId = req.activeOrganizationId || req.user?.organizationId;
   const isPlatformOwner = req.user?.role === ZENITH_ROLES.PLATFORM_OWNER;
 
-  const allConnections = await storage.getTenantConnections(isPlatformOwner ? undefined : undefined);
+  // When a specific org is active (always the case in normal use), scope to that org only.
+  // Platform owners only see everything when there is genuinely no org context.
+  const allConnections = orgId
+    ? await storage.getTenantConnections(orgId)
+    : await storage.getTenantConnections(undefined);
 
   const filtered: (typeof allConnections[0] & { mspAccessDenied?: boolean })[] = [];
   for (const c of allConnections) {
-    if (isPlatformOwner) {
+    if (c.organizationId === orgId) {
       filtered.push(c);
-    } else if (c.organizationId === orgId) {
+    } else if (isPlatformOwner && !orgId) {
+      // No org context at all — platform owner sees everything
       filtered.push(c);
     } else if (c.installMode === "CUSTOMER") {
       const grant = orgId ? await storage.getActiveMspGrantForOrg(c.id, orgId) : null;
