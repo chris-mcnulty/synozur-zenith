@@ -1,6 +1,6 @@
 import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
-import { Shield, Lock, Layers, Zap, ArrowRight, CheckCircle2, ShieldCheck, Cloud, BrainCircuit, Users } from "lucide-react";
+import { Shield, Lock, Layers, Zap, ArrowRight, CheckCircle2, ShieldCheck, Cloud, BrainCircuit, Users, Database, KeyRound, EyeOff, Trash2, Building2 } from "lucide-react";
 
 export default function SplashPage() {
   return (
@@ -182,6 +182,66 @@ export default function SplashPage() {
               </div>
               <h3 className="font-semibold mb-2">Service Plans</h3>
               <p className="text-sm text-muted-foreground">Tiered feature gating from Trial to Enterprise, enforced server-side and client-side.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* Security Highlights Section */}
+      <section id="security" className="relative z-10 py-24 px-4 border-t border-border/30">
+        <div className="max-w-7xl mx-auto">
+          <div className="text-center mb-16">
+            <p className="text-sm font-semibold text-primary uppercase tracking-widest mb-3">Data Protection</p>
+            <h2 className="text-3xl md:text-5xl font-bold tracking-tight mb-4">Privacy & Security by Design</h2>
+            <p className="text-lg text-muted-foreground max-w-2xl mx-auto">Your M365 inventory data belongs to your organization. Zenith enforces strict isolation, consent-controlled access, and encryption at every layer.</p>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            <div className="glass-panel p-8 rounded-2xl border border-border/50 transition-all hover:-translate-y-1 duration-300">
+              <div className="w-12 h-12 rounded-xl bg-blue-500/10 flex items-center justify-center text-blue-500 mb-6 border border-blue-500/20">
+                <Building2 className="w-6 h-6" />
+              </div>
+              <h3 className="text-lg font-semibold mb-3">Org-Scoped Data Isolation</h3>
+              <p className="text-sm text-muted-foreground leading-relaxed">All SharePoint inventory, governance results, and tenant credentials are scoped to your organization at the storage layer. No cross-organization data leakage — even on shared infrastructure.</p>
+            </div>
+
+            <div className="glass-panel p-8 rounded-2xl border border-border/50 transition-all hover:-translate-y-1 duration-300">
+              <div className="w-12 h-12 rounded-xl bg-emerald-500/10 flex items-center justify-center text-emerald-500 mb-6 border border-emerald-500/20">
+                <KeyRound className="w-6 h-6" />
+              </div>
+              <h3 className="text-lg font-semibold mb-3">Consent-Gated MSP Access</h3>
+              <p className="text-sm text-muted-foreground leading-relaxed">Grant your Managed Service Provider time-limited access via single-use consent codes — no permanent user accounts required. Revoke access instantly at any time with a full audit trail.</p>
+            </div>
+
+            <div className="glass-panel p-8 rounded-2xl border border-border/50 transition-all hover:-translate-y-1 duration-300">
+              <div className="w-12 h-12 rounded-xl bg-violet-500/10 flex items-center justify-center text-violet-500 mb-6 border border-violet-500/20">
+                <Database className="w-6 h-6" />
+              </div>
+              <h3 className="text-lg font-semibold mb-3">Encryption at Rest</h3>
+              <p className="text-sm text-muted-foreground leading-relaxed">Enable Tenant Database Masking to apply field-level encryption to your site inventory, tenant credentials, and metadata values. Sensitive fields are stored ciphertext — unreadable even at the database layer.</p>
+            </div>
+
+            <div className="glass-panel p-8 rounded-2xl border border-border/50 transition-all hover:-translate-y-1 duration-300">
+              <div className="w-12 h-12 rounded-xl bg-amber-500/10 flex items-center justify-center text-amber-500 mb-6 border border-amber-500/20">
+                <EyeOff className="w-6 h-6" />
+              </div>
+              <h3 className="text-lg font-semibold mb-3">Field-Level Visibility Controls</h3>
+              <p className="text-sm text-muted-foreground leading-relaxed">Control which governance columns are visible and filterable per role. Restrict sensitive policy results to Governance Admins while keeping operational views clean for Operators and Viewers.</p>
+            </div>
+
+            <div className="glass-panel p-8 rounded-2xl border border-border/50 transition-all hover:-translate-y-1 duration-300">
+              <div className="w-12 h-12 rounded-xl bg-rose-500/10 flex items-center justify-center text-rose-500 mb-6 border border-rose-500/20">
+                <Trash2 className="w-6 h-6" />
+              </div>
+              <h3 className="text-lg font-semibold mb-3">Your Data, Your Rules</h3>
+              <p className="text-sm text-muted-foreground leading-relaxed">Purge individual data modules (site inventory, governance results, Purview labels) or trigger a full organization purge at any time. Data removal is permanent, audited, and always under your control.</p>
+            </div>
+
+            <div className="glass-panel p-8 rounded-2xl border border-border/50 transition-all hover:-translate-y-1 duration-300">
+              <div className="w-12 h-12 rounded-xl bg-primary/10 flex items-center justify-center text-primary mb-6 border border-primary/20">
+                <Shield className="w-6 h-6" />
+              </div>
+              <h3 className="text-lg font-semibold mb-3">Operator Transparency</h3>
+              <p className="text-sm text-muted-foreground leading-relaxed">Synozur only retains operational metadata (billing, usage telemetry, error diagnostics). Your SharePoint inventory data, site metadata, and governance configurations are never accessed without your explicit consent.</p>
             </div>
           </div>
         </div>

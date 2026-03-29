@@ -27,10 +27,11 @@ Version 1.0 | Last Updated: March 8, 2026
 17. [Document Library Inventory](#document-library-inventory)
 18. [Tenant Management](#tenant-management)
 19. [Organization Settings](#organization-settings)
-20. [User Roles & Permissions](#user-roles--permissions)
-21. [Service Plans](#service-plans)
-22. [Common Workflows](#common-workflows)
-23. [Troubleshooting](#troubleshooting)
+20. [Data Privacy & Security](#data-privacy--security)
+21. [User Roles & Permissions](#user-roles--permissions)
+22. [Service Plans](#service-plans)
+23. [Common Workflows](#common-workflows)
+24. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -589,6 +590,137 @@ For testing, you can create demo tenants with sample data. Demo tenants have fak
 - Define custom metadata fields per tenant connection
 - Configure dropdown options for categorization
 - Set required vs. optional metadata fields
+
+---
+
+## Data Privacy & Security
+
+Zenith is built around a layered data protection model. This section explains what Synozur (the platform operator) can see, how your organization's inventory data is isolated, how MSP access is controlled, and how to manage, mask, and remove data.
+
+### What Synozur (the Platform Operator) Can Always See
+
+As the operator of the Zenith platform, Synozur has access to a limited set of **operational and administrative metadata** required to run the service:
+
+- **Account and billing information**: Organization name, contact email, service plan tier, and subscription status.
+- **Usage telemetry**: Aggregate usage signals such as sync counts, provisioning request volumes, and feature access patterns. This data is used for capacity planning and support.
+- **Error and diagnostic data**: Structured error logs and stack traces generated when platform operations fail. These logs do not include SharePoint site content or user-defined metadata values.
+- **Audit log records written by the platform**: Zenith writes structured audit records for all significant actions (user sign-ins, policy evaluations, writeback operations, etc.). Synozur support staff may access these records to assist with troubleshooting.
+
+Synozur support staff do **not** have routine access to your SharePoint inventory data, site metadata, governance policy configurations, or user lists unless you explicitly share them during a support engagement.
+
+### Org-Scoped Inventory Isolation
+
+All M365 inventory data — including SharePoint site records, document library inventory, governance policy results, sensitivity labels, property bag values, and user assignments — is **scoped to your organization** within Zenith's database. Row-level organization scoping is enforced at the storage layer, meaning:
+
+- A user authenticated to Organization A cannot query, view, or modify data belonging to Organization B.
+- MSP operators working with multiple client organizations must switch organizations explicitly and are subject to the access permissions of each organization separately.
+- Tenant connections (and their associated API credentials) are stored per-organization and are never shared across organizations.
+
+This isolation is maintained even when multiple organizations share the same Zenith deployment infrastructure.
+
+### MSP Access via Consent Codes
+
+Zenith allows organizations to grant time-limited, audited access to a Managed Service Provider (MSP) using **consent codes**. This eliminates the need to add MSP staff as permanent Zenith users within your organization.
+
+#### Generating a Consent Code
+
+1. Navigate to **Admin > Organization Settings**
+2. Open the **MSP Access** section
+3. Click **Generate Consent Code**
+4. Set the expiry window (codes are time-limited and single-use)
+5. Copy the generated code and share it securely with your MSP contact
+
+#### Redeeming a Consent Code
+
+The MSP recipient redeems the code from within their own Zenith organization context:
+
+1. Navigate to their organization's **MSP Connections** panel
+2. Click **Redeem Code**
+3. Enter the consent code provided by the client
+4. After successful redemption, the MSP organization gains access to the client organization's Zenith data with the access level defined at the time of code generation
+
+#### Revoking MSP Access
+
+To remove MSP access at any time:
+
+1. Navigate to **Admin > Organization Settings > MSP Access**
+2. Locate the active MSP connection
+3. Click **Revoke Access**
+
+Revocation is immediate. The MSP organization will lose access to your data on their next request. All actions taken by the MSP during their access period remain in the audit log under their user identity.
+
+### Field-Level Visibility Controls
+
+Zenith's workspace catalog supports **field-level visibility controls** that determine which roles can see which columns in the governance catalog. This is managed through the Policy Outcomes panel:
+
+- **Column visibility** (eye icon per outcome): Controls whether a given policy outcome column appears in the workspace catalog. Governance Admins can hide columns that are not relevant for Operators or Viewers.
+- **Filter availability** (filter icon per outcome): Controls whether an outcome is available as a filter in the catalog. Restricting filter access prevents users from querying governance state they do not have context to interpret.
+- **Role-based access**: Certain catalog columns — such as internal policy scores, writeback status fields, and MSP-only views — are rendered only for users with the required role (Governance Admin or higher).
+
+These controls do not restrict what is stored in the database, only what is surfaced in the UI for a given user's role.
+
+### Database Encryption (Tenant Database Masking)
+
+Zenith includes an optional **Tenant Database Masking** feature that adds a layer of encryption to the most sensitive fields stored in the Zenith database for your organization.
+
+#### What It Encrypts
+
+When enabled, Tenant Database Masking applies field-level encryption to:
+
+- SharePoint site URLs and display names stored in the site inventory
+- Tenant connection credentials (client IDs, client secrets, refresh tokens)
+- User-defined metadata values stored in the data dictionary
+
+Fields used for indexing and governance evaluation (such as policy outcome results and compliance scores) are not encrypted, as these must remain queryable.
+
+#### How to Enable It
+
+1. Navigate to **Admin > Organization Settings**
+2. Open the **Security** section
+3. Toggle **Tenant Database Masking** to **Enabled**
+4. Confirm the operation — masking is applied asynchronously to existing records
+
+> **Note**: Enabling masking on an existing organization triggers a background re-encryption job. During this window, affected records may appear blank in the UI. The job typically completes within a few minutes for organizations with standard inventory sizes.
+
+#### When It Applies
+
+- **At rest**: Encrypted values are stored ciphertext in the Zenith database. Even a direct database access would not reveal plaintext values.
+- **In transit**: All data between Zenith's backend and your browser is transmitted over HTTPS/TLS regardless of whether masking is enabled.
+- Masking does **not** affect data sent to Microsoft Graph or SharePoint — those interactions use the credentials and tokens as needed to authenticate with Microsoft services.
+
+### Data Removal
+
+Zenith provides two levels of data removal: **module-level purge** and **full organization purge**.
+
+#### Module-Level Purge
+
+A module-level purge removes all inventory data for a specific data domain while preserving your organization's settings, user accounts, and policy configurations. Available purge targets include:
+
+- **Site Inventory**: Removes all cached SharePoint site records and associated metadata
+- **Document Library Inventory**: Removes all document library records
+- **Governance Results**: Clears all stored policy evaluation results (does not affect the policies themselves)
+- **Purview Labels**: Removes the locally cached sensitivity label inventory
+
+To perform a module-level purge:
+
+1. Navigate to **Admin > Organization Settings > Data Management**
+2. Select the module to purge
+3. Click **Purge Module Data**
+4. Confirm the operation — this action is irreversible
+
+After a module-level purge, re-running a tenant sync will repopulate the removed data from Microsoft 365.
+
+#### Full Organization Purge
+
+A full organization purge permanently removes all data associated with your Zenith organization, including:
+
+- All site and library inventory records
+- All governance policies, outcomes, and evaluation results
+- All tenant connections and associated credentials
+- All user accounts and role assignments
+- All organization settings and data dictionary definitions
+
+This operation is used when offboarding from Zenith entirely. To initiate a full organization purge, contact Synozur support. Purges are logged in the platform audit trail and cannot be reversed.
 
 ---
 
