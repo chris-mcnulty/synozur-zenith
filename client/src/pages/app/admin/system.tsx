@@ -92,6 +92,8 @@ export default function SystemAdminPage() {
   const [deleteOrgTarget, setDeleteOrgTarget] = useState<{ id: string; name: string } | null>(null);
   const [purgeData, setPurgeData] = useState(true);
   const [deleteConfirmName, setDeleteConfirmName] = useState("");
+  const [changePlanTarget, setChangePlanTarget] = useState<{ id: string; name: string; currentPlan: string } | null>(null);
+  const [changePlanValue, setChangePlanValue] = useState("TRIAL");
   const [createOrgForm, setCreateOrgForm] = useState({
     name: "",
     domain: "",
@@ -271,6 +273,30 @@ export default function SystemAdminPage() {
     },
   });
 
+  const changePlanMutation = useMutation({
+    mutationFn: async ({ id, plan }: { id: string; plan: string }) => {
+      const res = await fetch(`/api/admin/organizations/${id}/plan`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ plan }),
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || "Failed to update plan");
+      }
+      return res.json();
+    },
+    onSuccess: (_data, { plan }) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/platform/org-stats"] });
+      const name = changePlanTarget?.name;
+      setChangePlanTarget(null);
+      toast({ title: "Plan updated", description: `${name} is now on the ${planLabel(plan)} plan.` });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+
   return (
     <div className="space-y-6 animate-in fade-in duration-500 pb-12">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -414,17 +440,30 @@ export default function SystemAdminPage() {
                         </TableCell>
                         {isPlatformOwner && (
                           <TableCell>
-                            {org.id !== myOrgId && (
+                            <div className="flex items-center justify-end gap-1">
                               <Button
                                 variant="ghost"
                                 size="icon"
-                                className="h-8 w-8 text-destructive hover:bg-destructive/10"
-                                onClick={() => setDeleteOrgTarget({ id: org.id, name: org.name })}
-                                data-testid={`button-delete-org-${org.id}`}
+                                className="h-8 w-8 text-muted-foreground hover:text-foreground"
+                                onClick={() => { setChangePlanTarget({ id: org.id, name: org.name, currentPlan: org.servicePlan }); setChangePlanValue(org.servicePlan); }}
+                                data-testid={`button-change-plan-${org.id}`}
+                                title="Change service plan"
                               >
-                                <Trash2 className="w-4 h-4" />
+                                <Settings2 className="w-4 h-4" />
                               </Button>
-                            )}
+                              {org.id !== myOrgId && (
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-8 w-8 text-destructive hover:bg-destructive/10"
+                                  onClick={() => setDeleteOrgTarget({ id: org.id, name: org.name })}
+                                  data-testid={`button-delete-org-${org.id}`}
+                                  title="Delete organization"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </Button>
+                              )}
+                            </div>
                           </TableCell>
                         )}
                       </TableRow>
@@ -699,6 +738,67 @@ export default function SystemAdminPage() {
           </DialogContent>
         </Dialog>
       )}
+
+      <Dialog open={!!changePlanTarget} onOpenChange={open => { if (!open) setChangePlanTarget(null); }}>
+        <DialogContent className="sm:max-w-[420px]">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Settings2 className="w-5 h-5 text-primary" />
+              Change Service Plan
+            </DialogTitle>
+            <DialogDescription>
+              Update the service plan for <strong>{changePlanTarget?.name}</strong>. Changes take effect immediately.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 py-2">
+            <div className="space-y-2">
+              <Label>Service Plan</Label>
+              <Select value={changePlanValue} onValueChange={setChangePlanValue}>
+                <SelectTrigger data-testid="select-change-plan">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {SERVICE_PLANS.map(plan => (
+                    <SelectItem key={plan} value={plan}>
+                      <div className="flex items-center gap-2">
+                        <span className={`inline-block w-2 h-2 rounded-full ${PLAN_COLORS[plan]?.includes("blue") ? "bg-blue-500" : PLAN_COLORS[plan]?.includes("purple") ? "bg-purple-500" : PLAN_COLORS[plan]?.includes("emerald") ? "bg-emerald-500" : "bg-muted-foreground"}`} />
+                        {planLabel(plan)}
+                      </div>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            {changePlanValue !== changePlanTarget?.currentPlan && (
+              <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 flex gap-2 text-xs text-muted-foreground">
+                <AlertCircle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
+                <p>Changing from <strong>{planLabel(changePlanTarget?.currentPlan ?? "")}</strong> to <strong>{planLabel(changePlanValue)}</strong> will immediately affect feature access for all users in this organization.</p>
+              </div>
+            )}
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setChangePlanTarget(null)} disabled={changePlanMutation.isPending} data-testid="button-cancel-change-plan">
+              Cancel
+            </Button>
+            <Button
+              onClick={() => changePlanTarget && changePlanMutation.mutate({ id: changePlanTarget.id, plan: changePlanValue })}
+              disabled={changePlanMutation.isPending || changePlanValue === changePlanTarget?.currentPlan}
+              className="gap-2"
+              data-testid="button-confirm-change-plan"
+            >
+              {changePlanMutation.isPending ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <Settings2 className="w-4 h-4" />
+              )}
+              Update Plan
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={!!deleteOrgTarget} onOpenChange={open => { if (!open) { setDeleteOrgTarget(null); setDeleteConfirmName(""); setPurgeData(true); } }}>
         <DialogContent className="sm:max-w-[520px]">

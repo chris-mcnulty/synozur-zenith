@@ -293,6 +293,31 @@ router.delete("/api/admin/organizations/:id", requireRole(ZENITH_ROLES.PLATFORM_
   res.json({ ok: true });
 });
 
+router.patch("/api/admin/organizations/:id/plan", requireRole(ZENITH_ROLES.PLATFORM_OWNER), async (req: AuthenticatedRequest, res) => {
+  const { id } = req.params;
+  const { plan } = req.body;
+  if (!SERVICE_PLANS.includes(plan)) {
+    return res.status(400).json({ error: `Invalid plan. Must be one of: ${SERVICE_PLANS.join(", ")}` });
+  }
+  const target = await storage.getOrganization(id);
+  if (!target) return res.status(404).json({ error: "Organization not found." });
+  const updated = await storage.updateOrganizationPlan(id, plan);
+  if (!updated) return res.status(500).json({ error: "Failed to update plan." });
+  const features = getPlanFeatures(plan as ServicePlanTier);
+  await storage.createAuditEntry({
+    userId: req.user!.id,
+    userEmail: req.user!.email,
+    action: 'ORG_PLAN_CHANGED_BY_ADMIN',
+    resource: 'organization',
+    resourceId: id,
+    organizationId: req.user!.organizationId,
+    details: { targetOrg: target.name, fromPlan: target.servicePlan, toPlan: plan },
+    result: 'SUCCESS',
+    ipAddress: req.ip || null,
+  });
+  res.json({ ...updated, features });
+});
+
 router.patch("/api/organization/plan", requireRole(ZENITH_ROLES.PLATFORM_OWNER, ZENITH_ROLES.TENANT_ADMIN), async (req: AuthenticatedRequest, res) => {
   const { plan } = req.body;
   if (!SERVICE_PLANS.includes(plan)) {
