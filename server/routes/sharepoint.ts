@@ -298,19 +298,17 @@ router.patch("/api/workspaces/:id", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, Z
     req.body.sensitivityLabelId !== existing.sensitivityLabelId;
 
   let labelSyncResult: { pushed: boolean; error?: string } | undefined;
+  let labelWritebackSkipped = false;
 
   if (sensitivityLabelChanged && existing.tenantConnectionId && existing.m365ObjectId) {
     const org = await storage.getOrganization();
     const plan = (org?.servicePlan || "TRIAL") as ServicePlanTier;
     const features = getPlanFeatures(plan);
     if (!features.m365WriteBack) {
-      return res.status(403).json({
-        error: "FEATURE_GATED",
-        message: `Applying sensitivity labels to Microsoft 365 is not available on the ${features.label} plan. Upgrade to Standard or higher.`,
-        currentPlan: plan,
-        requiredFeature: "m365WriteBack",
-      });
-    }
+      labelSyncResult = { pushed: false, error: `Sensitivity label writeback requires Standard plan or higher. Label saved in Zenith only.` };
+      labelWritebackSkipped = true;
+      console.log(`[label-push] Skipping sensitivity label CSOM for ${existing.displayName} — plan ${plan} does not include m365WriteBack`);
+    } else {
 
     if (req.body.sensitivityLabelId) {
       const connection = await storage.getTenantConnection(existing.tenantConnectionId);
@@ -365,6 +363,7 @@ router.patch("/api/workspaces/:id", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, Z
       console.error(`[label-push] Error pushing sensitivity label: ${err.message}`);
       return res.status(502).json({ message: `Error applying label to M365: ${err.message}`, labelSyncResult });
     }
+    } // end else (m365WriteBack enabled for label push)
   }
 
   const writebackFields = ['sensitivityLabelId', 'department', 'costCenter', 'projectCode'];
@@ -404,7 +403,8 @@ router.patch("/api/workspaces/:id", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, Z
     : await storage.updateWorkspace(req.params.id, updates);
   if (!workspace) return res.status(404).json({ message: "Workspace not found" });
 
-  let writebackResult: { attempted: boolean; success?: boolean; error?: string } = { attempted: false };
+  type WritebackResult = { attempted: boolean; skipped?: boolean; success?: boolean; error?: string };
+  let writebackResult: WritebackResult = { attempted: false };
   try {
     if (existing.tenantConnectionId) {
       const conn = await storage.getTenantConnection(existing.tenantConnectionId);
@@ -415,7 +415,7 @@ router.patch("/api/workspaces/:id", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, Z
           const wbOrg = await storage.getOrganization(conn.organizationId);
           const wbPlan = ((wbOrg?.servicePlan || "TRIAL") as ServicePlanTier);
           if (!getPlanFeatures(wbPlan).m365WriteBack) {
-            writebackResult = { attempted: false, skipped: true } as any;
+            writebackResult = { attempted: false, skipped: true };
             console.log(`[workspace-update] Auto-writeback skipped for ${workspace.displayName} — plan ${wbPlan} does not include m365WriteBack`);
           } else {
           console.log(`[workspace-update] Policy bag changed for ${workspace.displayName}, auto-writing back ${Object.keys(evalResult.changedBagKeys).length} keys`);
@@ -546,7 +546,7 @@ router.patch("/api/workspaces/:id", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, Z
     });
   }
 
-  res.json({ ...(finalWorkspace || workspace), labelSyncResult, ...(writebackResult.attempted ? { autoWriteback: writebackResult } : {}), ...((writebackResult as any).skipped ? { writebackSkipped: true } : {}) });
+  res.json({ ...(finalWorkspace || workspace), labelSyncResult, ...(writebackResult.attempted ? { autoWriteback: writebackResult } : {}), ...((writebackResult.skipped || labelWritebackSkipped) ? { writebackSkipped: true } : {}) });
 });
 
 router.get("/api/workspaces/:id/libraries", requireAuth(), async (req: AuthenticatedRequest, res) => {
