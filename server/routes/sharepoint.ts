@@ -301,19 +301,18 @@ router.patch("/api/workspaces/:id", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, Z
   let labelWritebackSkipped = false;
 
   if (sensitivityLabelChanged && existing.tenantConnectionId && existing.m365ObjectId) {
-    const org = await storage.getOrganization();
-    const plan = (org?.servicePlan || "TRIAL") as ServicePlanTier;
+    const labelConn = await storage.getTenantConnection(existing.tenantConnectionId);
+    const labelOrgId = labelConn?.organizationId || req.activeOrganizationId || req.user?.organizationId;
+    const labelOrg = await storage.getOrganization(labelOrgId);
+    const plan = (labelOrg?.servicePlan || "TRIAL") as ServicePlanTier;
     const features = getPlanFeatures(plan);
     if (!features.m365WriteBack) {
       labelSyncResult = { pushed: false, error: `Sensitivity label writeback requires Standard plan or higher. Label saved in Zenith only.` };
       labelWritebackSkipped = true;
       console.log(`[label-push] Skipping sensitivity label CSOM for ${existing.displayName} — plan ${plan} does not include m365WriteBack`);
     } else {
-
-    if (req.body.sensitivityLabelId) {
-      const connection = await storage.getTenantConnection(existing.tenantConnectionId);
-      if (connection) {
-        const labels = await storage.getSensitivityLabelsByTenantId(connection.tenantId);
+      if (req.body.sensitivityLabelId && labelConn) {
+        const labels = await storage.getSensitivityLabelsByTenantId(labelConn.tenantId);
         const targetLabel = labels.find(l => l.labelId === req.body.sensitivityLabelId);
         if (!targetLabel) {
           return res.status(400).json({ message: "Sensitivity label not found in synced labels." });
@@ -322,48 +321,46 @@ router.patch("/api/workspaces/:id", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, Z
           return res.status(400).json({ message: `Label "${targetLabel.name}" does not apply to Groups & Sites. Choose a label with Groups & Sites scope.` });
         }
       }
-    }
 
-    try {
-      const connection = await storage.getTenantConnection(existing.tenantConnectionId);
-      if (connection && existing.siteUrl) {
-        const spoHost = connection.domain.includes('.sharepoint.com') ? connection.domain : `${connection.domain.replace(/\..*$/, '')}.sharepoint.com`;
-        const spoToken = await getDelegatedSpoToken(req.user!.id, spoHost);
-        if (!spoToken) {
-          labelSyncResult = { pushed: false, error: "Could not acquire a SharePoint token for your account. Please sign out and sign back in with SSO. You must be a SharePoint administrator in the tenant to apply labels." };
-          console.warn(`[label-push] No delegated SPO token for user ${req.user!.email} on ${existing.displayName}. Label saved locally.`);
-        } else if (req.body.sensitivityLabelId) {
-          const result = await applySensitivityLabelToSite(spoToken, existing.siteUrl, req.body.sensitivityLabelId, req.user!.id);
-          labelSyncResult = { pushed: result.success, error: result.error };
-          if (result.success) {
-            console.log(`[label-push] Applied sensitivity label ${req.body.sensitivityLabelId} to ${existing.siteUrl} via CSOM for workspace ${existing.displayName}`);
+      try {
+        if (labelConn && existing.siteUrl) {
+          const spoHost = labelConn.domain.includes('.sharepoint.com') ? labelConn.domain : `${labelConn.domain.replace(/\..*$/, '')}.sharepoint.com`;
+          const spoToken = await getDelegatedSpoToken(req.user!.id, spoHost);
+          if (!spoToken) {
+            labelSyncResult = { pushed: false, error: "Could not acquire a SharePoint token for your account. Please sign out and sign back in with SSO. You must be a SharePoint administrator in the tenant to apply labels." };
+            console.warn(`[label-push] No delegated SPO token for user ${req.user!.email} on ${existing.displayName}. Label saved locally.`);
+          } else if (req.body.sensitivityLabelId) {
+            const result = await applySensitivityLabelToSite(spoToken, existing.siteUrl, req.body.sensitivityLabelId, req.user!.id);
+            labelSyncResult = { pushed: result.success, error: result.error };
+            if (result.success) {
+              console.log(`[label-push] Applied sensitivity label ${req.body.sensitivityLabelId} to ${existing.siteUrl} via CSOM for workspace ${existing.displayName}`);
+            } else {
+              console.error(`[label-push] Failed to apply label to ${existing.siteUrl}: ${result.error}`);
+              return res.status(502).json({ message: `Failed to apply label to site: ${result.error}`, labelSyncResult });
+            }
+          } else if (existing.sensitivityLabelId) {
+            const result = await removeSensitivityLabelFromSite(spoToken, existing.siteUrl, req.user!.id);
+            labelSyncResult = { pushed: result.success, error: result.error };
+            if (result.success) {
+              console.log(`[label-push] Removed sensitivity label from ${existing.siteUrl} via CSOM for workspace ${existing.displayName}`);
+            } else {
+              console.error(`[label-push] Failed to remove label from ${existing.siteUrl}: ${result.error}`);
+              return res.status(502).json({ message: `Failed to remove label from site: ${result.error}`, labelSyncResult });
+            }
           } else {
-            console.error(`[label-push] Failed to apply label to ${existing.siteUrl}: ${result.error}`);
-            return res.status(502).json({ message: `Failed to apply label to site: ${result.error}`, labelSyncResult });
+            labelSyncResult = { pushed: true };
+            console.log(`[label-push] No existing label to remove from ${existing.siteUrl}, skipping CSOM call`);
           }
-        } else if (existing.sensitivityLabelId) {
-          const result = await removeSensitivityLabelFromSite(spoToken, existing.siteUrl, req.user!.id);
-          labelSyncResult = { pushed: result.success, error: result.error };
-          if (result.success) {
-            console.log(`[label-push] Removed sensitivity label from ${existing.siteUrl} via CSOM for workspace ${existing.displayName}`);
-          } else {
-            console.error(`[label-push] Failed to remove label from ${existing.siteUrl}: ${result.error}`);
-            return res.status(502).json({ message: `Failed to remove label from site: ${result.error}`, labelSyncResult });
-          }
-        } else {
-          labelSyncResult = { pushed: true };
-          console.log(`[label-push] No existing label to remove from ${existing.siteUrl}, skipping CSOM call`);
+        } else if (labelConn && !existing.siteUrl) {
+          labelSyncResult = { pushed: false, error: "No site URL available for label push." };
+          console.warn(`[label-push] No siteUrl for workspace ${existing.displayName}. Label saved locally.`);
         }
-      } else if (connection && !existing.siteUrl) {
-        labelSyncResult = { pushed: false, error: "No site URL available for label push." };
-        console.warn(`[label-push] No siteUrl for workspace ${existing.displayName}. Label saved locally.`);
+      } catch (err: any) {
+        labelSyncResult = { pushed: false, error: err.message };
+        console.error(`[label-push] Error pushing sensitivity label: ${err.message}`);
+        return res.status(502).json({ message: `Error applying label to M365: ${err.message}`, labelSyncResult });
       }
-    } catch (err: any) {
-      labelSyncResult = { pushed: false, error: err.message };
-      console.error(`[label-push] Error pushing sensitivity label: ${err.message}`);
-      return res.status(502).json({ message: `Error applying label to M365: ${err.message}`, labelSyncResult });
     }
-    } // end else (m365WriteBack enabled for label push)
   }
 
   const writebackFields = ['sensitivityLabelId', 'department', 'costCenter', 'projectCode'];
