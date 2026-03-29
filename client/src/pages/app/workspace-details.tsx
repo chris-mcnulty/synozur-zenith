@@ -46,6 +46,7 @@ import {
   Archive,
   Library
 } from "lucide-react";
+import { useServicePlan } from "@/hooks/use-service-plan";
 
 type DataDictEntry = { id: string; tenantId: string; category: string; value: string; createdAt: string };
 type SensitivityLabelEntry = { id: string; tenantId: string; labelId: string; name: string; description: string | null; color: string | null; tooltip: string | null; sensitivity: number | null; isActive: boolean; contentFormats: string[] | null; hasProtection: boolean; parentLabelId: string | null; appliesToGroupsSites: boolean; syncedAt: string | null };
@@ -54,6 +55,7 @@ type RetentionLabelEntry = { id: string; tenantId: string; labelId: string; name
 export default function WorkspaceDetailsPage() {
   const { id } = useParams<{ id: string }>();
   const { toast } = useToast();
+  const { canWriteBack } = useServicePlan();
 
   const { data: workspace, isLoading, error } = useQuery<Workspace>({
     queryKey: [`/api/workspaces/${id}`],
@@ -818,7 +820,7 @@ export default function WorkspaceDetailsPage() {
                       <Badge variant={missingRequired.length === 0 ? "default" : "destructive"} className={missingRequired.length === 0 ? "bg-emerald-500/10 text-emerald-600 border-emerald-500/20" : "bg-destructive/10 text-destructive border-destructive/20"}>
                         {missingRequired.length === 0 ? "Complete" : "Missing Required"}
                       </Badge>
-                      {!editMode && (workspace.department || workspace.costCenter || workspace.projectCode) && (
+                      {!editMode && (workspace.department || workspace.costCenter || workspace.projectCode) && canWriteBack && (
                         <Button
                           variant="outline"
                           size="sm"

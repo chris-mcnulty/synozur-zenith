@@ -1221,17 +1221,33 @@ export default function GovernancePage() {
             >
               <Network className="w-4 h-4" /> Assign to Hub
             </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => writebackMutation.mutate(Array.from(selectedIds))}
-              disabled={writebackMutation.isPending}
-              className="h-8 gap-2 border-primary/20 text-primary hover:bg-primary/10"
-              data-testid="button-sync-metadata"
+            <UpgradeGate
+              feature="m365WriteBack"
+              fallback={
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled
+                  className="h-8 gap-2 opacity-60"
+                  data-testid="button-sync-metadata-locked"
+                >
+                  <Lock className="w-4 h-4" />
+                  Sync Metadata to SharePoint
+                </Button>
+              }
             >
-              {writebackMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
-              Sync Metadata to SharePoint
-            </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => writebackMutation.mutate(Array.from(selectedIds))}
+                disabled={writebackMutation.isPending}
+                className="h-8 gap-2 border-primary/20 text-primary hover:bg-primary/10"
+                data-testid="button-sync-metadata"
+              >
+                {writebackMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
+                Sync Metadata to SharePoint
+              </Button>
+            </UpgradeGate>
           </div>
         </div>
       )}

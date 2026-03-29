@@ -412,6 +412,12 @@ router.patch("/api/workspaces/:id", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, Z
         const evalResult = await evaluateAllPoliciesForWorkspace(workspace, conn.organizationId, conn.tenantId, "[workspace-update]");
 
         if (evalResult.bagChanged && workspace.siteUrl && Object.keys(evalResult.changedBagKeys).length > 0) {
+          const wbOrg = await storage.getOrganization(conn.organizationId);
+          const wbPlan = ((wbOrg?.servicePlan || "TRIAL") as ServicePlanTier);
+          if (!getPlanFeatures(wbPlan).m365WriteBack) {
+            writebackResult = { attempted: false, skipped: true } as any;
+            console.log(`[workspace-update] Auto-writeback skipped for ${workspace.displayName} — plan ${wbPlan} does not include m365WriteBack`);
+          } else {
           console.log(`[workspace-update] Policy bag changed for ${workspace.displayName}, auto-writing back ${Object.keys(evalResult.changedBagKeys).length} keys`);
           writebackResult.attempted = true;
           try {
@@ -447,6 +453,7 @@ router.patch("/api/workspaces/:id", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, Z
             writebackResult.error = wbErr.message;
             console.error(`[workspace-update] Auto-writeback error: ${wbErr.message}`);
           }
+          } // end else (m365WriteBack enabled)
         }
       }
     }
@@ -539,7 +546,7 @@ router.patch("/api/workspaces/:id", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, Z
     });
   }
 
-  res.json({ ...(finalWorkspace || workspace), labelSyncResult, ...(writebackResult.attempted ? { autoWriteback: writebackResult } : {}) });
+  res.json({ ...(finalWorkspace || workspace), labelSyncResult, ...(writebackResult.attempted ? { autoWriteback: writebackResult } : {}), ...((writebackResult as any).skipped ? { writebackSkipped: true } : {}) });
 });
 
 router.get("/api/workspaces/:id/libraries", requireAuth(), async (req: AuthenticatedRequest, res) => {
@@ -2768,23 +2775,13 @@ async function handleMetadataWriteback(req: AuthenticatedRequest, res: any) {
   res.json({ succeeded, failed, results });
 }
 
-router.post("/api/workspaces/writeback/department", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN), handleMetadataWriteback);
-router.post("/api/workspaces/writeback/metadata", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN), handleMetadataWriteback);
+router.post("/api/workspaces/writeback/department", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN), requireFeature("m365WriteBack"), handleMetadataWriteback);
+router.post("/api/workspaces/writeback/metadata", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN), requireFeature("m365WriteBack"), handleMetadataWriteback);
 
-router.post("/api/admin/tenants/:id/writeback", requireRole(ZENITH_ROLES.TENANT_ADMIN), async (req: AuthenticatedRequest, res) => {
+router.post("/api/admin/tenants/:id/writeback", requireRole(ZENITH_ROLES.TENANT_ADMIN), requireFeature("m365WriteBack"), async (req: AuthenticatedRequest, res) => {
   const allowedTenantIds = await getOrgTenantConnectionIds(req);
   if (allowedTenantIds !== null && !allowedTenantIds.includes(req.params.id)) {
     return res.status(403).json({ message: "Tenant connection is outside your organization scope" });
-  }
-
-  const org = await storage.getOrganization();
-  const plan = (org?.servicePlan || "TRIAL") as ServicePlanTier;
-  const features = getPlanFeatures(plan);
-  if (!features.m365WriteBack) {
-    return res.status(403).json({
-      error: "FEATURE_GATED",
-      message: `Bulk writeback is not available on the ${features.label} plan.`,
-    });
   }
 
   const connection = await storage.getTenantConnection(req.params.id);
