@@ -88,6 +88,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { useServicePlan } from "@/hooks/use-service-plan";
 
 const GOVERNANCE_PAGE_SIZE = 50;
 const PAGINATION_THRESHOLD = 100;
@@ -278,6 +279,10 @@ export default function GovernancePage() {
   const showPagination = governanceData?.mode === "paginated";
   const totalPages = showPagination ? Math.ceil(paginatedTotal / GOVERNANCE_PAGE_SIZE) : 1;
 
+  const { isTrial, maxSites } = useServicePlan();
+  const totalSiteCount = showPagination ? paginatedTotal : workspaces.length;
+  const showSiteCapBanner = isTrial && maxSites > 0 && totalSiteCount >= maxSites;
+
   const bulkMutation = useMutation({
     mutationFn: (data: any) => apiRequest("PATCH", "/api/workspaces/bulk/update", data),
     onSuccess: () => {
@@ -321,7 +326,10 @@ export default function GovernancePage() {
     onSuccess: (data: any) => {
       queryClient.invalidateQueries({ queryKey: ["/api/workspaces"] });
       if (data.success) {
-        toast({ title: "Inventory Synced", description: `${data.sitesFound || 0} sites synced from Microsoft 365.` });
+        const capNote = data.sitesCapApplied
+          ? ` (Trial plan cap: showing ${data.sitesFound?.toLocaleString()} of ${data.sitesDiscovered?.toLocaleString()} discovered sites)`
+          : "";
+        toast({ title: "Inventory Synced", description: `${(data.sitesFound || 0).toLocaleString()} sites synced from Microsoft 365.${capNote}` });
       } else {
         toast({ title: "Sync Issue", description: data.error || "Sync completed with issues.", variant: "destructive" });
       }
@@ -1074,6 +1082,19 @@ export default function GovernancePage() {
           </Button>
         </div>
       </div>
+
+      {showSiteCapBanner && (
+        <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-start gap-3" data-testid="banner-site-cap">
+          <AlertCircle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+          <div>
+            <p className="text-sm font-semibold text-amber-700 dark:text-amber-400">Trial Plan Site Limit Reached</p>
+            <p className="text-xs text-amber-600/80 dark:text-amber-400/70">
+              Your Trial plan limits inventory to {maxSites.toLocaleString()} sites. Your Microsoft 365 tenant may contain additional sites not shown here.{" "}
+              <Link href="/app/admin/service-plans" className="underline font-medium hover:no-underline">Upgrade your plan</Link> to see all sites.
+            </p>
+          </div>
+        </div>
+      )}
 
       <div className="flex items-center gap-2 flex-wrap" data-testid="quick-filters">
         <span className="text-xs text-muted-foreground mr-1">Quick filters:</span>

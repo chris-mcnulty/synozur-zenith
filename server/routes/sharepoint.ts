@@ -1366,6 +1366,11 @@ router.post("/api/admin/tenants/:id/sync", requireRole(ZENITH_ROLES.TENANT_ADMIN
     return res.status(503).json({ success: false, error: "Zenith app credentials not configured. Set AZURE_CLIENT_ID and AZURE_CLIENT_SECRET." });
   }
 
+  // Load org plan to determine if a site cap applies
+  const syncOrg = connection.organizationId ? await storage.getOrganization(connection.organizationId) : null;
+  const syncOrgPlan = (syncOrg?.servicePlan || 'TRIAL') as ServicePlanTier;
+  const syncOrgFeatures = getPlanFeatures(syncOrgPlan);
+
   await storage.createAuditEntry({
     userId: req.user?.id || null,
     userEmail: req.user?.email || null,
@@ -1392,6 +1397,16 @@ router.post("/api/admin/tenants/:id/sync", requireRole(ZENITH_ROLES.TENANT_ADMIN
         lastSyncSiteCount: 0,
       });
       return res.json({ success: false, error: siteResult.error, sitesFound: 0 });
+    }
+
+    // Apply plan-based site cap (Trial: 1,000; all other plans: -1 = unlimited)
+    const sitesDiscoveredTotal = siteResult.sites.length;
+    const maxSitesCap = syncOrgFeatures.maxSites;
+    let sitesCapApplied = false;
+    if (maxSitesCap > 0 && siteResult.sites.length > maxSitesCap) {
+      console.log(`[sync-cap] ${syncOrgPlan} plan cap applied: limiting ${sitesDiscoveredTotal} discovered sites to ${maxSitesCap}`);
+      siteResult.sites = siteResult.sites.slice(0, maxSitesCap);
+      sitesCapApplied = true;
     }
 
     const normalizeUrl = (url: string) => url.toLowerCase().replace(/\/+$/, '');
@@ -2103,6 +2118,8 @@ router.post("/api/admin/tenants/:id/sync", requireRole(ZENITH_ROLES.TENANT_ADMIN
     res.json({
       success: true,
       sitesFound: siteResult.sites.length,
+      sitesDiscovered: sitesDiscoveredTotal,
+      sitesCapApplied,
       upserted: upsertedCount,
       usageReportRows: usageResult.report.length,
       usageMatched,

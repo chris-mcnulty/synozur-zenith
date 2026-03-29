@@ -336,13 +336,15 @@ export default function TenantConnectionsPage() {
           setSyncWarnings(warnings);
           const errorCount = warnings.filter((w: any) => w.severity === "error").length;
           const warnCount = warnings.filter((w: any) => w.severity === "warning").length;
+          const capNote = result.sitesCapApplied ? ` Trial plan cap applied (${result.sitesFound?.toLocaleString()} of ${result.sitesDiscovered?.toLocaleString()} sites shown).` : "";
           toast({
             title: `Sync Complete — ${errorCount + warnCount} Permission Issue${errorCount + warnCount > 1 ? 's' : ''}`,
-            description: `Found ${result.sitesFound} sites. ${errorCount > 0 ? `${errorCount} error(s)` : ''}${errorCount > 0 && warnCount > 0 ? ', ' : ''}${warnCount > 0 ? `${warnCount} warning(s)` : ''} — see details below.`,
+            description: `Found ${result.sitesFound} sites.${capNote} ${errorCount > 0 ? `${errorCount} error(s)` : ''}${errorCount > 0 && warnCount > 0 ? ', ' : ''}${warnCount > 0 ? `${warnCount} warning(s)` : ''} — see details below.`,
             variant: "default",
           });
         } else {
-          toast({ title: "Sync Complete", description: `Found ${result.sitesFound} SharePoint sites. All permissions OK.` });
+          const capNote = result.sitesCapApplied ? ` Trial plan cap: showing ${result.sitesFound?.toLocaleString()} of ${result.sitesDiscovered?.toLocaleString()} discovered sites.` : "";
+          toast({ title: "Sync Complete", description: `Found ${result.sitesFound} SharePoint sites.${capNote}${capNote ? "" : " All permissions OK."}` });
         }
       } else {
         toast({ title: "Sync Error", description: result.error, variant: "destructive" });

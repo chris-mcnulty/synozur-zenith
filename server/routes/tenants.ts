@@ -226,6 +226,24 @@ router.get("/api/admin/tenants/consent/callback", async (req, res) => {
       return res.redirect(`${returnTo}?consent_success=true`);
     }
 
+    // Trial plan enforcement: tenant count and domain-match
+    if (organizationId) {
+      const orgForTrialCheck = await storage.getOrganization(organizationId);
+      if (orgForTrialCheck?.servicePlan === 'TRIAL') {
+        const existingConns = await storage.getTenantConnections(organizationId);
+        if (existingConns.length >= 1) {
+          return res.redirect(`${returnTo}?consent_error=${encodeURIComponent("Your Trial plan is limited to one tenant connection. Upgrade your plan to add more tenants.")}`);
+        }
+        if (orgForTrialCheck.domain && domain) {
+          const orgDomainBase = orgForTrialCheck.domain.toLowerCase().split('.')[0];
+          const tenantDomainBase = domain.toLowerCase().split('.')[0];
+          if (orgDomainBase !== tenantDomainBase) {
+            return res.redirect(`${returnTo}?consent_error=${encodeURIComponent("Trial plan is limited to your own domain. The tenant domain must match your organization's registered domain.")}`);
+          }
+        }
+      }
+    }
+
     let tenantName = domain.split('.')[0];
     const clientId = process.env.AZURE_CLIENT_ID!;
     const clientSecret = process.env.AZURE_CLIENT_SECRET!;
@@ -285,6 +303,26 @@ router.post("/api/admin/tenants", requireRole(ZENITH_ROLES.TENANT_ADMIN), async 
   if (!tenantId || !domain) {
     return res.status(400).json({ message: "tenantId and domain are required" });
   }
+
+  // Trial plan enforcement: tenant count and domain-match
+  const orgIdForTrialCheck = req.user?.organizationId;
+  if (orgIdForTrialCheck) {
+    const orgForTrialCheck = await storage.getOrganization(orgIdForTrialCheck);
+    if (orgForTrialCheck?.servicePlan === 'TRIAL') {
+      const existingConns = await storage.getTenantConnections(orgIdForTrialCheck);
+      if (existingConns.length >= 1) {
+        return res.status(403).json({ message: "Your Trial plan is limited to one tenant connection. Upgrade your plan to add more tenants." });
+      }
+      if (orgForTrialCheck.domain && domain) {
+        const orgDomainBase = orgForTrialCheck.domain.toLowerCase().split('.')[0];
+        const tenantDomainBase = (domain as string).toLowerCase().split('.')[0];
+        if (orgDomainBase !== tenantDomainBase) {
+          return res.status(403).json({ message: "Trial plan is limited to your own domain. The tenant domain must match your organization's registered domain." });
+        }
+      }
+    }
+  }
+
   const encryptedSecret = clientSecret && isEncryptionConfigured() && !isEncrypted(clientSecret)
     ? encryptToken(clientSecret)
     : clientSecret || undefined;
