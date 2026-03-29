@@ -9,8 +9,17 @@ export function getActiveOrgId(req: AuthenticatedRequest): string | null {
 export async function getOrgTenantConnectionIds(req: AuthenticatedRequest): Promise<string[] | null> {
   const orgId = getActiveOrgId(req);
   if (!orgId) return req.user?.role === ZENITH_ROLES.PLATFORM_OWNER ? null : [];
-  const connections = await storage.getTenantConnectionsByOrganization(orgId);
-  return connections.map(c => c.id);
+
+  const [ownConnections, legacyGrants, newGrantIds] = await Promise.all([
+    storage.getTenantConnectionsByOrganization(orgId),
+    storage.getActiveMspGrantsForGrantee(orgId),
+    storage.getGrantedTenantConnectionIds(orgId),
+  ]);
+
+  const ownIds = ownConnections.map(c => c.id);
+  const legacyGrantedIds = legacyGrants.map(g => g.tenantConnectionId);
+
+  return [...new Set([...ownIds, ...legacyGrantedIds, ...newGrantIds])];
 }
 
 export async function isWorkspaceInScope(req: AuthenticatedRequest, workspaceId: string): Promise<boolean> {
