@@ -66,9 +66,12 @@ const FEATURE_LIST: { key: keyof typeof PLAN_FEATURES.TRIAL; label: string; prem
   { key: "inventorySync", label: "Inventory & Data Sync" },
   { key: "provisioning", label: "Workspace Provisioning" },
   { key: "m365WriteBack", label: "M365 Write-Back", premium: true },
+  { key: "csvExport", label: "CSV Export", premium: true },
   { key: "copilotReadiness", label: "Copilot Readiness", premium: true },
   { key: "selfServicePortal", label: "Self-Service Portal", premium: true },
   { key: "lifecycleAutomation", label: "Lifecycle Automation", premium: true },
+  { key: "mspAccess", label: "MSP Consent Access", premium: true },
+  { key: "dataMasking", label: "Database Encryption", premium: true },
   { key: "advancedReporting", label: "Advanced Reporting", premium: true },
 ];
 
@@ -174,6 +177,10 @@ export default function ServicePlansPage() {
                     <div className="flex items-center gap-2 text-sm">
                       <Building2 className="w-3.5 h-3.5 text-muted-foreground" />
                       <span>{features.maxTenants === -1 ? "Unlimited" : `Up to ${features.maxTenants}`} tenants</span>
+                    </div>
+                    <div className="flex items-center gap-2 text-sm">
+                      <Globe className="w-3.5 h-3.5 text-muted-foreground" />
+                      <span>{features.maxSites === -1 ? "Unlimited" : `Up to ${features.maxSites.toLocaleString()}`} sites</span>
                     </div>
                     <div className="flex items-center gap-2 text-sm">
                       <HardDrive className="w-3.5 h-3.5 text-muted-foreground" />

@@ -22,5 +22,8 @@ export function useServicePlan() {
     isTrial: plan === "TRIAL",
     isFeatureEnabled: (feature: keyof typeof PLAN_FEATURES.TRIAL) => !!features[feature],
     canWriteBack: !!features.m365WriteBack,
+    maxSites: features.maxSites,
+    maxUsers: features.maxUsers,
+    maxTenants: features.maxTenants,
   };
 }
