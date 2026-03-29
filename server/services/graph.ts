@@ -467,6 +467,31 @@ export async function testConnection(tenantId: string, clientId: string, clientS
   }
 }
 
+export async function fetchTenantVerifiedDomains(tenantId: string, clientId: string, clientSecret: string): Promise<{
+  domains: string[];
+  initialDomain: string | null;
+  error?: string;
+}> {
+  try {
+    const token = await getAppToken(tenantId, clientId, clientSecret);
+    const res = await fetch("https://graph.microsoft.com/v1.0/organization?$select=verifiedDomains", {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) {
+      return { domains: [], initialDomain: null, error: `Graph API returned ${res.status}` };
+    }
+    const data = await res.json();
+    const org = data.value?.[0];
+    const verifiedDomains: Array<{ name: string; isDefault?: boolean; isInitial?: boolean }> = org?.verifiedDomains || [];
+    const domains = verifiedDomains.map(d => d.name.toLowerCase());
+    const initialDomainObj = verifiedDomains.find(d => d.isInitial);
+    const initialDomain = initialDomainObj ? initialDomainObj.name.toLowerCase() : null;
+    return { domains, initialDomain };
+  } catch (err: any) {
+    return { domains: [], initialDomain: null, error: err.message };
+  }
+}
+
 export interface GraphSite {
   id: string;
   displayName: string;

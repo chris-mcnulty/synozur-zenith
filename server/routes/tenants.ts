@@ -1,7 +1,7 @@
 import { Router } from "express";
 import crypto from "crypto";
 import { storage } from "../storage";
-import { testConnection, clearTokenCache, getAppToken, fetchSensitivityLabels, fetchRetentionLabels } from "../services/graph";
+import { testConnection, clearTokenCache, getAppToken, fetchSensitivityLabels, fetchRetentionLabels, fetchTenantVerifiedDomains } from "../services/graph";
 import { checkTenantPermissions, REQUIRED_PERMISSIONS, PERMISSIONS_VERSION } from "../services/permissions";
 import { METADATA_CATEGORIES, ZENITH_ROLES } from "@shared/schema";
 import { refreshDelegatedToken } from "../routes-entra";
@@ -11,6 +11,33 @@ import { requireFeature } from "../services/feature-gate";
 import { enableDataMasking, disableDataMasking } from "../services/data-masking-toggle";
 
 const router = Router();
+
+/**
+ * Checks whether a Zenith org domain matches a set of Microsoft-verified tenant domains.
+ * Supports:
+ *  - Exact match: "contoso.com" ↔ "contoso.com"
+ *  - onmicrosoft.com equivalence: "contoso.com" ↔ "contoso.onmicrosoft.com"
+ *    (only for simple 2-label org domains to prevent "acme.evil.com" from matching "acme")
+ */
+function trialDomainMatches(orgDomain: string, verifiedDomains: string[]): boolean {
+  const orgNorm = orgDomain.toLowerCase().trim();
+
+  // 1. Exact match with any verified domain
+  if (verifiedDomains.some(d => d === orgNorm)) return true;
+
+  // 2. onmicrosoft.com equivalence — only if org domain is a simple 2-label domain (e.g., "contoso.com")
+  //    "acme.evil.com" has 3 labels and must NOT match "acme.onmicrosoft.com"
+  const orgParts = orgNorm.split('.');
+  if (orgParts.length === 2) {
+    const orgBase = orgParts[0];
+    for (const d of verifiedDomains) {
+      const m = d.match(/^([^.]+)\.onmicrosoft\.com$/);
+      if (m && m[1] === orgBase) return true;
+    }
+  }
+
+  return false;
+}
 
 function getEffectiveClientSecret(conn: { clientSecret?: string | null }): string | undefined {
   if (conn.clientSecret) {
@@ -234,10 +261,16 @@ router.get("/api/admin/tenants/consent/callback", async (req, res) => {
         if (existingConns.length >= 1) {
           return res.redirect(`${returnTo}?consent_error=${encodeURIComponent("Your Trial plan is limited to one tenant connection. Upgrade your plan to add more tenants.")}`);
         }
-        if (orgForTrialCheck.domain && domain) {
-          const orgDomainBase = orgForTrialCheck.domain.toLowerCase().split('.')[0];
-          const tenantDomainBase = domain.toLowerCase().split('.')[0];
-          if (orgDomainBase !== tenantDomainBase) {
+        if (orgForTrialCheck.domain) {
+          // Fetch actual verified domains for this tenant from Microsoft Graph
+          const envClientId = process.env.AZURE_CLIENT_ID!;
+          const envClientSecret = process.env.AZURE_CLIENT_SECRET!;
+          const domainResult = await fetchTenantVerifiedDomains(tenantIdStr, envClientId, envClientSecret);
+          const verifiedDomains = domainResult.domains.length > 0
+            ? domainResult.domains
+            : [domain.toLowerCase()]; // Fall back to user-supplied domain if Graph unavailable
+          if (!trialDomainMatches(orgForTrialCheck.domain, verifiedDomains)) {
+            console.warn(`[trial-domain] Org domain "${orgForTrialCheck.domain}" does not match tenant verified domains: ${verifiedDomains.join(', ')}`);
             return res.redirect(`${returnTo}?consent_error=${encodeURIComponent("Trial plan is limited to your own domain. The tenant domain must match your organization's registered domain.")}`);
           }
         }
@@ -313,10 +346,16 @@ router.post("/api/admin/tenants", requireRole(ZENITH_ROLES.TENANT_ADMIN), async 
       if (existingConns.length >= 1) {
         return res.status(403).json({ message: "Your Trial plan is limited to one tenant connection. Upgrade your plan to add more tenants." });
       }
-      if (orgForTrialCheck.domain && domain) {
-        const orgDomainBase = orgForTrialCheck.domain.toLowerCase().split('.')[0];
-        const tenantDomainBase = (domain as string).toLowerCase().split('.')[0];
-        if (orgDomainBase !== tenantDomainBase) {
+      if (orgForTrialCheck.domain) {
+        // Fetch actual verified domains for this tenant from Microsoft Graph
+        const effectiveClientId = (clientId as string) || process.env.AZURE_CLIENT_ID!;
+        const effectiveSecret = (clientSecret as string) ? (isEncryptionConfigured() && !isEncrypted(clientSecret as string) ? clientSecret as string : decryptToken(clientSecret as string)) : process.env.AZURE_CLIENT_SECRET!;
+        const domainResult = await fetchTenantVerifiedDomains(tenantId as string, effectiveClientId, effectiveSecret).catch(() => ({ domains: [], initialDomain: null }));
+        const verifiedDomains = domainResult.domains.length > 0
+          ? domainResult.domains
+          : [(domain as string).toLowerCase()]; // Fall back to user-supplied domain if Graph unavailable
+        if (!trialDomainMatches(orgForTrialCheck.domain, verifiedDomains)) {
+          console.warn(`[trial-domain] Org domain "${orgForTrialCheck.domain}" does not match tenant verified domains: ${verifiedDomains.join(', ')}`);
           return res.status(403).json({ message: "Trial plan is limited to your own domain. The tenant domain must match your organization's registered domain." });
         }
       }

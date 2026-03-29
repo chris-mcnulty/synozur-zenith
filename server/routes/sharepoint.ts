@@ -2092,7 +2092,8 @@ router.post("/api/admin/tenants/:id/sync", requireRole(ZENITH_ROLES.TENANT_ADMIN
     await storage.updateTenantConnection(req.params.id, {
       lastSyncAt: new Date(),
       lastSyncStatus: permissionWarnings.some(w => w.severity === "error") ? "SUCCESS_WITH_ERRORS" : permissionWarnings.length > 0 ? "SUCCESS_WITH_WARNINGS" : "SUCCESS",
-      lastSyncSiteCount: siteResult.sites.length,
+      // When cap is applied, store the discovered total so the UI can display "Showing N of M sites"
+      lastSyncSiteCount: sitesCapApplied ? sitesDiscoveredTotal : siteResult.sites.length,
       status: "ACTIVE",
       consentGranted: true,
     });

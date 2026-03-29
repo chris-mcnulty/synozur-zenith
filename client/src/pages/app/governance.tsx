@@ -280,8 +280,10 @@ export default function GovernancePage() {
   const totalPages = showPagination ? Math.ceil(paginatedTotal / GOVERNANCE_PAGE_SIZE) : 1;
 
   const { isTrial, maxSites } = useServicePlan();
-  const totalSiteCount = showPagination ? paginatedTotal : workspaces.length;
-  const showSiteCapBanner = isTrial && maxSites > 0 && totalSiteCount >= maxSites;
+  // lastSyncSiteCount stores the raw discovered total when a cap was applied, otherwise the synced count.
+  // If it exceeds maxSites, the cap was active during the last sync.
+  const lastSyncDiscovered = selectedTenant?.lastSyncSiteCount ?? 0;
+  const showSiteCapBanner = isTrial && maxSites > 0 && lastSyncDiscovered > maxSites;
 
   const bulkMutation = useMutation({
     mutationFn: (data: any) => apiRequest("PATCH", "/api/workspaces/bulk/update", data),
@@ -1089,7 +1091,7 @@ export default function GovernancePage() {
           <div>
             <p className="text-sm font-semibold text-amber-700 dark:text-amber-400">Trial Plan Site Limit Reached</p>
             <p className="text-xs text-amber-600/80 dark:text-amber-400/70">
-              Your Trial plan limits inventory to {maxSites.toLocaleString()} sites. Your Microsoft 365 tenant may contain additional sites not shown here.{" "}
+              Showing {maxSites.toLocaleString()} of {lastSyncDiscovered.toLocaleString()} sites — your Trial plan limits inventory to {maxSites.toLocaleString()} sites.{" "}
               <Link href="/app/admin/service-plans" className="underline font-medium hover:no-underline">Upgrade your plan</Link> to see all sites.
             </p>
           </div>

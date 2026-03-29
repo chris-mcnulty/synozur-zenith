@@ -12,6 +12,7 @@ interface TenantConnection {
   installMode: string;
   status: string;
   isDemo: boolean;
+  lastSyncSiteCount?: number | null;
   mspAccessDenied?: boolean;
   isGrantedAccess?: boolean;
   onedriveInventoryEnabled?: boolean;
