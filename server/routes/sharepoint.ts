@@ -2,7 +2,7 @@ import { Router } from "express";
 import { storage } from "../storage";
 import { insertWorkspaceSchema, insertProvisioningRequestSchema, type ServicePlanTier, ZENITH_ROLES } from "@shared/schema";
 import { fetchSharePointSites, fetchSiteUsageReport, fetchSiteDriveOwner, fetchSiteAnalytics, fetchSiteGroupOwners, fetchSiteCollectionAdmins, getAppToken, writeSitePropertyBag, requestSiteReindex, fetchSitePropertyBag, fetchSensitivityLabels, fetchRetentionLabels, fetchHubSites, fetchSiteHubAssociation, fetchHubSitesViaSearch, applySensitivityLabelToSite, removeSensitivityLabelFromSite, joinHubSite, leaveHubSite, fetchSiteLockState, fetchSiteArchiveStatus, batchToggleNoScript, fetchSiteDocumentLibraries, enumerateSiteDocumentLibraries, fetchLibraryDetails, fetchSiteTelemetry, fetchContentTypes, createSharePointSite, createM365Group, createTeam, assignSensitivityLabelToGroup, resolveOwnerIds } from "../services/graph";
-import { getPlanFeatures } from "../services/feature-gate";
+import { getPlanFeatures, requireFeature } from "../services/feature-gate";
 import { refreshDelegatedToken, getDelegatedSpoToken } from "../routes-entra";
 import { requireAuth, requireRole, requirePermission, type AuthenticatedRequest } from "../middleware/rbac";
 import { computeWritebackHash, computeSpoSyncHash } from "../services/writeback-hash";
@@ -274,6 +274,25 @@ router.patch("/api/workspaces/:id", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, Z
   }
   const existing = await storage.getWorkspace(req.params.id);
   if (!existing) return res.status(404).json({ message: "Workspace not found" });
+
+  const effectiveSensitivity = 'sensitivity' in req.body ? req.body.sensitivity : existing.sensitivity;
+  const effectiveExternalSharing = 'externalSharing' in req.body ? req.body.externalSharing : existing.externalSharing;
+  const effectiveCopilotReady = 'copilotReady' in req.body ? req.body.copilotReady : existing.copilotReady;
+
+  if (effectiveSensitivity === 'HIGHLY_CONFIDENTIAL') {
+    if (effectiveExternalSharing === true) {
+      return res.status(400).json({
+        error: 'SENSITIVITY_POLICY_VIOLATION',
+        message: 'External sharing cannot be enabled on Highly Confidential workspaces. Disable external sharing or change the sensitivity label first.',
+      });
+    }
+    if (effectiveCopilotReady === true) {
+      return res.status(400).json({
+        error: 'SENSITIVITY_POLICY_VIOLATION',
+        message: 'Copilot Ready cannot be enabled on Highly Confidential workspaces. Change the sensitivity label first.',
+      });
+    }
+  }
 
   const sensitivityLabelChanged = 'sensitivityLabelId' in req.body &&
     req.body.sensitivityLabelId !== existing.sensitivityLabelId;
@@ -1000,7 +1019,7 @@ router.patch("/api/workspaces/bulk/hub-assignment", requireRole(ZENITH_ROLES.GOV
 });
 
 // ── Copilot Rules ──
-router.get("/api/workspaces/:id/copilot-rules", requireAuth(), async (req: AuthenticatedRequest, res) => {
+router.get("/api/workspaces/:id/copilot-rules", requireAuth(), requireFeature("copilotReadiness"), async (req: AuthenticatedRequest, res) => {
   if (!(await isWorkspaceInScope(req, req.params.id))) {
     return res.status(404).json({ message: "Workspace not found" });
   }
@@ -1008,7 +1027,7 @@ router.get("/api/workspaces/:id/copilot-rules", requireAuth(), async (req: Authe
   res.json(rules);
 });
 
-router.put("/api/workspaces/:id/copilot-rules", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN), async (req: AuthenticatedRequest, res) => {
+router.put("/api/workspaces/:id/copilot-rules", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN), requireFeature("copilotReadiness"), async (req: AuthenticatedRequest, res) => {
   if (!(await isWorkspaceInScope(req, req.params.id))) {
     return res.status(404).json({ message: "Workspace not found" });
   }
@@ -1021,7 +1040,7 @@ router.put("/api/workspaces/:id/copilot-rules", requireRole(ZENITH_ROLES.GOVERNA
 });
 
 // ── Provisioning Requests ──
-router.get("/api/provisioning-requests", requireAuth(), async (req: AuthenticatedRequest, res) => {
+router.get("/api/provisioning-requests", requireAuth(), requireFeature("selfServicePortal"), async (req: AuthenticatedRequest, res) => {
   const isPlatformOwner = req.user?.role === ZENITH_ROLES.PLATFORM_OWNER;
   if (isPlatformOwner) {
     const requests = await storage.getProvisioningRequests(null);
@@ -1033,7 +1052,7 @@ router.get("/api/provisioning-requests", requireAuth(), async (req: Authenticate
   res.json(requests);
 });
 
-router.get("/api/provisioning-requests/:id", requireAuth(), async (req: AuthenticatedRequest, res) => {
+router.get("/api/provisioning-requests/:id", requireAuth(), requireFeature("selfServicePortal"), async (req: AuthenticatedRequest, res) => {
   const request = await storage.getProvisioningRequest(req.params.id);
   if (!request) return res.status(404).json({ message: "Request not found" });
   const isPlatformOwner = req.user?.role === ZENITH_ROLES.PLATFORM_OWNER;
@@ -1046,7 +1065,7 @@ router.get("/api/provisioning-requests/:id", requireAuth(), async (req: Authenti
   res.json(request);
 });
 
-router.post("/api/provisioning-requests", requireRole(ZENITH_ROLES.OPERATOR, ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN), async (req: AuthenticatedRequest, res) => {
+router.post("/api/provisioning-requests", requireRole(ZENITH_ROLES.OPERATOR, ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN), requireFeature("selfServicePortal"), async (req: AuthenticatedRequest, res) => {
   const parsed = insertProvisioningRequestSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ message: parsed.error.message });
   const orgId = req.activeOrganizationId || req.user?.organizationId || null;
@@ -1054,7 +1073,7 @@ router.post("/api/provisioning-requests", requireRole(ZENITH_ROLES.OPERATOR, ZEN
   res.status(201).json(request);
 });
 
-router.patch("/api/provisioning-requests/:id/status", requireRole(ZENITH_ROLES.TENANT_ADMIN), async (req: AuthenticatedRequest, res) => {
+router.patch("/api/provisioning-requests/:id/status", requireRole(ZENITH_ROLES.TENANT_ADMIN), requireFeature("selfServicePortal"), async (req: AuthenticatedRequest, res) => {
   const { status } = req.body;
   if (!["PENDING", "APPROVED", "PROVISIONED", "REJECTED", "FAILED"].includes(status)) {
     return res.status(400).json({ message: "Invalid status" });
@@ -2319,7 +2338,7 @@ router.get("/api/admin/libraries/:libraryId/details", requireRole(ZENITH_ROLES.V
   }
 });
 
-router.get("/api/admin/tenants/:id/export-csv", requireRole(ZENITH_ROLES.VIEWER), async (req: AuthenticatedRequest, res) => {
+router.get("/api/admin/tenants/:id/export-csv", requireRole(ZENITH_ROLES.VIEWER), requireFeature("advancedReporting"), async (req: AuthenticatedRequest, res) => {
   try {
     const allowedTenantIds = await getOrgTenantConnectionIds(req);
     if (allowedTenantIds !== null && !allowedTenantIds.includes(req.params.id)) {

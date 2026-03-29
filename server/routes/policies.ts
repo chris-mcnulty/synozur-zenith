@@ -4,6 +4,7 @@ import { ZENITH_ROLES, insertGovernancePolicySchema, insertPolicyOutcomeSchema, 
 import { storage } from "../storage";
 import { evaluatePolicy, evaluationResultsToCopilotRules, formatPolicyBagValue, type EvaluationContext } from "../services/policy-engine";
 import { getOrgTenantConnectionIds, isWorkspaceInScope } from "./scope-helpers";
+import { requireFeature } from "../services/feature-gate";
 
 const router = Router();
 
@@ -230,7 +231,7 @@ router.post("/api/policies/simulate", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN,
   }
 });
 
-router.post("/api/policies/:id/evaluate", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN), async (req: AuthenticatedRequest, res) => {
+router.post("/api/policies/:id/evaluate", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN), requireFeature("copilotReadiness"), async (req: AuthenticatedRequest, res) => {
   const policy = await storage.getGovernancePolicy(req.params.id);
   if (!policy) return res.status(404).json({ message: "Policy not found" });
 
@@ -291,7 +292,7 @@ router.post("/api/policies/:id/evaluate", requireRole(ZENITH_ROLES.GOVERNANCE_AD
   res.json({ evaluated: results.length, results });
 });
 
-router.post("/api/admin/tenants/:id/evaluate-policies", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN), async (req: AuthenticatedRequest, res) => {
+router.post("/api/admin/tenants/:id/evaluate-policies", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN), requireFeature("lifecycleAutomation"), async (req: AuthenticatedRequest, res) => {
   try {
     const allowedTenantIds = await getOrgTenantConnectionIds(req);
     if (allowedTenantIds !== null && !allowedTenantIds.includes(req.params.id)) {
@@ -348,7 +349,7 @@ router.post("/api/admin/tenants/:id/evaluate-policies", requireRole(ZENITH_ROLES
   }
 });
 
-router.get("/api/workspaces/:id/policy-results", requireAuth(), async (req: AuthenticatedRequest, res) => {
+router.get("/api/workspaces/:id/policy-results", requireAuth(), requireFeature("copilotReadiness"), async (req: AuthenticatedRequest, res) => {
   if (!(await isWorkspaceInScope(req, req.params.id))) {
     return res.status(404).json({ message: "Workspace not found" });
   }

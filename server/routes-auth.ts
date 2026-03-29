@@ -5,6 +5,7 @@ import { AuthenticatedRequest, requireAuth, requirePermission } from './middlewa
 import { type User, ZENITH_ROLES, type ZenithRole } from '@shared/schema';
 import { isPublicEmailDomain } from './utils/publicDomains';
 import { getDefaultSignupPlan } from './utils/platformSettingsCache';
+import { sendVerificationEmail, sendPasswordResetEmail } from './email-support';
 
 const router = Router();
 
@@ -120,6 +121,17 @@ router.post('/signup', async (req: AuthenticatedRequest, res) => {
       result: 'SUCCESS',
       ipAddress: req.ip || null,
     });
+
+    try {
+      await sendVerificationEmail(user, verificationToken);
+    } catch (emailErr: any) {
+      console.warn('[Auth] Failed to send verification email:', emailErr.message);
+      return res.status(201).json({
+        user: sanitizeUser(user),
+        emailDeliveryFailed: true,
+        emailDeliveryError: 'Verification email could not be delivered. Please contact your administrator.',
+      });
+    }
 
     return res.status(201).json({ user: sanitizeUser(user) });
   } catch (error: any) {
@@ -284,6 +296,17 @@ router.post('/request-password-reset', async (req: AuthenticatedRequest, res) =>
       return res.status(400).json({ error: 'Email is required' });
     }
 
+    const { getUncachableSendGridClient } = await import('./services/sendgrid-client');
+    try {
+      await getUncachableSendGridClient();
+    } catch (configErr: any) {
+      console.warn('[Auth] Email service unavailable for password reset:', configErr.message);
+      return res.status(503).json({
+        error: 'EMAIL_SERVICE_UNAVAILABLE',
+        message: 'Password reset email could not be delivered. Please try again later or contact your administrator.',
+      });
+    }
+
     const user = await storage.getUserByEmail(email);
 
     if (user) {
@@ -306,6 +329,12 @@ router.post('/request-password-reset', async (req: AuthenticatedRequest, res) =>
         result: 'SUCCESS',
         ipAddress: req.ip || null,
       });
+
+      try {
+        await sendPasswordResetEmail(user, resetToken);
+      } catch (emailErr: any) {
+        console.warn('[Auth] Failed to send password reset email:', emailErr.message);
+      }
     }
 
     return res.json({ success: true });

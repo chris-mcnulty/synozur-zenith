@@ -97,6 +97,16 @@ app.use((req, res, next) => {
   next();
 });
 
+async function checkSendGridStartup() {
+  try {
+    const { getUncachableSendGridClient } = await import('./services/sendgrid-client');
+    await getUncachableSendGridClient();
+    log('SendGrid integration configured — transactional emails enabled');
+  } catch (err: any) {
+    console.warn('[SendGrid] WARNING: SendGrid is not configured or the API key is missing. Email verification and password reset emails will not be delivered. Error:', err.message);
+  }
+}
+
 function checkEncryptionStartupGuard() {
   const secret = process.env.TOKEN_ENCRYPTION_SECRET;
   if (!secret || secret.length < 32) {
@@ -304,6 +314,7 @@ async function backfillOrgMemberships() {
 
 (async () => {
   checkEncryptionStartupGuard();
+  await checkSendGridStartup();
 
   await registerRoutes(httpServer, app);
 

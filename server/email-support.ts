@@ -3,6 +3,134 @@ import type { SupportTicket, User, Organization } from "@shared/schema";
 
 const APP_PUBLIC_URL = process.env.APP_PUBLIC_URL || "https://zenith.synozur.com";
 
+export async function sendVerificationEmail(user: User, verificationToken: string): Promise<void> {
+  const { client, fromEmail } = await getUncachableSendGridClient();
+  const firstName = user.name ? user.name.split(" ")[0] : user.email;
+  const verifyUrl = `${APP_PUBLIC_URL}/verify-email?token=${encodeURIComponent(verificationToken)}`;
+
+  const html = `
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Verify Your Email</title>
+</head>
+<body style="margin:0;padding:0;background:#f5f5f5;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#f5f5f5;padding:32px 16px;">
+    <tr>
+      <td align="center">
+        <table width="600" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:8px;overflow:hidden;max-width:600px;width:100%;box-shadow:0 1px 3px rgba(0,0,0,0.1);">
+          <tr>
+            <td style="background:#5b0fbc;padding:24px;">
+              <h1 style="margin:0;color:#ffffff;font-size:20px;font-weight:700;">Zenith</h1>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:32px 24px 16px;">
+              <p style="margin:0 0 12px;color:#111827;font-size:16px;">Hi ${firstName},</p>
+              <p style="margin:0 0 24px;color:#374151;font-size:15px;line-height:1.6;">
+                Thanks for signing up for Zenith. Please verify your email address to activate your account.
+              </p>
+              <a href="${verifyUrl}" style="display:inline-block;background:#5b0fbc;color:#ffffff;text-decoration:none;padding:12px 24px;border-radius:6px;font-size:15px;font-weight:600;">
+                Verify Email Address
+              </a>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:16px 24px 32px;">
+              <p style="margin:0;color:#6b7280;font-size:13px;line-height:1.6;">
+                If you didn't create a Zenith account, you can safely ignore this email. This link expires in 24 hours.
+              </p>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:16px 24px;border-top:1px solid #e5e7eb;">
+              <p style="margin:0;color:#9ca3af;font-size:12px;">
+                If the button above doesn't work, copy and paste this URL into your browser:<br/>
+                <a href="${verifyUrl}" style="color:#5b0fbc;word-break:break-all;">${verifyUrl}</a>
+              </p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`;
+
+  await client.send({
+    to: user.email,
+    from: fromEmail,
+    subject: "Verify your Zenith email address",
+    html,
+  });
+}
+
+export async function sendPasswordResetEmail(user: User, resetToken: string): Promise<void> {
+  const { client, fromEmail } = await getUncachableSendGridClient();
+  const firstName = user.name ? user.name.split(" ")[0] : user.email;
+  const resetUrl = `${APP_PUBLIC_URL}/reset-password?token=${encodeURIComponent(resetToken)}`;
+
+  const html = `
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Reset Your Password</title>
+</head>
+<body style="margin:0;padding:0;background:#f5f5f5;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#f5f5f5;padding:32px 16px;">
+    <tr>
+      <td align="center">
+        <table width="600" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:8px;overflow:hidden;max-width:600px;width:100%;box-shadow:0 1px 3px rgba(0,0,0,0.1);">
+          <tr>
+            <td style="background:#5b0fbc;padding:24px;">
+              <h1 style="margin:0;color:#ffffff;font-size:20px;font-weight:700;">Zenith</h1>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:32px 24px 16px;">
+              <p style="margin:0 0 12px;color:#111827;font-size:16px;">Hi ${firstName},</p>
+              <p style="margin:0 0 24px;color:#374151;font-size:15px;line-height:1.6;">
+                We received a request to reset your Zenith password. Click the button below to choose a new password. This link expires in 1 hour.
+              </p>
+              <a href="${resetUrl}" style="display:inline-block;background:#5b0fbc;color:#ffffff;text-decoration:none;padding:12px 24px;border-radius:6px;font-size:15px;font-weight:600;">
+                Reset Password
+              </a>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:16px 24px 32px;">
+              <p style="margin:0;color:#6b7280;font-size:13px;line-height:1.6;">
+                If you didn't request a password reset, you can safely ignore this email. Your password will remain unchanged.
+              </p>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:16px 24px;border-top:1px solid #e5e7eb;">
+              <p style="margin:0;color:#9ca3af;font-size:12px;">
+                If the button above doesn't work, copy and paste this URL into your browser:<br/>
+                <a href="${resetUrl}" style="color:#5b0fbc;word-break:break-all;">${resetUrl}</a>
+              </p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`;
+
+  await client.send({
+    to: user.email,
+    from: fromEmail,
+    subject: "Reset your Zenith password",
+    html,
+  });
+}
+
 function getPriorityColor(priority: string): string {
   switch (priority.toLowerCase()) {
     case "high":
