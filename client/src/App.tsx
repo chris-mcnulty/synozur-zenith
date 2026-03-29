@@ -1,6 +1,7 @@
-import { Switch, Route, useLocation } from "wouter";
+import { Switch, Route, useLocation, Redirect } from "wouter";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { ThemeProvider } from "next-themes";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -45,6 +46,54 @@ import TeamsChannelsPage from "./pages/app/teams-channels";
 import OneDriveInventoryPage from "./pages/app/onedrive-inventory";
 import RecordingsPage from "./pages/app/recordings";
 import AppShell from "./components/layout/app-shell";
+
+const ROLE_LEVELS: Record<string, number> = {
+  platform_owner: 100,
+  tenant_admin: 80,
+  governance_admin: 60,
+  operator: 40,
+  viewer: 20,
+  read_only_auditor: 10,
+};
+
+function hasMinRole(userRole: string | undefined, minRole: string): boolean {
+  if (!userRole) return false;
+  return (ROLE_LEVELS[userRole] ?? 0) >= (ROLE_LEVELS[minRole] ?? 999);
+}
+
+type AuthData = {
+  user: { id: string; name: string | null; email: string; role: string; effectiveRole?: string; authProvider: string | null; organizationId: string | null };
+  organization: { id: string; name: string } | null;
+  activeOrganizationId: string | null;
+  membershipCount: number;
+} | null;
+
+function useAuthData() {
+  return useQuery<AuthData>({
+    queryKey: ["/api/auth/me"],
+    queryFn: async () => {
+      const r = await fetch("/api/auth/me", { credentials: "include" });
+      if (r.status === 401) return null;
+      if (!r.ok) return null;
+      return r.json();
+    },
+    staleTime: 5 * 60 * 1000,
+    retry: false,
+  });
+}
+
+function RoleGuard({ minRole, children }: { minRole: string; children: React.ReactNode }) {
+  const { data: authData, isLoading } = useAuthData();
+
+  if (isLoading) return null;
+
+  const effectiveRole = authData?.user?.effectiveRole || authData?.user?.role;
+  if (!hasMinRole(effectiveRole, minRole)) {
+    return <Redirect to="/app/dashboard" />;
+  }
+
+  return <>{children}</>;
+}
 
 const EmptyPage = ({ title }: { title: string }) => (
   <div className="flex h-[50vh] items-center justify-center">
@@ -93,18 +142,42 @@ function AppRoutes() {
         <Route path="/app/approvals" component={ApprovalsQueue} />
         <Route path="/app/ai-copilot" component={AICopilotIntegration} />
         <Route path="/app/discover" component={DiscoverDashboard} />
-        <Route path="/app/admin/plans" component={ServicePlansPage} />
-        <Route path="/app/admin/users" component={UserManagementPage} />
-        <Route path="/app/admin/organization" component={OrganizationSettingsPage} />
-        <Route path="/app/admin/system" component={SystemAdminPage} />
-        <Route path="/app/admin/tenants" component={TenantConnectionsPage} />
-        <Route path="/app/admin/audit-log" component={AuditLogPage} />
-        <Route path="/app/admin/data-dictionaries" component={DataDictionariesPage} />
-        <Route path="/app/admin/custom-fields" component={CustomFieldsPage} />
-        <Route path="/app/admin/policies" component={PolicyBuilderPage} />
-        <Route path="/app/admin/policy-whatif" component={PolicyWhatIfPage} />
-        <Route path="/app/admin/entra" component={EntraSetupPage} />
-        <Route path="/app/admin" component={AdminTemplatesPage} />
+        <Route path="/app/admin/plans">
+          <RoleGuard minRole="tenant_admin"><ServicePlansPage /></RoleGuard>
+        </Route>
+        <Route path="/app/admin/users">
+          <RoleGuard minRole="tenant_admin"><UserManagementPage /></RoleGuard>
+        </Route>
+        <Route path="/app/admin/organization">
+          <RoleGuard minRole="tenant_admin"><OrganizationSettingsPage /></RoleGuard>
+        </Route>
+        <Route path="/app/admin/system">
+          <RoleGuard minRole="platform_owner"><SystemAdminPage /></RoleGuard>
+        </Route>
+        <Route path="/app/admin/tenants">
+          <RoleGuard minRole="tenant_admin"><TenantConnectionsPage /></RoleGuard>
+        </Route>
+        <Route path="/app/admin/audit-log">
+          <RoleGuard minRole="read_only_auditor"><AuditLogPage /></RoleGuard>
+        </Route>
+        <Route path="/app/admin/data-dictionaries">
+          <RoleGuard minRole="tenant_admin"><DataDictionariesPage /></RoleGuard>
+        </Route>
+        <Route path="/app/admin/custom-fields">
+          <RoleGuard minRole="tenant_admin"><CustomFieldsPage /></RoleGuard>
+        </Route>
+        <Route path="/app/admin/policies">
+          <RoleGuard minRole="governance_admin"><PolicyBuilderPage /></RoleGuard>
+        </Route>
+        <Route path="/app/admin/policy-whatif">
+          <RoleGuard minRole="governance_admin"><PolicyWhatIfPage /></RoleGuard>
+        </Route>
+        <Route path="/app/admin/entra">
+          <RoleGuard minRole="tenant_admin"><EntraSetupPage /></RoleGuard>
+        </Route>
+        <Route path="/app/admin">
+          <RoleGuard minRole="tenant_admin"><AdminTemplatesPage /></RoleGuard>
+        </Route>
         <Route path="/app/teams-channels" component={TeamsChannelsPage} />
         <Route path="/app/onedrive-inventory" component={OneDriveInventoryPage} />
         <Route path="/app/recordings" component={RecordingsPage} />
