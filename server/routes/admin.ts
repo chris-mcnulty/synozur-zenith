@@ -182,22 +182,37 @@ router.get("/api/audit-log", requireAuth(), requireRole(ZENITH_ROLES.PLATFORM_OW
 
 // ── Organization & Service Plan ──
 router.get("/api/organization", requireAuth(), async (req: AuthenticatedRequest, res) => {
-  const id = req.query.id as string | undefined;
+  const isPlatformOwner = req.user?.role === ZENITH_ROLES.PLATFORM_OWNER;
+  const idParam = req.query.id as string | undefined;
+
+  const id = isPlatformOwner
+    ? idParam
+    : (req.activeOrganizationId || req.user?.organizationId || idParam);
+
   let org = await storage.getOrganization(id);
   if (!org) {
-    org = await storage.upsertOrganization({
-      name: "The Synozur Alliance",
-      domain: "synozur.onmicrosoft.com",
-      servicePlan: "ENTERPRISE",
-      supportEmail: "it-support@synozur.demo",
-    });
+    if (isPlatformOwner) {
+      org = await storage.upsertOrganization({
+        name: "The Synozur Alliance",
+        domain: "synozur.onmicrosoft.com",
+        servicePlan: "ENTERPRISE",
+        supportEmail: "it-support@synozur.demo",
+      });
+    } else {
+      return res.status(404).json({ error: "Organization not found" });
+    }
   }
+
+  if (!isPlatformOwner && org.id !== (req.activeOrganizationId || req.user?.organizationId)) {
+    return res.status(403).json({ error: "Access denied" });
+  }
+
   const plan = org.servicePlan as ServicePlanTier;
   const features = getPlanFeatures(plan);
   res.json({ ...org, features });
 });
 
-router.get("/api/organizations", requireAuth(), async (_req: AuthenticatedRequest, res) => {
+router.get("/api/organizations", requireAuth(), requireRole(ZENITH_ROLES.PLATFORM_OWNER), async (_req: AuthenticatedRequest, res) => {
   const orgs = await storage.getOrganizations();
   const withFeatures = orgs.map(org => ({
     ...org,

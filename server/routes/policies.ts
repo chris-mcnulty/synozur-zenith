@@ -25,22 +25,41 @@ function validatePropertyBagKey(key: string | undefined | null): string | null {
 }
 
 router.get("/api/policies", requireAuth(), async (req: AuthenticatedRequest, res) => {
-  const organizationId = req.query.organizationId as string;
-  if (!organizationId) {
+  const isPlatformOwner = req.user?.role === ZENITH_ROLES.PLATFORM_OWNER;
+  const requestedOrgId = req.query.organizationId as string;
+  if (!requestedOrgId) {
     return res.status(400).json({ message: "organizationId query parameter is required" });
   }
-  const policies = await storage.getGovernancePolicies(organizationId);
+  const activeOrgId = req.activeOrganizationId || req.user?.organizationId;
+  if (!isPlatformOwner && requestedOrgId !== activeOrgId) {
+    return res.status(403).json({ message: "Access denied: organizationId does not match your active organization" });
+  }
+  const policies = await storage.getGovernancePolicies(requestedOrgId);
   res.json(policies);
 });
 
 router.get("/api/policies/:id", requireAuth(), async (req: AuthenticatedRequest, res) => {
   const policy = await storage.getGovernancePolicy(req.params.id);
   if (!policy) return res.status(404).json({ message: "Policy not found" });
+  const isPlatformOwner = req.user?.role === ZENITH_ROLES.PLATFORM_OWNER;
+  const activeOrgId = req.activeOrganizationId || req.user?.organizationId;
+  if (!isPlatformOwner && policy.organizationId !== activeOrgId) {
+    return res.status(404).json({ message: "Policy not found" });
+  }
   res.json(policy);
 });
 
 router.post("/api/policies", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN), async (req: AuthenticatedRequest, res) => {
-  const parsed = insertGovernancePolicySchema.safeParse(req.body);
+  const isPlatformOwner = req.user?.role === ZENITH_ROLES.PLATFORM_OWNER;
+  const activeOrgId = req.activeOrganizationId || req.user?.organizationId;
+  const body = { ...req.body };
+  if (!isPlatformOwner) {
+    if (body.organizationId && body.organizationId !== activeOrgId) {
+      return res.status(403).json({ message: "Cannot create policy for a different organization" });
+    }
+    body.organizationId = activeOrgId;
+  }
+  const parsed = insertGovernancePolicySchema.safeParse(body);
   if (!parsed.success) return res.status(400).json({ message: parsed.error.message });
   const policy = await storage.createGovernancePolicy(parsed.data);
   res.status(201).json(policy);
@@ -49,6 +68,11 @@ router.post("/api/policies", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_R
 router.patch("/api/policies/:id", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN), async (req: AuthenticatedRequest, res) => {
   const existing = await storage.getGovernancePolicy(req.params.id);
   if (!existing) return res.status(404).json({ message: "Policy not found" });
+  const isPlatformOwner = req.user?.role === ZENITH_ROLES.PLATFORM_OWNER;
+  const activeOrgId = req.activeOrganizationId || req.user?.organizationId;
+  if (!isPlatformOwner && existing.organizationId !== activeOrgId) {
+    return res.status(404).json({ message: "Policy not found" });
+  }
 
   const updates: Record<string, unknown> = {};
   if (req.body.name !== undefined) updates.name = req.body.name;
@@ -68,23 +92,44 @@ router.patch("/api/policies/:id", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZEN
 });
 
 router.delete("/api/policies/:id", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN), async (req: AuthenticatedRequest, res) => {
+  const existing = await storage.getGovernancePolicy(req.params.id);
+  if (!existing) return res.status(404).json({ message: "Policy not found" });
+  const isPlatformOwner = req.user?.role === ZENITH_ROLES.PLATFORM_OWNER;
+  const activeOrgId = req.activeOrganizationId || req.user?.organizationId;
+  if (!isPlatformOwner && existing.organizationId !== activeOrgId) {
+    return res.status(404).json({ message: "Policy not found" });
+  }
   await storage.deleteGovernancePolicy(req.params.id);
   res.json({ message: "Policy deleted" });
 });
 
 router.get("/api/policy-outcomes", requireAuth(), async (req: AuthenticatedRequest, res) => {
-  const organizationId = req.query.organizationId as string;
-  if (!organizationId) return res.status(400).json({ message: "organizationId required" });
-  const outcomes = await storage.getPolicyOutcomes(organizationId);
+  const isPlatformOwner = req.user?.role === ZENITH_ROLES.PLATFORM_OWNER;
+  const requestedOrgId = req.query.organizationId as string;
+  if (!requestedOrgId) return res.status(400).json({ message: "organizationId required" });
+  const activeOrgId = req.activeOrganizationId || req.user?.organizationId;
+  if (!isPlatformOwner && requestedOrgId !== activeOrgId) {
+    return res.status(403).json({ message: "Access denied: organizationId does not match your active organization" });
+  }
+  const outcomes = await storage.getPolicyOutcomes(requestedOrgId);
   res.json(outcomes);
 });
 
 router.post("/api/policy-outcomes", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN), async (req: AuthenticatedRequest, res) => {
-  if (req.body.propertyBagKey) {
-    const keyError = validatePropertyBagKey(req.body.propertyBagKey);
+  const isPlatformOwner = req.user?.role === ZENITH_ROLES.PLATFORM_OWNER;
+  const activeOrgId = req.activeOrganizationId || req.user?.organizationId;
+  const body = { ...req.body };
+  if (!isPlatformOwner) {
+    if (body.organizationId && body.organizationId !== activeOrgId) {
+      return res.status(403).json({ message: "Cannot create policy outcome for a different organization" });
+    }
+    body.organizationId = activeOrgId;
+  }
+  if (body.propertyBagKey) {
+    const keyError = validatePropertyBagKey(body.propertyBagKey);
     if (keyError) return res.status(400).json({ message: keyError });
   }
-  const parsed = insertPolicyOutcomeSchema.safeParse(req.body);
+  const parsed = insertPolicyOutcomeSchema.safeParse(body);
   if (!parsed.success) return res.status(400).json({ message: parsed.error.message });
   const outcome = await storage.createPolicyOutcome(parsed.data);
   res.status(201).json(outcome);
@@ -93,6 +138,11 @@ router.post("/api/policy-outcomes", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, Z
 router.patch("/api/policy-outcomes/:id", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN), async (req: AuthenticatedRequest, res) => {
   const existing = await storage.getPolicyOutcome(req.params.id);
   if (!existing) return res.status(404).json({ message: "Outcome not found" });
+  const isPlatformOwner = req.user?.role === ZENITH_ROLES.PLATFORM_OWNER;
+  const activeOrgId = req.activeOrganizationId || req.user?.organizationId;
+  if (!isPlatformOwner && existing.organizationId !== activeOrgId) {
+    return res.status(404).json({ message: "Outcome not found" });
+  }
   const updates: Record<string, unknown> = {};
   if (req.body.name !== undefined) updates.name = req.body.name;
   if (req.body.description !== undefined) updates.description = req.body.description;
@@ -111,6 +161,11 @@ router.patch("/api/policy-outcomes/:id", requireRole(ZENITH_ROLES.GOVERNANCE_ADM
 router.delete("/api/policy-outcomes/:id", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN), async (req: AuthenticatedRequest, res) => {
   const existing = await storage.getPolicyOutcome(req.params.id);
   if (!existing) return res.status(404).json({ message: "Outcome not found" });
+  const isPlatformOwner = req.user?.role === ZENITH_ROLES.PLATFORM_OWNER;
+  const activeOrgId = req.activeOrganizationId || req.user?.organizationId;
+  if (!isPlatformOwner && existing.organizationId !== activeOrgId) {
+    return res.status(404).json({ message: "Outcome not found" });
+  }
   if (existing.builtIn) return res.status(400).json({ message: "Cannot delete built-in outcomes" });
   await storage.deletePolicyOutcome(req.params.id);
   res.json({ message: "Outcome deleted" });

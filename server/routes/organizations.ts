@@ -63,9 +63,10 @@ router.post('/api/orgs/switch', requireAuth(), async (req: AuthenticatedRequest,
       return res.status(400).json({ error: 'organizationId is required' });
     }
 
+    const isPlatformOwner = user.role === ZENITH_ROLES.PLATFORM_OWNER;
     const membership = await storage.getOrgMembership(user.id, organizationId);
 
-    if (!membership && user.organizationId !== organizationId) {
+    if (!membership && user.organizationId !== organizationId && !isPlatformOwner) {
       return res.status(403).json({ error: 'You are not a member of this organization' });
     }
 

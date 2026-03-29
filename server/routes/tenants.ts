@@ -521,6 +521,9 @@ router.get("/api/admin/tenants/:id/permissions", requirePermission('inventory:re
   try {
     const conn = await storage.getTenantConnection(req.params.id);
     if (!conn) return res.status(404).json({ error: "Tenant connection not found" });
+    if (!(await verifyTenantAccess(req, conn))) {
+      return res.status(403).json({ error: "You do not have access to this tenant connection" });
+    }
 
     const clientId = process.env.AZURE_CLIENT_ID;
     const clientSecret = process.env.AZURE_CLIENT_SECRET;
@@ -551,6 +554,9 @@ router.get("/api/admin/tenants/:id/reconsent", requireRole(ZENITH_ROLES.TENANT_A
   try {
     const conn = await storage.getTenantConnection(req.params.id);
     if (!conn) return res.status(404).json({ error: "Tenant connection not found" });
+    if (!(await verifyTenantAccess(req, conn))) {
+      return res.status(403).json({ error: "You do not have access to this tenant connection" });
+    }
 
     const clientId = process.env.AZURE_CLIENT_ID;
     if (!clientId) {
@@ -590,6 +596,12 @@ router.get("/api/admin/tenants/:tenantConnectionId/data-dictionaries", requirePe
   try {
     const conn = await storage.getTenantConnection(req.params.tenantConnectionId);
     if (!conn) return res.status(404).json({ error: "Tenant connection not found" });
+    const isPlatformOwner = req.user?.role === ZENITH_ROLES.PLATFORM_OWNER;
+    const orgId = req.activeOrganizationId || req.user?.organizationId;
+    if (!isPlatformOwner && conn.organizationId !== orgId) {
+      const grant = orgId ? await storage.getActiveTenantAccessGrant(conn.id, orgId) : null;
+      if (!grant) return res.status(403).json({ error: "Access denied" });
+    }
     const { category } = req.query;
     if (category && typeof category === "string") {
       const entries = await storage.getDataDictionary(conn.tenantId, category);
@@ -606,6 +618,11 @@ router.post("/api/admin/tenants/:tenantConnectionId/data-dictionaries", requireR
   try {
     const conn = await storage.getTenantConnection(req.params.tenantConnectionId);
     if (!conn) return res.status(404).json({ error: "Tenant connection not found" });
+    const isPlatformOwner = req.user?.role === ZENITH_ROLES.PLATFORM_OWNER;
+    const orgId = req.activeOrganizationId || req.user?.organizationId;
+    if (!isPlatformOwner && conn.organizationId !== orgId) {
+      return res.status(403).json({ error: "Access denied" });
+    }
     const { category, value } = req.body;
     if (!category || !value || typeof category !== "string" || typeof value !== "string" || !value.trim()) {
       return res.status(400).json({ error: "category and value are required" });
@@ -631,6 +648,17 @@ router.post("/api/admin/tenants/:tenantConnectionId/data-dictionaries", requireR
 
 router.delete("/api/admin/tenants/:tenantConnectionId/data-dictionaries/:entryId", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN), async (req: AuthenticatedRequest, res) => {
   try {
+    const conn = await storage.getTenantConnection(req.params.tenantConnectionId);
+    if (!conn) return res.status(404).json({ error: "Tenant connection not found" });
+    const isPlatformOwner = req.user?.role === ZENITH_ROLES.PLATFORM_OWNER;
+    const orgId = req.activeOrganizationId || req.user?.organizationId;
+    if (!isPlatformOwner && conn.organizationId !== orgId) {
+      return res.status(403).json({ error: "Access denied" });
+    }
+    const entry = await storage.getDataDictionaryEntry(req.params.entryId);
+    if (!entry || entry.tenantId !== conn.tenantId) {
+      return res.status(404).json({ error: "Data dictionary entry not found" });
+    }
     await storage.deleteDataDictionaryEntry(req.params.entryId);
     res.json({ success: true });
   } catch (err: any) {
@@ -667,6 +695,11 @@ router.put("/api/admin/tenants/:tenantConnectionId/required-metadata", requireRo
   try {
     const conn = await storage.getTenantConnection(req.params.tenantConnectionId);
     if (!conn) return res.status(404).json({ error: "Tenant connection not found" });
+    const isPlatformOwner = req.user?.role === ZENITH_ROLES.PLATFORM_OWNER;
+    const orgId = req.activeOrganizationId || req.user?.organizationId;
+    if (!isPlatformOwner && conn.organizationId !== orgId) {
+      return res.status(403).json({ error: "Access denied" });
+    }
     const { requiredFields } = req.body;
     if (!Array.isArray(requiredFields)) {
       return res.status(400).json({ error: "requiredFields must be an array of field names" });
@@ -721,6 +754,11 @@ router.post("/api/admin/tenants/:tenantConnectionId/sensitivity-labels/sync", re
   try {
     const conn = await storage.getTenantConnection(req.params.tenantConnectionId);
     if (!conn) return res.status(404).json({ error: "Tenant connection not found" });
+    const isPlatformOwner = req.user?.role === ZENITH_ROLES.PLATFORM_OWNER;
+    const orgId = req.activeOrganizationId || req.user?.organizationId;
+    if (!isPlatformOwner && conn.organizationId !== orgId) {
+      return res.status(403).json({ error: "Access denied" });
+    }
 
     const clientId = process.env.AZURE_CLIENT_ID;
     const clientSecret = process.env.AZURE_CLIENT_SECRET;
@@ -785,6 +823,11 @@ router.post("/api/admin/tenants/:tenantConnectionId/retention-labels/sync", requ
   try {
     const conn = await storage.getTenantConnection(req.params.tenantConnectionId);
     if (!conn) return res.status(404).json({ error: "Tenant connection not found" });
+    const isPlatformOwner = req.user?.role === ZENITH_ROLES.PLATFORM_OWNER;
+    const orgId = req.activeOrganizationId || req.user?.organizationId;
+    if (!isPlatformOwner && conn.organizationId !== orgId) {
+      return res.status(403).json({ error: "Access denied" });
+    }
 
     const clientId = process.env.AZURE_CLIENT_ID;
     const clientSecret = process.env.AZURE_CLIENT_SECRET;
@@ -936,6 +979,11 @@ router.patch("/api/admin/tenants/:tenantConnectionId/custom-fields/:fieldId", re
   try {
     const conn = await storage.getTenantConnection(req.params.tenantConnectionId);
     if (!conn) return res.status(404).json({ error: "Tenant connection not found" });
+    const isPlatformOwner = req.user?.role === ZENITH_ROLES.PLATFORM_OWNER;
+    const orgId = req.activeOrganizationId || req.user?.organizationId;
+    if (!isPlatformOwner && conn.organizationId !== orgId) {
+      return res.status(403).json({ error: "Access denied" });
+    }
     const field = await storage.getCustomFieldDefinition(req.params.fieldId);
     if (!field || field.tenantId !== conn.tenantId) {
       return res.status(404).json({ error: "Custom field not found" });
@@ -964,6 +1012,11 @@ router.delete("/api/admin/tenants/:tenantConnectionId/custom-fields/:fieldId", r
   try {
     const conn = await storage.getTenantConnection(req.params.tenantConnectionId);
     if (!conn) return res.status(404).json({ error: "Tenant connection not found" });
+    const isPlatformOwner = req.user?.role === ZENITH_ROLES.PLATFORM_OWNER;
+    const orgId = req.activeOrganizationId || req.user?.organizationId;
+    if (!isPlatformOwner && conn.organizationId !== orgId) {
+      return res.status(403).json({ error: "Access denied" });
+    }
     const field = await storage.getCustomFieldDefinition(req.params.fieldId);
     if (!field || field.tenantId !== conn.tenantId) {
       return res.status(404).json({ error: "Custom field not found" });

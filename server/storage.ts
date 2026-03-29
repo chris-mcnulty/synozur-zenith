@@ -207,6 +207,7 @@ export interface IStorage {
 
   getDataDictionary(tenantId: string, category: string): Promise<TenantDataDictionary[]>;
   getAllDataDictionaries(tenantId: string): Promise<TenantDataDictionary[]>;
+  getDataDictionaryEntry(id: string): Promise<TenantDataDictionary | undefined>;
   createDataDictionaryEntry(entry: InsertTenantDataDictionary): Promise<TenantDataDictionary>;
   deleteDataDictionaryEntry(id: string): Promise<void>;
 
@@ -1160,6 +1161,12 @@ export class DatabaseStorage implements IStorage {
     return db.select().from(tenantDataDictionaries)
       .where(eq(tenantDataDictionaries.tenantId, tenantId))
       .orderBy(tenantDataDictionaries.category, tenantDataDictionaries.value);
+  }
+
+  async getDataDictionaryEntry(id: string): Promise<TenantDataDictionary | undefined> {
+    const [entry] = await db.select().from(tenantDataDictionaries)
+      .where(eq(tenantDataDictionaries.id, id));
+    return entry;
   }
 
   async createDataDictionaryEntry(entry: InsertTenantDataDictionary): Promise<TenantDataDictionary> {
