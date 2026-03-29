@@ -52,7 +52,8 @@ import {
   Tag,
   Sparkles,
   AlertCircle,
-  RefreshCw
+  RefreshCw,
+  Lock
 } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
@@ -89,6 +90,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { useServicePlan } from "@/hooks/use-service-plan";
+import { UpgradeGate } from "@/components/upgrade-gate";
 
 const GOVERNANCE_PAGE_SIZE = 50;
 const PAGINATION_THRESHOLD = 100;
@@ -279,7 +281,7 @@ export default function GovernancePage() {
   const showPagination = governanceData?.mode === "paginated";
   const totalPages = showPagination ? Math.ceil(paginatedTotal / GOVERNANCE_PAGE_SIZE) : 1;
 
-  const { isTrial, maxSites } = useServicePlan();
+  const { isTrial, maxSites, isFeatureEnabled } = useServicePlan();
   // lastSyncSiteCount stores the raw discovered total when a cap was applied, otherwise the synced count.
   // If it exceeds maxSites, the cap was active during the last sync.
   const lastSyncDiscovered = selectedTenant?.lastSyncSiteCount ?? 0;
@@ -1073,15 +1075,34 @@ export default function GovernancePage() {
             <Upload className="w-4 h-4" />
             Import CSV
           </Button>
-          <Button
-            className="gap-2 rounded-full shadow-md shadow-primary/20"
-            onClick={handleExportCsv}
-            disabled={!tenantConnectionId}
-            data-testid="button-export-csv"
+          <UpgradeGate
+            feature="csvExport"
+            fallback={
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    className="gap-2 rounded-full shadow-md shadow-primary/20 opacity-60"
+                    disabled
+                    data-testid="button-export-csv-locked"
+                  >
+                    <Lock className="w-4 h-4" />
+                    Export CSV
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>CSV Export requires Standard plan or higher. Upgrade to enable.</TooltipContent>
+              </Tooltip>
+            }
           >
-            <Download className="w-4 h-4" />
-            Export CSV
-          </Button>
+            <Button
+              className="gap-2 rounded-full shadow-md shadow-primary/20"
+              onClick={handleExportCsv}
+              disabled={!tenantConnectionId}
+              data-testid="button-export-csv"
+            >
+              <Download className="w-4 h-4" />
+              Export CSV
+            </Button>
+          </UpgradeGate>
         </div>
       </div>
 

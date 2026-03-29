@@ -2375,7 +2375,7 @@ router.get("/api/admin/libraries/:libraryId/details", requireRole(ZENITH_ROLES.V
   }
 });
 
-router.get("/api/admin/tenants/:id/export-csv", requireRole(ZENITH_ROLES.VIEWER), requireFeature("advancedReporting"), async (req: AuthenticatedRequest, res) => {
+router.get("/api/admin/tenants/:id/export-csv", requireRole(ZENITH_ROLES.VIEWER), requireFeature("csvExport"), async (req: AuthenticatedRequest, res) => {
   try {
     const allowedTenantIds = await getOrgTenantConnectionIds(req);
     if (allowedTenantIds !== null && !allowedTenantIds.includes(req.params.id)) {
