@@ -1144,7 +1144,7 @@ router.get("/api/admin/tenants/:id/msp-access/grants", requireRole(ZENITH_ROLES.
   }
 });
 
-router.post("/api/admin/tenants/:tenantConnectionId/access-codes", requireRole(ZENITH_ROLES.TENANT_ADMIN), async (req: AuthenticatedRequest, res) => {
+router.post("/api/admin/tenants/:tenantConnectionId/access-codes", requireRole(ZENITH_ROLES.TENANT_ADMIN), requireFeature("mspAccess"), async (req: AuthenticatedRequest, res) => {
   try {
     const conn = await storage.getTenantConnection(req.params.tenantConnectionId);
     if (!conn) return res.status(404).json({ error: "Tenant connection not found" });
@@ -1179,7 +1179,7 @@ router.post("/api/admin/tenants/:tenantConnectionId/access-codes", requireRole(Z
   }
 });
 
-router.delete("/api/admin/tenants/:tenantConnectionId/access-grants/:grantId", requireRole(ZENITH_ROLES.TENANT_ADMIN), async (req: AuthenticatedRequest, res) => {
+router.delete("/api/admin/tenants/:tenantConnectionId/access-grants/:grantId", requireRole(ZENITH_ROLES.TENANT_ADMIN), requireFeature("mspAccess"), async (req: AuthenticatedRequest, res) => {
   try {
     const conn = await storage.getTenantConnection(req.params.tenantConnectionId);
     if (!conn) return res.status(404).json({ error: "Tenant connection not found" });
@@ -1226,7 +1226,7 @@ router.delete("/api/admin/tenants/:id/msp-access/grants/:grantId", requireRole(Z
   }
 });
 
-router.post("/api/admin/tenants/claim-access", requireRole(ZENITH_ROLES.TENANT_ADMIN), async (req: AuthenticatedRequest, res) => {
+router.post("/api/admin/tenants/claim-access", requireRole(ZENITH_ROLES.TENANT_ADMIN), requireFeature("mspAccess"), async (req: AuthenticatedRequest, res) => {
   try {
     const { code } = req.body;
     if (!code || typeof code !== "string" || code.length !== 6) {

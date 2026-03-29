@@ -43,6 +43,7 @@ import {
   ClipboardList,
   Loader2,
   KeySquare,
+  Lock,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -418,14 +419,17 @@ export default function AppShell({ children }: AppShellProps) {
                             </DropdownMenuItem>
                           ))}
                           <DropdownMenuSeparator className="my-1" />
-                          {canUseMspAccess && (
-                            <DropdownMenuItem
-                              className="rounded-lg p-2.5 cursor-pointer text-muted-foreground"
-                              onSelect={() => { setMspCode(""); setMspError(null); setMspDialogOpen(true); }}
-                            >
-                              <KeySquare className="w-4 h-4 mr-2" /> Enter MSP access code...
-                            </DropdownMenuItem>
-                          )}
+                          <DropdownMenuItem
+                            className="rounded-lg p-2.5 cursor-pointer text-muted-foreground"
+                            onSelect={() => { if (canUseMspAccess) { setMspCode(""); setMspError(null); setMspDialogOpen(true); } }}
+                            disabled={!canUseMspAccess}
+                          >
+                            {canUseMspAccess
+                              ? <KeySquare className="w-4 h-4 mr-2" />
+                              : <Lock className="w-4 h-4 mr-2 text-muted-foreground/50" />}
+                            Enter MSP access code...
+                            {!canUseMspAccess && <span className="ml-auto text-[9px] text-amber-600 font-medium">Professional+</span>}
+                          </DropdownMenuItem>
                           <DropdownMenuItem asChild className="rounded-lg p-2.5 cursor-pointer">
                             <Link href="/app/admin/tenants" className="flex items-center text-muted-foreground">
                               <Settings className="w-4 h-4 mr-2" /> Manage connections
@@ -511,16 +515,18 @@ export default function AppShell({ children }: AppShellProps) {
                     </DropdownMenuItem>
                   )}
                   <DropdownMenuSeparator className="my-2" />
-                  {canUseMspAccess && (
-                    <DropdownMenuItem
-                      className="rounded-lg p-2.5 cursor-pointer text-muted-foreground"
-                      onSelect={() => { setMspCode(""); setMspError(null); setMspDialogOpen(true); }}
-                      data-testid="button-enter-msp-code"
-                    >
-                      <KeySquare className="w-4 h-4 mr-2" />
-                      Enter MSP access code...
-                    </DropdownMenuItem>
-                  )}
+                  <DropdownMenuItem
+                    className="rounded-lg p-2.5 cursor-pointer text-muted-foreground"
+                    onSelect={() => { if (canUseMspAccess) { setMspCode(""); setMspError(null); setMspDialogOpen(true); } }}
+                    disabled={!canUseMspAccess}
+                    data-testid="button-enter-msp-code"
+                  >
+                    {canUseMspAccess
+                      ? <KeySquare className="w-4 h-4 mr-2" />
+                      : <Lock className="w-4 h-4 mr-2 text-muted-foreground/50" />}
+                    Enter MSP access code...
+                    {!canUseMspAccess && <span className="ml-auto text-[9px] text-amber-600 font-medium">Professional+</span>}
+                  </DropdownMenuItem>
                   <DropdownMenuItem asChild className="rounded-lg p-2.5 cursor-pointer group">
                     <Link href="/app/admin/tenants" className="flex items-center text-muted-foreground">
                       <Settings className="w-4 h-4 mr-2" />
