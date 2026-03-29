@@ -189,6 +189,18 @@ router.post('/api/orgs/:id/members', requireAuth(), requirePermission('users:man
       ipAddress: req.ip || null,
     });
 
+    await storage.createAuditEntry({
+      userId: adminUser.id,
+      userEmail: adminUser.email,
+      action: 'ROLE_ASSIGNED',
+      resource: 'organization_user',
+      resourceId: membership.id,
+      organizationId: orgId,
+      details: { targetUserId, role: assignedRole, assignedBy: adminUser.email },
+      result: 'SUCCESS',
+      ipAddress: req.ip || null,
+    });
+
     return res.status(201).json(membership);
   } catch (error: any) {
     console.error('[Orgs] Add member error:', error);
@@ -259,6 +271,18 @@ router.delete('/api/orgs/:id/members/:userId', requireAuth(), requirePermission(
       resourceId: membership.id,
       organizationId: orgId,
       details: { targetUserId, removedBy: adminUser.email },
+      result: 'SUCCESS',
+      ipAddress: req.ip || null,
+    });
+
+    await storage.createAuditEntry({
+      userId: adminUser.id,
+      userEmail: adminUser.email,
+      action: 'ROLE_REVOKED',
+      resource: 'organization_user',
+      resourceId: membership.id,
+      organizationId: orgId,
+      details: { targetUserId, previousRole: membership.role, revokedBy: adminUser.email },
       result: 'SUCCESS',
       ipAddress: req.ip || null,
     });

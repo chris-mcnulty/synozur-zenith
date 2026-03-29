@@ -58,7 +58,13 @@ const ACTION_LABELS: Record<string, string> = {
   ROLE_ASSIGNED: "Role Assigned",
   ROLE_REVOKED: "Role Revoked",
   ORG_MEMBER_ADDED: "Member Added",
+  ORG_MEMBER_REMOVED: "Member Removed",
   ORG_MEMBER_ROLE_CHANGED: "Member Role Changed",
+  ORG_SWITCHED: "Organization Switched",
+  ORG_SETTINGS_UPDATED: "Org Settings Updated",
+  ORG_DELETED_BY_ADMIN: "Organization Deleted",
+  ORG_CANCELLED: "Organization Cancelled",
+  TENANT_DELETED: "Tenant Deleted",
   ACCESS_DENIED: "Access Denied",
 };
 

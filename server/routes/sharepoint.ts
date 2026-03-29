@@ -459,6 +459,7 @@ router.patch("/api/workspaces/:id", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, Z
   const metadataFields = ['department', 'costCenter', 'projectCode', 'description'];
   const hasMetadataChange = metadataFields.some(f => f in req.body && req.body[f] !== (existing as any)[f]);
   const hasSharingChange = 'externalSharing' in req.body && req.body.externalSharing !== existing.externalSharing;
+  const hasArchiveChange = 'isArchived' in req.body && req.body.isArchived === true && !existing.isArchived;
 
   if (sensitivityLabelChanged) {
     await storage.createAuditEntry({
@@ -514,6 +515,24 @@ router.patch("/api/workspaces/:id", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, Z
         workspaceName: existing.displayName,
         previousValue: existing.externalSharing,
         newValue: req.body.externalSharing,
+      },
+      result: 'SUCCESS',
+      ipAddress: req.ip || null,
+    });
+  }
+
+  if (hasArchiveChange) {
+    await storage.createAuditEntry({
+      userId: req.user?.id || null,
+      userEmail: req.user?.email || null,
+      action: 'SITE_ARCHIVED',
+      resource: 'workspace',
+      resourceId: req.params.id,
+      organizationId: req.user?.organizationId || null,
+      tenantConnectionId: existing.tenantConnectionId || null,
+      details: {
+        workspaceName: existing.displayName,
+        siteUrl: existing.siteUrl,
       },
       result: 'SUCCESS',
       ipAddress: req.ip || null,
