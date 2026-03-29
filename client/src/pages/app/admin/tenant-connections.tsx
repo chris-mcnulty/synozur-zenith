@@ -52,6 +52,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { useServicePlan } from "@/hooks/use-service-plan";
 
 type PermissionDetail = {
   roleId: string;
@@ -73,6 +74,7 @@ type PermissionCheckResult = {
 
 export default function TenantConnectionsPage() {
   const { toast } = useToast();
+  const { isTrial, maxSites } = useServicePlan();
   const [searchTerm, setSearchTerm] = useState("");
   const [showAddDialog, setShowAddDialog] = useState(false);
   const [syncingId, setSyncingId] = useState<string | null>(null);
@@ -585,6 +587,15 @@ export default function TenantConnectionsPage() {
           </div>
         </CardHeader>
         <CardContent className="p-0">
+          {isTrial && maxSites > 0 && connections.some(c => (c.lastSyncSiteCount ?? 0) > maxSites) && (
+            <div className="mx-4 mt-4 mb-2 flex items-center gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-700 dark:text-amber-400" data-testid="banner-trial-site-cap">
+              <AlertTriangle className="w-4 h-4 shrink-0" />
+              <span>
+                Trial plan: site inventory capped at {maxSites.toLocaleString()} sites per tenant.{" "}
+                <strong>Upgrade your plan</strong> to sync all discovered sites.
+              </span>
+            </div>
+          )}
           {isLoading ? (
             <div className="flex items-center justify-center h-32">
               <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
@@ -674,7 +685,13 @@ export default function TenantConnectionsPage() {
                       </div>
                     </TableCell>
                     <TableCell className="text-sm font-medium">
-                      {conn.lastSyncSiteCount != null ? conn.lastSyncSiteCount : "—"}
+                      {conn.lastSyncSiteCount != null ? (
+                        isTrial && maxSites > 0 && conn.lastSyncSiteCount > maxSites ? (
+                          <span className="text-amber-600" title={`Trial cap applied: showing ${maxSites.toLocaleString()} of ${conn.lastSyncSiteCount.toLocaleString()} discovered`}>
+                            {maxSites.toLocaleString()} <span className="text-xs font-normal text-amber-500/80">of {conn.lastSyncSiteCount.toLocaleString()}</span>
+                          </span>
+                        ) : conn.lastSyncSiteCount
+                      ) : "—"}
                     </TableCell>
                     <TableCell>
                       <div className="flex items-center gap-1.5">

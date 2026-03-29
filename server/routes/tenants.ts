@@ -262,15 +262,17 @@ router.get("/api/admin/tenants/consent/callback", async (req, res) => {
           return res.redirect(`${returnTo}?consent_error=${encodeURIComponent("Your Trial plan is limited to one tenant connection. Upgrade your plan to add more tenants.")}`);
         }
         if (orgForTrialCheck.domain) {
-          // Fetch actual verified domains for this tenant from Microsoft Graph
+          // Fetch actual verified domains using only trusted app (env) credentials — never use caller-supplied creds
           const envClientId = process.env.AZURE_CLIENT_ID!;
           const envClientSecret = process.env.AZURE_CLIENT_SECRET!;
-          const domainResult = await fetchTenantVerifiedDomains(tenantIdStr, envClientId, envClientSecret);
-          const verifiedDomains = domainResult.domains.length > 0
-            ? domainResult.domains
-            : [domain.toLowerCase()]; // Fall back to user-supplied domain if Graph unavailable
-          if (!trialDomainMatches(orgForTrialCheck.domain, verifiedDomains)) {
-            console.warn(`[trial-domain] Org domain "${orgForTrialCheck.domain}" does not match tenant verified domains: ${verifiedDomains.join(', ')}`);
+          const domainResult = await fetchTenantVerifiedDomains(tenantIdStr, envClientId, envClientSecret).catch(() => ({ domains: [], initialDomain: null }));
+          if (domainResult.domains.length === 0) {
+            // Fail closed — cannot verify tenant ownership without domain data
+            console.warn(`[trial-domain] Could not verify domains for tenant ${tenantIdStr} — blocking as fail-safe`);
+            return res.redirect(`${returnTo}?consent_error=${encodeURIComponent("Domain verification failed. Please try again or contact support if this persists.")}`);
+          }
+          if (!trialDomainMatches(orgForTrialCheck.domain, domainResult.domains)) {
+            console.warn(`[trial-domain] Org domain "${orgForTrialCheck.domain}" does not match tenant verified domains: ${domainResult.domains.join(', ')}`);
             return res.redirect(`${returnTo}?consent_error=${encodeURIComponent("Trial plan is limited to your own domain. The tenant domain must match your organization's registered domain.")}`);
           }
         }
@@ -347,15 +349,17 @@ router.post("/api/admin/tenants", requireRole(ZENITH_ROLES.TENANT_ADMIN), async 
         return res.status(403).json({ message: "Your Trial plan is limited to one tenant connection. Upgrade your plan to add more tenants." });
       }
       if (orgForTrialCheck.domain) {
-        // Fetch actual verified domains for this tenant from Microsoft Graph
-        const effectiveClientId = (clientId as string) || process.env.AZURE_CLIENT_ID!;
-        const effectiveSecret = (clientSecret as string) ? (isEncryptionConfigured() && !isEncrypted(clientSecret as string) ? clientSecret as string : decryptToken(clientSecret as string)) : process.env.AZURE_CLIENT_SECRET!;
-        const domainResult = await fetchTenantVerifiedDomains(tenantId as string, effectiveClientId, effectiveSecret).catch(() => ({ domains: [], initialDomain: null }));
-        const verifiedDomains = domainResult.domains.length > 0
-          ? domainResult.domains
-          : [(domain as string).toLowerCase()]; // Fall back to user-supplied domain if Graph unavailable
-        if (!trialDomainMatches(orgForTrialCheck.domain, verifiedDomains)) {
-          console.warn(`[trial-domain] Org domain "${orgForTrialCheck.domain}" does not match tenant verified domains: ${verifiedDomains.join(', ')}`);
+        // Always use trusted app (env) credentials — never use caller-supplied credentials for domain verification
+        const envClientId = process.env.AZURE_CLIENT_ID!;
+        const envClientSecret = process.env.AZURE_CLIENT_SECRET!;
+        const domainResult = await fetchTenantVerifiedDomains(tenantId as string, envClientId, envClientSecret).catch(() => ({ domains: [], initialDomain: null }));
+        if (domainResult.domains.length === 0) {
+          // Fail closed — cannot verify tenant ownership without domain data
+          console.warn(`[trial-domain] Could not verify domains for tenant ${tenantId} — blocking as fail-safe`);
+          return res.status(503).json({ message: "Domain verification failed. Please try again or contact support if this persists." });
+        }
+        if (!trialDomainMatches(orgForTrialCheck.domain, domainResult.domains)) {
+          console.warn(`[trial-domain] Org domain "${orgForTrialCheck.domain}" does not match tenant verified domains: ${domainResult.domains.join(', ')}`);
           return res.status(403).json({ message: "Trial plan is limited to your own domain. The tenant domain must match your organization's registered domain." });
         }
       }
