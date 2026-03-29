@@ -14,13 +14,24 @@ const router = Router();
 
 /**
  * Checks whether a Zenith org domain matches a set of Microsoft-verified tenant domains.
+ *
+ * Policy decision: we accept a match against ANY of the tenant's verified domains
+ * (not just the primary/default). A tenant legitimately owns all its verified domains,
+ * so matching any of them correctly proves ownership without being more restrictive
+ * than necessary.  The onmicrosoft.com equivalence further handles the common case
+ * where an org's Zenith domain is registered as "contoso.com" but the tenant's
+ * primary domain is "contoso.onmicrosoft.com".
+ *
  * Supports:
- *  - Exact match: "contoso.com" ↔ "contoso.com"
+ *  - Exact match: "contoso.com" ↔ any verified domain (e.g., "contoso.com")
  *  - onmicrosoft.com equivalence: "contoso.com" ↔ "contoso.onmicrosoft.com"
  *    (only for simple 2-label org domains to prevent "acme.evil.com" from matching "acme")
+ *
+ * Empty/blank orgDomain is always treated as no-match (callers guard with `if (domain)` check).
  */
 function trialDomainMatches(orgDomain: string, verifiedDomains: string[]): boolean {
   const orgNorm = orgDomain.toLowerCase().trim();
+  if (!orgNorm) return false; // empty org domain is never a valid match
 
   // 1. Exact match with any verified domain
   if (verifiedDomains.some(d => d === orgNorm)) return true;
