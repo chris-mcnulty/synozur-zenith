@@ -71,7 +71,6 @@ const FEATURE_LIST: { key: keyof typeof PLAN_FEATURES.TRIAL; label: string; prem
   { key: "selfServicePortal", label: "Self-Service Portal", premium: true },
   { key: "lifecycleAutomation", label: "Lifecycle Automation", premium: true },
   { key: "mspAccess", label: "MSP Consent Access", premium: true },
-  { key: "dataMasking", label: "Database Encryption", premium: true },
   { key: "advancedReporting", label: "Advanced Reporting", premium: true },
 ];
 
