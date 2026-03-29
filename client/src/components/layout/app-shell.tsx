@@ -61,6 +61,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { Label } from "@/components/ui/label";
 import SynozurAppSwitcher from "@/components/synozur-app-switcher";
 import { useTenant } from "@/lib/tenant-context";
+import { useServicePlan } from "@/hooks/use-service-plan";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient } from "@/lib/queryClient";
 
@@ -142,6 +143,8 @@ export default function AppShell({ children }: AppShellProps) {
   const [location] = useLocation();
   const { theme, setTheme } = useTheme();
   const { tenants, selectedTenant, setSelectedTenantId, isFeatureEnabled } = useTenant();
+  const { isFeatureEnabled: planFeatureEnabled } = useServicePlan();
+  const canUseMspAccess = planFeatureEnabled("mspAccess");
   const [mspDialogOpen, setMspDialogOpen] = useState(false);
   const [mspCode, setMspCode] = useState("");
   const [mspError, setMspError] = useState<string | null>(null);
@@ -415,12 +418,14 @@ export default function AppShell({ children }: AppShellProps) {
                             </DropdownMenuItem>
                           ))}
                           <DropdownMenuSeparator className="my-1" />
-                          <DropdownMenuItem
-                            className="rounded-lg p-2.5 cursor-pointer text-muted-foreground"
-                            onSelect={() => { setMspCode(""); setMspError(null); setMspDialogOpen(true); }}
-                          >
-                            <KeySquare className="w-4 h-4 mr-2" /> Enter MSP access code...
-                          </DropdownMenuItem>
+                          {canUseMspAccess && (
+                            <DropdownMenuItem
+                              className="rounded-lg p-2.5 cursor-pointer text-muted-foreground"
+                              onSelect={() => { setMspCode(""); setMspError(null); setMspDialogOpen(true); }}
+                            >
+                              <KeySquare className="w-4 h-4 mr-2" /> Enter MSP access code...
+                            </DropdownMenuItem>
+                          )}
                           <DropdownMenuItem asChild className="rounded-lg p-2.5 cursor-pointer">
                             <Link href="/app/admin/tenants" className="flex items-center text-muted-foreground">
                               <Settings className="w-4 h-4 mr-2" /> Manage connections
@@ -506,14 +511,16 @@ export default function AppShell({ children }: AppShellProps) {
                     </DropdownMenuItem>
                   )}
                   <DropdownMenuSeparator className="my-2" />
-                  <DropdownMenuItem
-                    className="rounded-lg p-2.5 cursor-pointer text-muted-foreground"
-                    onSelect={() => { setMspCode(""); setMspError(null); setMspDialogOpen(true); }}
-                    data-testid="button-enter-msp-code"
-                  >
-                    <KeySquare className="w-4 h-4 mr-2" />
-                    Enter MSP access code...
-                  </DropdownMenuItem>
+                  {canUseMspAccess && (
+                    <DropdownMenuItem
+                      className="rounded-lg p-2.5 cursor-pointer text-muted-foreground"
+                      onSelect={() => { setMspCode(""); setMspError(null); setMspDialogOpen(true); }}
+                      data-testid="button-enter-msp-code"
+                    >
+                      <KeySquare className="w-4 h-4 mr-2" />
+                      Enter MSP access code...
+                    </DropdownMenuItem>
+                  )}
                   <DropdownMenuItem asChild className="rounded-lg p-2.5 cursor-pointer group">
                     <Link href="/app/admin/tenants" className="flex items-center text-muted-foreground">
                       <Settings className="w-4 h-4 mr-2" />

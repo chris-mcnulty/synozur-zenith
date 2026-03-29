@@ -27,6 +27,8 @@ export function requireFeature(feature: keyof typeof PLAN_FEATURES.TRIAL) {
         selfServicePortal: "self-service portal",
         advancedReporting: "advanced reporting",
         dataMasking: "database masking",
+        mspAccess: "MSP access code management",
+        csvExport: "CSV export",
       };
       const label = featureLabels[feature] || feature;
       return res.status(403).json({

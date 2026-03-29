@@ -53,6 +53,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useServicePlan } from "@/hooks/use-service-plan";
+import { UpgradeGate } from "@/components/upgrade-gate";
 
 type PermissionDetail = {
   roleId: string;
@@ -74,7 +75,7 @@ type PermissionCheckResult = {
 
 export default function TenantConnectionsPage() {
   const { toast } = useToast();
-  const { isTrial, maxSites } = useServicePlan();
+  const { isTrial, maxSites, isFeatureEnabled: planFeatureEnabled } = useServicePlan();
   const [searchTerm, setSearchTerm] = useState("");
   const [showAddDialog, setShowAddDialog] = useState(false);
   const [syncingId, setSyncingId] = useState<string | null>(null);
@@ -974,55 +975,68 @@ export default function TenantConnectionsPage() {
           </DialogHeader>
           {maskingDialogTenantId && (
             <div className="space-y-4 py-2">
-              <div className="flex items-center justify-between p-4 rounded-lg border border-border/50 bg-muted/30">
-                <div className="space-y-1">
-                  <p className="text-sm font-medium">Database Masking</p>
-                  <p className="text-xs text-muted-foreground">
-                    {maskingStatus?.enabled
-                      ? "Sensitive fields are currently encrypted in the database."
-                      : "Sensitive fields are stored as plaintext in the database."}
-                  </p>
-                </div>
-                <div className="flex items-center gap-2">
-                  {maskingStatus?.enabled ? (
-                    <Badge variant="default" className="bg-green-500/10 text-green-600 border-green-200" data-testid="badge-masking-enabled">Enabled</Badge>
-                  ) : (
-                    <Badge variant="secondary" data-testid="badge-masking-disabled">Disabled</Badge>
-                  )}
-                </div>
-              </div>
-
-              <div className="p-3 rounded-lg border border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/30">
-                <div className="flex items-start gap-2">
-                  <AlertTriangle className="w-4 h-4 text-amber-600 mt-0.5 shrink-0" />
-                  <div className="text-xs text-amber-800 dark:text-amber-200">
-                    {maskingStatus?.enabled
-                      ? "Disabling masking will decrypt all data back to plaintext in the database. This operation may take a few moments for large datasets."
-                      : "Enabling masking will encrypt all existing sensitive data for this tenant. This operation may take a few moments for large datasets. Anyone querying the database directly will see encrypted values."}
+              {!planFeatureEnabled("dataMasking") ? (
+                <>
+                  <UpgradeGate feature="dataMasking" />
+                  <DialogFooter>
+                    <Button variant="outline" onClick={() => setMaskingDialogTenantId(null)} data-testid="button-masking-cancel">
+                      Close
+                    </Button>
+                  </DialogFooter>
+                </>
+              ) : (
+                <>
+                  <div className="flex items-center justify-between p-4 rounded-lg border border-border/50 bg-muted/30">
+                    <div className="space-y-1">
+                      <p className="text-sm font-medium">Database Masking</p>
+                      <p className="text-xs text-muted-foreground">
+                        {maskingStatus?.enabled
+                          ? "Sensitive fields are currently encrypted in the database."
+                          : "Sensitive fields are stored as plaintext in the database."}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {maskingStatus?.enabled ? (
+                        <Badge variant="default" className="bg-green-500/10 text-green-600 border-green-200" data-testid="badge-masking-enabled">Enabled</Badge>
+                      ) : (
+                        <Badge variant="secondary" data-testid="badge-masking-disabled">Disabled</Badge>
+                      )}
+                    </div>
                   </div>
-                </div>
-              </div>
 
-              <DialogFooter>
-                <Button variant="outline" onClick={() => setMaskingDialogTenantId(null)} data-testid="button-masking-cancel">
-                  Cancel
-                </Button>
-                <Button
-                  onClick={() => handleToggleMasking(maskingDialogTenantId, !maskingStatus?.enabled)}
-                  disabled={maskingToggling}
-                  variant={maskingStatus?.enabled ? "destructive" : "default"}
-                  data-testid="button-masking-toggle"
-                >
-                  {maskingToggling ? (
-                    <>
-                      <Loader2 className="w-4 h-4 animate-spin mr-2" />
-                      {maskingStatus?.enabled ? "Decrypting..." : "Encrypting..."}
-                    </>
-                  ) : (
-                    maskingStatus?.enabled ? "Disable Masking" : "Enable Masking"
-                  )}
-                </Button>
-              </DialogFooter>
+                  <div className="p-3 rounded-lg border border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/30">
+                    <div className="flex items-start gap-2">
+                      <AlertTriangle className="w-4 h-4 text-amber-600 mt-0.5 shrink-0" />
+                      <div className="text-xs text-amber-800 dark:text-amber-200">
+                        {maskingStatus?.enabled
+                          ? "Disabling masking will decrypt all data back to plaintext in the database. This operation may take a few moments for large datasets."
+                          : "Enabling masking will encrypt all existing sensitive data for this tenant. This operation may take a few moments for large datasets. Anyone querying the database directly will see encrypted values."}
+                      </div>
+                    </div>
+                  </div>
+
+                  <DialogFooter>
+                    <Button variant="outline" onClick={() => setMaskingDialogTenantId(null)} data-testid="button-masking-cancel">
+                      Cancel
+                    </Button>
+                    <Button
+                      onClick={() => handleToggleMasking(maskingDialogTenantId, !maskingStatus?.enabled)}
+                      disabled={maskingToggling}
+                      variant={maskingStatus?.enabled ? "destructive" : "default"}
+                      data-testid="button-masking-toggle"
+                    >
+                      {maskingToggling ? (
+                        <>
+                          <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                          {maskingStatus?.enabled ? "Decrypting..." : "Encrypting..."}
+                        </>
+                      ) : (
+                        maskingStatus?.enabled ? "Disable Masking" : "Enable Masking"
+                      )}
+                    </Button>
+                  </DialogFooter>
+                </>
+              )}
             </div>
           )}
         </DialogContent>
@@ -1220,7 +1234,11 @@ export default function TenantConnectionsPage() {
                     Manage which MSP organizations have access to this customer-mode tenant.
                   </DialogDescription>
                 </DialogHeader>
-                <MspAccessPanel tenantConnectionId={mspAccessDialogId} />
+                {planFeatureEnabled("mspAccess") ? (
+                  <MspAccessPanel tenantConnectionId={mspAccessDialogId} />
+                ) : (
+                  <UpgradeGate feature="mspAccess" />
+                )}
               </>
             );
           })()}

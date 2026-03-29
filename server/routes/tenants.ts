@@ -1054,7 +1054,7 @@ router.get("/api/admin/tenants/:tenantConnectionId/access-grants", requireAuth()
 });
 
 // ── MSP Access: code generation (customer side) ──
-router.post("/api/admin/tenants/:id/msp-access/code", requireRole(ZENITH_ROLES.TENANT_ADMIN), async (req: AuthenticatedRequest, res) => {
+router.post("/api/admin/tenants/:id/msp-access/code", requireRole(ZENITH_ROLES.TENANT_ADMIN), requireFeature("mspAccess"), async (req: AuthenticatedRequest, res) => {
   try {
     const conn = await storage.getTenantConnection(req.params.id);
     if (!conn) return res.status(404).json({ error: "Tenant connection not found" });
@@ -1085,7 +1085,7 @@ router.post("/api/admin/tenants/:id/msp-access/code", requireRole(ZENITH_ROLES.T
 });
 
 // ── MSP Access: redeem a code (MSP side) ──
-router.post("/api/admin/msp-access/redeem", requireRole(ZENITH_ROLES.TENANT_ADMIN), async (req: AuthenticatedRequest, res) => {
+router.post("/api/admin/msp-access/redeem", requireRole(ZENITH_ROLES.TENANT_ADMIN), requireFeature("mspAccess"), async (req: AuthenticatedRequest, res) => {
   try {
     const { code } = req.body;
     if (!code || typeof code !== "string") {
@@ -1119,7 +1119,7 @@ router.post("/api/admin/msp-access/redeem", requireRole(ZENITH_ROLES.TENANT_ADMI
 });
 
 // ── MSP Access: list grants for a tenant (customer side) ──
-router.get("/api/admin/tenants/:id/msp-access/grants", requireRole(ZENITH_ROLES.TENANT_ADMIN), async (req: AuthenticatedRequest, res) => {
+router.get("/api/admin/tenants/:id/msp-access/grants", requireRole(ZENITH_ROLES.TENANT_ADMIN), requireFeature("mspAccess"), async (req: AuthenticatedRequest, res) => {
   try {
     const conn = await storage.getTenantConnection(req.params.id);
     if (!conn) return res.status(404).json({ error: "Tenant connection not found" });
@@ -1200,7 +1200,7 @@ router.delete("/api/admin/tenants/:tenantConnectionId/access-grants/:grantId", r
 });
 
 // ── MSP Access: revoke a grant (customer side) ──
-router.delete("/api/admin/tenants/:id/msp-access/grants/:grantId", requireRole(ZENITH_ROLES.TENANT_ADMIN), async (req: AuthenticatedRequest, res) => {
+router.delete("/api/admin/tenants/:id/msp-access/grants/:grantId", requireRole(ZENITH_ROLES.TENANT_ADMIN), requireFeature("mspAccess"), async (req: AuthenticatedRequest, res) => {
   try {
     const conn = await storage.getTenantConnection(req.params.id);
     if (!conn) return res.status(404).json({ error: "Tenant connection not found" });

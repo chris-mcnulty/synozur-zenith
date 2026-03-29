@@ -8,7 +8,7 @@ import { Lock, ArrowUpRight } from "lucide-react";
 
 interface UpgradeGateProps {
   feature: keyof typeof PLAN_FEATURES.TRIAL;
-  children: React.ReactNode;
+  children?: React.ReactNode;
   fallback?: React.ReactNode;
   inline?: boolean;
 }
@@ -19,13 +19,16 @@ const FEATURE_LABELS: Record<string, { label: string; minPlan: string }> = {
   lifecycleAutomation: { label: "Lifecycle Automation", minPlan: "Professional" },
   selfServicePortal: { label: "Self-Service Portal", minPlan: "Professional" },
   advancedReporting: { label: "Advanced Reporting", minPlan: "Enterprise" },
+  mspAccess: { label: "MSP Access Code Management", minPlan: "Professional" },
+  dataMasking: { label: "Tenant Database Masking", minPlan: "Professional" },
+  csvExport: { label: "CSV Export", minPlan: "Standard" },
 };
 
 export function UpgradeGate({ feature, children, fallback, inline }: UpgradeGateProps) {
   const { isFeatureEnabled, plan } = useServicePlan();
 
   if (isFeatureEnabled(feature)) {
-    return <>{children}</>;
+    return children ? <>{children}</> : null;
   }
 
   if (fallback) {
