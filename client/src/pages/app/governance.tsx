@@ -281,7 +281,7 @@ export default function GovernancePage() {
   const showPagination = governanceData?.mode === "paginated";
   const totalPages = showPagination ? Math.ceil(paginatedTotal / GOVERNANCE_PAGE_SIZE) : 1;
 
-  const { isTrial, maxSites, isFeatureEnabled } = useServicePlan();
+  const { isTrial, maxSites } = useServicePlan();
   // lastSyncSiteCount stores the raw discovered total when a cap was applied, otherwise the synced count.
   // If it exceeds maxSites, the cap was active during the last sync.
   const lastSyncDiscovered = selectedTenant?.lastSyncSiteCount ?? 0;

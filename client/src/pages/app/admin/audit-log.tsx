@@ -8,8 +8,8 @@ import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Download, Filter, RefreshCw, ChevronLeft, ChevronRight, ShieldAlert, Lock } from "lucide-react";
-import { useServicePlan } from "@/hooks/use-service-plan";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { UpgradeGate } from "@/components/upgrade-gate";
 
 type AuditLogEntry = {
   id: string;
@@ -124,8 +124,6 @@ function downloadCsv(rows: AuditLogEntry[]) {
 }
 
 export default function AuditLogPage() {
-  const { isFeatureEnabled } = useServicePlan();
-  const canExportCsv = isFeatureEnabled("csvExport");
   const [page, setPage] = useState(1);
   const [limit] = useState(50);
   const [filters, setFilters] = useState({
@@ -191,7 +189,26 @@ export default function AuditLogPage() {
             <RefreshCw className="w-4 h-4" />
             Refresh
           </Button>
-          {canExportCsv ? (
+          <UpgradeGate
+            feature="csvExport"
+            fallback={
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="gap-2 opacity-60"
+                    disabled
+                    data-testid="button-export-csv-locked"
+                  >
+                    <Lock className="w-4 h-4" />
+                    Export CSV
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>CSV Export requires Standard plan or higher. Upgrade to enable.</TooltipContent>
+              </Tooltip>
+            }
+          >
             <Button
               variant="outline"
               size="sm"
@@ -203,23 +220,7 @@ export default function AuditLogPage() {
               <Download className="w-4 h-4" />
               Export CSV
             </Button>
-          ) : (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="gap-2 opacity-60"
-                  disabled
-                  data-testid="button-export-csv-locked"
-                >
-                  <Lock className="w-4 h-4" />
-                  Export CSV
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>CSV Export requires Standard plan or higher. Upgrade to enable.</TooltipContent>
-            </Tooltip>
-          )}
+          </UpgradeGate>
         </div>
       </div>
 
