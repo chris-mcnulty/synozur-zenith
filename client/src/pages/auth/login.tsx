@@ -12,6 +12,7 @@ import { useToast } from "@/hooks/use-toast";
 import heroBg from "@/assets/images/hero-login-bg.jpeg";
 
 import { CheckCircle2 } from "lucide-react";
+import { usePageTracking } from "@/hooks/use-page-tracking";
 
 const SSO_ERROR_MESSAGES: Record<string, string> = {
   tenant_mismatch: "Your account belongs to a different Microsoft tenant. Please contact your administrator.",
@@ -24,6 +25,7 @@ const SSO_ERROR_MESSAGES: Record<string, string> = {
 };
 
 export default function LoginPage() {
+  usePageTracking("/login");
   const [, setLocation] = useLocation();
   const { toast } = useToast();
   const [mode, setMode] = useState<"login" | "signup">("login");

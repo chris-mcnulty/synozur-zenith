@@ -13,6 +13,7 @@ import recordingsRouter from "./routes/recordings";
 import supportRouter from "./routes/support";
 import aiChatRouter from "./routes/ai-chat";
 import featureTogglesRouter from "./routes/feature-toggles";
+import analyticsRouter from "./routes/analytics";
 
 export async function registerRoutes(
   httpServer: Server,
@@ -33,6 +34,7 @@ export async function registerRoutes(
   app.use(supportRouter);
   app.use(aiChatRouter);
   app.use(featureTogglesRouter);
+  app.use(analyticsRouter);
 
   return httpServer;
 }

@@ -189,6 +189,27 @@ async function ensureTenantConnectionsSchema() {
       )
     `);
 
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS page_views (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        path text NOT NULL,
+        session_id text NOT NULL,
+        ip_hash text,
+        user_agent text,
+        referrer text,
+        utm_source text,
+        utm_medium text,
+        utm_campaign text,
+        country text,
+        created_at timestamp NOT NULL DEFAULT now()
+      )
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_page_views_created_at ON page_views(created_at);
+      CREATE INDEX IF NOT EXISTS idx_page_views_path ON page_views(path);
+    `);
+
     log('Schema migration ensureTenantConnectionsSchema completed');
   } catch (err) {
     console.error('[Migration] Failed to ensure tenant_connections schema:', err);

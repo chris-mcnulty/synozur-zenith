@@ -38,9 +38,15 @@ import {
   AlertTriangle,
   CheckCircle2,
   Settings2,
+  TrendingUp,
+  MousePointerClick,
+  Users,
+  Home,
+  LogIn,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useQuery as useAuthQuery } from "@tanstack/react-query";
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
 
 type PlatformSettings = {
   id: string;
@@ -163,6 +169,20 @@ export default function SystemAdminPage() {
       if (!res.ok) throw new Error("Failed to fetch organization stats");
       return res.json();
     },
+  });
+
+  const { data: trafficStats, isLoading: trafficLoading } = useQuery<{
+    ytd: { totalViews: number; uniqueSessions: number; homeViews: number; loginViews: number };
+    monthly: Array<{ month: string; label: string; views: number; sessions: number; homeViews: number; loginViews: number }>;
+    topReferrers: Array<{ referrer: string; count: number }>;
+  }>({
+    queryKey: ["/api/analytics/traffic"],
+    queryFn: async () => {
+      const res = await fetch("/api/analytics/traffic");
+      if (!res.ok) throw new Error("Failed to fetch traffic stats");
+      return res.json();
+    },
+    enabled: isPlatformOwner,
   });
 
   const filteredOrgs = orgStats.filter(org =>
@@ -370,6 +390,7 @@ export default function SystemAdminPage() {
       <Tabs defaultValue="organizations" className="space-y-4">
         <TabsList data-testid="tabs-admin">
           <TabsTrigger value="organizations">Organizations</TabsTrigger>
+          <TabsTrigger value="traffic" data-testid="tab-traffic">Traffic</TabsTrigger>
           <TabsTrigger value="blocked-domains">Blocked Domains</TabsTrigger>
           <TabsTrigger value="platform-settings" data-testid="tab-platform-settings">Platform Settings</TabsTrigger>
         </TabsList>
@@ -473,6 +494,101 @@ export default function SystemAdminPage() {
               )}
             </CardContent>
           </Card>
+        </TabsContent>
+
+        <TabsContent value="traffic">
+          <div className="space-y-4">
+            {trafficLoading ? (
+              <div className="flex items-center justify-center py-16">
+                <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
+              </div>
+            ) : (
+              <>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                  {[
+                    { label: "YTD Page Views", value: trafficStats?.ytd.totalViews ?? 0, icon: MousePointerClick, color: "text-blue-500", border: "border-blue-500/20", bg: "from-blue-500/5" },
+                    { label: "YTD Unique Sessions", value: trafficStats?.ytd.uniqueSessions ?? 0, icon: Users, color: "text-purple-500", border: "border-purple-500/20", bg: "from-purple-500/5" },
+                    { label: "Home Page Views", value: trafficStats?.ytd.homeViews ?? 0, icon: Home, color: "text-emerald-500", border: "border-emerald-500/20", bg: "from-emerald-500/5" },
+                    { label: "Login Page Views", value: trafficStats?.ytd.loginViews ?? 0, icon: LogIn, color: "text-amber-500", border: "border-amber-500/20", bg: "from-amber-500/5" },
+                  ].map(({ label, value, icon: Icon, color, border, bg }) => (
+                    <Card key={label} className={`glass-panel ${border} shadow-lg bg-gradient-to-br ${bg} to-transparent`}>
+                      <CardHeader className="pb-2 flex flex-row items-center justify-between">
+                        <CardTitle className="text-sm font-medium text-muted-foreground">{label}</CardTitle>
+                        <Icon className={`w-4 h-4 ${color}`} />
+                      </CardHeader>
+                      <CardContent>
+                        <div className={`text-2xl font-bold ${color}`} data-testid={`text-traffic-${label.toLowerCase().replace(/ /g, "-")}`}>
+                          {value.toLocaleString()}
+                        </div>
+                      </CardContent>
+                    </Card>
+                  ))}
+                </div>
+
+                <Card className="glass-panel border-border/50 shadow-xl">
+                  <CardHeader className="pb-4 border-b border-border/40 bg-muted/10">
+                    <CardTitle className="text-xl flex items-center gap-2">
+                      <TrendingUp className="w-5 h-5 text-primary" />
+                      {new Date().getFullYear()} Month-by-Month Traffic
+                    </CardTitle>
+                    <CardDescription>Page views and unique sessions per month (year to date)</CardDescription>
+                  </CardHeader>
+                  <CardContent className="pt-6">
+                    {!trafficStats?.monthly?.length ? (
+                      <div className="flex flex-col items-center justify-center py-12 text-muted-foreground gap-2">
+                        <TrendingUp className="w-8 h-8 opacity-30" />
+                        <p className="text-sm">No traffic data yet. Views will appear here once visitors reach the public pages.</p>
+                      </div>
+                    ) : (
+                      <ResponsiveContainer width="100%" height={300}>
+                        <BarChart data={trafficStats.monthly} margin={{ top: 4, right: 16, left: 0, bottom: 0 }}>
+                          <CartesianGrid strokeDasharray="3 3" className="stroke-border/40" />
+                          <XAxis dataKey="label" tick={{ fontSize: 12 }} className="text-muted-foreground" />
+                          <YAxis tick={{ fontSize: 12 }} className="text-muted-foreground" />
+                          <Tooltip
+                            contentStyle={{ background: "hsl(var(--card))", border: "1px solid hsl(var(--border))", borderRadius: 8, fontSize: 12 }}
+                            labelStyle={{ fontWeight: 600 }}
+                          />
+                          <Legend wrapperStyle={{ fontSize: 12 }} />
+                          <Bar dataKey="views" name="Page Views" fill="hsl(var(--primary))" radius={[4, 4, 0, 0]} />
+                          <Bar dataKey="sessions" name="Unique Sessions" fill="hsl(262 80% 65%)" radius={[4, 4, 0, 0]} />
+                        </BarChart>
+                      </ResponsiveContainer>
+                    )}
+                  </CardContent>
+                </Card>
+
+                {(trafficStats?.topReferrers?.length ?? 0) > 0 && (
+                  <Card className="glass-panel border-border/50 shadow-xl">
+                    <CardHeader className="pb-4 border-b border-border/40 bg-muted/10">
+                      <CardTitle className="text-base flex items-center gap-2">
+                        <Globe className="w-4 h-4 text-primary" />
+                        Top Referrers (YTD)
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent className="pt-4">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>Source</TableHead>
+                            <TableHead className="text-right">Views</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {trafficStats!.topReferrers.map((r) => (
+                            <TableRow key={r.referrer}>
+                              <TableCell className="font-mono text-xs">{r.referrer}</TableCell>
+                              <TableCell className="text-right font-medium">{r.count.toLocaleString()}</TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </CardContent>
+                  </Card>
+                )}
+              </>
+            )}
+          </div>
         </TabsContent>
 
         <TabsContent value="blocked-domains">

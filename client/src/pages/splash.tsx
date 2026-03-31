@@ -1,8 +1,10 @@
 import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Shield, Lock, Layers, Zap, ArrowRight, CheckCircle2, ShieldCheck, Cloud, BrainCircuit, Users, Database, KeyRound, EyeOff, Trash2, Building2 } from "lucide-react";
+import { usePageTracking } from "@/hooks/use-page-tracking";
 
 export default function SplashPage() {
+  usePageTracking("/");
   return (
     <div className="min-h-screen bg-background text-foreground flex flex-col selection:bg-primary/30 relative overflow-hidden">
       {/* Background Image with Overlay */}
