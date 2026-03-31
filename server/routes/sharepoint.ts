@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { storage } from "../storage";
 import { insertWorkspaceSchema, insertProvisioningRequestSchema, type ServicePlanTier, ZENITH_ROLES } from "@shared/schema";
-import { fetchSharePointSites, fetchSiteUsageReport, fetchSiteDriveOwner, fetchSiteAnalytics, fetchSiteGroupOwners, fetchSiteCollectionAdmins, getAppToken, writeSitePropertyBag, requestSiteReindex, fetchSitePropertyBag, fetchSensitivityLabels, fetchRetentionLabels, fetchHubSites, fetchSiteHubAssociation, fetchHubSitesViaSearch, applySensitivityLabelToSite, removeSensitivityLabelFromSite, joinHubSite, leaveHubSite, fetchSiteLockState, fetchSiteArchiveStatus, batchToggleNoScript, fetchSiteDocumentLibraries, enumerateSiteDocumentLibraries, fetchLibraryDetails, fetchSiteTelemetry, fetchContentTypes, createSharePointSite, createM365Group, createTeam, assignSensitivityLabelToGroup, resolveOwnerIds } from "../services/graph";
+import { fetchSharePointSites, fetchSiteUsageReport, fetchSiteDriveOwner, fetchSiteAnalytics, fetchSiteGroupOwners, fetchSiteCollectionAdmins, getAppToken, writeSitePropertyBag, requestSiteReindex, fetchSitePropertyBag, fetchSensitivityLabels, fetchRetentionLabels, fetchHubSites, fetchSiteHubAssociation, fetchHubSitesViaSearch, applySensitivityLabelToSite, removeSensitivityLabelFromSite, joinHubSite, leaveHubSite, fetchSiteLockState, fetchSiteArchiveStatus, batchToggleNoScript, fetchSiteDocumentLibraries, enumerateSiteDocumentLibraries, fetchLibraryDetails, fetchSiteTelemetry, fetchContentTypes, createSharePointSite, createM365Group, createTeam, assignSensitivityLabelToGroup, resolveOwnerIds, archiveSite, unarchiveSite } from "../services/graph";
 import { getPlanFeatures, requireFeature } from "../services/feature-gate";
 import { refreshDelegatedToken, getDelegatedSpoToken } from "../routes-entra";
 import { requireAuth, requireRole, requirePermission, type AuthenticatedRequest } from "../middleware/rbac";
@@ -609,6 +609,144 @@ router.delete("/api/workspaces/:id", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, 
   res.status(204).send();
 });
 
+router.post("/api/workspaces/:id/archive", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN), requireFeature("lifecycleAutomation"), async (req: AuthenticatedRequest, res) => {
+  if (!(await isWorkspaceInScope(req, req.params.id))) {
+    return res.status(404).json({ message: "Workspace not found" });
+  }
+  const workspace = await storage.getWorkspace(req.params.id);
+  if (!workspace) return res.status(404).json({ message: "Workspace not found" });
+  if (workspace.isArchived) return res.status(400).json({ message: "Workspace is already archived" });
+  if (!workspace.tenantConnectionId) return res.status(400).json({ message: "Workspace has no tenant connection" });
+  if (!workspace.m365ObjectId) return res.status(400).json({ message: "Workspace has no Graph site ID — sync the workspace first" });
+
+  const conn = await storage.getTenantConnection(workspace.tenantConnectionId);
+  if (!conn) return res.status(404).json({ message: "Tenant connection not found" });
+
+  const clientId = conn.clientId || process.env.AZURE_CLIENT_ID!;
+  const clientSecret = getEffectiveClientSecret(conn);
+  let graphToken: string;
+  try {
+    graphToken = await getAppToken(conn.tenantId, clientId, clientSecret);
+  } catch (err: any) {
+    await storage.createAuditEntry({
+      userId: req.user?.id || null,
+      userEmail: req.user?.email || null,
+      action: 'SITE_ARCHIVED',
+      resource: 'workspace',
+      resourceId: workspace.id,
+      organizationId: req.user?.organizationId || null,
+      tenantConnectionId: workspace.tenantConnectionId,
+      details: { workspaceName: workspace.displayName, siteUrl: workspace.siteUrl, error: `Failed to acquire Graph token: ${err.message}` },
+      result: 'FAILURE',
+      ipAddress: req.ip || null,
+    });
+    return res.status(502).json({ message: `Failed to acquire Graph token: ${err.message}` });
+  }
+
+  const result = await archiveSite(graphToken, workspace.m365ObjectId!);
+  if (!result.success) {
+    await storage.createAuditEntry({
+      userId: req.user?.id || null,
+      userEmail: req.user?.email || null,
+      action: 'SITE_ARCHIVED',
+      resource: 'workspace',
+      resourceId: workspace.id,
+      organizationId: req.user?.organizationId || null,
+      tenantConnectionId: workspace.tenantConnectionId,
+      details: { workspaceName: workspace.displayName, siteUrl: workspace.siteUrl, error: result.error },
+      result: 'FAILURE',
+      ipAddress: req.ip || null,
+    });
+    return res.status(502).json({ message: `Archive failed: ${result.error}` });
+  }
+
+  await storage.updateWorkspace(workspace.id, { isArchived: true, lockState: 'Locked' } as any);
+
+  await storage.createAuditEntry({
+    userId: req.user?.id || null,
+    userEmail: req.user?.email || null,
+    action: 'SITE_ARCHIVED',
+    resource: 'workspace',
+    resourceId: workspace.id,
+    organizationId: req.user?.organizationId || null,
+    tenantConnectionId: workspace.tenantConnectionId,
+    details: { workspaceName: workspace.displayName, siteUrl: workspace.siteUrl },
+    result: 'SUCCESS',
+    ipAddress: req.ip || null,
+  });
+
+  res.json({ success: true, workspaceId: workspace.id });
+});
+
+router.post("/api/workspaces/:id/unarchive", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN), requireFeature("lifecycleAutomation"), async (req: AuthenticatedRequest, res) => {
+  if (!(await isWorkspaceInScope(req, req.params.id))) {
+    return res.status(404).json({ message: "Workspace not found" });
+  }
+  const workspace = await storage.getWorkspace(req.params.id);
+  if (!workspace) return res.status(404).json({ message: "Workspace not found" });
+  if (!workspace.isArchived) return res.status(400).json({ message: "Workspace is not archived" });
+  if (!workspace.tenantConnectionId) return res.status(400).json({ message: "Workspace has no tenant connection" });
+  if (!workspace.m365ObjectId) return res.status(400).json({ message: "Workspace has no Graph site ID — sync the workspace first" });
+
+  const conn = await storage.getTenantConnection(workspace.tenantConnectionId);
+  if (!conn) return res.status(404).json({ message: "Tenant connection not found" });
+
+  const clientId = conn.clientId || process.env.AZURE_CLIENT_ID!;
+  const clientSecret = getEffectiveClientSecret(conn);
+  let graphToken: string;
+  try {
+    graphToken = await getAppToken(conn.tenantId, clientId, clientSecret);
+  } catch (err: any) {
+    await storage.createAuditEntry({
+      userId: req.user?.id || null,
+      userEmail: req.user?.email || null,
+      action: 'SITE_UNARCHIVED',
+      resource: 'workspace',
+      resourceId: workspace.id,
+      organizationId: req.user?.organizationId || null,
+      tenantConnectionId: workspace.tenantConnectionId,
+      details: { workspaceName: workspace.displayName, siteUrl: workspace.siteUrl, error: `Failed to acquire Graph token: ${err.message}` },
+      result: 'FAILURE',
+      ipAddress: req.ip || null,
+    });
+    return res.status(502).json({ message: `Failed to acquire Graph token: ${err.message}` });
+  }
+
+  const result = await unarchiveSite(graphToken, workspace.m365ObjectId!);
+  if (!result.success) {
+    await storage.createAuditEntry({
+      userId: req.user?.id || null,
+      userEmail: req.user?.email || null,
+      action: 'SITE_UNARCHIVED',
+      resource: 'workspace',
+      resourceId: workspace.id,
+      organizationId: req.user?.organizationId || null,
+      tenantConnectionId: workspace.tenantConnectionId,
+      details: { workspaceName: workspace.displayName, siteUrl: workspace.siteUrl, error: result.error },
+      result: 'FAILURE',
+      ipAddress: req.ip || null,
+    });
+    return res.status(502).json({ message: `Unarchive failed: ${result.error}` });
+  }
+
+  await storage.updateWorkspace(workspace.id, { isArchived: false, lockState: 'Unlock' } as any);
+
+  await storage.createAuditEntry({
+    userId: req.user?.id || null,
+    userEmail: req.user?.email || null,
+    action: 'SITE_UNARCHIVED',
+    resource: 'workspace',
+    resourceId: workspace.id,
+    organizationId: req.user?.organizationId || null,
+    tenantConnectionId: workspace.tenantConnectionId,
+    details: { workspaceName: workspace.displayName, siteUrl: workspace.siteUrl },
+    result: 'SUCCESS',
+    ipAddress: req.ip || null,
+  });
+
+  res.json({ success: true, workspaceId: workspace.id });
+});
+
 router.post("/api/workspaces/:id/sync", requireRole(ZENITH_ROLES.OPERATOR, ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN), async (req: AuthenticatedRequest, res) => {
   if (!(await isWorkspaceInScope(req, req.params.id))) {
     return res.status(404).json({ message: "Workspace not found" });
@@ -921,6 +1059,18 @@ router.patch("/api/workspaces/bulk/update", requireRole(ZENITH_ROLES.GOVERNANCE_
     console.log(`[bulk-update] ${writebackPendingCount} workspaces have pending property bag writebacks`);
   }
 
+  await storage.createAuditEntry({
+    userId: req.user?.id || null,
+    userEmail: req.user?.email || null,
+    action: 'BULK_UPDATE',
+    resource: 'workspace',
+    resourceId: null,
+    organizationId: req.user?.organizationId || null,
+    details: { count: ids.length, fields: Object.keys(updates), workspaceIds: ids },
+    result: 'SUCCESS',
+    ipAddress: req.ip || null,
+  });
+
   res.json({
     message: "Bulk update complete",
     count: ids.length,
@@ -1093,6 +1243,18 @@ router.post("/api/provisioning-requests", requireRole(ZENITH_ROLES.OPERATOR, ZEN
   if (!parsed.success) return res.status(400).json({ message: parsed.error.message });
   const orgId = req.activeOrganizationId || req.user?.organizationId || null;
   const request = await storage.createProvisioningRequest({ ...parsed.data, organizationId: orgId });
+  await storage.createAuditEntry({
+    userId: req.user?.id || null,
+    userEmail: req.user?.email || null,
+    action: 'PROVISIONING_REQUESTED',
+    resource: 'provisioning_request',
+    resourceId: request.id,
+    organizationId: orgId,
+    tenantConnectionId: request.tenantConnectionId || null,
+    details: { workspaceName: request.workspaceName, workspaceType: request.workspaceType, sensitivity: request.sensitivity },
+    result: 'SUCCESS',
+    ipAddress: req.ip || null,
+  });
   res.status(201).json(request);
 });
 

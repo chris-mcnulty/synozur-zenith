@@ -394,6 +394,11 @@ router.post('/reset-password', async (req: AuthenticatedRequest, res) => {
 
 const VALID_ROLES: ZenithRole[] = Object.values(ZENITH_ROLES);
 
+async function countActiveTenantAdmins(orgId: string): Promise<number> {
+  const orgUsers = await storage.getUsersByOrganization(orgId);
+  return orgUsers.filter(u => u.role === 'tenant_admin' && u.emailVerified).length;
+}
+
 router.post('/users/add', requireAuth(), requirePermission('users:manage'), async (req: AuthenticatedRequest, res) => {
   try {
     const adminUser = req.user!;
@@ -488,6 +493,14 @@ router.patch('/users/:id/role', requireAuth(), requirePermission('users:manage')
       return res.status(400).json({ error: 'Cannot change your own role' });
     }
 
+    // Prevent demoting the last active tenant admin (only relevant if the user is currently active)
+    if (targetUser.role === 'tenant_admin' && role !== 'tenant_admin' && targetUser.emailVerified) {
+      const adminCount = await countActiveTenantAdmins(orgId);
+      if (adminCount <= 1) {
+        return res.status(400).json({ error: 'Cannot demote the last Tenant Admin. Assign another Tenant Admin first.' });
+      }
+    }
+
     const previousRole = targetUser.role;
     const updated = await storage.updateUser(targetUserId, { role });
 
@@ -531,6 +544,14 @@ router.patch('/users/:id/deactivate', requireAuth(), requirePermission('users:ma
 
     if (targetUser.role === 'platform_owner' && adminUser.role !== 'platform_owner') {
       return res.status(403).json({ error: 'Cannot deactivate a platform owner' });
+    }
+
+    // Prevent deactivating the last active tenant admin (only relevant if the user is currently active)
+    if (targetUser.role === 'tenant_admin' && targetUser.emailVerified) {
+      const adminCount = await countActiveTenantAdmins(orgId);
+      if (adminCount <= 1) {
+        return res.status(400).json({ error: 'Cannot deactivate the last Tenant Admin. Assign another Tenant Admin first.' });
+      }
     }
 
     const updated = await storage.updateUser(targetUserId, { emailVerified: false });
