@@ -1078,6 +1078,19 @@ router.post("/api/admin/tenants/:id/msp-access/code", requireRole(ZENITH_ROLES.T
       status: "PENDING",
     });
 
+    await storage.createAuditEntry({
+      userId: req.user?.id || null,
+      userEmail: req.user?.email || null,
+      action: 'MSP_GRANT_CODE_CREATED',
+      resource: 'msp_access_grant',
+      resourceId: grant.id,
+      organizationId: orgId || null,
+      tenantConnectionId: conn.id,
+      details: { tenantName: conn.tenantName, expiresAt },
+      result: 'SUCCESS',
+      ipAddress: req.ip || null,
+    });
+
     res.json({ code, expiresAt, grantId: grant.id });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -1110,6 +1123,19 @@ router.post("/api/admin/msp-access/redeem", requireRole(ZENITH_ROLES.TENANT_ADMI
       status: "ACTIVE",
       grantedToOrgId: requestingOrgId,
       grantedAt: new Date(),
+    });
+
+    await storage.createAuditEntry({
+      userId: req.user?.id || null,
+      userEmail: req.user?.email || null,
+      action: 'MSP_GRANT_REDEEMED',
+      resource: 'msp_access_grant',
+      resourceId: grant.id,
+      organizationId: requestingOrgId,
+      tenantConnectionId: grant.tenantConnectionId,
+      details: { grantingOrgId: grant.grantingOrgId, redeemedBy: requestingOrgId },
+      result: 'SUCCESS',
+      ipAddress: req.ip || null,
     });
 
     res.json({ success: true, grant: updated });
@@ -1218,6 +1244,19 @@ router.delete("/api/admin/tenants/:id/msp-access/grants/:grantId", requireRole(Z
     await storage.updateMspAccessGrant(grant.id, {
       status: "REVOKED",
       revokedAt: new Date(),
+    });
+
+    await storage.createAuditEntry({
+      userId: req.user?.id || null,
+      userEmail: req.user?.email || null,
+      action: 'MSP_GRANT_REVOKED',
+      resource: 'msp_access_grant',
+      resourceId: grant.id,
+      organizationId: orgId || null,
+      tenantConnectionId: conn.id,
+      details: { tenantName: conn.tenantName, grantedToOrgId: grant.grantedToOrgId, revokedBy: req.user?.email },
+      result: 'SUCCESS',
+      ipAddress: req.ip || null,
     });
 
     res.json({ success: true });

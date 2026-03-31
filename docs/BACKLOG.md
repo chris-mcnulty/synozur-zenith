@@ -233,6 +233,17 @@ Gap analysis performed against the authoritative Zenith Engineering Product Spec
 - Service plan gated: Professional+ (aligns with BL-006 Copilot Readiness Dashboard)
 
 
+### 🟡 BL-030: MSP Access Grant — Mutual Confirmation Handshake
+**Status:** Backlog | **Depends on:** BL-001 (audit trail, ✅ instrumented)
+**Description:** The current 6-digit, 10-minute access code has no intended-recipient verification — any authenticated organization that obtains the code can claim the grant. Enhancement: when an MSP redeems a customer's 6-digit code, the system generates a second 6-digit confirmation code which the MSP must relay back to the customer out-of-band; the customer enters it on their side to complete the grant. This creates a mutual confirmation loop — proof the MSP has a legitimate invitation, plus proof the customer still controls the process — without requiring either party to browse a directory of organizations.
+**Acceptance Criteria:**
+- Phase 1 (MSP side): `POST /api/admin/msp-access/redeem` validates the 6-digit code and, instead of immediately activating the grant, returns a new system-generated 6-digit confirmation code and sets grant status to `PENDING_CONFIRMATION`
+- Phase 2 (Customer side): new endpoint `POST /api/admin/tenants/:id/msp-access/confirm` accepts the confirmation code and the grantId; validates the code matches and has not expired (separate 10-minute window); sets grant status to `ACTIVE`
+- Expired confirmation codes cancel the grant (status → `EXPIRED`); customer must generate a new access code to retry
+- Both steps emit audit events: `MSP_GRANT_CONFIRMATION_PENDING`, `MSP_GRANT_CONFIRMED`, `MSP_GRANT_EXPIRED`
+- Schema change: add `confirmationCode` (text), `confirmationExpiresAt` (timestamp) to `mspAccessGrants`
+- No UI change needed for Phase 1 (MSP enters code as today); customer UI shows a "Waiting for confirmation" step with the code to relay to the MSP
+
 **Status:** Backlog | **Design Doc:** [`docs/design/job-scheduling-system.md`](/docs/design/job-scheduling-system.md)
 **Description:** Background job scheduling system for automating recurring governance operations — tenant syncs, stale site detection, compliance scans, label audits, and notification delivery. Architecture follows the proven Orbit pattern with database-backed audit trail, concurrency guards, abort support, and admin monitoring UI.
 **Reference:** Orbit (`synozur-orbit`) `scheduled-jobs.ts` — best job scheduling implementation in the Synozur portfolio.
