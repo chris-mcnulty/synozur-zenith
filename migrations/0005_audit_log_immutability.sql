@@ -10,10 +10,13 @@
 -- and is only callable by authenticated Tenant Admins deleting their own org.
 -- It is NOT exposed as a standalone audit-log delete endpoint.
 
--- Prevent updating any audit_log column other than tenantConnectionId
+-- Prevent updating any audit_log column other than tenantConnectionId (NULL only).
+-- id is immutable; tenant_connection_id may only be set to NULL for referential
+-- maintenance on tenant deletion; all other data columns are fully immutable.
 CREATE OR REPLACE RULE audit_log_no_data_update AS
   ON UPDATE TO audit_log
   WHERE (
+    OLD.id IS DISTINCT FROM NEW.id OR
     OLD.user_id IS DISTINCT FROM NEW.user_id OR
     OLD.user_email IS DISTINCT FROM NEW.user_email OR
     OLD.action IS DISTINCT FROM NEW.action OR
@@ -23,7 +26,8 @@ CREATE OR REPLACE RULE audit_log_no_data_update AS
     OLD.details IS DISTINCT FROM NEW.details OR
     OLD.result IS DISTINCT FROM NEW.result OR
     OLD.ip_address IS DISTINCT FROM NEW.ip_address OR
-    OLD.created_at IS DISTINCT FROM NEW.created_at
+    OLD.created_at IS DISTINCT FROM NEW.created_at OR
+    (OLD.tenant_connection_id IS DISTINCT FROM NEW.tenant_connection_id AND NEW.tenant_connection_id IS NOT NULL)
   )
   DO INSTEAD NOTHING;
 
