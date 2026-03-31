@@ -493,8 +493,8 @@ router.patch('/users/:id/role', requireAuth(), requirePermission('users:manage')
       return res.status(400).json({ error: 'Cannot change your own role' });
     }
 
-    // Prevent demoting the last active tenant admin
-    if (targetUser.role === 'tenant_admin' && role !== 'tenant_admin') {
+    // Prevent demoting the last active tenant admin (only relevant if the user is currently active)
+    if (targetUser.role === 'tenant_admin' && role !== 'tenant_admin' && targetUser.emailVerified) {
       const adminCount = await countActiveTenantAdmins(orgId);
       if (adminCount <= 1) {
         return res.status(400).json({ error: 'Cannot demote the last Tenant Admin. Assign another Tenant Admin first.' });
@@ -546,8 +546,8 @@ router.patch('/users/:id/deactivate', requireAuth(), requirePermission('users:ma
       return res.status(403).json({ error: 'Cannot deactivate a platform owner' });
     }
 
-    // Prevent deactivating the last active tenant admin
-    if (targetUser.role === 'tenant_admin') {
+    // Prevent deactivating the last active tenant admin (only relevant if the user is currently active)
+    if (targetUser.role === 'tenant_admin' && targetUser.emailVerified) {
       const adminCount = await countActiveTenantAdmins(orgId);
       if (adminCount <= 1) {
         return res.status(400).json({ error: 'Cannot deactivate the last Tenant Admin. Assign another Tenant Admin first.' });

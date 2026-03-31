@@ -628,6 +628,18 @@ router.post("/api/workspaces/:id/archive", requireRole(ZENITH_ROLES.GOVERNANCE_A
   try {
     graphToken = await getAppToken(conn.tenantId, clientId, clientSecret);
   } catch (err: any) {
+    await storage.createAuditEntry({
+      userId: req.user?.id || null,
+      userEmail: req.user?.email || null,
+      action: 'SITE_ARCHIVED',
+      resource: 'workspace',
+      resourceId: workspace.id,
+      organizationId: req.user?.organizationId || null,
+      tenantConnectionId: workspace.tenantConnectionId,
+      details: { workspaceName: workspace.displayName, siteUrl: workspace.siteUrl, error: `Failed to acquire Graph token: ${err.message}` },
+      result: 'FAILURE',
+      ipAddress: req.ip || null,
+    });
     return res.status(502).json({ message: `Failed to acquire Graph token: ${err.message}` });
   }
 
@@ -685,6 +697,18 @@ router.post("/api/workspaces/:id/unarchive", requireRole(ZENITH_ROLES.GOVERNANCE
   try {
     graphToken = await getAppToken(conn.tenantId, clientId, clientSecret);
   } catch (err: any) {
+    await storage.createAuditEntry({
+      userId: req.user?.id || null,
+      userEmail: req.user?.email || null,
+      action: 'SITE_UNARCHIVED',
+      resource: 'workspace',
+      resourceId: workspace.id,
+      organizationId: req.user?.organizationId || null,
+      tenantConnectionId: workspace.tenantConnectionId,
+      details: { workspaceName: workspace.displayName, siteUrl: workspace.siteUrl, error: `Failed to acquire Graph token: ${err.message}` },
+      result: 'FAILURE',
+      ipAddress: req.ip || null,
+    });
     return res.status(502).json({ message: `Failed to acquire Graph token: ${err.message}` });
   }
 
