@@ -20,6 +20,11 @@ export async function registerRoutes(
   app: Express
 ): Promise<Server> {
 
+  // Health check for Azure load balancer / container probes
+  app.get("/healthz", (_req, res) => {
+    res.status(200).json({ status: "ok" });
+  });
+
   app.use("/api/auth", authRouter);
   app.use("/auth/entra", entraRouter);
 
