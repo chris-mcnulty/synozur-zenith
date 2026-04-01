@@ -12,20 +12,14 @@ pr:
       - main
 
 variables:
-  # ---- Shared infrastructure (one per Azure environment) ----
-  # Set these in a shared Variable Group named 'synozur-shared-vars':
-  # azureSubscription: '<Azure-Service-Connection-Name>'   # e.g. synozur-azure-connection
-  # acrName: 'synozuracr'                                  # shared ACR for all apps
-  # resourceGroupName: 'synozur-rg'                        # shared resource group
-  #
-  # ---- App-specific (set in 'synozur-zenith-vars' Variable Group) ----
-  # appServiceName: 'synozur-zenith'                       # this app's Web App name
-  # DATABASE_URL: 'postgresql://...'                       # this app's database
-  # ---- End user-configurable variables ----
-
-  dockerImageName: 'synozur-zenith'
-  dockerImageTag: '$(Build.BuildId)'
-  nodeVersion: '20.x'
+  - group: synozur-shared-vars
+  - group: synozur-zenith-vars
+  - name: dockerImageName
+    value: 'synozur-zenith'
+  - name: dockerImageTag
+    value: '$(Build.BuildId)'
+  - name: nodeVersion
+    value: '20.x'
 
 stages:
   # ========================================
