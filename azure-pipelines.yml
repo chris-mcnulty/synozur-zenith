@@ -12,11 +12,15 @@ pr:
       - main
 
 variables:
-  # ---- Set these in Azure DevOps Pipeline > Variables (or a Variable Group) ----
-  # azureSubscription: '<Azure-Service-Connection-Name>'
-  # acrName: '<your-acr-name>'                        # e.g. synozuracr
-  # appServiceName: '<your-app-service-name>'          # e.g. synozur-zenith-app
-  # resourceGroupName: '<your-resource-group>'
+  # ---- Shared infrastructure (one per Azure environment) ----
+  # Set these in a shared Variable Group named 'synozur-shared-vars':
+  # azureSubscription: '<Azure-Service-Connection-Name>'   # e.g. synozur-azure-connection
+  # acrName: 'synozuracr'                                  # shared ACR for all apps
+  # resourceGroupName: 'synozur-rg'                        # shared resource group
+  #
+  # ---- App-specific (set in 'synozur-zenith-vars' Variable Group) ----
+  # appServiceName: 'synozur-zenith'                       # this app's Web App name
+  # DATABASE_URL: 'postgresql://...'                       # this app's database
   # ---- End user-configurable variables ----
 
   dockerImageName: 'synozur-zenith'
