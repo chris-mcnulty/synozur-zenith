@@ -200,6 +200,101 @@ az webapp config container set --name synozur-zenith --resource-group synozur-rg
 
 ---
 
+## Schema Changes (Database Migrations)
+
+When you add a column, table, or other schema change in Replit, here is how
+that change flows through to Azure production.
+
+### Two Migration Mechanisms
+
+The app uses two complementary mechanisms for schema management:
+
+| Mechanism | Source | When It Runs | What It Covers |
+|-----------|--------|-------------|----------------|
+| `drizzle-kit push` | `shared/schema.ts` | Pipeline CD stage, before deploy | All columns/tables defined in the Drizzle schema |
+| `ensureTenantConnectionsSchema()` | `server/index.ts` | Every app startup | Additional columns/tables managed via raw SQL with `IF NOT EXISTS` guards |
+
+Both are safe to run repeatedly — Drizzle compares the live DB to the schema
+and only applies the diff, and the runtime ensures use `ADD COLUMN IF NOT EXISTS`
+and `CREATE TABLE IF NOT EXISTS`.
+
+### Developer Workflow
+
+```
+1. Edit shared/schema.ts in Replit        ← add your column here
+2. Test in Replit dev                      ← works immediately (runtime ensures)
+3. Commit + push to GitHub
+4. Open PR → merge to main
+5. Azure DevOps pipeline runs:
+   a. CI: npm run build                   ← catches compile errors
+   b. CI: npm run check                   ← catches type errors
+   c. CD: drizzle-kit push                ← applies schema diff to Azure PostgreSQL
+   d. CD: deploy new container            ← app boots, runtime ensures run as backup
+6. Azure production now has the new column
+```
+
+### What Each Change Type Looks Like
+
+#### Additive changes (safe, automatic)
+
+Adding columns, tables, or indexes — these flow through automatically:
+
+```typescript
+// shared/schema.ts — add a new column
+export const workspaces = pgTable("workspaces", {
+  // ... existing columns ...
+  newField: text("new_field"),               // ← just add this
+});
+```
+
+Pipeline runs `drizzle-kit push` → detects the new column → runs
+`ALTER TABLE workspaces ADD COLUMN new_field text` → done.
+
+#### Destructive changes (require care)
+
+Dropping columns, renaming columns, or changing types need manual attention
+regardless of platform. These can break running code if the old container is
+still serving requests while the schema changes.
+
+For destructive changes, use a two-phase approach:
+
+```
+Phase 1: Deploy code that works with BOTH old and new schema
+         (stop reading the old column, start reading the new one)
+Phase 2: Deploy a migration that drops/renames the old column
+```
+
+This applies to both Replit and Azure — it's a general best practice, not
+specific to the pipeline.
+
+### Runtime-Managed Schema
+
+Some columns and tables are managed by `ensureTenantConnectionsSchema()` in
+`server/index.ts` via raw SQL rather than in `shared/schema.ts`. These include:
+
+- `tenant_connections` feature flag columns (`data_masking_enabled`, etc.)
+- `msp_access_grants` table
+- `tenant_encryption_keys` table
+- `tenant_access_grants` table
+- `tenant_access_codes` table
+- `page_views` table
+
+These are applied on every app startup with `IF NOT EXISTS` guards, so they
+work automatically in both Replit and Azure without any pipeline step. The
+pipeline's `drizzle-kit push` step does not manage these — the running app does.
+
+### Summary
+
+| Change Type | How It Gets to Azure | Action Needed |
+|-------------|---------------------|---------------|
+| New column in `shared/schema.ts` | Pipeline runs `drizzle-kit push` | None — automatic |
+| New table in `shared/schema.ts` | Pipeline runs `drizzle-kit push` | None — automatic |
+| New column in `ensureTenantConnectionsSchema()` | App startup runs raw SQL | None — automatic |
+| Drop/rename column | Must be done carefully | Two-phase deploy |
+| Change column type | Must be done carefully | Two-phase deploy |
+
+---
+
 ## Pipeline Flow
 
 ```
