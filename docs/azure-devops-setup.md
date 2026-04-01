@@ -468,6 +468,76 @@ The shared resources (ACR, plan, PG server, resource group) stay the same.
 
 ---
 
+## Pre-Production Checklist
+
+Before cutting over live traffic from Replit to Azure, complete these items:
+
+### 1. Upgrade App Service Plan to Premium with Zone Redundancy
+
+The Basic B1 plan is fine for initial validation, but does not support zone
+redundancy (spreading instances across data center availability zones).
+Before going to production, upgrade to Premium P1v3:
+
+**Portal:**
+1. Go to App Service Plan `synozur-plan`
+2. Left menu → **Scale up (App Service plan)**
+3. Select **Premium V3** → **P1v3**
+4. Check **Zone redundancy** → **Enabled**
+5. Click **Apply**
+
+**CLI:**
+```bash
+az appservice plan update --name synozur-plan --resource-group synozur-rg \
+  --sku P1V3 --zone-redundant
+```
+
+| Plan | Zone Redundancy | Monthly Cost |
+|------|----------------|-------------|
+| Basic B1 (validation) | Not available | ~$13 |
+| Premium P1v3 (production) | 3 availability zones | ~$138 |
+
+This upgrade is in-place with no downtime. All apps on the plan benefit
+immediately since they share the plan.
+
+### 2. Force HTTPS on All Apps
+
+For each app:
+```bash
+az webapp update --name synozur-zenith --resource-group synozur-rg --https-only true
+```
+
+### 3. Verify Custom Domains and SSL Certificates
+
+Confirm each app has its custom domain bound with a managed certificate
+(see Custom Domains section above).
+
+### 4. Set Production Environment Variables
+
+Ensure all apps have `SESSION_SECRET`, `TOKEN_ENCRYPTION_SECRET`, and
+`DATABASE_URL` set to production values (not dev/test values).
+
+### 5. Configure Database Backups
+
+Azure PostgreSQL Flexible Server includes 7-day point-in-time restore by
+default. Consider extending retention to 35 days:
+
+```bash
+az postgres flexible-server update --name synozur-db --resource-group synozur-rg \
+  --backup-retention 35
+```
+
+### 6. Set Up Monitoring and Alerts
+
+1. App Service → **Monitoring** → **Alerts** → create rules for:
+   - HTTP 5xx error rate > threshold
+   - Response time > threshold
+   - CPU/memory usage
+2. PostgreSQL → **Monitoring** → **Alerts** → create rules for:
+   - Storage usage > 80%
+   - Connection count near limit
+
+---
+
 ## Parallel Deployment (Replit)
 
 This pipeline runs independently of the existing Replit deployment. Both use the
