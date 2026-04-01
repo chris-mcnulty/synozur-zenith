@@ -1,0 +1,12 @@
+node_modules
+dist
+.git
+.gitignore
+.replit
+replit.md
+SPEC_GAPS.md
+*.md
+.DS_Store
+attached_assets/
+*.tar.gz
+docs/

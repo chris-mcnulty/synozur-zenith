@@ -1,0 +1,119 @@
+# Azure DevOps CI/CD Pipeline for Synozur Zenith
+# Builds a Docker image and deploys to Azure App Service (Linux container)
+
+trigger:
+  branches:
+    include:
+      - main
+
+pr:
+  branches:
+    include:
+      - main
+
+variables:
+  # ---- Shared infrastructure (one per Azure environment) ----
+  # Set these in a shared Variable Group named 'synozur-shared-vars':
+  # azureSubscription: '<Azure-Service-Connection-Name>'   # e.g. synozur-azure-connection
+  # acrName: 'synozuracr'                                  # shared ACR for all apps
+  # resourceGroupName: 'synozur-rg'                        # shared resource group
+  #
+  # ---- App-specific (set in 'synozur-zenith-vars' Variable Group) ----
+  # appServiceName: 'synozur-zenith'                       # this app's Web App name
+  # DATABASE_URL: 'postgresql://...'                       # this app's database
+  # ---- End user-configurable variables ----
+
+  dockerImageName: 'synozur-zenith'
+  dockerImageTag: '$(Build.BuildId)'
+  nodeVersion: '20.x'
+
+stages:
+  # ========================================
+  # Stage 1 — CI: Build & Validate
+  # ========================================
+  - stage: Build
+    displayName: 'CI — Build & Validate'
+    jobs:
+      - job: BuildAndTest
+        displayName: 'Build, type-check, and package'
+        pool:
+          vmImage: 'ubuntu-latest'
+        steps:
+          - task: NodeTool@0
+            displayName: 'Use Node.js $(nodeVersion)'
+            inputs:
+              versionSpec: '$(nodeVersion)'
+
+          - script: npm ci
+            displayName: 'Install dependencies'
+
+          - script: npm run check
+            displayName: 'TypeScript type check'
+
+          - script: npm run build
+            displayName: 'Production build (Vite + esbuild)'
+
+          # Publish the build output as a pipeline artifact
+          - publish: $(System.DefaultWorkingDirectory)/dist
+            artifact: app-dist
+            displayName: 'Publish build artifacts'
+
+      - job: DockerBuild
+        displayName: 'Build & push Docker image'
+        dependsOn: BuildAndTest
+        condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+        pool:
+          vmImage: 'ubuntu-latest'
+        steps:
+          - task: Docker@2
+            displayName: 'Build and push to ACR'
+            inputs:
+              containerRegistry: '$(azureSubscription)'
+              repository: '$(dockerImageName)'
+              command: 'buildAndPush'
+              Dockerfile: '$(System.DefaultWorkingDirectory)/Dockerfile'
+              tags: |
+                $(dockerImageTag)
+                latest
+
+  # ========================================
+  # Stage 2 — CD: Deploy to Azure
+  # ========================================
+  - stage: Deploy
+    displayName: 'CD — Deploy to Azure'
+    dependsOn: Build
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+    jobs:
+      - deployment: DeployToAzure
+        displayName: 'Deploy container to App Service'
+        pool:
+          vmImage: 'ubuntu-latest'
+        environment: 'production'
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                # Run database migrations before the new container starts
+                - task: NodeTool@0
+                  displayName: 'Use Node.js $(nodeVersion)'
+                  inputs:
+                    versionSpec: '$(nodeVersion)'
+
+                - checkout: self
+
+                - script: npm ci
+                  displayName: 'Install dependencies (for drizzle-kit)'
+
+                - script: npx drizzle-kit push
+                  displayName: 'Run database migrations'
+                  env:
+                    DATABASE_URL: $(DATABASE_URL)
+
+                # Deploy the container image to Azure App Service
+                - task: AzureWebAppContainer@1
+                  displayName: 'Deploy to Azure App Service'
+                  inputs:
+                    azureSubscription: '$(azureSubscription)'
+                    appName: '$(appServiceName)'
+                    resourceGroupName: '$(resourceGroupName)'
+                    containers: '$(acrName).azurecr.io/$(dockerImageName):$(dockerImageTag)'
