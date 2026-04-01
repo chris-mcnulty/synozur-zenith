@@ -62,7 +62,7 @@ stages:
           - task: Docker@2
             displayName: 'Build and push to ACR'
             inputs:
-              containerRegistry: '$(azureSubscription)'
+              containerRegistry: '$(acrServiceConnection)'
               repository: '$(dockerImageName)'
               command: 'buildAndPush'
               Dockerfile: '$(System.DefaultWorkingDirectory)/Dockerfile'
