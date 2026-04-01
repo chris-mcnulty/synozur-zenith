@@ -209,6 +209,140 @@ Merge to main →  CI + Docker build + push to ACR + DB migration + deploy to Ap
 
 ---
 
+## Custom Domains and SSL/TLS Certificates
+
+By default each App Service gets a free `<app-name>.azurewebsites.net` domain
+with a Microsoft-managed SSL certificate — no configuration required. To use
+your own domains (e.g. `zenith.synozur.com`) with HTTPS, Azure provides free
+managed certificates for each custom domain.
+
+### How It Works Across Multiple Apps
+
+Each app gets its own subdomain, CNAME record, and free managed certificate:
+
+| App | Custom Domain | CNAME Target |
+|-----|--------------|--------------|
+| Zenith | `zenith.synozur.com` | `synozur-zenith.azurewebsites.net` |
+| App 2 | `app2.synozur.com` | `synozur-app2.azurewebsites.net` |
+| App 3 | `app3.synozur.com` | `synozur-app3.azurewebsites.net` |
+| ... | ... | ... |
+
+Azure issues and auto-renews a free SSL certificate per custom domain.
+No wildcard cert purchase needed. No manual renewal.
+
+### Step-by-Step: Add a Custom Domain to an App
+
+This process is the same for every app. Repeat for each one.
+
+**1. Add domain verification TXT record (does NOT affect live traffic):**
+
+At your DNS registrar, add a TXT record to prove you own the domain:
+
+| Type | Host | Value |
+|------|------|-------|
+| TXT | `asuid.zenith` | *(Azure provides this value in the next step)* |
+
+**2. Add the custom domain in Azure Portal:**
+
+1. Go to your App Service (e.g. `synozur-zenith`)
+2. Left menu → **Settings** → **Custom domains**
+3. Click **+ Add custom domain**
+4. Domain: `zenith.synozur.com`
+5. Hostname record type: **CNAME**
+6. Azure displays the TXT verification value — add it to your DNS if you
+   haven't already (from step 1)
+7. Click **Validate** — Azure checks the TXT record
+8. Click **Add**
+
+**3. Bind the free managed certificate:**
+
+1. Still on the **Custom domains** page, find `zenith.synozur.com`
+2. The SSL State will show **Not Secure**
+3. Click **Add binding**
+4. Certificate source: **App Service Managed Certificate (Free)**
+5. Click **Create** — Azure issues the cert (takes ~5 minutes)
+6. TLS/SSL type: **SNI SSL**
+7. Click **Add binding**
+
+The domain now has HTTPS with an auto-renewing certificate.
+
+**4. Switch DNS from Replit to Azure (the cutover):**
+
+When you're ready to move live traffic, change the CNAME at your DNS registrar:
+
+| Type | Host | Old Value (Replit) | New Value (Azure) |
+|------|------|--------------------|-------------------|
+| CNAME | `zenith` | `<replit-domain>` | `synozur-zenith.azurewebsites.net` |
+
+DNS propagation takes 5–30 minutes depending on your TTL setting.
+
+**5. Update BASE_URL in App Service settings:**
+
+After cutover, update the environment variable:
+
+```bash
+az webapp config appsettings set --name synozur-zenith --resource-group synozur-rg \
+  --settings BASE_URL="https://zenith.synozur.com"
+```
+
+**6. Force HTTPS (recommended):**
+
+1. App Service → **Settings** → **Configuration** → **General settings**
+2. Set **HTTPS Only** to **On**
+3. Click **Save**
+
+All HTTP requests will automatically redirect to HTTPS.
+
+#### CLI Alternative
+
+```bash
+# Add custom domain
+az webapp config hostname add \
+  --webapp-name synozur-zenith \
+  --resource-group synozur-rg \
+  --hostname zenith.synozur.com
+
+# Create free managed certificate
+az webapp config ssl create \
+  --name synozur-zenith \
+  --resource-group synozur-rg \
+  --hostname zenith.synozur.com
+
+# Bind certificate (use the thumbprint from the previous command's output)
+az webapp config ssl bind \
+  --name synozur-zenith \
+  --resource-group synozur-rg \
+  --certificate-thumbprint <thumbprint> \
+  --ssl-type SNI
+
+# Force HTTPS
+az webapp update \
+  --name synozur-zenith \
+  --resource-group synozur-rg \
+  --https-only true
+```
+
+### Cost
+
+Free managed certificates are included with App Service at no additional cost.
+Each app gets its own certificate, issued and renewed automatically by Azure.
+
+### Scaling to 8+ Apps — Azure Front Door (Optional Future Upgrade)
+
+When running many apps, you may later want to centralize routing, SSL, and
+add a Web Application Firewall (WAF). Azure Front Door provides this:
+
+```
+*.synozur.com → Azure Front Door → routes to individual App Services
+                (single wildcard cert, WAF, CDN, global load balancing)
+```
+
+This is optional and costs ~$35/month. The free per-app managed certificates
+work well and can be used indefinitely. Front Door is an upgrade path, not a
+requirement.
+
+---
+
 ## Adding a New App
 
 To add another Synozur app to this infrastructure:
@@ -232,6 +366,8 @@ To add another Synozur app to this infrastructure:
    `synozur-shared-vars` and `synozur-<app-name>-vars`
 
 5. Configure App Service settings (env vars) for the new app
+
+6. Add a custom domain + free managed certificate (see Custom Domains section above)
 
 The shared resources (ACR, plan, PG server, resource group) stay the same.
 
