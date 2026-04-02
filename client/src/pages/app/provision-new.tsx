@@ -142,9 +142,7 @@ export default function ProvisionNewPage() {
               </p>
             </div>
             <div className="w-full max-w-sm space-y-2">
-              <Progress value={progressValue} className="h-1.5 bg-emerald-500/10">
-                <div className="h-full bg-emerald-500 transition-all duration-1000 ease-linear rounded-full" style={{ width: `${progressValue}%` }} />
-              </Progress>
+              <Progress value={progressValue} className="h-1.5 bg-emerald-500/10 [&>div]:bg-emerald-500" />
               <p className="text-xs text-muted-foreground">
                 Redirecting to dashboard in {countdown}s…
               </p>
