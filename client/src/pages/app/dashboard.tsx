@@ -198,9 +198,7 @@ export default function DashboardPage() {
           <CardContent>
             <div className="text-3xl font-bold" data-testid="text-metadata-compliance">{isLoading ? <Skeleton className="h-9 w-16" /> : `${metadataCompliance}%`}</div>
             {isLoading ? <Skeleton className="h-2 mt-3" /> : (
-              <Progress value={metadataCompliance} className="h-2 mt-3 bg-muted overflow-hidden">
-                <div className="h-full bg-primary transition-all duration-1000 ease-in-out" style={{ width: `${metadataCompliance}%` }} />
-              </Progress>
+              <Progress value={metadataCompliance} className="h-2 mt-3 bg-muted overflow-hidden [&>div]:bg-primary" />
             )}
           </CardContent>
         </Card>
