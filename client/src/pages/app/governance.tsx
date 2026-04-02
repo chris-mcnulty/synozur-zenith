@@ -1277,7 +1277,7 @@ export default function GovernancePage() {
               <div className="flex items-center justify-between px-6 py-2 border-b border-border/30 bg-muted/10">
                 <span className="text-xs text-muted-foreground" data-testid="text-results-summary">
                   {showPagination
-                    ? `${paginatedTotal} workspace${paginatedTotal !== 1 ? 's' : ''} total \u00B7 page ${currentPage} of ${totalPages}`
+                    ? `Showing ${((currentPage - 1) * GOVERNANCE_PAGE_SIZE + 1).toLocaleString()}–${Math.min(currentPage * GOVERNANCE_PAGE_SIZE, paginatedTotal).toLocaleString()} of ${paginatedTotal.toLocaleString()} workspace${paginatedTotal !== 1 ? 's' : ''}`
                     : filteredAndSortedWorkspaces.length === workspaces.length
                       ? `${workspaces.length} workspace${workspaces.length !== 1 ? 's' : ''}`
                       : `${filteredAndSortedWorkspaces.length} of ${workspaces.length} workspace${workspaces.length !== 1 ? 's' : ''}`}

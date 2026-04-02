@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Link, useLocation } from "wouter";
 import { useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -6,6 +6,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useServicePlan } from "@/hooks/use-service-plan";
 import { UpgradeGate } from "@/components/upgrade-gate";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
+import { Progress } from "@/components/ui/progress";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -35,12 +36,40 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 
+const REDIRECT_DELAY = 5;
+
 export default function ProvisionNewPage() {
   const [, setLocation] = useLocation();
   const [isSuccess, setIsSuccess] = useState(false);
+  const [countdown, setCountdown] = useState(REDIRECT_DELAY);
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const { toast } = useToast();
   const { canWriteBack } = useServicePlan();
-  
+
+  useEffect(() => {
+    if (!isSuccess) return;
+    setCountdown(REDIRECT_DELAY);
+    intervalRef.current = setInterval(() => {
+      setCountdown((prev) => {
+        if (prev <= 1) {
+          clearInterval(intervalRef.current!);
+          setLocation("/app/dashboard");
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+    return () => {
+      if (intervalRef.current) clearInterval(intervalRef.current);
+    };
+  }, [isSuccess, setLocation]);
+
+  const handleCancelRedirect = () => {
+    if (intervalRef.current) clearInterval(intervalRef.current);
+    setIsSuccess(false);
+    setCountdown(REDIRECT_DELAY);
+  };
+
   const [workspaceType, setWorkspaceType] = useState("TEAM_SITE");
   const [teamsConnected, setTeamsConnected] = useState(true);
   const [projectType, setProjectType] = useState("DEAL");
@@ -80,9 +109,6 @@ export default function ProvisionNewPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/provisioning-requests"] });
       setIsSuccess(true);
-      setTimeout(() => {
-        setLocation("/app/dashboard");
-      }, 2000);
     },
     onError: (error: Error) => {
       toast({
@@ -101,6 +127,7 @@ export default function ProvisionNewPage() {
   };
 
   if (isSuccess) {
+    const progressValue = ((REDIRECT_DELAY - countdown) / REDIRECT_DELAY) * 100;
     return (
       <div className="max-w-2xl mx-auto pt-12 animate-in fade-in zoom-in duration-500">
         <Card className="glass-panel border-emerald-500/20 shadow-lg shadow-emerald-500/5 text-center py-12">
@@ -113,6 +140,22 @@ export default function ProvisionNewPage() {
               <p className="text-muted-foreground max-w-sm mx-auto">
                 Your request for <span className="font-semibold text-foreground">{getPolicyPreview()}</span> has been securely logged and is pending automated provisioning.
               </p>
+            </div>
+            <div className="w-full max-w-sm space-y-2">
+              <Progress value={progressValue} className="h-1.5 bg-emerald-500/10">
+                <div className="h-full bg-emerald-500 transition-all duration-1000 ease-linear rounded-full" style={{ width: `${progressValue}%` }} />
+              </Progress>
+              <p className="text-xs text-muted-foreground">
+                Redirecting to dashboard in {countdown}s…
+              </p>
+            </div>
+            <div className="flex items-center gap-3">
+              <Button variant="ghost" size="sm" onClick={handleCancelRedirect} className="text-muted-foreground">
+                Stay on this page
+              </Button>
+              <Button size="sm" className="gap-2 bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm" onClick={() => setLocation("/app/dashboard")}>
+                Go to Dashboard now
+              </Button>
             </div>
           </CardContent>
         </Card>
