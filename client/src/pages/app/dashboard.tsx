@@ -2,6 +2,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
+import { Skeleton } from "@/components/ui/skeleton";
 import { 
   ShieldCheck, 
   AlertTriangle, 
@@ -185,7 +186,7 @@ export default function DashboardPage() {
             <Database className="w-4 h-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-3xl font-bold" data-testid="text-total-workspaces">{isLoading ? "..." : totalWorkspaces.toLocaleString()}</div>
+            <div className="text-3xl font-bold" data-testid="text-total-workspaces">{isLoading ? <Skeleton className="h-9 w-20" /> : totalWorkspaces.toLocaleString()}</div>
           </CardContent>
         </Card>
         
@@ -195,10 +196,10 @@ export default function DashboardPage() {
             <ShieldCheck className="w-4 h-4 text-primary" />
           </CardHeader>
           <CardContent>
-            <div className="text-3xl font-bold" data-testid="text-metadata-compliance">{isLoading ? "..." : `${metadataCompliance}%`}</div>
-            <Progress value={isLoading ? 0 : metadataCompliance} className="h-2 mt-3 bg-muted overflow-hidden">
-              <div className="h-full bg-primary transition-all duration-1000 ease-in-out" style={{ width: isLoading ? "0%" : `${metadataCompliance}%` }} />
-            </Progress>
+            <div className="text-3xl font-bold" data-testid="text-metadata-compliance">{isLoading ? <Skeleton className="h-9 w-16" /> : `${metadataCompliance}%`}</div>
+            {isLoading ? <Skeleton className="h-2 mt-3" /> : (
+              <Progress value={metadataCompliance} className="h-2 mt-3 bg-muted overflow-hidden [&>div]:bg-primary" />
+            )}
           </CardContent>
         </Card>
 
@@ -208,7 +209,7 @@ export default function DashboardPage() {
             <Clock className="w-4 h-4 text-amber-500" />
           </CardHeader>
           <CardContent>
-            <div className="text-3xl font-bold text-amber-500" data-testid="text-pending-approvals">{isLoading ? "..." : pendingApprovals}</div>
+            <div className="text-3xl font-bold text-amber-500" data-testid="text-pending-approvals">{isLoading ? <Skeleton className="h-9 w-12" /> : pendingApprovals}</div>
             <p className="text-xs text-muted-foreground mt-1 text-amber-500/80 font-medium">
               Requires attention
             </p>
@@ -221,7 +222,7 @@ export default function DashboardPage() {
             <Wifi className="w-4 h-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-3xl font-bold" data-testid="text-connected-tenants">{isDashLoading ? "..." : activeTenantsCount}</div>
+            <div className="text-3xl font-bold" data-testid="text-connected-tenants">{isDashLoading ? <Skeleton className="h-9 w-12" /> : activeTenantsCount}</div>
             <p className="text-xs text-muted-foreground mt-1">
               Active tenant connections
             </p>
@@ -243,7 +244,17 @@ export default function DashboardPage() {
             <CardContent>
               <div className="space-y-4">
                 {isDashLoading ? (
-                  <p className="text-sm text-muted-foreground p-4">Loading alerts...</p>
+                  <div className="space-y-4">
+                    {[0, 1, 2].map((i) => (
+                      <div key={i} className="flex items-center justify-between p-4 rounded-xl border border-border">
+                        <div className="space-y-2 flex-1">
+                          <Skeleton className="h-4 w-40" />
+                          <Skeleton className="h-3 w-64" />
+                        </div>
+                        <Skeleton className="h-6 w-16 ml-4 rounded-full" />
+                      </div>
+                    ))}
+                  </div>
                 ) : (dashData?.alerts ?? []).map((alert, i) => (
                   <div key={i} className="flex items-center justify-between p-4 rounded-xl bg-card border border-border hover:border-destructive/30 transition-colors" data-testid={`alert-item-${i}`}>
                     <div>
@@ -272,7 +283,20 @@ export default function DashboardPage() {
             <CardContent>
               <div className="space-y-6">
                 {isDashLoading ? (
-                  <p className="text-sm text-muted-foreground p-4">Loading activity...</p>
+                  <div className="space-y-6">
+                    {[0, 1, 2, 3].map((i) => (
+                      <div key={i} className="flex items-start gap-4 p-4 rounded-xl border border-border/50">
+                        <Skeleton className="w-8 h-8 rounded-full shrink-0 mt-1" />
+                        <div className="flex-1 space-y-2">
+                          <div className="flex items-center justify-between">
+                            <Skeleton className="h-4 w-36" />
+                            <Skeleton className="h-3 w-16" />
+                          </div>
+                          <Skeleton className="h-3 w-56" />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                 ) : (dashData?.recentActivity ?? []).length === 0 ? (
                   <p className="text-sm text-muted-foreground p-4">No recent activity found.</p>
                 ) : (dashData?.recentActivity ?? []).map((entry) => (
@@ -310,7 +334,16 @@ export default function DashboardPage() {
             </CardHeader>
             <CardContent className="space-y-4">
               {isDashLoading ? (
-                <p className="text-sm text-muted-foreground">Loading...</p>
+                <div className="space-y-4">
+                  {[0, 1].map((i) => (
+                    <div key={i} className="space-y-2">
+                      <div className="flex items-center justify-between p-3 rounded-lg border border-border/50">
+                        <Skeleton className="h-4 w-32" />
+                        <Skeleton className="h-5 w-16 rounded-full" />
+                      </div>
+                    </div>
+                  ))}
+                </div>
               ) : (dashData?.serviceStatus ?? []).length === 0 ? (
                 <p className="text-sm text-muted-foreground">No tenant connections configured.</p>
               ) : (dashData?.serviceStatus ?? []).map((tenant) => (
@@ -338,12 +371,15 @@ export default function DashboardPage() {
             </CardHeader>
             <CardContent>
               <div className="flex items-end justify-between mb-3">
-                <span className="text-4xl font-bold tracking-tight text-transparent bg-clip-text bg-gradient-to-r from-primary to-secondary" data-testid="text-copilot-readiness">{isLoading ? "..." : `${copilotReadiness}%`}</span>
+                <span className="text-4xl font-bold tracking-tight text-transparent bg-clip-text bg-gradient-to-r from-primary to-secondary" data-testid="text-copilot-readiness">{isLoading ? <Skeleton className="h-10 w-20" /> : `${copilotReadiness}%`}</span>
                 <span className="text-sm text-muted-foreground mb-1 font-medium">of workspaces</span>
               </div>
-              <Progress value={isLoading ? 0 : copilotReadiness} className="h-2.5 mb-5 bg-muted overflow-hidden rounded-full">
-                <div className="h-full bg-gradient-to-r from-primary to-secondary transition-all duration-1000 ease-in-out" style={{ width: isLoading ? "0%" : `${copilotReadiness}%` }} />
-              </Progress>
+              {isLoading ? <Skeleton className="h-2.5 mb-5 rounded-full" /> : (
+                <Progress
+                  value={copilotReadiness}
+                  className="h-2.5 mb-5 bg-muted overflow-hidden rounded-full [&>div]:bg-gradient-to-r [&>div]:from-primary [&>div]:to-secondary"
+                />
+              )}
               <p className="text-sm text-muted-foreground leading-relaxed">
                 Workspaces meeting minimum classification and external sharing policies required for secure Copilot indexing.
               </p>
