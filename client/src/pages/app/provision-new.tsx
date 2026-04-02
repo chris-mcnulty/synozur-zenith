@@ -41,6 +41,7 @@ const REDIRECT_DELAY = 5;
 export default function ProvisionNewPage() {
   const [, setLocation] = useLocation();
   const [isSuccess, setIsSuccess] = useState(false);
+  const [isRedirectCancelled, setIsRedirectCancelled] = useState(false);
   const [countdown, setCountdown] = useState(REDIRECT_DELAY);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const { toast } = useToast();
@@ -48,6 +49,7 @@ export default function ProvisionNewPage() {
 
   useEffect(() => {
     if (!isSuccess) return;
+    setIsRedirectCancelled(false);
     setCountdown(REDIRECT_DELAY);
     intervalRef.current = setInterval(() => {
       setCountdown((prev) => {
@@ -66,8 +68,7 @@ export default function ProvisionNewPage() {
 
   const handleCancelRedirect = () => {
     if (intervalRef.current) clearInterval(intervalRef.current);
-    setIsSuccess(false);
-    setCountdown(REDIRECT_DELAY);
+    setIsRedirectCancelled(true);
   };
 
   const [workspaceType, setWorkspaceType] = useState("TEAM_SITE");
@@ -142,15 +143,21 @@ export default function ProvisionNewPage() {
               </p>
             </div>
             <div className="w-full max-w-sm space-y-2">
-              <Progress value={progressValue} className="h-1.5 bg-emerald-500/10 [&>div]:bg-emerald-500" />
-              <p className="text-xs text-muted-foreground">
-                Redirecting to dashboard in {countdown}s…
-              </p>
+              {!isRedirectCancelled && (
+                <>
+                  <Progress value={progressValue} className="h-1.5 bg-emerald-500/10 [&>div]:bg-emerald-500" />
+                  <p className="text-xs text-muted-foreground">
+                    Redirecting to dashboard in {countdown}s…
+                  </p>
+                </>
+              )}
             </div>
             <div className="flex items-center gap-3">
-              <Button variant="ghost" size="sm" onClick={handleCancelRedirect} className="text-muted-foreground">
-                Stay on this page
-              </Button>
+              {!isRedirectCancelled && (
+                <Button variant="ghost" size="sm" onClick={handleCancelRedirect} className="text-muted-foreground">
+                  Stay on this page
+                </Button>
+              )}
               <Button size="sm" className="gap-2 bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm" onClick={() => setLocation("/app/dashboard")}>
                 Go to Dashboard now
               </Button>
