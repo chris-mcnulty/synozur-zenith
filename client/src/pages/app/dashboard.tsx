@@ -375,9 +375,10 @@ export default function DashboardPage() {
                 <span className="text-sm text-muted-foreground mb-1 font-medium">of workspaces</span>
               </div>
               {isLoading ? <Skeleton className="h-2.5 mb-5 rounded-full" /> : (
-                <Progress value={copilotReadiness} className="h-2.5 mb-5 bg-muted overflow-hidden rounded-full">
-                  <div className="h-full bg-gradient-to-r from-primary to-secondary transition-all duration-1000 ease-in-out" style={{ width: `${copilotReadiness}%` }} />
-                </Progress>
+                <Progress
+                  value={copilotReadiness}
+                  className="h-2.5 mb-5 bg-muted overflow-hidden rounded-full [&>div]:bg-gradient-to-r [&>div]:from-primary [&>div]:to-secondary"
+                />
               )}
               <p className="text-sm text-muted-foreground leading-relaxed">
                 Workspaces meeting minimum classification and external sharing policies required for secure Copilot indexing.
