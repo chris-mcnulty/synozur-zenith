@@ -31,7 +31,7 @@ stages:
       - job: BuildAndTest
         displayName: 'Build, type-check, and package'
         pool:
-          vmImage: 'ubuntu-latest'
+          vmImage: 'ubuntu-22.04'
         steps:
           - task: NodeTool@0
             displayName: 'Use Node.js $(nodeVersion)'
@@ -57,7 +57,7 @@ stages:
         dependsOn: BuildAndTest
         condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
         pool:
-          vmImage: 'ubuntu-latest'
+          vmImage: 'ubuntu-22.04'
         steps:
           - task: Docker@2
             displayName: 'Build and push to ACR'
@@ -81,7 +81,7 @@ stages:
       - deployment: DeployToAzure
         displayName: 'Deploy container to App Service'
         pool:
-          vmImage: 'ubuntu-latest'
+          vmImage: 'ubuntu-22.04'
         environment: 'production'
         strategy:
           runOnce:
