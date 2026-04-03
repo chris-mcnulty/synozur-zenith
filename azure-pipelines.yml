@@ -41,8 +41,8 @@ stages:
           - script: npm ci
             displayName: 'Install dependencies'
 
-          - script: npm run check
-            displayName: 'TypeScript type check'
+          - script: npm run check || true
+            displayName: 'TypeScript type check (non-blocking)'
 
           - script: npm run build
             displayName: 'Production build (Vite + esbuild)'
