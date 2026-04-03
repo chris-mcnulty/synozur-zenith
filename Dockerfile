@@ -39,4 +39,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
 
 USER node
 
-CMD ["node", "dist/index.cjs"]
+CMD ["node", "-e", "process.on('uncaughtException',e=>{console.error('[FATAL] Uncaught exception:',e.stack||e);process.exit(1)});process.on('unhandledRejection',r=>{console.error('[FATAL] Unhandled rejection:',r);process.exit(1)});require('./dist/index.cjs')"]
