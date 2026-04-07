@@ -4,8 +4,12 @@
 
 This plan adds two major feature areas to Zenith, inspired by competitive platforms but adapted to Zenith's existing multi-tenant architecture, policy engine, and Microsoft Graph integration:
 
-1. **Content Governance Reporting** - Centralized visibility into SharePoint & OneDrive across risk, ownership, storage, and sharing
-2. **Licensing Reporting & Optimization** - Visibility into M365 license usage, cost, and waste
+1. **Content Governance Reporting** - Enriches the existing Site Governance and OneDrive Inventory pages with reporting across risk, ownership, storage, and sharing
+2. **Licensing Reporting & Optimization** - New page for M365 license usage, cost, and waste analysis
+
+### Design Principle: Integrate, Don't Duplicate
+
+Zenith is an admin tool — there are no end-user self-service scenarios. Rather than creating a separate "Content Governance" hub that would duplicate data already visible in Site Governance and OneDrive Inventory, the new reporting capabilities are integrated directly into these existing pages as additional tabs and views. This keeps the admin workflow natural: you go to the page for the resource type you care about, and the governance insights are right there.
 
 ---
 
@@ -13,9 +17,22 @@ This plan adds two major feature areas to Zenith, inspired by competitive platfo
 
 ### What It Delivers
 
-A dedicated **Content Governance** hub giving admins a centralized, cross-tenant view of SharePoint sites and OneDrive drives with reporting across four governance pillars: **Risk, Ownership, Storage, and Sharing**. End users get a **My OneDrive** self-service view.
+Enriches **Site Governance** (`/app/governance`) and **OneDrive Inventory** (`/app/onedrive-inventory`) with reporting across four governance pillars: **Risk, Ownership, Storage, and Sharing**. Also adds a **Governance Reviews** system for tracking and resolving findings.
 
-### 1.1 New Database Tables
+### 1.1 Where Each Capability Lives
+
+| Capability | Integrated Into | How |
+|---|---|---|
+| Risk reporting (missing labels, no retention, unapproved external sharing) | **Site Governance** | New "Risk" tab |
+| Ownership reporting (orphaned sites, dual-owner gaps) | **Site Governance** | New "Ownership" tab |
+| SharePoint storage trends & quota warnings | **Site Governance** | New "Storage" tab |
+| SharePoint sharing link inventory & revocation | **Site Governance** | New "Sharing" tab |
+| Governance reviews & findings | **Site Governance** | New "Reviews" tab |
+| Inactive / unlicensed OneDrive detection | **OneDrive Inventory** | Status badges + filter controls on existing table |
+| OneDrive storage summary & trends | **OneDrive Inventory** | Summary cards and trend chart above the table |
+| OneDrive sharing link inventory | **OneDrive Inventory** | New "Sharing" tab |
+
+### 1.2 New Database Tables
 
 #### `content_governance_snapshots`
 Point-in-time rollups computed from existing `workspaces`, `onedrive_inventory`, and `workspace_telemetry` tables. Enables trend analysis without re-querying live data.
@@ -101,7 +118,7 @@ Individual findings within a review task.
 | resolved_at | timestamp | |
 | created_at | timestamp | |
 
-### 1.2 New & Modified Graph API Calls
+### 1.3 New & Modified Graph API Calls
 
 Add to `server/services/graph.ts`:
 
@@ -119,18 +136,19 @@ Add to `server/services/graph.ts`:
 - `fetchSiteOwners()` - already fetches site ownership
 - `fetchWorkspaceTelemetry()` - already captures storage metrics
 
-### 1.3 New Backend Routes
+### 1.4 New Backend Routes
 
 #### `server/routes/content-governance.ts`
 
+These routes serve data to the new tabs on existing pages. The route prefix is shared because the backend logic (snapshots, reviews) spans both SharePoint and OneDrive.
+
 | Method | Path | Description |
 |---|---|---|
-| GET | `/api/content-governance/dashboard` | Aggregated stats across 4 pillars for selected tenant |
+| GET | `/api/content-governance/summary` | Aggregated stats across 4 pillars for selected tenant (powers summary cards) |
 | GET | `/api/content-governance/risk` | Risk report: sites missing labels, no retention, external-facing |
 | GET | `/api/content-governance/ownership` | Ownership report: orphaned sites, inactive OneDrives, unlicensed users |
 | GET | `/api/content-governance/storage` | Storage report: usage breakdown, growth trends, quota warnings |
-| GET | `/api/content-governance/sharing` | Sharing report: link inventory with filtering |
-| GET | `/api/content-governance/sharing/links` | Paginated sharing links list |
+| GET | `/api/content-governance/sharing/links` | Paginated sharing links list (filterable by resource_type) |
 | DELETE | `/api/content-governance/sharing/links/:id` | Revoke a sharing link |
 | POST | `/api/content-governance/reviews` | Create a governance review task |
 | GET | `/api/content-governance/reviews` | List review tasks |
@@ -138,63 +156,46 @@ Add to `server/services/graph.ts`:
 | PATCH | `/api/content-governance/reviews/:id/findings/:findingId` | Update finding status |
 | POST | `/api/content-governance/snapshot` | Trigger a governance snapshot |
 | GET | `/api/content-governance/trends` | Storage/sharing/risk trends over time |
-| GET | `/api/content-governance/my-onedrive` | End-user self-service view of their own OneDrive |
 
-### 1.4 New Frontend Pages
+### 1.5 Frontend Changes
 
-#### `client/src/pages/app/content-governance.tsx` - Main Hub
+#### Site Governance page (`governance.tsx`) — Add Tabs
 
-Four-tab layout (Risk | Ownership | Storage | Sharing) with:
-- **Summary cards** at top: total sites, total OneDrives, risk score, storage used
-- **Risk tab**: Table of sites missing sensitivity labels, lacking retention policies, with external sharing enabled but no approval
-- **Ownership tab**: Orphaned sites (0-1 owners), inactive OneDrives (90+ days), unlicensed OneDrives (disabled user accounts)
-- **Storage tab**: Storage usage bar charts by department/site type, growth trend line chart, quota warning list
-- **Sharing tab**: Sharing link inventory table with filters (type, scope, created by, expiry), bulk revoke action
+Current page is a single workspace grid. Refactor to a tabbed layout:
 
-#### `client/src/pages/app/my-onedrive.tsx` - End-User Self-Service
+| Tab | Content |
+|---|---|
+| **Sites** (default) | Existing workspace grid — no changes |
+| **Risk** | Table of sites with governance gaps: missing sensitivity labels, no retention policy, external sharing without policy approval. Severity badges. Link to workspace detail. |
+| **Ownership** | Table of orphaned sites (0-1 owners). Filter by department, site type. Highlight stale ownership (owner account disabled). |
+| **Storage** | Summary cards (total used, avg per site, sites over 80% quota). Bar chart by department or site type. Growth trend line chart from snapshots. |
+| **Sharing** | Sharing link inventory for SharePoint sites. Filter by link type (anonymous/org/specific), scope (read/write), creator. Bulk revoke action. |
+| **Reviews** | List of governance review tasks. Create review button. Click into review to see findings with resolve/dismiss actions. |
 
-Available to all roles (including `viewer`):
-- Storage usage donut chart
-- File count and last activity
-- Active sharing links with ability to revoke own links
-- Governance status (sensitivity label, retention)
+#### OneDrive Inventory page (`onedrive-inventory.tsx`) — Enrich
 
-#### `client/src/pages/app/governance-reviews.tsx` - Review Management
-
-For `governance_admin+`:
-- List of active/past reviews
-- Create review wizard (pick type, set threshold triggers)
-- Review detail view with findings table
-- Bulk resolve/dismiss actions
-
-### 1.5 Navigation Changes
-
-Add to `app-shell.tsx` navGroups:
-
-```
-// Under "Insights & Intelligence" group:
-{ name: "Content Governance", href: "/app/content-governance", icon: ShieldAlert }
-
-// Under "Overview" group (available to all roles):
-{ name: "My OneDrive", href: "/app/my-onedrive", icon: HardDrive }
-```
+| Enhancement | Detail |
+|---|---|
+| **Summary cards** (new) | Total OneDrives, total storage used, inactive count (90+ days), unlicensed count, average utilization % |
+| **Status badges** (new columns) | "Inactive" badge (amber) for no activity in 90+ days. "Unlicensed" badge (red) for disabled user accounts. |
+| **Filters** (new) | Filter by status: All, Active, Inactive, Unlicensed. Filter by quota state: Normal, Nearing, Critical. |
+| **Storage trend chart** (new) | Collapsible chart above table showing aggregate OneDrive storage growth over time from snapshots. |
+| **Sharing tab** (new) | Second tab showing OneDrive sharing links inventory with same filter/revoke UI as Site Governance sharing tab. |
 
 ### 1.6 Service Plan Gating
 
 | Feature | TRIAL | STANDARD | PROFESSIONAL | ENTERPRISE |
 |---|---|---|---|---|
-| Content Governance Dashboard | - | Read-only | Full | Full |
+| Risk / Ownership / Storage tabs | - | Read-only | Full | Full |
 | Sharing Link Inventory | - | - | Read-only | Full + Revoke |
 | Governance Reviews | - | - | Manual only | Manual + Automated |
-| My OneDrive (self-service) | - | Basic | Full | Full |
 | Trend Analysis | - | - | 30 days | Unlimited |
 
 Add to `PLAN_FEATURES`:
 ```typescript
-contentGovernanceDashboard: false | "readonly" | "full",
+contentGovernanceReporting: false | "readonly" | "full",
 sharingLinkManagement: false | "readonly" | "full",
 governanceReviews: false | "manual" | "full",
-myOneDriveSelfService: false | "basic" | "full",
 trendRetentionDays: 0 | 30 | 90 | -1 (unlimited),
 ```
 
@@ -216,7 +217,7 @@ Triggers are evaluated during the existing inventory sync cycle and create `gove
 
 ### What It Delivers
 
-A **Licensing** hub that pulls M365 license data via Graph API, combines it with Zenith's user/tenant knowledge, and surfaces spend analysis, waste detection, and optimization recommendations.
+A new **Licensing** page that pulls M365 license data via Graph API, combines it with Zenith's tenant knowledge, and surfaces spend analysis, waste detection, and optimization recommendations. This is a standalone page since Zenith has no existing licensing UI.
 
 ### 2.1 New Database Tables
 
@@ -326,9 +327,9 @@ Add to `server/services/graph.ts`:
 | GET | `/api/licensing/overlap` | Detect overlapping SKUs with redundant service plans |
 | GET | `/api/licensing/trends` | License usage trends over time |
 
-### 2.4 New Frontend Pages
+### 2.4 Frontend: New Licensing Page
 
-#### `client/src/pages/app/licensing.tsx` - Main Hub
+#### `client/src/pages/app/licensing.tsx`
 
 Three-tab layout (Overview | Assignments | Optimization):
 
@@ -412,15 +413,13 @@ New service: `server/services/license-sync.ts`
 ### Phase 2: Content Governance Backend
 1. Implement snapshot computation service (aggregates from existing tables)
 2. Implement sharing link discovery service
-3. Build content governance API routes (dashboard, risk, ownership, storage, sharing)
+3. Build content governance API routes (summary, risk, ownership, storage, sharing)
 4. Add governance review task CRUD
 
 ### Phase 3: Content Governance Frontend
-1. Build Content Governance hub page with 4-tab layout
-2. Build My OneDrive self-service page
-3. Build Governance Reviews management page
-4. Add navigation entries and route guards
-5. Wire up to backend APIs
+1. Refactor Site Governance page to tabbed layout (Sites | Risk | Ownership | Storage | Sharing | Reviews)
+2. Enrich OneDrive Inventory page (summary cards, status badges, filters, sharing tab)
+3. Wire up to backend APIs
 
 ### Phase 4: Licensing Backend
 1. Implement license sync service
@@ -429,10 +428,10 @@ New service: `server/services/license-sync.ts`
 4. Build licensing API routes
 
 ### Phase 5: Licensing Frontend
-1. Build Licensing hub page with 3-tab layout
+1. Build Licensing page with 3-tab layout
 2. Build overlap detail page
 3. Add CSV export functionality
-4. Add navigation entries and route guards
+4. Add navigation entry and route guards
 
 ### Phase 6: Automated Reviews & Polish
 1. Implement threshold-based governance review triggers
@@ -459,9 +458,11 @@ New permissions needed beyond current set:
 
 ## Key Architectural Decisions
 
-1. **Snapshot-based reporting**: Governance stats are snapshotted daily rather than computed on-the-fly, enabling trend analysis and avoiding expensive live queries
-2. **Leverage existing tables**: OneDrive inventory, workspace telemetry, and site ownership data already exist - governance reporting aggregates from these
-3. **Review task pattern**: Follows the same CRUD + status pattern as existing provisioning requests
-4. **Custom pricing**: License costs stored per-tenant since EA/CSP pricing varies by customer
-5. **Overlap detection**: Computed by comparing service plan arrays across SKUs assigned to the same user
-6. **Self-service boundary**: End users (viewer role) can only see their own OneDrive data and revoke their own sharing links - no cross-user visibility
+1. **Integrate, don't duplicate**: Content governance reporting is added as tabs/views on existing Site Governance and OneDrive Inventory pages rather than a standalone hub, keeping the admin workflow natural
+2. **Admin-only**: No end-user self-service views — Zenith is an admin tool, and all governance data is shown in admin context
+3. **Snapshot-based reporting**: Governance stats are snapshotted daily rather than computed on-the-fly, enabling trend analysis and avoiding expensive live queries
+4. **Leverage existing tables**: OneDrive inventory, workspace telemetry, and site ownership data already exist — governance reporting aggregates from these
+5. **Review task pattern**: Follows the same CRUD + status pattern as existing provisioning requests
+6. **Custom pricing**: License costs stored per-tenant since EA/CSP pricing varies by customer
+7. **Overlap detection**: Computed by comparing service plan arrays across SKUs assigned to the same user
+8. **Licensing is standalone**: Unlike content governance, there is no existing licensing page to integrate into, so it gets its own page under a new "Cost & Licensing" nav group
