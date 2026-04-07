@@ -539,9 +539,13 @@ function OptimizationTab({ tenantConnectionId }: { tenantConnectionId: string | 
 
   const actionMutation = useMutation({
     mutationFn: async ({ id, action }: { id: string; action: string }) => {
-      const res = await fetch(`/api/licensing/optimization/findings/${id}/${action}`, {
-        method: "POST",
+      const res = await fetch(`/api/licensing/optimization/findings/${id}`, {
+        method: "PATCH",
         credentials: "include",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ status: action }),
       });
       if (!res.ok) throw new Error(`Failed to ${action} finding`);
       return res.json();
