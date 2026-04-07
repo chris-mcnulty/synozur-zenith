@@ -201,14 +201,19 @@ router.delete("/api/content-governance/sharing/links/:id", requireAuth(), async 
     const [updated] = await db
       .update(sharingLinksInventory)
       .set({ isActive: false })
-      .where(and(
-        eq(sharingLinksInventory.id, id),
-        eq(sharingLinksInventory.tenantConnectionId, tenantConnectionId),
-      ))
-      .returning();
+    const [link] = await db
+      .select()
+      .from(sharingLinksInventory)
+      .where(eq(sharingLinksInventory.id, id))
+      .limit(1);
 
-    if (!updated) return res.status(404).json({ error: "Sharing link not found" });
-    res.json(updated);
+    if (!link) return res.status(404).json({ error: "Sharing link not found" });
+
+    return res.status(501).json({
+      error: "Remote sharing-link revocation is not implemented for this endpoint.",
+      message: "This route must revoke the permission in Microsoft 365 before updating local inventory state.",
+      id,
+    });
   } catch (err: any) {
     console.error("[content-governance] delete sharing link error:", err);
     res.status(500).json({ error: err.message });
