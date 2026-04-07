@@ -11,15 +11,20 @@ import {
 } from "@shared/schema";
 import { requireAuth, type AuthenticatedRequest } from "../middleware/rbac";
 import { computeGovernanceSnapshot } from "../services/governance-snapshot";
+import { getOrgTenantConnectionIds } from "./scope-helpers";
 
 const router = Router();
 
 // ── GET /api/content-governance/summary ────────────────────────────────────
-router.get("/api/content-governance/summary", requireAuth(), async (req: AuthenticatedRequest, res) => {
+router.get("/api/content-governance/summary", requireAuth("inventory:read"), async (req: AuthenticatedRequest, res) => {
   try {
     const tenantConnectionId = req.query.tenantConnectionId as string;
     if (!tenantConnectionId) return res.status(400).json({ error: "tenantConnectionId is required" });
 
+    const allowedTenantConnectionIds = await getOrgTenantConnectionIds(req);
+    if (!allowedTenantConnectionIds.includes(tenantConnectionId)) {
+      return res.status(403).json({ error: "Forbidden" });
+    }
     // Latest snapshot
     const [snapshot] = await db
       .select()
