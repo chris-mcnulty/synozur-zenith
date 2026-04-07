@@ -45,6 +45,7 @@ import SupportPage from "./pages/app/support";
 import TeamsChannelsPage from "./pages/app/teams-channels";
 import OneDriveInventoryPage from "./pages/app/onedrive-inventory";
 import RecordingsPage from "./pages/app/recordings";
+import LicensingPage from "./pages/app/licensing";
 import AppShell from "./components/layout/app-shell";
 
 const ROLE_LEVELS: Record<string, number> = {
@@ -181,6 +182,7 @@ function AppRoutes() {
         <Route path="/app/teams-channels" component={TeamsChannelsPage} />
         <Route path="/app/onedrive-inventory" component={OneDriveInventoryPage} />
         <Route path="/app/recordings" component={RecordingsPage} />
+        <Route path="/app/licensing" component={LicensingPage} />
         <Route path="/app/support/:tab" component={SupportPage} />
         <Route path="/app/support" component={SupportPage} />
         <Route component={NotFound} />

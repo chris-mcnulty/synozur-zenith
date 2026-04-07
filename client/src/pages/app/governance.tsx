@@ -5,6 +5,8 @@ import type { Workspace } from "@shared/schema";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useTenant } from "@/lib/tenant-context";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { GovernanceRiskTab, GovernanceOwnershipTab, GovernanceStorageTab, GovernanceSharingTab, GovernanceReviewsTab } from "./governance-tabs";
 import { 
   Table, 
   TableBody, 
@@ -1015,6 +1017,37 @@ export default function GovernancePage() {
           <h1 className="text-3xl font-bold tracking-tight">Site Governance</h1>
           <p className="text-muted-foreground mt-1">Enumerate and inspect SharePoint sites across your tenant</p>
         </div>
+      </div>
+
+      <Tabs defaultValue="sites" className="w-full">
+        <TabsList className="grid w-full grid-cols-6 max-w-2xl">
+          <TabsTrigger value="sites">Sites</TabsTrigger>
+          <TabsTrigger value="risk">Risk</TabsTrigger>
+          <TabsTrigger value="ownership">Ownership</TabsTrigger>
+          <TabsTrigger value="storage">Storage</TabsTrigger>
+          <TabsTrigger value="sharing">Sharing</TabsTrigger>
+          <TabsTrigger value="reviews">Reviews</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="risk" className="mt-6">
+          <GovernanceRiskTab tenantConnectionId={tenantConnectionId} />
+        </TabsContent>
+        <TabsContent value="ownership" className="mt-6">
+          <GovernanceOwnershipTab tenantConnectionId={tenantConnectionId} />
+        </TabsContent>
+        <TabsContent value="storage" className="mt-6">
+          <GovernanceStorageTab tenantConnectionId={tenantConnectionId} />
+        </TabsContent>
+        <TabsContent value="sharing" className="mt-6">
+          <GovernanceSharingTab tenantConnectionId={tenantConnectionId} />
+        </TabsContent>
+        <TabsContent value="reviews" className="mt-6">
+          <GovernanceReviewsTab tenantConnectionId={tenantConnectionId} organizationId={organizationId || ""} />
+        </TabsContent>
+
+        <TabsContent value="sites" className="mt-6">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div></div>
         <div className="flex gap-3">
           <div className="flex items-center border rounded-full overflow-hidden" data-testid="view-toggle">
             <Button
@@ -1935,6 +1968,8 @@ export default function GovernancePage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }

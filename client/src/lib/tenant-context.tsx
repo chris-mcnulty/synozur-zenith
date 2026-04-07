@@ -20,6 +20,8 @@ interface TenantConnection {
   teamsDiscoveryEnabled?: boolean;
   telemetryEnabled?: boolean;
   speDiscoveryEnabled?: boolean;
+  contentGovernanceEnabled?: boolean;
+  licensingEnabled?: boolean;
 }
 
 interface TenantContextType {
@@ -27,7 +29,7 @@ interface TenantContextType {
   selectedTenant: TenantConnection | undefined;
   setSelectedTenantId: (id: string) => void;
   selectedTenantId: string | null;
-  isFeatureEnabled: (feature: "onedriveInventory" | "recordingsDiscovery" | "teamsDiscovery" | "telemetry" | "speDiscovery") => boolean;
+  isFeatureEnabled: (feature: "onedriveInventory" | "recordingsDiscovery" | "teamsDiscovery" | "telemetry" | "speDiscovery" | "contentGovernance" | "licensing") => boolean;
 }
 
 const FEATURE_FIELD_MAP: Record<string, keyof TenantConnection> = {
@@ -36,6 +38,8 @@ const FEATURE_FIELD_MAP: Record<string, keyof TenantConnection> = {
   teamsDiscovery: "teamsDiscoveryEnabled",
   telemetry: "telemetryEnabled",
   speDiscovery: "speDiscoveryEnabled",
+  contentGovernance: "contentGovernanceEnabled",
+  licensing: "licensingEnabled",
 };
 
 const TenantContext = createContext<TenantContextType>({

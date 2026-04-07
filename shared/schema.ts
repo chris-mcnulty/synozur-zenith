@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, integer, boolean, timestamp, jsonb, unique, bigint } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, integer, boolean, timestamp, jsonb, unique, bigint, numeric, date } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -206,6 +206,8 @@ export const tenantConnections = pgTable("tenant_connections", {
   teamsDiscoveryEnabled: boolean("teams_discovery_enabled").notNull().default(false),
   telemetryEnabled: boolean("telemetry_enabled").notNull().default(false),
   speDiscoveryEnabled: boolean("spe_discovery_enabled").notNull().default(false),
+  contentGovernanceEnabled: boolean("content_governance_enabled").notNull().default(false),
+  licensingEnabled: boolean("licensing_enabled").notNull().default(false),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -341,6 +343,8 @@ export const FEATURE_TOGGLES = {
   teamsDiscovery: "teamsDiscoveryEnabled",
   telemetry: "telemetryEnabled",
   speDiscovery: "speDiscoveryEnabled",
+  contentGovernance: "contentGovernanceEnabled",
+  licensing: "licensingEnabled",
 } as const;
 
 export type FeatureToggleKey = keyof typeof FEATURE_TOGGLES;
@@ -352,6 +356,8 @@ export const FEATURE_TOGGLE_LABELS: Record<FeatureToggleKey, string> = {
   teamsDiscovery: "Teams & Channels Discovery",
   telemetry: "Workspace Telemetry",
   speDiscovery: "SPE Container Discovery",
+  contentGovernance: "Content Governance Reporting",
+  licensing: "Licensing Reporting",
 };
 
 export const SERVICE_PLANS = ["TRIAL", "STANDARD", "PROFESSIONAL", "ENTERPRISE"] as const;
@@ -370,6 +376,12 @@ export const PLAN_FEATURES = {
     dataMasking: false,
     csvExport: false,
     mspAccess: false,
+    contentGovernanceReporting: false as false | "readonly" | "full",
+    sharingLinkManagement: false as false | "readonly" | "full",
+    governanceReviews: false as false | "manual" | "full",
+    licensingDashboard: false as false | "readonly" | "full",
+    licensingOptimization: false as false | "basic" | "full",
+    trendRetentionDays: 0,
     maxUsers: 25,
     maxTenants: 1,
     maxSites: 1000,
@@ -387,6 +399,12 @@ export const PLAN_FEATURES = {
     dataMasking: false,
     csvExport: true,
     mspAccess: false,
+    contentGovernanceReporting: "readonly" as false | "readonly" | "full",
+    sharingLinkManagement: false as false | "readonly" | "full",
+    governanceReviews: false as false | "manual" | "full",
+    licensingDashboard: "readonly" as false | "readonly" | "full",
+    licensingOptimization: false as false | "basic" | "full",
+    trendRetentionDays: 0,
     maxUsers: 500,
     maxTenants: 2,
     maxSites: -1,
@@ -404,6 +422,12 @@ export const PLAN_FEATURES = {
     dataMasking: true,
     csvExport: true,
     mspAccess: true,
+    contentGovernanceReporting: "full" as false | "readonly" | "full",
+    sharingLinkManagement: "readonly" as false | "readonly" | "full",
+    governanceReviews: "manual" as false | "manual" | "full",
+    licensingDashboard: "full" as false | "readonly" | "full",
+    licensingOptimization: "basic" as false | "basic" | "full",
+    trendRetentionDays: 30,
     maxUsers: 5000,
     maxTenants: 10,
     maxSites: -1,
@@ -421,6 +445,12 @@ export const PLAN_FEATURES = {
     dataMasking: true,
     csvExport: true,
     mspAccess: true,
+    contentGovernanceReporting: "full" as false | "readonly" | "full",
+    sharingLinkManagement: "full" as false | "readonly" | "full",
+    governanceReviews: "full" as false | "manual" | "full",
+    licensingDashboard: "full" as false | "readonly" | "full",
+    licensingOptimization: "full" as false | "basic" | "full",
+    trendRetentionDays: -1,
     maxUsers: -1,
     maxTenants: -1,
     maxSites: -1,
@@ -1109,3 +1139,210 @@ export const insertTenantEncryptionKeySchema = createInsertSchema(tenantEncrypti
 
 export type InsertTenantEncryptionKey = z.infer<typeof insertTenantEncryptionKeySchema>;
 export type TenantEncryptionKey = typeof tenantEncryptionKeys.$inferSelect;
+
+// ── Content Governance ──────────────────────────────────────────────────────
+
+export const contentGovernanceSnapshots = pgTable("content_governance_snapshots", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantConnectionId: varchar("tenant_connection_id").notNull(),
+  snapshotDate: date("snapshot_date").notNull(),
+  totalSharepointSites: integer("total_sharepoint_sites").default(0),
+  totalOnedriveAccounts: integer("total_onedrive_accounts").default(0),
+  inactiveOnedriveCount: integer("inactive_onedrive_count").default(0),
+  unlicensedOnedriveCount: integer("unlicensed_onedrive_count").default(0),
+  orphanedSiteCount: integer("orphaned_site_count").default(0),
+  sitesMissingLabels: integer("sites_missing_labels").default(0),
+  externalSharingSiteCount: integer("external_sharing_site_count").default(0),
+  anonymousLinkCount: integer("anonymous_link_count").default(0),
+  companyLinkCount: integer("company_link_count").default(0),
+  specificPeopleLinkCount: integer("specific_people_link_count").default(0),
+  totalStorageUsedBytes: bigint("total_storage_used_bytes", { mode: "number" }).default(0),
+  totalOnedriveStorageUsedBytes: bigint("total_onedrive_storage_used_bytes", { mode: "number" }).default(0),
+  sitesOverQuotaWarning: integer("sites_over_quota_warning").default(0),
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => [
+  unique("uq_tenant_snapshot_date").on(table.tenantConnectionId, table.snapshotDate),
+]);
+
+export const insertContentGovernanceSnapshotSchema = createInsertSchema(contentGovernanceSnapshots).omit({
+  id: true,
+  createdAt: true,
+});
+export type InsertContentGovernanceSnapshot = z.infer<typeof insertContentGovernanceSnapshotSchema>;
+export type ContentGovernanceSnapshot = typeof contentGovernanceSnapshots.$inferSelect;
+
+export const sharingLinksInventory = pgTable("sharing_links_inventory", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantConnectionId: varchar("tenant_connection_id").notNull(),
+  resourceType: text("resource_type").notNull(), // SHAREPOINT_SITE, ONEDRIVE
+  resourceId: text("resource_id").notNull(),
+  resourceName: text("resource_name"),
+  linkId: text("link_id").notNull(),
+  linkType: text("link_type").notNull(), // anonymous, organization, specific
+  linkScope: text("link_scope"), // read, write, review
+  createdBy: text("created_by"),
+  createdAtGraph: timestamp("created_at_graph"),
+  expiresAt: timestamp("expires_at"),
+  isActive: boolean("is_active").notNull().default(true),
+  lastAccessedAt: timestamp("last_accessed_at"),
+  lastDiscoveredAt: timestamp("last_discovered_at").defaultNow(),
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => [
+  unique("uq_tenant_link").on(table.tenantConnectionId, table.linkId),
+]);
+
+export const insertSharingLinkSchema = createInsertSchema(sharingLinksInventory).omit({
+  id: true,
+  createdAt: true,
+});
+export type InsertSharingLink = z.infer<typeof insertSharingLinkSchema>;
+export type SharingLink = typeof sharingLinksInventory.$inferSelect;
+
+export const governanceReviewTasks = pgTable("governance_review_tasks", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantConnectionId: varchar("tenant_connection_id").notNull(),
+  organizationId: varchar("organization_id").notNull(),
+  reviewType: text("review_type").notNull(), // SHARING_REVIEW, OWNERSHIP_REVIEW, STORAGE_REVIEW, INACTIVE_REVIEW
+  triggerType: text("trigger_type").notNull().default("MANUAL"), // MANUAL, THRESHOLD, SCHEDULED
+  triggerConfig: jsonb("trigger_config").$type<Record<string, any>>(),
+  status: text("status").notNull().default("PENDING"), // PENDING, IN_PROGRESS, COMPLETED, CANCELLED
+  targetResourceType: text("target_resource_type").notNull().default("ALL"), // SHAREPOINT_SITE, ONEDRIVE, ALL
+  targetResourceIds: text("target_resource_ids").array(),
+  findingsCount: integer("findings_count").default(0),
+  resolvedCount: integer("resolved_count").default(0),
+  assignedTo: varchar("assigned_to"),
+  dueDate: timestamp("due_date"),
+  completedAt: timestamp("completed_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertGovernanceReviewTaskSchema = createInsertSchema(governanceReviewTasks).omit({
+  id: true,
+  createdAt: true,
+  completedAt: true,
+  findingsCount: true,
+  resolvedCount: true,
+});
+export type InsertGovernanceReviewTask = z.infer<typeof insertGovernanceReviewTaskSchema>;
+export type GovernanceReviewTask = typeof governanceReviewTasks.$inferSelect;
+
+export const governanceReviewFindings = pgTable("governance_review_findings", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  reviewTaskId: varchar("review_task_id").notNull().references(() => governanceReviewTasks.id, { onDelete: 'cascade' }),
+  resourceType: text("resource_type").notNull(),
+  resourceId: text("resource_id").notNull(),
+  resourceName: text("resource_name"),
+  findingType: text("finding_type").notNull(), // ANONYMOUS_LINK, EXPIRED_OWNER, OVER_QUOTA, INACTIVE_90D, etc.
+  severity: text("severity").notNull().default("MEDIUM"), // HIGH, MEDIUM, LOW, INFO
+  description: text("description"),
+  recommendedAction: text("recommended_action"),
+  status: text("status").notNull().default("OPEN"), // OPEN, ACKNOWLEDGED, RESOLVED, DISMISSED
+  resolvedBy: varchar("resolved_by"),
+  resolvedAt: timestamp("resolved_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertGovernanceReviewFindingSchema = createInsertSchema(governanceReviewFindings).omit({
+  id: true,
+  createdAt: true,
+  resolvedAt: true,
+  resolvedBy: true,
+});
+export type InsertGovernanceReviewFinding = z.infer<typeof insertGovernanceReviewFindingSchema>;
+export type GovernanceReviewFinding = typeof governanceReviewFindings.$inferSelect;
+
+// ── Licensing ───────────────────────────────────────────────────────────────
+
+export const licenseSubscriptions = pgTable("license_subscriptions", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantConnectionId: varchar("tenant_connection_id").notNull(),
+  skuId: text("sku_id").notNull(),
+  skuPartNumber: text("sku_part_number"),
+  displayName: text("display_name"),
+  totalUnits: integer("total_units").default(0),
+  consumedUnits: integer("consumed_units").default(0),
+  suspendedUnits: integer("suspended_units").default(0),
+  warningUnits: integer("warning_units").default(0),
+  enabledServicePlans: jsonb("enabled_service_plans").$type<Array<{ servicePlanId: string; servicePlanName: string }>>(),
+  customPricePerUnit: numeric("custom_price_per_unit", { precision: 10, scale: 2 }),
+  billingCycle: text("billing_cycle"),
+  lastSyncedAt: timestamp("last_synced_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => [
+  unique("uq_tenant_sku").on(table.tenantConnectionId, table.skuId),
+]);
+
+export const insertLicenseSubscriptionSchema = createInsertSchema(licenseSubscriptions).omit({
+  id: true,
+  createdAt: true,
+});
+export type InsertLicenseSubscription = z.infer<typeof insertLicenseSubscriptionSchema>;
+export type LicenseSubscription = typeof licenseSubscriptions.$inferSelect;
+
+export const licenseAssignments = pgTable("license_assignments", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantConnectionId: varchar("tenant_connection_id").notNull(),
+  userId: text("user_id").notNull(),
+  userPrincipalName: text("user_principal_name"),
+  userDisplayName: text("user_display_name"),
+  userDepartment: text("user_department"),
+  userJobTitle: text("user_job_title"),
+  accountEnabled: boolean("account_enabled"),
+  lastSignInDate: text("last_sign_in_date"),
+  skuId: text("sku_id").notNull(),
+  skuPartNumber: text("sku_part_number"),
+  assignedDate: text("assigned_date"),
+  disabledPlans: text("disabled_plans").array(),
+  lastSyncedAt: timestamp("last_synced_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => [
+  unique("uq_tenant_user_sku").on(table.tenantConnectionId, table.userId, table.skuId),
+]);
+
+export const insertLicenseAssignmentSchema = createInsertSchema(licenseAssignments).omit({
+  id: true,
+  createdAt: true,
+});
+export type InsertLicenseAssignment = z.infer<typeof insertLicenseAssignmentSchema>;
+export type LicenseAssignment = typeof licenseAssignments.$inferSelect;
+
+export const licenseOptimizationRules = pgTable("license_optimization_rules", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantConnectionId: varchar("tenant_connection_id").notNull(),
+  organizationId: varchar("organization_id").notNull(),
+  ruleType: text("rule_type").notNull(), // INACTIVE_USER, DISABLED_ACCOUNT, OVERLAP_DETECTION, UNASSIGNED_LICENSE
+  config: jsonb("config").$type<Record<string, any>>().default(sql`'{}'::jsonb`),
+  isActive: boolean("is_active").notNull().default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertLicenseOptimizationRuleSchema = createInsertSchema(licenseOptimizationRules).omit({
+  id: true,
+  createdAt: true,
+});
+export type InsertLicenseOptimizationRule = z.infer<typeof insertLicenseOptimizationRuleSchema>;
+export type LicenseOptimizationRule = typeof licenseOptimizationRules.$inferSelect;
+
+export const licenseOptimizationFindings = pgTable("license_optimization_findings", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantConnectionId: varchar("tenant_connection_id").notNull(),
+  ruleId: varchar("rule_id"),
+  findingType: text("finding_type").notNull(), // INACTIVE_USER, DISABLED_ACCOUNT, OVERLAP_DETECTION, UNASSIGNED_LICENSE
+  userId: text("user_id"),
+  userPrincipalName: text("user_principal_name"),
+  skuId: text("sku_id"),
+  skuDisplayName: text("sku_display_name"),
+  estimatedMonthlySavings: numeric("estimated_monthly_savings", { precision: 10, scale: 2 }),
+  description: text("description"),
+  status: text("status").notNull().default("OPEN"), // OPEN, ACKNOWLEDGED, RESOLVED, DISMISSED
+  resolvedAt: timestamp("resolved_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertLicenseOptimizationFindingSchema = createInsertSchema(licenseOptimizationFindings).omit({
+  id: true,
+  createdAt: true,
+  resolvedAt: true,
+});
+export type InsertLicenseOptimizationFinding = z.infer<typeof insertLicenseOptimizationFindingSchema>;
+export type LicenseOptimizationFinding = typeof licenseOptimizationFindings.$inferSelect;
