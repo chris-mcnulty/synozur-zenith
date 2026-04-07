@@ -111,13 +111,20 @@ router.get("/api/licensing/subscriptions", requireAuth(), async (req: Authentica
 router.patch("/api/licensing/subscriptions/:id/price", requireAuth(), async (req: AuthenticatedRequest, res) => {
   try {
     const { id } = req.params;
+    const tenantConnectionId = (req.body?.tenantConnectionId ?? req.query.tenantConnectionId) as string | undefined;
     const { price } = req.body;
+    if (!tenantConnectionId) return res.status(400).json({ error: "tenantConnectionId is required" });
     if (price === undefined || price === null) return res.status(400).json({ error: "price is required" });
 
     const [updated] = await db
       .update(licenseSubscriptions)
       .set({ customPricePerUnit: String(price) })
-      .where(eq(licenseSubscriptions.id, id))
+      .where(
+        and(
+          eq(licenseSubscriptions.id, id),
+          eq(licenseSubscriptions.tenantConnectionId, tenantConnectionId),
+        ),
+      )
       .returning();
 
     if (!updated) return res.status(404).json({ error: "Subscription not found" });
