@@ -11,58 +11,11 @@ import {
   licenseSubscriptions,
   licenseAssignments,
 } from "@shared/schema";
-import { getAppToken } from "./graph";
-
-interface GraphSubscribedSku {
-  skuId: string;
-  skuPartNumber: string;
-  prepaidUnits: { enabled: number; suspended: number; warning: number };
-  consumedUnits: number;
-  servicePlans: Array<{ servicePlanId: string; servicePlanName: string; appliesTo: string }>;
-}
-
-interface GraphUserLicense {
-  id: string;
-  userPrincipalName: string;
-  displayName: string;
-  department: string | null;
-  jobTitle: string | null;
-  accountEnabled: boolean;
-  signInActivity?: { lastSignInDateTime?: string };
-  assignedLicenses: Array<{ skuId: string; disabledPlans: string[] }>;
-}
-
-async function graphGet<T>(token: string, url: string): Promise<T[]> {
-  const results: T[] = [];
-  let nextLink: string | null = url;
-
-  while (nextLink) {
-    const res = await fetch(nextLink, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) {
-      const text = await res.text();
-      throw new Error(`Graph API error ${res.status}: ${text}`);
-    }
-    const json = await res.json();
-    if (json.value) {
-      results.push(...json.value);
-    }
-    nextLink = json["@odata.nextLink"] ?? null;
-  }
-
-  return results;
-}
-
-async function getSubscribedSkus(token: string): Promise<GraphSubscribedSku[]> {
-  return graphGet<GraphSubscribedSku>(token, "https://graph.microsoft.com/v1.0/subscribedSkus");
-}
-
-async function getAllUserLicenseDetails(token: string): Promise<GraphUserLicense[]> {
-  const select = "$select=id,userPrincipalName,displayName,department,jobTitle,accountEnabled,assignedLicenses,signInActivity";
-  return graphGet<GraphUserLicense>(token, `https://graph.microsoft.com/v1.0/users?${select}&$top=999`);
-}
-
+import {
+  getAppToken,
+  getSubscribedSkus,
+  getAllUserLicenseDetails,
+} from "./graph";
 export async function syncLicenses(
   tenantConnectionId: string,
   tenantId: string,
