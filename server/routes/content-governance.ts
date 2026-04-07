@@ -195,11 +195,16 @@ router.get("/api/content-governance/sharing/links", requireAuth(), async (req: A
 router.delete("/api/content-governance/sharing/links/:id", requireAuth(), async (req: AuthenticatedRequest, res) => {
   try {
     const { id } = req.params;
+    const tenantConnectionId = (req.body?.tenantConnectionId ?? req.query.tenantConnectionId) as string;
+    if (!tenantConnectionId) return res.status(400).json({ error: "tenantConnectionId is required" });
 
     const [updated] = await db
       .update(sharingLinksInventory)
       .set({ isActive: false })
-      .where(eq(sharingLinksInventory.id, id))
+      .where(and(
+        eq(sharingLinksInventory.id, id),
+        eq(sharingLinksInventory.tenantConnectionId, tenantConnectionId),
+      ))
       .returning();
 
     if (!updated) return res.status(404).json({ error: "Sharing link not found" });
