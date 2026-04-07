@@ -30,6 +30,35 @@ router.get("/api/licensing/dashboard", requireAuth(), async (req: AuthenticatedR
     const tenantConnectionId = req.query.tenantConnectionId as string;
     if (!tenantConnectionId) return res.status(400).json({ error: "tenantConnectionId is required" });
 
+    const user = (req as any).user;
+    const permissions = Array.isArray(user?.permissions) ? user.permissions : [];
+    const role = typeof user?.role === "string" ? user.role : "";
+    const organizationId = user?.organizationId ?? user?.orgId;
+    const hasInventoryRead =
+      permissions.includes("inventory:read") || role === "admin" || role === "superadmin";
+
+    if (!hasInventoryRead) {
+      return res.status(403).json({ error: "Forbidden" });
+    }
+
+    if (!organizationId) {
+      return res.status(403).json({ error: "Forbidden" });
+    }
+
+    const [scopedTenantConnection] = await db
+      .select({ id: tenantConnections.id })
+      .from(tenantConnections)
+      .where(
+        and(
+          eq(tenantConnections.id, tenantConnectionId),
+          eq(tenantConnections.organizationId, organizationId),
+        ),
+      )
+      .limit(1);
+
+    if (!scopedTenantConnection) {
+      return res.status(403).json({ error: "Forbidden" });
+    }
     const subs = await db
       .select()
       .from(licenseSubscriptions)
