@@ -726,12 +726,34 @@ function OptimizationTab({ tenantConnectionId }: { tenantConnectionId: string | 
 // Main Page
 
 export default function LicensingPage() {
-  const { selectedTenant } = useTenant();
+  const { selectedTenant, isFeatureEnabled } = useTenant();
   const { toast } = useToast();
   const tenantConnectionId = selectedTenant?.id;
+  const featureDisabled = !isFeatureEnabled?.("licensing");
+
+  if (featureDisabled) {
+    return (
+      <div className="container mx-auto p-6">
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <ShieldAlert className="h-5 w-5 text-muted-foreground" />
+              Licensing unavailable
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-sm text-muted-foreground">
+              The Licensing feature is not enabled for the selected tenant.
+            </p>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
 
   const syncMutation = useMutation({
     mutationFn: async () => {
+      if (featureDisabled) throw new Error("Licensing is not enabled for the selected tenant");
       if (!tenantConnectionId) throw new Error("No tenant selected");
       const res = await fetch("/api/licensing/sync", {
         method: "POST",
