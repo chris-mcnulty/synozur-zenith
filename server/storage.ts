@@ -102,6 +102,13 @@ import {
   tenantEncryptionKeys,
   type TenantEncryptionKey,
   type InsertTenantEncryptionKey,
+  sharingLinksInventory,
+  type SharingLink,
+  type InsertSharingLink,
+  governanceReviewTasks,
+  governanceReviewFindings,
+  type GovernanceReviewFinding,
+  type InsertGovernanceReviewFinding,
 } from "@shared/schema";
 import { decryptRecord, encryptRecord, getTenantKeyBuffer } from "./services/data-masking";
 
@@ -323,6 +330,20 @@ export interface IStorage {
   getTenantEncryptionKey(tenantConnectionId: string): Promise<TenantEncryptionKey | undefined>;
   upsertTenantEncryptionKey(data: InsertTenantEncryptionKey): Promise<TenantEncryptionKey>;
   deleteTenantEncryptionKey(tenantConnectionId: string): Promise<void>;
+
+  // Content Governance - sharing links inventory
+  upsertSharingLink(data: InsertSharingLink): Promise<SharingLink>;
+  getSharingLinksPaginated(params: {
+    tenantConnectionId: string;
+    resourceType?: string;
+    linkType?: string;
+    page: number;
+    pageSize: number;
+  }): Promise<{ items: SharingLink[]; total: number }>;
+
+  // Content Governance - review findings
+  createGovernanceReviewFinding(data: InsertGovernanceReviewFinding): Promise<GovernanceReviewFinding>;
+  getGovernanceReviewFindingsForTask(taskId: string): Promise<GovernanceReviewFinding[]>;
 
   // Data purge methods
   purgeOnedriveInventory(tenantConnectionId: string): Promise<number>;
@@ -2007,6 +2028,112 @@ export class DatabaseStorage implements IStorage {
     if (!result) return undefined;
     const [decrypted] = await this.decryptRows([result], "onedrive_inventory");
     return decrypted as OnedriveInventoryItem;
+  }
+
+  // ── Content Governance: Sharing Links Inventory ──────────────────────────
+  async upsertSharingLink(data: InsertSharingLink): Promise<SharingLink> {
+    const encrypted = await this.encryptForTenant(
+      data as Record<string, any>,
+      "sharing_links_inventory",
+      data.tenantConnectionId,
+    ) as InsertSharingLink;
+    const [result] = await db
+      .insert(sharingLinksInventory)
+      .values(encrypted)
+      .onConflictDoUpdate({
+        target: [sharingLinksInventory.tenantConnectionId, sharingLinksInventory.linkId],
+        set: {
+          resourceType: encrypted.resourceType,
+          resourceId: encrypted.resourceId,
+          resourceName: encrypted.resourceName,
+          linkType: encrypted.linkType,
+          linkScope: encrypted.linkScope,
+          createdBy: encrypted.createdBy,
+          createdAtGraph: encrypted.createdAtGraph,
+          expiresAt: encrypted.expiresAt,
+          isActive: encrypted.isActive,
+          lastAccessedAt: encrypted.lastAccessedAt,
+          lastDiscoveredAt: encrypted.lastDiscoveredAt ?? new Date(),
+        },
+      })
+      .returning();
+    const [decrypted] = await this.decryptRows([result], "sharing_links_inventory");
+    return decrypted as SharingLink;
+  }
+
+  async getSharingLinksPaginated(params: {
+    tenantConnectionId: string;
+    resourceType?: string;
+    linkType?: string;
+    page: number;
+    pageSize: number;
+  }): Promise<{ items: SharingLink[]; total: number }> {
+    const { tenantConnectionId, resourceType, linkType, page, pageSize } = params;
+    const conditions = [eq(sharingLinksInventory.tenantConnectionId, tenantConnectionId)];
+    if (resourceType) conditions.push(eq(sharingLinksInventory.resourceType, resourceType));
+    if (linkType) conditions.push(eq(sharingLinksInventory.linkType, linkType));
+    const where = and(...conditions);
+
+    const [countRow] = await db
+      .select({ total: sql<number>`count(*)::int` })
+      .from(sharingLinksInventory)
+      .where(where);
+
+    const rows = await db
+      .select()
+      .from(sharingLinksInventory)
+      .where(where)
+      .orderBy(desc(sharingLinksInventory.createdAt))
+      .limit(pageSize)
+      .offset((page - 1) * pageSize);
+
+    const decrypted = await this.decryptRows(rows, "sharing_links_inventory") as SharingLink[];
+    return { items: decrypted, total: countRow?.total ?? 0 };
+  }
+
+  // ── Content Governance: Review Findings ──────────────────────────────────
+  // Findings have no tenantConnectionId column; the key is resolved via the
+  // parent review task so encryption and decryption can still be tenant-scoped.
+  async createGovernanceReviewFinding(data: InsertGovernanceReviewFinding): Promise<GovernanceReviewFinding> {
+    const [task] = await db
+      .select({ tenantConnectionId: governanceReviewTasks.tenantConnectionId })
+      .from(governanceReviewTasks)
+      .where(eq(governanceReviewTasks.id, data.reviewTaskId));
+
+    let toInsert: InsertGovernanceReviewFinding = data;
+    if (task?.tenantConnectionId) {
+      toInsert = await this.encryptForTenant(
+        data as Record<string, any>,
+        "governance_review_findings",
+        task.tenantConnectionId,
+      ) as InsertGovernanceReviewFinding;
+    }
+
+    const [result] = await db.insert(governanceReviewFindings).values(toInsert).returning();
+
+    if (task?.tenantConnectionId) {
+      const buf = await this.getKeyBufferForTenant(task.tenantConnectionId);
+      if (buf) return decryptRecord(result as Record<string, any>, "governance_review_findings", buf) as GovernanceReviewFinding;
+    }
+    return result;
+  }
+
+  async getGovernanceReviewFindingsForTask(taskId: string): Promise<GovernanceReviewFinding[]> {
+    const [task] = await db
+      .select({ tenantConnectionId: governanceReviewTasks.tenantConnectionId })
+      .from(governanceReviewTasks)
+      .where(eq(governanceReviewTasks.id, taskId));
+
+    const rows = await db
+      .select()
+      .from(governanceReviewFindings)
+      .where(eq(governanceReviewFindings.reviewTaskId, taskId))
+      .orderBy(desc(governanceReviewFindings.createdAt));
+
+    if (!task?.tenantConnectionId || rows.length === 0) return rows;
+    const buf = await this.getKeyBufferForTenant(task.tenantConnectionId);
+    if (!buf) return rows;
+    return rows.map((row) => decryptRecord(row as Record<string, any>, "governance_review_findings", buf) as GovernanceReviewFinding);
   }
 
   async getNextTicketNumber(orgId: string): Promise<number> {

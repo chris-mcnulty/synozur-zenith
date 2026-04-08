@@ -12,6 +12,7 @@ import {
 import { requireAuth, type AuthenticatedRequest } from "../middleware/rbac";
 import { computeGovernanceSnapshot } from "../services/governance-snapshot";
 import { getOrgTenantConnectionIds } from "./scope-helpers";
+import { storage } from "../storage";
 
 const router = Router();
 
@@ -160,27 +161,16 @@ router.get("/api/content-governance/sharing/links", requireAuth(), async (req: A
     const page = Math.max(1, parseInt(req.query.page as string || "1", 10));
     const pageSize = Math.min(200, Math.max(1, parseInt(req.query.pageSize as string || "50", 10)));
 
-    const conditions = [eq(sharingLinksInventory.tenantConnectionId, tenantConnectionId)];
-    if (resourceType) conditions.push(eq(sharingLinksInventory.resourceType, resourceType));
-    if (linkType) conditions.push(eq(sharingLinksInventory.linkType, linkType));
-
-    const where = and(...conditions);
-
-    const [countRow] = await db
-      .select({ total: sql<number>`count(*)::int` })
-      .from(sharingLinksInventory)
-      .where(where);
-
-    const links = await db
-      .select()
-      .from(sharingLinksInventory)
-      .where(where)
-      .orderBy(desc(sharingLinksInventory.createdAt))
-      .limit(pageSize)
-      .offset((page - 1) * pageSize);
+    const { items: links, total } = await storage.getSharingLinksPaginated({
+      tenantConnectionId,
+      resourceType,
+      linkType,
+      page,
+      pageSize,
+    });
 
     res.json({
-      total: countRow?.total ?? 0,
+      total,
       page,
       pageSize,
       links,
@@ -311,11 +301,7 @@ router.get("/api/content-governance/reviews/:id", requireAuth(), async (req: Aut
 
     if (!task) return res.status(404).json({ error: "Review task not found" });
 
-    const findings = await db
-      .select()
-      .from(governanceReviewFindings)
-      .where(eq(governanceReviewFindings.reviewTaskId, id))
-      .orderBy(desc(governanceReviewFindings.createdAt));
+    const findings = await storage.getGovernanceReviewFindingsForTask(id);
 
     res.json({ task, findings });
   } catch (err: any) {
