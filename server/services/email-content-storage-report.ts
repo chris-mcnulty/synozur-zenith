@@ -66,7 +66,7 @@ export interface EmailReportRunOptions {
   mode?: EmailReportMode;
   limits?: Partial<EmailReportLimits>;
   triggeredByUserId?: string;
-  /** Fail fast if inventory is older than this many hours. Defaults to staleness warning only. */
+  /** Treat inventory older than this many hours as stale for warnings/partial results; does not fail fast. */
   inventoryMaxAgeHours?: number;
 }
 
