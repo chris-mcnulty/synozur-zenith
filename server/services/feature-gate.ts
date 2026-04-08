@@ -29,6 +29,7 @@ export function requireFeature(feature: keyof typeof PLAN_FEATURES.TRIAL) {
         dataMasking: "database masking",
         mspAccess: "MSP access code management",
         csvExport: "CSV export",
+        emailContentStorageReport: "Email Content Storage Report",
       };
       const label = featureLabels[feature] || feature;
       return res.status(403).json({
