@@ -208,36 +208,38 @@ router.post(
     const clientSecret = getEffectiveClientSecret(access.conn);
     const body = parseResult.data;
 
-    // Kick off the run. The service creates the row synchronously up-front
-    // so we can return the id. We still use a background task for the
-    // actual paging so this request returns quickly.
-    const runPromise = runEmailContentStorageReport(
-      access.conn.id,
-      access.conn.tenantId,
-      clientId,
-      clientSecret,
-      {
-        mode: body.mode,
-        triggeredByUserId: req.user?.id ?? undefined,
-        limits: {
-          windowDays: body.windowDays,
-          maxUsers: body.maxUsers,
-          maxMessagesPerUser: body.maxMessagesPerUser,
-          maxTotalMessages: body.maxTotalMessages,
-          attachmentMetadataEnabled: body.attachmentMetadataEnabled,
-          maxMessagesWithMetadata: body.maxMessagesWithMetadata,
-          minMessageSizeKBForMetadata: body.minMessageSizeKBForMetadata,
-          maxAttachmentsPerMessage: body.maxAttachmentsPerMessage,
+    // Wait for the report row to be created (synchronous DB work only),
+    // then fire the execution in the background so the response returns quickly.
+    const reportId = await new Promise<string>((resolveId, rejectId) => {
+      runEmailContentStorageReport(
+        access.conn.id,
+        access.conn.tenantId,
+        clientId,
+        clientSecret,
+        {
+          mode: body.mode,
+          triggeredByUserId: req.user?.id ?? undefined,
+          onReportCreated: resolveId,
+          limits: {
+            windowDays: body.windowDays,
+            maxUsers: body.maxUsers,
+            maxMessagesPerUser: body.maxMessagesPerUser,
+            maxTotalMessages: body.maxTotalMessages,
+            attachmentMetadataEnabled: body.attachmentMetadataEnabled,
+            maxMessagesWithMetadata: body.maxMessagesWithMetadata,
+            minMessageSizeKBForMetadata: body.minMessageSizeKBForMetadata,
+            maxAttachmentsPerMessage: body.maxAttachmentsPerMessage,
+          },
         },
-      },
-    );
-
-    // Fire-and-forget execution; log any uncaught errors.
-    runPromise.catch(err => {
-      console.error("[email-storage-report] run failed:", err);
+      ).catch(err => {
+        // If execution fails before onReportCreated fires (e.g. DB error
+        // during row creation), surface the error to the caller.
+        if (!res.headersSent) rejectId(err);
+        else console.error("[email-storage-report] run failed:", err);
+      });
     });
 
-    res.status(202).json({ message: "Email storage report started" });
+    res.status(202).json({ reportId, message: "Email storage report started" });
   },
 );
 
@@ -353,6 +355,161 @@ router.post(
       runId,
       status: "RUNNING",
     });
+  },
+);
+
+// ── Canonical-path aliases ───────────────────────────────────────────────────
+// The PR description documented shorter paths without the `/run` and `/runs/`
+// segments. These aliases make both forms valid so API consumers have a stable
+// contract regardless of which path they discovered first.
+//
+// Registration order matters: the specific `/runs` and `/runs/:runId` routes
+// above are registered first, so they take precedence over the `:reportId`
+// wildcard below.
+
+/**
+ * POST /api/admin/tenants/:id/email-storage-report
+ * Alias for POST /api/admin/tenants/:id/email-storage-report/run
+ */
+router.post(
+  "/api/admin/tenants/:id/email-storage-report",
+  requireAuth(),
+  requireRole("tenant_admin"),
+  requireFeature("emailContentStorageReport"),
+  async (req: AuthenticatedRequest, res) => {
+    // Re-use the /run handler by delegating to the same logic.
+    const access = await assertTenantAccess(req, req.params.id);
+    if (!access.ok) return res.status(access.status).json({ message: access.message });
+
+    const parseResult = runReportBodySchema.safeParse(req.body ?? {});
+    if (!parseResult.success) {
+      return res.status(400).json({ message: "Invalid run options", errors: parseResult.error.flatten() });
+    }
+
+    const inventoryCount = await storage.countUserInventoryActive(access.conn.id);
+    if (inventoryCount === 0) {
+      return res.status(409).json({
+        message: "User inventory is empty for this tenant. Run POST /user-inventory/sync first.",
+      });
+    }
+
+    const clientId = access.conn.clientId || process.env.AZURE_CLIENT_ID!;
+    const clientSecret = getEffectiveClientSecret(access.conn);
+    const body = parseResult.data;
+
+    const reportId = await new Promise<string>((resolveId, rejectId) => {
+      runEmailContentStorageReport(
+        access.conn.id,
+        access.conn.tenantId,
+        clientId,
+        clientSecret,
+        {
+          mode: body.mode,
+          triggeredByUserId: req.user?.id ?? undefined,
+          onReportCreated: resolveId,
+          limits: {
+            windowDays: body.windowDays,
+            maxUsers: body.maxUsers,
+            maxMessagesPerUser: body.maxMessagesPerUser,
+            maxTotalMessages: body.maxTotalMessages,
+            attachmentMetadataEnabled: body.attachmentMetadataEnabled,
+            maxMessagesWithMetadata: body.maxMessagesWithMetadata,
+            minMessageSizeKBForMetadata: body.minMessageSizeKBForMetadata,
+            maxAttachmentsPerMessage: body.maxAttachmentsPerMessage,
+          },
+        },
+      ).catch(err => {
+        if (!res.headersSent) rejectId(err);
+        else console.error("[email-storage-report] run failed:", err);
+      });
+    });
+
+    res.status(202).json({ reportId, message: "Email storage report started" });
+  },
+);
+
+/**
+ * GET /api/admin/tenants/:id/email-storage-report/:reportId
+ * Alias for GET /api/admin/tenants/:id/email-storage-report/runs/:runId
+ */
+router.get(
+  "/api/admin/tenants/:id/email-storage-report/:reportId",
+  requireAuth(),
+  requireFeature("emailContentStorageReport"),
+  async (req: AuthenticatedRequest, res) => {
+    const access = await assertTenantAccess(req, req.params.id);
+    if (!access.ok) return res.status(access.status).json({ message: access.message });
+
+    const runId = asStringParam(req.params.reportId);
+    if (!runId) return res.status(400).json({ message: "reportId is required" });
+    const report = await storage.getEmailStorageReport(runId);
+    if (!report || report.tenantConnectionId !== access.conn.id) {
+      return res.status(404).json({ message: "Report run not found" });
+    }
+    res.json(report);
+  },
+);
+
+/**
+ * GET /api/admin/tenants/:id/email-storage-report/:reportId/csv
+ * Alias for GET /api/admin/tenants/:id/email-storage-report/runs/:runId/export.csv
+ */
+router.get(
+  "/api/admin/tenants/:id/email-storage-report/:reportId/csv",
+  requireAuth(),
+  requireFeature("emailContentStorageReport"),
+  requireFeature("csvExport"),
+  async (req: AuthenticatedRequest, res) => {
+    const access = await assertTenantAccess(req, req.params.id);
+    if (!access.ok) return res.status(access.status).json({ message: access.message });
+
+    const runId = asStringParam(req.params.reportId);
+    if (!runId) return res.status(400).json({ message: "reportId is required" });
+    const report = await storage.getEmailStorageReport(runId);
+    if (!report || report.tenantConnectionId !== access.conn.id) {
+      return res.status(404).json({ message: "Report run not found" });
+    }
+
+    const csv = renderReportCsv(report);
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="email-storage-report-${report.id}.csv"`,
+    );
+    res.send(csv);
+  },
+);
+
+/**
+ * POST /api/admin/tenants/:id/email-storage-report/:reportId/cancel
+ * Alias for POST /api/admin/tenants/:id/email-storage-report/runs/:runId/cancel
+ */
+router.post(
+  "/api/admin/tenants/:id/email-storage-report/:reportId/cancel",
+  requireAuth(),
+  requireRole("tenant_admin"),
+  requireFeature("emailContentStorageReport"),
+  async (req: AuthenticatedRequest, res) => {
+    const access = await assertTenantAccess(req, req.params.id);
+    if (!access.ok) return res.status(access.status).json({ message: access.message });
+
+    const runId = asStringParam(req.params.reportId);
+    if (!runId) return res.status(400).json({ message: "reportId is required" });
+
+    const report = await storage.getEmailStorageReport(runId);
+    if (!report || report.tenantConnectionId !== access.conn.id) {
+      return res.status(404).json({ message: "Report run not found" });
+    }
+
+    if (report.status !== "RUNNING") {
+      return res.status(409).json({
+        message: `Report is already in terminal state: ${report.status}`,
+        status: report.status,
+      });
+    }
+
+    requestEmailReportCancellation(access.conn.id, runId);
+    res.status(202).json({ message: "Cancellation requested", runId, status: "RUNNING" });
   },
 );
 

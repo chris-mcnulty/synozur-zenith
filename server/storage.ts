@@ -1,4 +1,4 @@
-import { eq, desc, ilike, or, and, sql, gt, max, gte, lte, inArray } from "drizzle-orm";
+import { eq, desc, ilike, or, and, sql, gt, lt, max, gte, lte, inArray } from "drizzle-orm";
 import { db } from "./db";
 import {
   workspaces,
@@ -355,6 +355,7 @@ export interface IStorage {
 
   // ── Zenith User Inventory ─────────────────────────────────────────────────
   upsertUserInventory(data: InsertUserInventory): Promise<UserInventoryItem>;
+  batchUpsertUserInventory(items: InsertUserInventory[]): Promise<number>;
   getUserInventory(
     tenantConnectionIds?: string[],
     options?: { search?: string; includeDeleted?: boolean; limit?: number },
@@ -366,7 +367,7 @@ export interface IStorage {
   countUserInventoryActive(tenantConnectionId: string): Promise<number>;
   markMissingUserInventoryAsDeleted(
     tenantConnectionId: string,
-    seenUserIds: string[],
+    runStartedAt: Date,
   ): Promise<number>;
   createUserInventoryRun(data: InsertUserInventoryRun): Promise<UserInventoryRun>;
   updateUserInventoryRun(
@@ -2453,6 +2454,53 @@ export class DatabaseStorage implements IStorage {
     return decrypted as UserInventoryItem;
   }
 
+  /**
+   * Batch upsert multiple user inventory records in a single SQL statement.
+   * Encrypts each record individually (keys are tenant-scoped and may vary),
+   * then issues one INSERT ... ON CONFLICT DO UPDATE per chunk to amortise
+   * DB round-trips. Returns the total number of rows affected.
+   *
+   * The CHUNK_SIZE keeps individual statements at a safe parameter count.
+   */
+  async batchUpsertUserInventory(items: InsertUserInventory[]): Promise<number> {
+    if (items.length === 0) return 0;
+    const CHUNK_SIZE = 500;
+    let total = 0;
+    // Encrypt all items first (encryption is async but can be parallelised
+    // within a chunk since each only touches its own tenant key).
+    for (let offset = 0; offset < items.length; offset += CHUNK_SIZE) {
+      const chunk = items.slice(offset, offset + CHUNK_SIZE);
+      const encrypted = await Promise.all(
+        chunk.map(data =>
+          this.encryptForTenant(
+            data as Record<string, any>,
+            "user_inventory",
+            data.tenantConnectionId,
+          ).then(e => e as InsertUserInventory),
+        ),
+      );
+      const results = await db.insert(userInventory)
+        .values(encrypted)
+        .onConflictDoUpdate({
+          target: [userInventory.tenantConnectionId, userInventory.userId],
+          set: {
+            userPrincipalName: sql.raw(`excluded.user_principal_name`),
+            mail: sql.raw(`excluded.mail`),
+            displayName: sql.raw(`excluded.display_name`),
+            accountEnabled: sql.raw(`excluded.account_enabled`),
+            userType: sql.raw(`excluded.user_type`),
+            mailboxLicenseHint: sql.raw(`excluded.mailbox_license_hint`),
+            lastKnownMailActivity: sql.raw(`excluded.last_known_mail_activity`),
+            lastRefreshedAt: sql.raw(`excluded.last_refreshed_at`),
+            discoveryStatus: sql.raw(`excluded.discovery_status`),
+          },
+        })
+        .returning({ id: userInventory.id });
+      total += results.length;
+    }
+    return total;
+  }
+
   async getUserInventory(
     tenantConnectionIds?: string[],
     options: { search?: string; includeDeleted?: boolean; limit?: number } = {},
@@ -2517,21 +2565,19 @@ export class DatabaseStorage implements IStorage {
 
   async markMissingUserInventoryAsDeleted(
     tenantConnectionId: string,
-    seenUserIds: string[],
+    runStartedAt: Date,
   ): Promise<number> {
-    // If we saw no users, we deliberately don't mark everything deleted —
-    // that would nuke a tenant's inventory on a single failed page.
-    if (seenUserIds.length === 0) return 0;
-
+    // Mark all rows that were NOT touched (i.e., upserted) during this run as DELETED.
+    // Upserts always update `lastRefreshedAt` to `new Date()`, so any row whose
+    // `lastRefreshedAt` is older than the run start was not seen in this refresh.
+    // This is O(1) in SQL (a single range scan), avoiding the huge NOT IN (...)
+    // clause that would be generated when passing tens-of-thousands of user IDs.
     const result = await db.update(userInventory)
       .set({ discoveryStatus: "DELETED" })
       .where(and(
         eq(userInventory.tenantConnectionId, tenantConnectionId),
         eq(userInventory.discoveryStatus, "ACTIVE"),
-        sql`${userInventory.userId} NOT IN (${sql.join(
-          seenUserIds.map(id => sql`${id}`),
-          sql`, `,
-        )})`,
+        lt(userInventory.lastRefreshedAt, runStartedAt),
       ))
       .returning({ id: userInventory.id });
     return result.length;

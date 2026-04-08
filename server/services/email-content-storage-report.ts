@@ -68,6 +68,12 @@ export interface EmailReportRunOptions {
   triggeredByUserId?: string;
   /** Treat inventory older than this many hours as stale for warnings/partial results; does not fail fast. */
   inventoryMaxAgeHours?: number;
+  /**
+   * Called with the new reportId as soon as the DB row has been created,
+   * before any Graph I/O begins. Use this to return the reportId to API
+   * callers without waiting for the full report to complete.
+   */
+  onReportCreated?: (reportId: string) => void;
 }
 
 export interface EmailReportRunResult {
@@ -99,6 +105,7 @@ export async function runEmailContentStorageReport(
   const windowStart = new Date(now.getTime() - limits.windowDays * 24 * 60 * 60 * 1000);
 
   // ── Inventory gate ─────────────────────────────────────────────────────────
+  const latestInventoryRun = await storage.getLatestUserInventoryRun(tenantConnectionId);
   const inventoryAgeHours = await getUserInventoryAgeHours(tenantConnectionId);
   const inventoryStale = await isUserInventoryStale(
     tenantConnectionId,
@@ -115,6 +122,13 @@ export async function runEmailContentStorageReport(
   // outcome of summary masking/encryption rather than tenant configuration.
   const dataMaskingApplied = false;
 
+  // Use the latest completed inventory run's completedAt as the snapshot timestamp.
+  // This is more reliable than the first row's lastRefreshedAt (which is ordered by UPN
+  // and may be encrypted), and reflects when the inventory was last fully refreshed.
+  const inventorySnapshotAt = latestInventoryRun?.completedAt
+    ? new Date(latestInventoryRun.completedAt)
+    : null;
+
   // Create the report row up front so progress is observable from the UI.
   const created = await storage.createEmailStorageReport({
     tenantConnectionId,
@@ -129,7 +143,7 @@ export async function runEmailContentStorageReport(
     messagesAnalyzed: 0,
     messagesWithAttachments: 0,
     estimatedAttachmentBytes: 0,
-    inventorySnapshotAt: inventory[0]?.lastRefreshedAt ?? null,
+    inventorySnapshotAt,
     inventorySampledCount: inventory.length,
     inventoryTotalCount: totalInventory,
     verifiedDomains: [],
@@ -140,6 +154,10 @@ export async function runEmailContentStorageReport(
   // Clear any stale cancellation flag from a prior run with the same id
   // (defensive — createEmailStorageReport generates a fresh uuid).
   clearCancellation(tenantConnectionId, EMAIL_REPORT_CANCEL_SCOPE, created.id);
+
+  // Notify the caller with the report ID as soon as the row exists, so HTTP
+  // routes can return 202 with a reportId before Graph work starts.
+  options.onReportCreated?.(created.id);
 
   const errors: Array<{ context: string; message: string }> = [];
   const checkCancelled = () =>

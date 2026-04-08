@@ -10,7 +10,9 @@
  * Fast. Safe. Bounded. Defensible.
  */
 
+import { createHash } from "crypto";
 import type { EmailReportLimits, EmailReportSummary } from "@shared/schema";
+import { VALID_WINDOW_DAYS_LIST } from "@shared/schema";
 
 // ── Defaults ─────────────────────────────────────────────────────────────────
 
@@ -30,9 +32,6 @@ export const DEFAULT_EMAIL_REPORT_LIMITS: EmailReportLimits = {
   maxAttachmentsPerMessage: 20,
 };
 
-export const VALID_WINDOW_DAYS = [7, 30, 90] as const;
-export type ValidWindowDays = typeof VALID_WINDOW_DAYS[number];
-
 /**
  * Merge caller-supplied overrides with defaults, clamping each field to its
  * safe range. Unknown / undefined fields fall back to the default.
@@ -51,7 +50,7 @@ export function resolveLimits(
   const windowDaysRaw = overrides.windowDays;
   const windowDays =
     typeof windowDaysRaw === "number" &&
-    (VALID_WINDOW_DAYS as readonly number[]).includes(windowDaysRaw)
+    (VALID_WINDOW_DAYS_LIST as readonly number[]).includes(windowDaysRaw)
       ? windowDaysRaw
       : base.windowDays;
 
@@ -308,9 +307,12 @@ export class EmailReportAggregator {
     this.contentTypeTotals.set(ct, prev);
 
     if (params.name) {
-      // Repeated attachment heuristic: lowercased filename + rounded size
+      // Repeated attachment heuristic: SHA-256 of lowercased filename + rounded size bucket.
+      // Filenames may contain PII (names, project titles), so we hash rather than persisting
+      // the raw value. The hash is stable across runs for the same filename+size combination.
       const sizeBucket = Math.round(params.size / 1024); // KB bucket
-      const key = `${params.name.toLowerCase()}|${sizeBucket}`;
+      const hashInput = `${params.name.toLowerCase()}|${sizeBucket}`;
+      const key = createHash("sha256").update(hashInput).digest("hex").substring(0, 16);
       const p = this.patternTotals.get(key) ?? { bytes: 0, count: 0 };
       p.bytes += params.size;
       p.count += 1;

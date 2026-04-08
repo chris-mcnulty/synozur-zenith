@@ -84,6 +84,11 @@ export async function runUserInventoryRefresh(
     maxUsersCap: maxUsers,
   });
 
+  // Record the time the run started (before any upserts). All upserts will set
+  // `lastRefreshedAt = new Date()`, so any row with lastRefreshedAt < runStartedAt
+  // was not touched in this run and can be marked as DELETED.
+  const runStartedAt = run.startedAt ? new Date(run.startedAt) : new Date();
+
   let token: string;
   try {
     token = await getAppToken(tenantId, clientId, clientSecret);
@@ -104,7 +109,7 @@ export async function runUserInventoryRefresh(
     };
   }
 
-  const seenUserIds = new Set<string>();
+  let usersDiscovered = 0;
   let pagesFetched = 0;
   let nextLink: string | null | undefined;
   let capReached = false;
@@ -123,28 +128,40 @@ export async function runUserInventoryRefresh(
         break;
       }
 
-      const remaining = maxUsers - seenUserIds.size;
+      const remaining = maxUsers - usersDiscovered;
       if (remaining <= 0) {
         capReached = true;
         break;
       }
 
       const batch = page.users.slice(0, remaining);
-      for (const user of batch) {
-        seenUserIds.add(user.id);
-        try {
-          await storage.upsertUserInventory(buildInventoryRecord(tenantConnectionId, user));
-        } catch (err: any) {
-          errors.push({
-            context: `upsert:${user.id}`,
-            message: err?.message ?? String(err),
-          });
+
+      // Batch upsert the page in a single SQL statement instead of looping
+      // one-by-one, which would cause O(n) round-trips for large tenants.
+      try {
+        await storage.batchUpsertUserInventory(
+          batch.map(user => buildInventoryRecord(tenantConnectionId, user)),
+        );
+        usersDiscovered += batch.length;
+      } catch (err: any) {
+        // Fall back to individual upserts so a single bad record doesn't
+        // block the whole page.
+        for (const user of batch) {
+          try {
+            await storage.upsertUserInventory(buildInventoryRecord(tenantConnectionId, user));
+            usersDiscovered++;
+          } catch (upsertErr: any) {
+            errors.push({
+              context: `upsert:${user.id}`,
+              message: upsertErr?.message ?? String(upsertErr),
+            });
+          }
         }
       }
 
       // Checkpoint progress so operators can see it live.
       await storage.updateUserInventoryRun(run.id, {
-        usersDiscovered: seenUserIds.size,
+        usersDiscovered,
         pagesFetched,
       });
 
@@ -161,11 +178,13 @@ export async function runUserInventoryRefresh(
   }
 
   // Mark stale users as DELETED so the inventory reflects de-provisioning.
+  // Uses a timestamp-based approach (lastRefreshedAt < runStartedAt) to avoid
+  // a huge NOT IN (...) clause that would be impractical for large tenants.
   let usersMarkedDeleted = 0;
   try {
     usersMarkedDeleted = await storage.markMissingUserInventoryAsDeleted(
       tenantConnectionId,
-      Array.from(seenUserIds),
+      runStartedAt,
     );
   } catch (err: any) {
     errors.push({ context: "markMissingAsDeleted", message: err?.message ?? String(err) });
@@ -173,7 +192,7 @@ export async function runUserInventoryRefresh(
 
   const status: UserInventoryRunResult["status"] = capReached
     ? "CAP_REACHED"
-    : errors.length > 0 && seenUserIds.size > 0
+    : errors.length > 0 && usersDiscovered > 0
       ? "PARTIAL"
       : errors.length > 0
         ? "FAILED"
@@ -182,7 +201,7 @@ export async function runUserInventoryRefresh(
   await storage.updateUserInventoryRun(run.id, {
     status,
     completedAt: new Date(),
-    usersDiscovered: seenUserIds.size,
+    usersDiscovered,
     usersMarkedDeleted,
     pagesFetched,
     errors,
@@ -190,14 +209,14 @@ export async function runUserInventoryRefresh(
 
   console.log(
     `[user-inventory] tenant=${tenantConnectionId} status=${status} ` +
-      `users=${seenUserIds.size} deleted=${usersMarkedDeleted} pages=${pagesFetched} ` +
+      `users=${usersDiscovered} deleted=${usersMarkedDeleted} pages=${pagesFetched} ` +
       `errors=${errors.length}`,
   );
 
   return {
     runId: run.id,
     status,
-    usersDiscovered: seenUserIds.size,
+    usersDiscovered,
     usersMarkedDeleted,
     pagesFetched,
     errors,
