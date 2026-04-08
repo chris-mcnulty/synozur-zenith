@@ -110,10 +110,10 @@ export async function runEmailContentStorageReport(
   });
   const totalInventory = await storage.countUserInventoryActive(tenantConnectionId);
 
-  // Data-masking status for this tenant (for the dataMaskingApplied flag on
-  // the report and for any subsequent rendering of PII fields).
-  const tenantConn = await storage.getTenantConnection(tenantConnectionId);
-  const dataMaskingApplied = tenantConn?.dataMaskingEnabled === true;
+  // The report row is created before any summary payload is persisted, so do
+  // not claim masking has been applied yet. This flag must reflect the actual
+  // outcome of summary masking/encryption rather than tenant configuration.
+  const dataMaskingApplied = false;
 
   // Create the report row up front so progress is observable from the UI.
   const created = await storage.createEmailStorageReport({
