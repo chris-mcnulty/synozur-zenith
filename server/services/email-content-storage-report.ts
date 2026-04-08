@@ -401,10 +401,16 @@ async function processUser(params: {
       nextLink ?? undefined,
     );
 
-    if (page.status !== 200 && page.messages.length === 0) {
-      // 403 = no mail access / user has no mailbox. 404 = no Sent Items.
-      // These are expected for some users — skip quietly.
-      return;
+    if (page.status !== 200) {
+      if (page.messages.length === 0 && (page.status === 403 || page.status === 404)) {
+        // 403 = no mail access / user has no mailbox. 404 = no Sent Items.
+        // These are expected for some users — skip quietly.
+        return;
+      }
+
+      throw new Error(
+        `Failed to fetch sent messages for user ${user.userId}: Graph returned status ${page.status}`,
+      );
     }
 
     for (const msg of page.messages) {
