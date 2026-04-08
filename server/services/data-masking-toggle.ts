@@ -7,8 +7,11 @@ import {
   channelsInventory,
   onedriveInventory,
   documentLibraries,
+  sharingLinksInventory,
+  governanceReviewFindings,
+  governanceReviewTasks,
 } from "@shared/schema";
-import { eq } from "drizzle-orm";
+import { eq, inArray, type SQL } from "drizzle-orm";
 import {
   generateTenantEncryptionKey,
   getTenantKeyBuffer,
@@ -17,14 +20,53 @@ import {
   SENSITIVE_FIELDS,
 } from "./data-masking";
 
-const TABLE_MAP = {
-  workspaces: { table: workspaces, tenantField: workspaces.tenantConnectionId },
-  teams_recordings: { table: teamsRecordings, tenantField: teamsRecordings.tenantConnectionId },
-  teams_inventory: { table: teamsInventory, tenantField: teamsInventory.tenantConnectionId },
-  channels_inventory: { table: channelsInventory, tenantField: channelsInventory.tenantConnectionId },
-  onedrive_inventory: { table: onedriveInventory, tenantField: onedriveInventory.tenantConnectionId },
-  document_libraries: { table: documentLibraries, tenantField: documentLibraries.tenantConnectionId },
-} as const;
+type TableMapEntry = {
+  table: any;
+  getWhere: (tenantConnectionId: string) => Promise<SQL | undefined>;
+};
+
+const TABLE_MAP: Record<string, TableMapEntry> = {
+  workspaces: {
+    table: workspaces,
+    getWhere: async (t) => eq(workspaces.tenantConnectionId, t),
+  },
+  teams_recordings: {
+    table: teamsRecordings,
+    getWhere: async (t) => eq(teamsRecordings.tenantConnectionId, t),
+  },
+  teams_inventory: {
+    table: teamsInventory,
+    getWhere: async (t) => eq(teamsInventory.tenantConnectionId, t),
+  },
+  channels_inventory: {
+    table: channelsInventory,
+    getWhere: async (t) => eq(channelsInventory.tenantConnectionId, t),
+  },
+  onedrive_inventory: {
+    table: onedriveInventory,
+    getWhere: async (t) => eq(onedriveInventory.tenantConnectionId, t),
+  },
+  document_libraries: {
+    table: documentLibraries,
+    getWhere: async (t) => eq(documentLibraries.tenantConnectionId, t),
+  },
+  sharing_links_inventory: {
+    table: sharingLinksInventory,
+    getWhere: async (t) => eq(sharingLinksInventory.tenantConnectionId, t),
+  },
+  governance_review_findings: {
+    // Findings have no tenantConnectionId column; scope them via their parent review task.
+    table: governanceReviewFindings,
+    getWhere: async (t) => {
+      const taskRows = await db
+        .select({ id: governanceReviewTasks.id })
+        .from(governanceReviewTasks)
+        .where(eq(governanceReviewTasks.tenantConnectionId, t));
+      if (taskRows.length === 0) return undefined;
+      return inArray(governanceReviewFindings.reviewTaskId, taskRows.map((r: { id: string }) => r.id));
+    },
+  },
+};
 
 export interface DataMaskingToggleResult {
   success: boolean;
@@ -45,9 +87,11 @@ export async function enableDataMasking(tenantConnectionId: string): Promise<Dat
 
   const keyBuffer = getTenantKeyBuffer(encryptedKey);
 
-  for (const [tableName, { table, tenantField }] of Object.entries(TABLE_MAP)) {
+  for (const [tableName, { table, getWhere }] of Object.entries(TABLE_MAP)) {
     try {
-      const rows = await db.select().from(table).where(eq(tenantField, tenantConnectionId));
+      const whereClause = await getWhere(tenantConnectionId);
+      if (!whereClause) continue;
+      const rows = await db.select().from(table).where(whereClause);
 
       for (const row of rows) {
         const encrypted = encryptRecord(row as Record<string, any>, tableName, keyBuffer);
@@ -89,9 +133,11 @@ export async function disableDataMasking(tenantConnectionId: string): Promise<Da
 
   const keyBuffer = getTenantKeyBuffer(keyRecord.encryptedKey);
 
-  for (const [tableName, { table, tenantField }] of Object.entries(TABLE_MAP)) {
+  for (const [tableName, { table, getWhere }] of Object.entries(TABLE_MAP)) {
     try {
-      const rows = await db.select().from(table).where(eq(tenantField, tenantConnectionId));
+      const whereClause = await getWhere(tenantConnectionId);
+      if (!whereClause) continue;
+      const rows = await db.select().from(table).where(whereClause);
 
       for (const row of rows) {
         const decrypted = decryptRecord(row as Record<string, any>, tableName, keyBuffer);

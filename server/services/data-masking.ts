@@ -67,6 +67,12 @@ export const SENSITIVE_FIELDS: Record<string, string[]> = {
   document_libraries: [
     "displayName", "description", "webUrl",
   ],
+  sharing_links_inventory: [
+    "resourceName", "resourceId", "linkId", "createdBy",
+  ],
+  governance_review_findings: [
+    "resourceName", "resourceId", "description", "recommendedAction",
+  ],
 };
 
 export function encryptRecord<T extends Record<string, any>>(
