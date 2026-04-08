@@ -64,7 +64,8 @@ export function GovernanceRiskTab({ tenantConnectionId }: { tenantConnectionId: 
     queryFn: async () => {
       const res = await fetch(`/api/content-governance/risk?tenantConnectionId=${tenantConnectionId}`, { credentials: "include" });
       if (!res.ok) return [];
-      return res.json();
+      const data = await res.json();
+      return Array.isArray(data) ? data : (data.workspaces ?? []);
     },
     enabled: !!tenantConnectionId,
   });
@@ -163,7 +164,8 @@ export function GovernanceOwnershipTab({ tenantConnectionId }: { tenantConnectio
     queryFn: async () => {
       const res = await fetch(`/api/content-governance/ownership?tenantConnectionId=${tenantConnectionId}`, { credentials: "include" });
       if (!res.ok) return [];
-      return res.json();
+      const data = await res.json();
+      return Array.isArray(data) ? data : (data.workspaces ?? []);
     },
     enabled: !!tenantConnectionId,
   });
@@ -260,7 +262,8 @@ export function GovernanceStorageTab({ tenantConnectionId }: { tenantConnectionI
     queryFn: async () => {
       const res = await fetch(`/api/content-governance/storage?tenantConnectionId=${tenantConnectionId}`, { credentials: "include" });
       if (!res.ok) return [];
-      return res.json();
+      const data = await res.json();
+      return Array.isArray(data) ? data : (data.workspaces ?? []);
     },
     enabled: !!tenantConnectionId,
   });
@@ -388,7 +391,8 @@ export function GovernanceSharingTab({ tenantConnectionId }: { tenantConnectionI
       if (linkTypeFilter !== "all") params.set("linkType", linkTypeFilter);
       const res = await fetch(`/api/content-governance/sharing/links?${params}`, { credentials: "include" });
       if (!res.ok) return [];
-      return res.json();
+      const data = await res.json();
+      return Array.isArray(data) ? data : (data.links ?? []);
     },
     enabled: !!tenantConnectionId,
   });
