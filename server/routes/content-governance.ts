@@ -169,9 +169,6 @@ router.delete("/api/content-governance/sharing/links/:id", requireAuth(), async 
     const tenantConnectionId = (req.body?.tenantConnectionId ?? req.query.tenantConnectionId) as string;
     if (!tenantConnectionId) return res.status(400).json({ error: "tenantConnectionId is required" });
 
-    const [updated] = await db
-      .update(sharingLinksInventory)
-      .set({ isActive: false })
     const [link] = await db
       .select()
       .from(sharingLinksInventory)
