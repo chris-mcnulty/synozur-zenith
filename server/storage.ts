@@ -102,8 +102,23 @@ import {
   tenantEncryptionKeys,
   type TenantEncryptionKey,
   type InsertTenantEncryptionKey,
+  userInventory,
+  type UserInventoryItem,
+  type InsertUserInventory,
+  userInventoryRuns,
+  type UserInventoryRun,
+  type InsertUserInventoryRun,
+  emailStorageReports,
+  type EmailStorageReport,
+  type InsertEmailStorageReport,
 } from "@shared/schema";
-import { decryptRecord, encryptRecord, getTenantKeyBuffer } from "./services/data-masking";
+import {
+  decryptRecord,
+  encryptRecord,
+  getTenantKeyBuffer,
+  maskEmailReportSummary,
+  unmaskEmailReportSummary,
+} from "./services/data-masking";
 
 export interface TeamsChannelsSummaryChannel {
   channelId: string;
@@ -337,6 +352,43 @@ export interface IStorage {
   countTeamsInventory(tenantConnectionId: string): Promise<number>;
   countWorkspaceTelemetry(tenantConnectionId: string): Promise<number>;
   countSpeData(tenantConnectionId: string): Promise<number>;
+
+  // ── Zenith User Inventory ─────────────────────────────────────────────────
+  upsertUserInventory(data: InsertUserInventory): Promise<UserInventoryItem>;
+  getUserInventory(
+    tenantConnectionIds?: string[],
+    options?: { search?: string; includeDeleted?: boolean; limit?: number },
+  ): Promise<UserInventoryItem[]>;
+  getUserInventoryForReport(
+    tenantConnectionId: string,
+    options?: { maxUsers?: number },
+  ): Promise<UserInventoryItem[]>;
+  countUserInventoryActive(tenantConnectionId: string): Promise<number>;
+  markMissingUserInventoryAsDeleted(
+    tenantConnectionId: string,
+    seenUserIds: string[],
+  ): Promise<number>;
+  createUserInventoryRun(data: InsertUserInventoryRun): Promise<UserInventoryRun>;
+  updateUserInventoryRun(
+    id: string,
+    updates: Partial<InsertUserInventoryRun> & { completedAt?: Date | null },
+  ): Promise<UserInventoryRun | undefined>;
+  getLatestUserInventoryRun(tenantConnectionId: string): Promise<UserInventoryRun | undefined>;
+  getUserInventoryRuns(tenantConnectionId: string, limit?: number): Promise<UserInventoryRun[]>;
+  purgeUserInventory(tenantConnectionId: string): Promise<number>;
+
+  // ── Email Content Storage Report ─────────────────────────────────────────
+  createEmailStorageReport(data: InsertEmailStorageReport): Promise<EmailStorageReport>;
+  updateEmailStorageReport(
+    id: string,
+    updates: Partial<InsertEmailStorageReport> & { completedAt?: Date | null },
+  ): Promise<EmailStorageReport | undefined>;
+  getEmailStorageReport(id: string): Promise<EmailStorageReport | undefined>;
+  getEmailStorageReports(
+    tenantConnectionId: string,
+    limit?: number,
+  ): Promise<EmailStorageReport[]>;
+  getLatestEmailStorageReport(tenantConnectionId: string): Promise<EmailStorageReport | undefined>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -2370,6 +2422,266 @@ export class DatabaseStorage implements IStorage {
       .from(speContainerTypes)
       .where(eq(speContainerTypes.tenantConnectionId, tenantConnectionId));
     return (containers?.count ?? 0) + (types?.count ?? 0);
+  }
+
+  // ── Zenith User Inventory ─────────────────────────────────────────────────
+
+  async upsertUserInventory(data: InsertUserInventory): Promise<UserInventoryItem> {
+    const encrypted = await this.encryptForTenant(
+      data as Record<string, any>,
+      "user_inventory",
+      data.tenantConnectionId,
+    ) as InsertUserInventory;
+    const [result] = await db.insert(userInventory)
+      .values(encrypted)
+      .onConflictDoUpdate({
+        target: [userInventory.tenantConnectionId, userInventory.userId],
+        set: {
+          userPrincipalName: encrypted.userPrincipalName,
+          mail: encrypted.mail,
+          displayName: encrypted.displayName,
+          accountEnabled: data.accountEnabled,
+          userType: data.userType,
+          mailboxLicenseHint: data.mailboxLicenseHint,
+          lastKnownMailActivity: data.lastKnownMailActivity,
+          lastRefreshedAt: data.lastRefreshedAt ?? new Date(),
+          discoveryStatus: data.discoveryStatus ?? "ACTIVE",
+        },
+      })
+      .returning();
+    const [decrypted] = await this.decryptRows([result], "user_inventory");
+    return decrypted as UserInventoryItem;
+  }
+
+  async getUserInventory(
+    tenantConnectionIds?: string[],
+    options: { search?: string; includeDeleted?: boolean; limit?: number } = {},
+  ): Promise<UserInventoryItem[]> {
+    const conditions = [];
+    if (!options.includeDeleted) {
+      conditions.push(eq(userInventory.discoveryStatus, "ACTIVE"));
+    }
+    if (tenantConnectionIds && tenantConnectionIds.length > 0) {
+      conditions.push(inArray(userInventory.tenantConnectionId, tenantConnectionIds));
+    }
+    if (options.search) {
+      conditions.push(
+        or(
+          ilike(userInventory.userPrincipalName, `%${options.search}%`),
+          ilike(userInventory.displayName, `%${options.search}%`),
+          ilike(userInventory.mail, `%${options.search}%`),
+        )!,
+      );
+    }
+    let query = db.select().from(userInventory)
+      .where(conditions.length > 0 ? and(...conditions) : undefined)
+      .orderBy(userInventory.userPrincipalName) as any;
+    if (options.limit && options.limit > 0) {
+      query = query.limit(options.limit);
+    }
+    const rows = await query;
+    return this.decryptRows(rows, "user_inventory") as Promise<UserInventoryItem[]>;
+  }
+
+  async getUserInventoryForReport(
+    tenantConnectionId: string,
+    options: { maxUsers?: number } = {},
+  ): Promise<UserInventoryItem[]> {
+    // Only active, enabled members/guests with a UPN. Reports must be able
+    // to run deterministically, so this ordering is stable.
+    const conditions = [
+      eq(userInventory.tenantConnectionId, tenantConnectionId),
+      eq(userInventory.discoveryStatus, "ACTIVE"),
+      eq(userInventory.accountEnabled, true),
+    ];
+    let query = db.select().from(userInventory)
+      .where(and(...conditions))
+      .orderBy(userInventory.userPrincipalName) as any;
+    if (options.maxUsers && options.maxUsers > 0) {
+      query = query.limit(options.maxUsers);
+    }
+    const rows = await query;
+    return this.decryptRows(rows, "user_inventory") as Promise<UserInventoryItem[]>;
+  }
+
+  async countUserInventoryActive(tenantConnectionId: string): Promise<number> {
+    const [result] = await db.select({ count: sql<number>`count(*)::int` })
+      .from(userInventory)
+      .where(and(
+        eq(userInventory.tenantConnectionId, tenantConnectionId),
+        eq(userInventory.discoveryStatus, "ACTIVE"),
+        eq(userInventory.accountEnabled, true),
+      ));
+    return result?.count ?? 0;
+  }
+
+  async markMissingUserInventoryAsDeleted(
+    tenantConnectionId: string,
+    seenUserIds: string[],
+  ): Promise<number> {
+    // If we saw no users, we deliberately don't mark everything deleted —
+    // that would nuke a tenant's inventory on a single failed page.
+    if (seenUserIds.length === 0) return 0;
+
+    const result = await db.update(userInventory)
+      .set({ discoveryStatus: "DELETED" })
+      .where(and(
+        eq(userInventory.tenantConnectionId, tenantConnectionId),
+        eq(userInventory.discoveryStatus, "ACTIVE"),
+        sql`${userInventory.userId} NOT IN (${sql.join(
+          seenUserIds.map(id => sql`${id}`),
+          sql`, `,
+        )})`,
+      ))
+      .returning({ id: userInventory.id });
+    return result.length;
+  }
+
+  async createUserInventoryRun(data: InsertUserInventoryRun): Promise<UserInventoryRun> {
+    const [row] = await db.insert(userInventoryRuns).values(data).returning();
+    return row;
+  }
+
+  async updateUserInventoryRun(
+    id: string,
+    updates: Partial<InsertUserInventoryRun> & { completedAt?: Date | null },
+  ): Promise<UserInventoryRun | undefined> {
+    const [row] = await db.update(userInventoryRuns)
+      .set(updates as any)
+      .where(eq(userInventoryRuns.id, id))
+      .returning();
+    return row;
+  }
+
+  async getLatestUserInventoryRun(
+    tenantConnectionId: string,
+  ): Promise<UserInventoryRun | undefined> {
+    const [row] = await db.select().from(userInventoryRuns)
+      .where(eq(userInventoryRuns.tenantConnectionId, tenantConnectionId))
+      .orderBy(desc(userInventoryRuns.startedAt))
+      .limit(1);
+    return row;
+  }
+
+  async getUserInventoryRuns(
+    tenantConnectionId: string,
+    limit = 20,
+  ): Promise<UserInventoryRun[]> {
+    return db.select().from(userInventoryRuns)
+      .where(eq(userInventoryRuns.tenantConnectionId, tenantConnectionId))
+      .orderBy(desc(userInventoryRuns.startedAt))
+      .limit(limit);
+  }
+
+  async purgeUserInventory(tenantConnectionId: string): Promise<number> {
+    const rows = await db.delete(userInventory)
+      .where(eq(userInventory.tenantConnectionId, tenantConnectionId))
+      .returning({ id: userInventory.id });
+    await db.delete(userInventoryRuns)
+      .where(eq(userInventoryRuns.tenantConnectionId, tenantConnectionId));
+    return rows.length;
+  }
+
+  // ── Email Content Storage Report ─────────────────────────────────────────
+
+  async createEmailStorageReport(
+    data: InsertEmailStorageReport,
+  ): Promise<EmailStorageReport> {
+    const payload = await this.maskEmailReportForWrite(data as any, data.tenantConnectionId);
+    const [row] = await db.insert(emailStorageReports).values(payload as any).returning();
+    const [out] = await this.unmaskEmailReportRows([row as EmailStorageReport]);
+    return out;
+  }
+
+  async updateEmailStorageReport(
+    id: string,
+    updates: Partial<InsertEmailStorageReport> & { completedAt?: Date | null },
+  ): Promise<EmailStorageReport | undefined> {
+    // Look up the row first so we know which tenant's key to use for masking.
+    const [existing] = await db.select().from(emailStorageReports)
+      .where(eq(emailStorageReports.id, id))
+      .limit(1);
+    if (!existing) return undefined;
+    const payload = await this.maskEmailReportForWrite(
+      updates as any,
+      existing.tenantConnectionId,
+    );
+    const [row] = await db.update(emailStorageReports)
+      .set(payload as any)
+      .where(eq(emailStorageReports.id, id))
+      .returning();
+    if (!row) return undefined;
+    const [out] = await this.unmaskEmailReportRows([row as EmailStorageReport]);
+    return out;
+  }
+
+  async getEmailStorageReport(id: string): Promise<EmailStorageReport | undefined> {
+    const [row] = await db.select().from(emailStorageReports)
+      .where(eq(emailStorageReports.id, id))
+      .limit(1);
+    if (!row) return undefined;
+    const [out] = await this.unmaskEmailReportRows([row as EmailStorageReport]);
+    return out;
+  }
+
+  async getEmailStorageReports(
+    tenantConnectionId: string,
+    limit = 20,
+  ): Promise<EmailStorageReport[]> {
+    const rows = await db.select().from(emailStorageReports)
+      .where(eq(emailStorageReports.tenantConnectionId, tenantConnectionId))
+      .orderBy(desc(emailStorageReports.startedAt))
+      .limit(limit);
+    return this.unmaskEmailReportRows(rows as EmailStorageReport[]);
+  }
+
+  async getLatestEmailStorageReport(
+    tenantConnectionId: string,
+  ): Promise<EmailStorageReport | undefined> {
+    const [row] = await db.select().from(emailStorageReports)
+      .where(eq(emailStorageReports.tenantConnectionId, tenantConnectionId))
+      .orderBy(desc(emailStorageReports.startedAt))
+      .limit(1);
+    if (!row) return undefined;
+    const [out] = await this.unmaskEmailReportRows([row as EmailStorageReport]);
+    return out;
+  }
+
+  private async maskEmailReportForWrite<T extends Record<string, any>>(
+    payload: T,
+    tenantConnectionId: string,
+  ): Promise<T> {
+    // Only touch `summary` — the only jsonb field carrying sender PII.
+    if (!("summary" in payload) || payload.summary == null) return payload;
+    const key = await this.getKeyBufferForTenant(tenantConnectionId);
+    if (!key) return payload;
+    return { ...payload, summary: maskEmailReportSummary(payload.summary, key) };
+  }
+
+  private async unmaskEmailReportRows(
+    rows: EmailStorageReport[],
+  ): Promise<EmailStorageReport[]> {
+    if (rows.length === 0) return rows;
+    const keyMap = new Map<string, Buffer>();
+    const seenTenantIds: Record<string, true> = {};
+    const tenantIds: string[] = [];
+    for (const row of rows) {
+      const tid = row.tenantConnectionId;
+      if (tid && !seenTenantIds[tid]) {
+        seenTenantIds[tid] = true;
+        tenantIds.push(tid);
+      }
+    }
+    for (const tid of tenantIds) {
+      const buf = await this.getKeyBufferForTenant(tid);
+      if (buf) keyMap.set(tid, buf);
+    }
+    if (keyMap.size === 0) return rows;
+    return rows.map(row => {
+      const key = keyMap.get(row.tenantConnectionId);
+      if (!key || !row.summary) return row;
+      return { ...row, summary: unmaskEmailReportSummary(row.summary as any, key) };
+    });
   }
 }
 

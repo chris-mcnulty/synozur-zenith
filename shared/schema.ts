@@ -1346,3 +1346,171 @@ export const insertLicenseOptimizationFindingSchema = createInsertSchema(license
 });
 export type InsertLicenseOptimizationFinding = z.infer<typeof insertLicenseOptimizationFindingSchema>;
 export type LicenseOptimizationFinding = typeof licenseOptimizationFindings.$inferSelect;
+
+// ── Zenith User Inventory ────────────────────────────────────────────────────
+// Cached, minimal, read-only snapshot of tenant users. Populated via Graph
+// /users by a background/admin-triggered job. Reports MUST consume this
+// inventory rather than re-enumerating Entra at report execution time.
+export const userInventory = pgTable("user_inventory", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantConnectionId: varchar("tenant_connection_id").notNull(),
+
+  userId: text("user_id").notNull(),                 // Entra Object ID
+  userPrincipalName: text("user_principal_name").notNull(),
+  mail: text("mail"),                                 // primary SMTP (if different from UPN)
+  displayName: text("display_name"),
+  accountEnabled: boolean("account_enabled").notNull().default(true),
+  userType: text("user_type").notNull().default("Member"), // Member | Guest
+
+  // Optional hints (populated later if available from other services)
+  mailboxLicenseHint: text("mailbox_license_hint"),
+  lastKnownMailActivity: text("last_known_mail_activity"),
+
+  lastRefreshedAt: timestamp("last_refreshed_at").defaultNow().notNull(),
+  discoveryStatus: text("discovery_status").notNull().default("ACTIVE"), // ACTIVE | DELETED
+
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => [
+  unique("uq_tenant_user_inventory").on(table.tenantConnectionId, table.userId),
+]);
+
+export const insertUserInventorySchema = createInsertSchema(userInventory).omit({
+  id: true,
+  createdAt: true,
+});
+export type InsertUserInventory = z.infer<typeof insertUserInventorySchema>;
+export type UserInventoryItem = typeof userInventory.$inferSelect;
+
+// Tracks each refresh of the user inventory (throttling-safe paging, caps).
+export const userInventoryRuns = pgTable("user_inventory_runs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantConnectionId: varchar("tenant_connection_id").notNull(),
+  startedAt: timestamp("started_at").defaultNow().notNull(),
+  completedAt: timestamp("completed_at"),
+  status: text("status").notNull().default("RUNNING"), // RUNNING | COMPLETED | FAILED | PARTIAL | CAP_REACHED
+  maxUsersCap: integer("max_users_cap"),
+  usersDiscovered: integer("users_discovered").default(0),
+  usersMarkedDeleted: integer("users_marked_deleted").default(0),
+  pagesFetched: integer("pages_fetched").default(0),
+  errors: jsonb("errors").$type<Array<{ context: string; message: string }>>(),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertUserInventoryRunSchema = createInsertSchema(userInventoryRuns).omit({
+  id: true,
+  createdAt: true,
+  startedAt: true,
+});
+export type InsertUserInventoryRun = z.infer<typeof insertUserInventoryRunSchema>;
+export type UserInventoryRun = typeof userInventoryRuns.$inferSelect;
+
+// ── Email Content Storage Report ─────────────────────────────────────────────
+// Estimates how much organizational content is propagated via classic email
+// attachments rather than SharePoint/OneDrive links. Built on top of the
+// user_inventory cache — MUST NOT enumerate Entra directly.
+
+export const EMAIL_REPORT_MODES = ["ESTIMATE", "METADATA"] as const;
+export type EmailReportMode = typeof EMAIL_REPORT_MODES[number];
+
+export const VALID_WINDOW_DAYS_LIST = [7, 30, 90] as const;
+export type ValidEmailReportWindowDays = typeof VALID_WINDOW_DAYS_LIST[number];
+
+export const EMAIL_REPORT_STATUSES = [
+  "RUNNING",
+  "COMPLETED",
+  "PARTIAL",
+  "FAILED",
+  "CANCELLED",
+  "INVENTORY_STALE",
+] as const;
+export type EmailReportStatus = typeof EMAIL_REPORT_STATUSES[number];
+
+/** Shape of the `limits` jsonb blob. Defaults live in the service layer. */
+export interface EmailReportLimits {
+  windowDays: number;                 // 7 | 30 | 90
+  maxUsers: number;
+  maxMessagesPerUser: number;
+  maxTotalMessages: number;
+  attachmentMetadataEnabled: boolean;
+  maxMessagesWithMetadata: number;
+  minMessageSizeKBForMetadata: number;
+  maxAttachmentsPerMessage: number;
+}
+
+/** Aggregates computed per-run; all counts/bytes are integers. */
+export interface EmailReportSummary {
+  totalMessagesAnalyzed: number;
+  messagesWithAttachments: number;
+  pctWithAttachments: number;           // 0..1
+  estimatedAttachmentBytes: number;
+  sizeStats: {
+    avgBytes: number;
+    medianBytes: number;
+    p90Bytes: number;
+    p95Bytes: number;
+    maxBytes: number;
+  };
+  internal: { messages: number; bytes: number };
+  external: { messages: number; bytes: number };
+  topSenders: Array<{ sender: string; bytes: number; count: number }>;
+  topRecipientDomains: Array<{ domain: string; bytes: number; count: number }>;
+  topAttachmentTypes?: Array<{ contentType: string; bytes: number; count: number }>; // METADATA only
+  repeatedAttachmentPatterns?: Array<{ key: string; count: number; bytes: number }>; // METADATA only
+}
+
+export interface EmailReportCapsHit {
+  maxUsers?: boolean;
+  maxMessagesPerUser?: Array<{ userId: string }>;
+  maxTotalMessages?: boolean;
+  maxMessagesWithMetadata?: boolean;
+  inventoryEmpty?: boolean;
+  inventoryStale?: boolean;
+}
+
+export const emailStorageReports = pgTable("email_storage_reports", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantConnectionId: varchar("tenant_connection_id").notNull(),
+
+  mode: text("mode").notNull(),                     // ESTIMATE | METADATA
+  windowDays: integer("window_days").notNull(),     // 7 | 30 | 90
+  windowStart: timestamp("window_start").notNull(),
+  windowEnd: timestamp("window_end").notNull(),
+
+  status: text("status").notNull().default("RUNNING"),
+  startedAt: timestamp("started_at").defaultNow().notNull(),
+  completedAt: timestamp("completed_at"),
+
+  // Snapshot of limits in effect for this run
+  limits: jsonb("limits").$type<EmailReportLimits>().notNull(),
+
+  // Progress counters (updated during run)
+  usersPlanned: integer("users_planned").default(0),
+  usersProcessed: integer("users_processed").default(0),
+  messagesAnalyzed: integer("messages_analyzed").default(0),
+  messagesWithAttachments: integer("messages_with_attachments").default(0),
+  estimatedAttachmentBytes: bigint("estimated_attachment_bytes", { mode: "number" }).default(0),
+
+  // Accuracy metadata
+  inventorySnapshotAt: timestamp("inventory_snapshot_at"),
+  inventorySampledCount: integer("inventory_sampled_count"),
+  inventoryTotalCount: integer("inventory_total_count"),
+  verifiedDomains: jsonb("verified_domains").$type<string[]>(),
+  dataMaskingApplied: boolean("data_masking_applied").notNull().default(false),
+
+  // Aggregated results (computed at completion)
+  summary: jsonb("summary").$type<EmailReportSummary>(),
+  capsHit: jsonb("caps_hit").$type<EmailReportCapsHit>(),
+  accuracyCaveats: jsonb("accuracy_caveats").$type<string[]>(),
+  errors: jsonb("errors").$type<Array<{ context: string; message: string }>>(),
+
+  triggeredByUserId: varchar("triggered_by_user_id"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertEmailStorageReportSchema = createInsertSchema(emailStorageReports).omit({
+  id: true,
+  createdAt: true,
+  startedAt: true,
+});
+export type InsertEmailStorageReport = z.infer<typeof insertEmailStorageReportSchema>;
+export type EmailStorageReport = typeof emailStorageReports.$inferSelect;
