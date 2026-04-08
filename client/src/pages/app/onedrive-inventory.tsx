@@ -99,8 +99,9 @@ export default function OneDriveInventoryPage() {
       if (search) params.set("search", search);
       if (tenantConnectionId) params.set("tenantConnectionId", tenantConnectionId);
       const res = await fetch(`/api/onedrive-inventory?${params}`, { credentials: "include" });
-      if (!res.ok) throw new Error("Failed to load OneDrive inventory");
-      return res.json();
+      if (!res.ok) return [];
+      const data = await res.json();
+      return Array.isArray(data) ? data : [];
     },
   });
 
@@ -112,7 +113,8 @@ export default function OneDriveInventoryPage() {
       params.set("resourceType", "ONEDRIVE");
       const res = await fetch(`/api/content-governance/sharing/links?${params}`, { credentials: "include" });
       if (!res.ok) return [];
-      return res.json();
+      const data = await res.json();
+      return Array.isArray(data) ? data : (data.links ?? []);
     },
     enabled: !!tenantConnectionId,
   });
