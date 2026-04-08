@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { eq, and, desc, sql, asc, or, isNull } from "drizzle-orm";
+import { eq, desc, sql, asc } from "drizzle-orm";
 import { db } from "../db";
 import {
   workspaces,
@@ -73,20 +73,7 @@ router.get("/api/content-governance/risk", requireAuth(), async (req: Authentica
     const tenantConnectionId = req.query.tenantConnectionId as string;
     if (!tenantConnectionId) return res.status(400).json({ error: "tenantConnectionId is required" });
 
-    const riskySites = await db
-      .select()
-      .from(workspaces)
-      .where(
-        and(
-          eq(workspaces.tenantConnectionId, tenantConnectionId),
-          or(
-            isNull(workspaces.sensitivityLabelId),
-            eq(workspaces.retentionPolicy, ""),
-            eq(workspaces.externalSharing, true),
-          ),
-        ),
-      )
-      .orderBy(desc(workspaces.storageUsedBytes));
+    const riskySites = await storage.getWorkspacesAtRisk(tenantConnectionId);
 
     res.json({ count: riskySites.length, workspaces: riskySites });
   } catch (err: any) {
@@ -101,16 +88,7 @@ router.get("/api/content-governance/ownership", requireAuth(), async (req: Authe
     const tenantConnectionId = req.query.tenantConnectionId as string;
     if (!tenantConnectionId) return res.status(400).json({ error: "tenantConnectionId is required" });
 
-    const orphaned = await db
-      .select()
-      .from(workspaces)
-      .where(
-        and(
-          eq(workspaces.tenantConnectionId, tenantConnectionId),
-          sql`${workspaces.owners} < 2`,
-        ),
-      )
-      .orderBy(workspaces.displayName);
+    const orphaned = await storage.getOrphanedWorkspaces(tenantConnectionId);
 
     res.json({ count: orphaned.length, workspaces: orphaned });
   } catch (err: any) {
@@ -125,12 +103,15 @@ router.get("/api/content-governance/storage", requireAuth(), async (req: Authent
     const tenantConnectionId = req.query.tenantConnectionId as string;
     if (!tenantConnectionId) return res.status(400).json({ error: "tenantConnectionId is required" });
 
-    const sites = await db
-      .select()
-      .from(workspaces)
-      .where(eq(workspaces.tenantConnectionId, tenantConnectionId))
-      .orderBy(desc(workspaces.storageUsedBytes));
+    // Fetch decrypted workspaces via storage, then sort by storage used desc
+    // (storageUsedBytes is numeric and unmasked, so sorting after decrypt is safe).
+    const allSites = await storage.getWorkspaces(undefined, tenantConnectionId);
+    const sites = [...allSites].sort(
+      (a, b) => Number(b.storageUsedBytes ?? 0) - Number(a.storageUsedBytes ?? 0),
+    );
 
+    // Aggregate runs directly against the DB: all summed columns are numeric
+    // and not part of SENSITIVE_FIELDS, so decryption is not required.
     const [agg] = await db
       .select({
         totalUsed: sql<number>`coalesce(sum(${workspaces.storageUsedBytes}), 0)::bigint`,

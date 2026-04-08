@@ -1,4 +1,4 @@
-import { eq, desc, ilike, or, and, sql, gt, max, gte, lte, inArray } from "drizzle-orm";
+import { eq, desc, ilike, or, and, sql, gt, max, gte, lte, inArray, isNull } from "drizzle-orm";
 import { db } from "./db";
 import {
   workspaces,
@@ -131,6 +131,8 @@ export interface TeamsChannelsSummary {
 export interface IStorage {
   getWorkspaces(search?: string, tenantConnectionId?: string, organizationId?: string): Promise<Workspace[]>;
   getWorkspacesPaginated(params: { page: number; pageSize: number; search?: string; tenantConnectionId?: string; tenantConnectionIds?: string[]; organizationId?: string }): Promise<{ items: Workspace[]; total: number }>;
+  getWorkspacesAtRisk(tenantConnectionId: string): Promise<Workspace[]>;
+  getOrphanedWorkspaces(tenantConnectionId: string): Promise<Workspace[]>;
   getWorkspace(id: string): Promise<Workspace | undefined>;
   getWorkspaceByM365ObjectId(m365ObjectId: string): Promise<Workspace | undefined>;
   createWorkspace(workspace: InsertWorkspace): Promise<Workspace>;
@@ -495,6 +497,41 @@ export class DatabaseStorage implements IStorage {
     const total = Number(countResult[0]?.count ?? 0);
     const decryptedItems = await this.decryptRows(items, "workspaces") as Workspace[];
     return { items: decryptedItems, total };
+  }
+
+  async getWorkspacesAtRisk(tenantConnectionId: string): Promise<Workspace[]> {
+    const rows = await db
+      .select()
+      .from(workspaces)
+      .where(
+        and(
+          eq(workspaces.tenantConnectionId, tenantConnectionId),
+          or(
+            isNull(workspaces.sensitivityLabelId),
+            eq(workspaces.retentionPolicy, ""),
+            eq(workspaces.externalSharing, true),
+          ),
+        ),
+      )
+      .orderBy(desc(workspaces.storageUsedBytes));
+    return this.decryptRows(rows, "workspaces") as Promise<Workspace[]>;
+  }
+
+  async getOrphanedWorkspaces(tenantConnectionId: string): Promise<Workspace[]> {
+    const rows = await db
+      .select()
+      .from(workspaces)
+      .where(
+        and(
+          eq(workspaces.tenantConnectionId, tenantConnectionId),
+          sql`${workspaces.owners} < 2`,
+        ),
+      );
+    // Sort in memory after decryption: displayName may be masked at rest.
+    const decrypted = await this.decryptRows(rows, "workspaces") as Workspace[];
+    return decrypted.sort((a, b) =>
+      (a.displayName ?? "").localeCompare(b.displayName ?? ""),
+    );
   }
 
   async getWorkspace(id: string): Promise<Workspace | undefined> {
