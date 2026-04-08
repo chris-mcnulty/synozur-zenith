@@ -3728,3 +3728,413 @@ export async function resolveOwnerIds(
   }
   return ids;
 }
+
+// ---------------------------------------------------------------------------
+// Sharing Links
+// ---------------------------------------------------------------------------
+
+export interface SharingLinkPermission {
+  id: string;
+  roles: string[];
+  link: {
+    scope: string;
+    type: string;
+    webUrl: string;
+    preventsDownload?: boolean;
+  };
+  grantedToIdentitiesV2?: any[];
+  expirationDateTime?: string;
+  hasPassword?: boolean;
+}
+
+export async function getSharingLinks(
+  token: string,
+  siteId: string,
+): Promise<{ permissions: SharingLinkPermission[]; error?: string }> {
+  try {
+    const res = await fetch(
+      `https://graph.microsoft.com/v1.0/sites/${siteId}/drive/root/permissions`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+
+    if (!res.ok) {
+      const errText = await res.text();
+      return { permissions: [], error: `Graph API error ${res.status}: ${errText.substring(0, 300)}` };
+    }
+
+    const data = await res.json();
+    const allPerms: any[] = data.value || [];
+
+    // Filter to only permissions that represent sharing links
+    const linkPerms: SharingLinkPermission[] = allPerms
+      .filter((p: any) => p.link)
+      .map((p: any) => ({
+        id: p.id,
+        roles: p.roles || [],
+        link: {
+          scope: p.link.scope,
+          type: p.link.type,
+          webUrl: p.link.webUrl,
+          preventsDownload: p.link.preventsDownload,
+        },
+        grantedToIdentitiesV2: p.grantedToIdentitiesV2,
+        expirationDateTime: p.expirationDateTime,
+        hasPassword: p.hasPassword,
+      }));
+
+    return { permissions: linkPerms };
+  } catch (err: any) {
+    return { permissions: [], error: err.message };
+  }
+}
+
+export async function getOneDriveSharingLinks(
+  token: string,
+  userId: string,
+): Promise<{ permissions: SharingLinkPermission[]; error?: string }> {
+  try {
+    const res = await fetch(
+      `https://graph.microsoft.com/v1.0/users/${userId}/drive/root/permissions`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+
+    if (!res.ok) {
+      const errText = await res.text();
+      return { permissions: [], error: `Graph API error ${res.status}: ${errText.substring(0, 300)}` };
+    }
+
+    const data = await res.json();
+    const allPerms: any[] = data.value || [];
+
+    const linkPerms: SharingLinkPermission[] = allPerms
+      .filter((p: any) => p.link)
+      .map((p: any) => ({
+        id: p.id,
+        roles: p.roles || [],
+        link: {
+          scope: p.link.scope,
+          type: p.link.type,
+          webUrl: p.link.webUrl,
+          preventsDownload: p.link.preventsDownload,
+        },
+        grantedToIdentitiesV2: p.grantedToIdentitiesV2,
+        expirationDateTime: p.expirationDateTime,
+        hasPassword: p.hasPassword,
+      }));
+
+    return { permissions: linkPerms };
+  } catch (err: any) {
+    return { permissions: [], error: err.message };
+  }
+}
+
+export async function revokeSharingLink(
+  token: string,
+  siteId: string,
+  permissionId: string,
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const res = await fetch(
+      `https://graph.microsoft.com/v1.0/sites/${siteId}/drive/root/permissions/${permissionId}`,
+      {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` },
+      },
+    );
+
+    if (res.ok || res.status === 204) {
+      return { success: true };
+    }
+
+    const errText = await res.text();
+    return { success: false, error: `Graph DELETE permission ${res.status}: ${errText.substring(0, 300)}` };
+  } catch (err: any) {
+    return { success: false, error: err.message };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// License / SKU management
+// ---------------------------------------------------------------------------
+
+export interface SubscribedSku {
+  id: string;
+  skuId: string;
+  skuPartNumber: string;
+  appliesTo: string;
+  capabilityStatus: string;
+  consumedUnits: number;
+  prepaidUnits: {
+    enabled: number;
+    suspended: number;
+    warning: number;
+    lockedOut: number;
+  };
+  servicePlans: {
+    servicePlanId: string;
+    servicePlanName: string;
+    provisioningStatus: string;
+    appliesTo: string;
+  }[];
+}
+
+export async function getSubscribedSkus(
+  token: string,
+): Promise<{ skus: SubscribedSku[]; error?: string }> {
+  try {
+    const res = await fetch(
+      `https://graph.microsoft.com/v1.0/subscribedSkus`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+
+    if (!res.ok) {
+      const errText = await res.text();
+      return { skus: [], error: `Graph API error ${res.status}: ${errText.substring(0, 300)}` };
+    }
+
+    const data = await res.json();
+    const skus: SubscribedSku[] = (data.value || []).map((s: any) => ({
+      id: s.id,
+      skuId: s.skuId,
+      skuPartNumber: s.skuPartNumber,
+      appliesTo: s.appliesTo || '',
+      capabilityStatus: s.capabilityStatus || '',
+      consumedUnits: s.consumedUnits ?? 0,
+      prepaidUnits: {
+        enabled: s.prepaidUnits?.enabled ?? 0,
+        suspended: s.prepaidUnits?.suspended ?? 0,
+        warning: s.prepaidUnits?.warning ?? 0,
+        lockedOut: s.prepaidUnits?.lockedOut ?? 0,
+      },
+      servicePlans: (s.servicePlans || []).map((sp: any) => ({
+        servicePlanId: sp.servicePlanId,
+        servicePlanName: sp.servicePlanName,
+        provisioningStatus: sp.provisioningStatus,
+        appliesTo: sp.appliesTo,
+      })),
+    }));
+
+    return { skus };
+  } catch (err: any) {
+    return { skus: [], error: err.message };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// All user license details (paginated)
+// ---------------------------------------------------------------------------
+
+export interface UserLicenseInfo {
+  id: string;
+  displayName: string | null;
+  userPrincipalName: string;
+  department: string | null;
+  jobTitle: string | null;
+  accountEnabled: boolean;
+  assignedLicenses: { skuId: string; disabledPlans: string[] }[];
+}
+
+export async function getAllUserLicenseDetails(
+  token: string,
+): Promise<{ users: UserLicenseInfo[]; error?: string }> {
+  try {
+    const users: UserLicenseInfo[] = [];
+    let url: string | null =
+      `https://graph.microsoft.com/v1.0/users` +
+      `?$select=id,displayName,userPrincipalName,department,jobTitle,accountEnabled,assignedLicenses` +
+      `&$top=999`;
+
+    while (url) {
+      const res = await fetch(url, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          ConsistencyLevel: "eventual",
+        },
+      });
+
+      if (!res.ok) {
+        const errText = await res.text();
+        return { users, error: `Graph API error ${res.status}: ${errText.substring(0, 300)}` };
+      }
+
+      const data = await res.json();
+      for (const u of data.value || []) {
+        users.push({
+          id: u.id,
+          displayName: u.displayName ?? null,
+          userPrincipalName: u.userPrincipalName,
+          department: u.department ?? null,
+          jobTitle: u.jobTitle ?? null,
+          accountEnabled: u.accountEnabled ?? false,
+          assignedLicenses: (u.assignedLicenses || []).map((l: any) => ({
+            skuId: l.skuId,
+            disabledPlans: l.disabledPlans || [],
+          })),
+        });
+      }
+      url = data["@odata.nextLink"] ?? null;
+    }
+
+    console.log(`[graph] getAllUserLicenseDetails: ${users.length} users`);
+    return { users };
+  } catch (err: any) {
+    return { users: [], error: err.message };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// OneDrive usage report (CSV → parsed objects)
+// ---------------------------------------------------------------------------
+
+export interface OneDriveUsageRow {
+  reportRefreshDate: string;
+  ownerDisplayName: string;
+  ownerPrincipalName: string;
+  isDeleted: boolean;
+  lastActivityDate: string;
+  fileCount: number;
+  activeFileCount: number;
+  storageUsedBytes: number;
+  storageAllocatedBytes: number;
+  siteUrl: string;
+  reportPeriod: string;
+}
+
+function parseCsvToObjects<T = Record<string, string>>(csv: string): T[] {
+  const lines = csv.trim().split("\n");
+  if (lines.length < 2) return [];
+
+  // Strip BOM if present
+  const headerLine = lines[0].replace(/^\uFEFF/, "");
+  const headers = headerLine.split(",").map(h => h.trim());
+  const results: T[] = [];
+
+  for (let i = 1; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line) continue;
+    const values = line.split(",");
+    const obj: Record<string, string> = {};
+    for (let j = 0; j < headers.length; j++) {
+      obj[headers[j]] = (values[j] || "").trim();
+    }
+    results.push(obj as T);
+  }
+
+  return results;
+}
+
+export async function getOneDriveUsageReport(
+  token: string,
+): Promise<{ rows: OneDriveUsageRow[]; error?: string }> {
+  try {
+    const res = await fetch(
+      `https://graph.microsoft.com/v1.0/reports/getOneDriveUsageAccountDetail(period='D30')`,
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      },
+    );
+
+    if (!res.ok) {
+      const errText = await res.text();
+      return { rows: [], error: `Graph report API error ${res.status}: ${errText.substring(0, 300)}` };
+    }
+
+    const csvText = await res.text();
+    const raw = parseCsvToObjects(csvText);
+
+    const rows: OneDriveUsageRow[] = raw.map((r: any) => ({
+      reportRefreshDate: r["Report Refresh Date"] || '',
+      ownerDisplayName: r["Owner Display Name"] || '',
+      ownerPrincipalName: r["Owner Principal Name"] || '',
+      isDeleted: r["Is Deleted"] === "TRUE",
+      lastActivityDate: r["Last Activity Date"] || '',
+      fileCount: parseInt(r["File Count"] || '0', 10) || 0,
+      activeFileCount: parseInt(r["Active File Count"] || '0', 10) || 0,
+      storageUsedBytes: parseInt(r["Storage Used (Byte)"] || '0', 10) || 0,
+      storageAllocatedBytes: parseInt(r["Storage Allocated (Byte)"] || '0', 10) || 0,
+      siteUrl: r["Site URL"] || '',
+      reportPeriod: r["Report Period"] || '',
+    }));
+
+    return { rows };
+  } catch (err: any) {
+    return { rows: [], error: err.message };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// SharePoint site usage report (CSV → parsed objects)
+// ---------------------------------------------------------------------------
+
+export interface SharePointSiteUsageRow {
+  reportRefreshDate: string;
+  siteId: string;
+  siteUrl: string;
+  ownerDisplayName: string;
+  ownerPrincipalName: string;
+  isDeleted: boolean;
+  lastActivityDate: string;
+  siteSensitivityLabelId: string;
+  externalSharing: string;
+  unmanagedDevicePolicy: string;
+  geolocation: string;
+  fileCount: number;
+  activeFileCount: number;
+  pageViewCount: number;
+  visitedPageCount: number;
+  storageUsedBytes: number;
+  storageAllocatedBytes: number;
+  rootWebTemplate: string;
+  reportPeriod: string;
+}
+
+export async function getSharePointSiteUsageReport(
+  token: string,
+): Promise<{ rows: SharePointSiteUsageRow[]; error?: string }> {
+  try {
+    const res = await fetch(
+      `https://graph.microsoft.com/v1.0/reports/getSharePointSiteUsageDetail(period='D30')`,
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      },
+    );
+
+    if (!res.ok) {
+      const errText = await res.text();
+      return { rows: [], error: `Graph report API error ${res.status}: ${errText.substring(0, 300)}` };
+    }
+
+    const csvText = await res.text();
+    const raw = parseCsvToObjects(csvText);
+
+    const rows: SharePointSiteUsageRow[] = raw.map((r: any) => ({
+      reportRefreshDate: r["Report Refresh Date"] || '',
+      siteId: r["Site Id"] || '',
+      siteUrl: r["Site URL"] || '',
+      ownerDisplayName: r["Owner Display Name"] || '',
+      ownerPrincipalName: r["Owner Principal Name"] || '',
+      isDeleted: r["Is Deleted"] === "TRUE",
+      lastActivityDate: r["Last Activity Date"] || '',
+      siteSensitivityLabelId: r["Site Sensitivity Label Id"] || '',
+      externalSharing: r["External Sharing"] || '',
+      unmanagedDevicePolicy: r["Unmanaged Device Policy"] || '',
+      geolocation: r["Geo Location"] || '',
+      fileCount: parseInt(r["File Count"] || '0', 10) || 0,
+      activeFileCount: parseInt(r["Active File Count"] || '0', 10) || 0,
+      pageViewCount: parseInt(r["Page View Count"] || '0', 10) || 0,
+      visitedPageCount: parseInt(r["Visited Page Count"] || '0', 10) || 0,
+      storageUsedBytes: parseInt(r["Storage Used (Byte)"] || '0', 10) || 0,
+      storageAllocatedBytes: parseInt(r["Storage Allocated (Byte)"] || '0', 10) || 0,
+      rootWebTemplate: r["Root Web Template"] || '',
+      reportPeriod: r["Report Period"] || '',
+    }));
+
+    return { rows };
+  } catch (err: any) {
+    return { rows: [], error: err.message };
+  }
+}

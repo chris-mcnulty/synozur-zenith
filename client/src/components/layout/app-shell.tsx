@@ -91,7 +91,7 @@ type NavItem = {
   badge?: string;
   minRole?: string;
   isMock?: boolean;
-  featureToggle?: "onedriveInventory" | "recordingsDiscovery" | "teamsDiscovery" | "telemetry" | "speDiscovery";
+  featureToggle?: "onedriveInventory" | "recordingsDiscovery" | "teamsDiscovery" | "telemetry" | "speDiscovery" | "contentGovernance" | "licensing";
 };
 
 type NavGroup = {
@@ -128,6 +128,13 @@ const navGroups: NavGroup[] = [
       { name: "Lifecycle", href: "/app/lifecycle", icon: Clock, isMock: true },
       { name: "Syntex", href: "/app/syntex", icon: BrainCircuit, isMock: true },
       { name: "Purview", href: "/app/purview", icon: Fingerprint },
+    ]
+  },
+  {
+    label: "Cost & Licensing",
+    minRole: "operator",
+    items: [
+      { name: "License Overview", href: "/app/licensing", icon: CreditCard, featureToggle: "licensing" },
     ]
   },
   {

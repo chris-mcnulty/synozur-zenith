@@ -14,6 +14,8 @@ import supportRouter from "./routes/support";
 import aiChatRouter from "./routes/ai-chat";
 import featureTogglesRouter from "./routes/feature-toggles";
 import analyticsRouter from "./routes/analytics";
+import contentGovernanceRouter from "./routes/content-governance";
+import licensingRouter from "./routes/licensing";
 
 export async function registerRoutes(
   httpServer: Server,
@@ -40,6 +42,8 @@ export async function registerRoutes(
   app.use(aiChatRouter);
   app.use(featureTogglesRouter);
   app.use(analyticsRouter);
+  app.use(contentGovernanceRouter);
+  app.use(licensingRouter);
 
   return httpServer;
 }
