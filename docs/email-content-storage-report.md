@@ -140,6 +140,15 @@ labeled so consumers do not treat it as ground truth.
 - Malformed addresses → external (conservative default)
 - Mixed messages are attributed proportionally by recipient count
 
+### Plan gate
+
+The Email Content Storage Report is gated on the `emailContentStorageReport`
+plan feature. **Enterprise** is currently the only tier where this feature is
+enabled; Trial, Standard, and Professional receive HTTP 403 with a
+`FEATURE_GATED` error if they attempt to use any report endpoint. The CSV
+export additionally requires the `csvExport` feature (also Enterprise for this
+report since both gates must pass).
+
 ### Admin API
 
 ```
@@ -160,7 +169,25 @@ POST /api/admin/tenants/{id}/email-storage-report/run
 GET  /api/admin/tenants/{id}/email-storage-report/runs
 GET  /api/admin/tenants/{id}/email-storage-report/runs/{runId}
 GET  /api/admin/tenants/{id}/email-storage-report/runs/{runId}/export.csv
+
+POST /api/admin/tenants/{id}/email-storage-report/runs/{runId}/cancel
+     → 202 Accepted when the signal is queued
+     → 409 Conflict if the run is already in a terminal state
 ```
+
+### Cooperative cancellation
+
+A tenant_admin can cancel a running report via the `/cancel` endpoint. The
+background job checks a cancellation flag **between users** and **between
+message pages** (it does not interrupt an in-flight HTTP call to Graph). On
+cancel:
+
+- The run's `status` becomes `CANCELLED`.
+- Partial aggregates (users already processed, message counts, top senders)
+  are preserved in the `summary` blob.
+- An entry is appended to `accuracyCaveats` noting the cancel point.
+- The cancellation flag is cleared so the run id cannot inherit a stale
+  cancel signal on any subsequent lookup.
 
 ---
 

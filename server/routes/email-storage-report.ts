@@ -12,6 +12,7 @@ import { z } from "zod";
 import { storage } from "../storage";
 import { ZENITH_ROLES, EMAIL_REPORT_MODES, VALID_WINDOW_DAYS_LIST } from "@shared/schema";
 import { requireAuth, requireRole, type AuthenticatedRequest } from "../middleware/rbac";
+import { requireFeature } from "../services/feature-gate";
 import { decryptToken } from "../utils/encryption";
 import {
   runUserInventoryRefresh,
@@ -22,6 +23,7 @@ import {
 import {
   runEmailContentStorageReport,
   renderReportCsv,
+  requestEmailReportCancellation,
 } from "../services/email-content-storage-report";
 
 const router = Router();
@@ -178,6 +180,7 @@ router.post(
   "/api/admin/tenants/:id/email-storage-report/run",
   requireAuth(),
   requireRole("tenant_admin"),
+  requireFeature("emailContentStorageReport"),
   async (req: AuthenticatedRequest, res) => {
     const access = await assertTenantAccess(req, req.params.id);
     if (!access.ok) return res.status(access.status).json({ message: access.message });
@@ -246,6 +249,7 @@ router.post(
 router.get(
   "/api/admin/tenants/:id/email-storage-report/runs",
   requireAuth(),
+  requireFeature("emailContentStorageReport"),
   async (req: AuthenticatedRequest, res) => {
     const access = await assertTenantAccess(req, req.params.id);
     if (!access.ok) return res.status(access.status).json({ message: access.message });
@@ -263,6 +267,7 @@ router.get(
 router.get(
   "/api/admin/tenants/:id/email-storage-report/runs/:runId",
   requireAuth(),
+  requireFeature("emailContentStorageReport"),
   async (req: AuthenticatedRequest, res) => {
     const access = await assertTenantAccess(req, req.params.id);
     if (!access.ok) return res.status(access.status).json({ message: access.message });
@@ -285,6 +290,8 @@ router.get(
 router.get(
   "/api/admin/tenants/:id/email-storage-report/runs/:runId/export.csv",
   requireAuth(),
+  requireFeature("emailContentStorageReport"),
+  requireFeature("csvExport"),
   async (req: AuthenticatedRequest, res) => {
     const access = await assertTenantAccess(req, req.params.id);
     if (!access.ok) return res.status(access.status).json({ message: access.message });
@@ -303,6 +310,49 @@ router.get(
       `attachment; filename="email-storage-report-${report.id}.csv"`,
     );
     res.send(csv);
+  },
+);
+
+/**
+ * POST /api/admin/tenants/:id/email-storage-report/runs/:runId/cancel
+ *
+ * Cooperatively cancel a running report. The background job checks the
+ * cancellation flag between users and between message pages, then marks
+ * the run as CANCELLED with partial aggregates preserved.
+ *
+ * Returns 202 if the signal was accepted, 409 if the run is already in a
+ * terminal state (COMPLETED/FAILED/CANCELLED/PARTIAL).
+ */
+router.post(
+  "/api/admin/tenants/:id/email-storage-report/runs/:runId/cancel",
+  requireAuth(),
+  requireRole("tenant_admin"),
+  requireFeature("emailContentStorageReport"),
+  async (req: AuthenticatedRequest, res) => {
+    const access = await assertTenantAccess(req, req.params.id);
+    if (!access.ok) return res.status(access.status).json({ message: access.message });
+
+    const runId = asStringParam(req.params.runId);
+    if (!runId) return res.status(400).json({ message: "runId is required" });
+
+    const report = await storage.getEmailStorageReport(runId);
+    if (!report || report.tenantConnectionId !== access.conn.id) {
+      return res.status(404).json({ message: "Report run not found" });
+    }
+
+    if (report.status !== "RUNNING") {
+      return res.status(409).json({
+        message: `Report is already in terminal state: ${report.status}`,
+        status: report.status,
+      });
+    }
+
+    requestEmailReportCancellation(access.conn.id, runId);
+    res.status(202).json({
+      message: "Cancellation requested",
+      runId,
+      status: "RUNNING",
+    });
   },
 );
 

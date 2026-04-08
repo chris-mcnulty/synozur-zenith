@@ -33,6 +33,11 @@ import {
   getUserInventoryAgeHours,
   DEFAULT_INVENTORY_MAX_AGE_HOURS,
 } from "./user-inventory";
+import {
+  cancelDiscovery,
+  clearCancellation,
+  isCancelled,
+} from "./discovery-cancellation";
 import type {
   EmailReportLimits,
   EmailReportMode,
@@ -41,6 +46,21 @@ import type {
   EmailStorageReport,
   UserInventoryItem,
 } from "@shared/schema";
+
+/** Cancellation scope key used by this service. */
+export const EMAIL_REPORT_CANCEL_SCOPE = "emailContentStorageReport" as const;
+
+/**
+ * Request cancellation of a specific running report. Cooperative — the
+ * report loop checks this flag between users and between message pages
+ * and stops cleanly, marking the run as CANCELLED.
+ */
+export function requestEmailReportCancellation(
+  tenantConnectionId: string,
+  reportId: string,
+): void {
+  cancelDiscovery(tenantConnectionId, EMAIL_REPORT_CANCEL_SCOPE, reportId);
+}
 
 export interface EmailReportRunOptions {
   mode?: EmailReportMode;
@@ -117,7 +137,13 @@ export async function runEmailContentStorageReport(
     triggeredByUserId: options.triggeredByUserId ?? null,
   });
 
+  // Clear any stale cancellation flag from a prior run with the same id
+  // (defensive — createEmailStorageReport generates a fresh uuid).
+  clearCancellation(tenantConnectionId, EMAIL_REPORT_CANCEL_SCOPE, created.id);
+
   const errors: Array<{ context: string; message: string }> = [];
+  const checkCancelled = () =>
+    isCancelled(tenantConnectionId, EMAIL_REPORT_CANCEL_SCOPE, created.id);
 
   // Empty inventory → bail out cleanly so admins know to refresh first.
   if (inventory.length === 0) {
@@ -184,9 +210,14 @@ export async function runEmailContentStorageReport(
   const windowStartIso = windowStart.toISOString();
   const windowEndIso = windowEnd.toISOString();
   let usersProcessed = 0;
+  let cancelled = false;
 
   for (const user of inventory) {
     if (!caps.canProcessMoreMessages()) break;
+    if (checkCancelled()) {
+      cancelled = true;
+      break;
+    }
 
     try {
       await processUser({
@@ -198,12 +229,21 @@ export async function runEmailContentStorageReport(
         mode,
         aggregator,
         caps,
+        checkCancelled,
       });
     } catch (err: any) {
       errors.push({
         context: `user:${user.userId}`,
         message: err?.message ?? String(err),
       });
+    }
+
+    // Re-check after the user is done — processUser stops quickly on cancel
+    // but the outer loop decides whether to mark the run as CANCELLED.
+    if (checkCancelled()) {
+      cancelled = true;
+      usersProcessed++;
+      break;
     }
 
     usersProcessed++;
@@ -256,8 +296,16 @@ export async function runEmailContentStorageReport(
     );
   }
 
-  const finalStatus: EmailStorageReport["status"] =
-    errors.length > 0 && aggregator.totalMessagesAnalyzed === 0
+  if (cancelled) {
+    accuracyCaveats.push(
+      `Run was cancelled by an admin after processing ${usersProcessed}/${inventory.length} users. ` +
+        "Partial aggregates are preserved.",
+    );
+  }
+
+  const finalStatus: EmailStorageReport["status"] = cancelled
+    ? "CANCELLED"
+    : errors.length > 0 && aggregator.totalMessagesAnalyzed === 0
       ? "FAILED"
       : errors.length > 0 ||
           capsHit.maxUsers ||
@@ -280,6 +328,10 @@ export async function runEmailContentStorageReport(
     accuracyCaveats,
     errors,
   });
+
+  // Always clear the cancellation flag so a re-run with the same id (or
+  // residual state from a crash) does not inherit a stale cancel signal.
+  clearCancellation(tenantConnectionId, EMAIL_REPORT_CANCEL_SCOPE, created.id);
 
   console.log(
     `[email-storage-report] tenant=${tenantConnectionId} mode=${mode} status=${finalStatus} ` +
@@ -309,13 +361,25 @@ async function processUser(params: {
   mode: EmailReportMode;
   aggregator: EmailReportAggregator;
   caps: CapsTracker;
+  checkCancelled: () => boolean;
 }): Promise<void> {
-  const { token, user, windowStartIso, windowEndIso, limits, mode, aggregator, caps } = params;
+  const {
+    token,
+    user,
+    windowStartIso,
+    windowEndIso,
+    limits,
+    mode,
+    aggregator,
+    caps,
+    checkCancelled,
+  } = params;
 
   let nextLink: string | null | undefined;
   let userMessageCount = 0;
 
   do {
+    if (checkCancelled()) return;
     if (!caps.canProcessForUser(userMessageCount)) {
       if (userMessageCount >= limits.maxMessagesPerUser) {
         caps.markUserHitPerUserCap(user.userId);
@@ -349,6 +413,7 @@ async function processUser(params: {
         caps.markUserHitPerUserCap(user.userId);
         break;
       }
+      if (checkCancelled()) return;
 
       aggregator.recordMessage({
         sizeBytes: msg.size,
