@@ -165,14 +165,17 @@ export function splitRecipientAttribution(
   const total = internalCount + externalCount;
   const internalShare = total > 0 ? internalCount / total : 0;
   const externalShare = total > 0 ? externalCount / total : 0;
+  const internalBytes = Math.round(sizeBytes * internalShare);
+  const externalBytes = sizeBytes - internalBytes;
 
   return {
     // A message "counts" as internal if any recipient is internal, and
-    // symmetric for external. Bytes are split proportionally.
+    // symmetric for external. Bytes are split proportionally while preserving
+    // the invariant that internalBytes + externalBytes === sizeBytes.
     internalMessages: internalCount > 0 ? 1 : 0,
-    internalBytes: Math.round(sizeBytes * internalShare),
+    internalBytes,
     externalMessages: externalCount > 0 ? 1 : 0,
-    externalBytes: Math.round(sizeBytes * externalShare),
+    externalBytes,
   };
 }
 
