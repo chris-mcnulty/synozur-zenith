@@ -536,6 +536,7 @@ interface ReviewTask {
 interface ReviewFinding {
   id: string;
   resourceType: string;
+  resourceId: string;
   resourceName: string | null;
   findingType: string;
   severity: string;

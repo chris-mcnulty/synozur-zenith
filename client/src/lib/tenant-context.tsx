@@ -88,7 +88,7 @@ export function TenantProvider({ children }: { children: ReactNode }) {
     }
   }, [tenants, selectedTenant, storedId, setSelectedTenantId]);
 
-  const isFeatureEnabled = useCallback((feature: "onedriveInventory" | "recordingsDiscovery" | "teamsDiscovery" | "telemetry" | "speDiscovery"): boolean => {
+  const isFeatureEnabled = useCallback((feature: "onedriveInventory" | "recordingsDiscovery" | "teamsDiscovery" | "telemetry" | "speDiscovery" | "contentGovernance" | "licensing"): boolean => {
     if (!selectedTenant) return false;
     const field = FEATURE_FIELD_MAP[feature];
     return !!(selectedTenant as any)[field];

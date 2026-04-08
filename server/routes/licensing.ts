@@ -121,7 +121,7 @@ router.patch("/api/licensing/subscriptions/:id/price", requireAuth(), async (req
       .set({ customPricePerUnit: String(price) })
       .where(
         and(
-          eq(licenseSubscriptions.id, id),
+          eq(licenseSubscriptions.id, id as string),
           eq(licenseSubscriptions.tenantConnectionId, tenantConnectionId),
         ),
       )
@@ -302,7 +302,7 @@ router.patch("/api/licensing/optimization/findings/:id", requireAuth(), async (r
     const [updated] = await db
       .update(licenseOptimizationFindings)
       .set(updates)
-      .where(eq(licenseOptimizationFindings.id, id))
+      .where(eq(licenseOptimizationFindings.id, id as string))
       .returning();
 
     if (!updated) return res.status(404).json({ error: "Finding not found" });
@@ -367,7 +367,7 @@ router.get("/api/licensing/overlap", requireAuth(), async (req: AuthenticatedReq
           const plans2 = plansBySku.get(userSkuIds[j]);
           if (plans1 && plans2) {
             let shared = 0;
-            for (const p of plans1) {
+            for (const p of Array.from(plans1)) {
               if (plans2.has(p)) shared++;
             }
             if (shared > 0) {
