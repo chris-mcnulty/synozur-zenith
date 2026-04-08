@@ -558,7 +558,8 @@ export function GovernanceReviewsTab({ tenantConnectionId, organizationId }: { t
     queryFn: async () => {
       const res = await fetch(`/api/content-governance/reviews?tenantConnectionId=${tenantConnectionId}`, { credentials: "include" });
       if (!res.ok) return [];
-      return res.json();
+      const data = await res.json();
+      return Array.isArray(data) ? data : (data.tasks ?? []);
     },
     enabled: !!tenantConnectionId,
   });
