@@ -171,6 +171,14 @@ export default function RecordingsPage() {
     page: number;
     pageSize: number;
     totalPages: number;
+    aggregates: {
+      totalRecordings: number;
+      totalTranscripts: number;
+      channelCount: number;
+      onedriveCount: number;
+      labelledCount: number;
+      blockedCount: number;
+    };
   }>({
     queryKey: ["/api/recordings", tenantConnectionId, search, page, pageSize],
     queryFn: async () => {
@@ -250,12 +258,13 @@ export default function RecordingsPage() {
     return true;
   });
 
-  const totalRecordings = recordings.filter(r => r.fileType === "RECORDING").length;
-  const totalTranscripts = recordings.filter(r => r.fileType === "TRANSCRIPT").length;
-  const channelCount = recordings.filter(r => r.storageType === "SHAREPOINT_CHANNEL").length;
-  const onedriveCount = recordings.filter(r => r.storageType === "ONEDRIVE").length;
-  const labelledCount = recordings.filter(r => r.sensitivityLabelName).length;
-  const blockedCount = recordings.filter(r => r.copilotAccessible === false).length;
+  const aggregates = paginatedData?.aggregates;
+  const totalRecordings = aggregates?.totalRecordings ?? 0;
+  const totalTranscripts = aggregates?.totalTranscripts ?? 0;
+  const channelCount = aggregates?.channelCount ?? 0;
+  const onedriveCount = aggregates?.onedriveCount ?? 0;
+  const labelledCount = aggregates?.labelledCount ?? 0;
+  const blockedCount = aggregates?.blockedCount ?? 0;
 
   const isRunning = latestRun?.status === "RUNNING" || syncMutation.isPending;
 

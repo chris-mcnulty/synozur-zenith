@@ -289,7 +289,7 @@ export interface IStorage {
   // Teams recordings discovery
   upsertTeamsRecording(data: InsertTeamsRecording): Promise<TeamsRecording>;
   getTeamsRecordings(tenantConnectionId?: string, search?: string): Promise<TeamsRecording[]>;
-  getTeamsRecordingsPaginated(opts: { tenantConnectionIds?: string[]; search?: string; limit: number; offset: number }): Promise<{ rows: TeamsRecording[]; total: number }>;
+  getTeamsRecordingsPaginated(opts: { tenantConnectionIds?: string[]; search?: string; limit: number; offset: number }): Promise<{ rows: TeamsRecording[]; total: number; aggregates: { totalRecordings: number; totalTranscripts: number; channelCount: number; onedriveCount: number; labelledCount: number; blockedCount: number } }>;
   getTeamsRecording(id: string): Promise<TeamsRecording | undefined>;
   createTeamsDiscoveryRun(data: InsertTeamsDiscoveryRun): Promise<TeamsDiscoveryRun>;
   updateTeamsDiscoveryRun(id: string, updates: Partial<InsertTeamsDiscoveryRun>): Promise<TeamsDiscoveryRun | undefined>;
@@ -1802,7 +1802,7 @@ export class DatabaseStorage implements IStorage {
     search?: string;
     limit: number;
     offset: number;
-  }): Promise<{ rows: TeamsRecording[]; total: number }> {
+  }): Promise<{ rows: TeamsRecording[]; total: number; aggregates: { totalRecordings: number; totalTranscripts: number; channelCount: number; onedriveCount: number; labelledCount: number; blockedCount: number } }> {
     const conditions = [];
     if (opts.tenantConnectionIds && opts.tenantConnectionIds.length > 0) {
       conditions.push(
@@ -1825,7 +1825,15 @@ export class DatabaseStorage implements IStorage {
 
     const where = conditions.length > 0 ? and(...conditions) : undefined;
 
-    const [countResult] = await db.select({ count: sql<number>`count(*)::int` })
+    const [aggregateResult] = await db.select({
+      count: sql<number>`count(*)::int`,
+      totalRecordings: sql<number>`count(*) filter (where ${teamsRecordings.fileType} = 'RECORDING')::int`,
+      totalTranscripts: sql<number>`count(*) filter (where ${teamsRecordings.fileType} = 'TRANSCRIPT')::int`,
+      channelCount: sql<number>`count(*) filter (where ${teamsRecordings.storageType} = 'SHAREPOINT_CHANNEL')::int`,
+      onedriveCount: sql<number>`count(*) filter (where ${teamsRecordings.storageType} = 'ONEDRIVE')::int`,
+      labelledCount: sql<number>`count(*) filter (where ${teamsRecordings.sensitivityLabelName} is not null and ${teamsRecordings.sensitivityLabelName} <> '')::int`,
+      blockedCount: sql<number>`count(*) filter (where ${teamsRecordings.copilotAccessible} = false)::int`,
+    })
       .from(teamsRecordings)
       .where(where);
 
@@ -1836,7 +1844,18 @@ export class DatabaseStorage implements IStorage {
       .offset(opts.offset);
 
     const decryptedRows = await this.decryptRows(rows, "teams_recordings") as TeamsRecording[];
-    return { rows: decryptedRows, total: countResult?.count ?? 0 };
+    return {
+      rows: decryptedRows,
+      total: aggregateResult?.count ?? 0,
+      aggregates: {
+        totalRecordings: aggregateResult?.totalRecordings ?? 0,
+        totalTranscripts: aggregateResult?.totalTranscripts ?? 0,
+        channelCount: aggregateResult?.channelCount ?? 0,
+        onedriveCount: aggregateResult?.onedriveCount ?? 0,
+        labelledCount: aggregateResult?.labelledCount ?? 0,
+        blockedCount: aggregateResult?.blockedCount ?? 0,
+      },
+    };
   }
 
   // ── Teams & Channels Inventory ──────────────────────────────────────────────

@@ -200,12 +200,12 @@ router.get("/api/recordings", requireAuth(), async (req: AuthenticatedRequest, r
   let effectiveIds: string[] | undefined;
   if (tenantConnectionId) {
     if (allowedIds && !allowedIds.includes(tenantConnectionId)) {
-      return res.json({ rows: [], total: 0, page, pageSize });
+      return res.json({ rows: [], total: 0, page, pageSize, aggregates: { totalRecordings: 0, totalTranscripts: 0, channelCount: 0, onedriveCount: 0, labelledCount: 0, blockedCount: 0 } });
     }
     effectiveIds = [tenantConnectionId];
   } else {
     if (Array.isArray(allowedIds) && allowedIds.length === 0) {
-      return res.json({ rows: [], total: 0, page, pageSize });
+      return res.json({ rows: [], total: 0, page, pageSize, aggregates: { totalRecordings: 0, totalTranscripts: 0, channelCount: 0, onedriveCount: 0, labelledCount: 0, blockedCount: 0 } });
     }
     if (allowedIds && allowedIds.length > 0) {
       effectiveIds = allowedIds;
@@ -225,6 +225,7 @@ router.get("/api/recordings", requireAuth(), async (req: AuthenticatedRequest, r
     page,
     pageSize,
     totalPages: Math.ceil(result.total / pageSize),
+    aggregates: result.aggregates,
   });
 });
 
