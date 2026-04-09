@@ -101,13 +101,13 @@ router.get("/api/teams-inventory/:id", requireAuth(), async (req: AuthenticatedR
 router.get("/api/onedrive-inventory", requireAuth(), async (req: AuthenticatedRequest, res) => {
   const search = req.query.search as string | undefined;
   const requestedTenantId = req.query.tenantConnectionId as string | undefined;
+  const includeExcluded = req.query.includeExcluded === "true";
   const allowedIds = await getOrgTenantConnectionIds(req.user);
 
   if (Array.isArray(allowedIds) && allowedIds.length === 0) {
     return res.json([]);
   }
 
-  // Scope to the requested tenant if provided, validating it is within org's allowed set
   let ids: string[] | undefined;
   if (requestedTenantId) {
     if (allowedIds && !allowedIds.includes(requestedTenantId)) {
@@ -118,7 +118,7 @@ router.get("/api/onedrive-inventory", requireAuth(), async (req: AuthenticatedRe
     ids = allowedIds === null ? undefined : allowedIds;
   }
 
-  const drives = await storage.getOnedriveInventory(ids, search);
+  const drives = await storage.getOnedriveInventory(ids, search, includeExcluded);
   res.json(drives);
 });
 
@@ -132,6 +132,55 @@ router.get("/api/onedrive-inventory/:id", requireAuth(), async (req: Authenticat
     return res.status(404).json({ message: "OneDrive not found" });
   }
   res.json(drive);
+});
+
+// PATCH /api/onedrive-inventory/:id/exclusion — exclude or include an account
+router.patch("/api/onedrive-inventory/:id/exclusion", requireAuth(), async (req: AuthenticatedRequest, res) => {
+  try {
+    const { excluded, exclusionReason } = req.body;
+    if (typeof excluded !== "boolean") {
+      return res.status(400).json({ error: "excluded (boolean) is required" });
+    }
+
+    const drive = await storage.getOnedriveInventoryItem(req.params.id);
+    if (!drive) return res.status(404).json({ message: "OneDrive not found" });
+
+    const allowedIds = await getOrgTenantConnectionIds(req.user);
+    if (allowedIds && !allowedIds.includes(drive.tenantConnectionId)) {
+      return res.status(404).json({ message: "OneDrive not found" });
+    }
+
+    const updated = await storage.updateOnedriveInventoryExclusion(
+      req.params.id,
+      excluded,
+      exclusionReason ?? null,
+    );
+    res.json(updated);
+  } catch (err: any) {
+    console.error("[onedrive-inventory] exclusion update error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/onedrive-inventory/bulk-exclude-no-drive — bulk exclude accounts with no drive
+router.post("/api/onedrive-inventory/bulk-exclude-no-drive", requireAuth(), async (req: AuthenticatedRequest, res) => {
+  try {
+    const { tenantConnectionId, exclusionReason } = req.body;
+    if (!tenantConnectionId) {
+      return res.status(400).json({ error: "tenantConnectionId is required" });
+    }
+
+    const allowedIds = await getOrgTenantConnectionIds(req.user);
+    if (allowedIds && !allowedIds.includes(tenantConnectionId)) {
+      return res.status(403).json({ error: "Tenant not accessible" });
+    }
+
+    const count = await storage.bulkExcludeNoDriveAccounts(tenantConnectionId, exclusionReason);
+    res.json({ excluded: count });
+  } catch (err: any) {
+    console.error("[onedrive-inventory] bulk exclude error:", err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ── Recordings (with pagination support) ────────────────────────────────────

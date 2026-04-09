@@ -958,6 +958,10 @@ export const onedriveInventory = pgTable("onedrive_inventory", {
   lastDiscoveredAt: timestamp("last_discovered_at").defaultNow(),
   discoveryStatus: text("discovery_status").notNull().default("ACTIVE"),
 
+  // Exclusion
+  excluded: boolean("excluded").notNull().default(false),
+  exclusionReason: text("exclusion_reason"),
+
   createdAt: timestamp("created_at").defaultNow(),
 }, (table) => [
   unique("uq_tenant_user_onedrive").on(table.tenantConnectionId, table.userId),

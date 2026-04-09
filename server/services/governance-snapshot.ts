@@ -51,7 +51,10 @@ export async function computeGovernanceSnapshot(tenantConnectionId: string): Pro
       totalStorage: sql<number>`coalesce(sum(${onedriveInventory.quotaUsedBytes}), 0)::bigint`,
     })
     .from(onedriveInventory)
-    .where(eq(onedriveInventory.tenantConnectionId, tenantConnectionId));
+    .where(and(
+      eq(onedriveInventory.tenantConnectionId, tenantConnectionId),
+      eq(onedriveInventory.excluded, false),
+    ));
 
   const odStats = odRows[0] ?? { totalAccounts: 0, inactiveCount: 0, totalStorage: 0 };
 

@@ -3082,7 +3082,21 @@ export async function fetchAllOneDriveInventories(
   const token = await getAppToken(tenantId, clientId, clientSecret);
   const results: OneDriveInventoryInfo[] = [];
 
-  // Step 1: Fetch all enabled member users with dept/title
+  // Step 1: Fetch usage report to get activity data
+  const usageReport = await getOneDriveUsageReport(token);
+  const usageByUpn = new Map<string, OneDriveUsageRow>();
+  if (usageReport.error) {
+    console.warn(`[graph] fetchAllOneDriveInventories: usage report failed: ${usageReport.error}`);
+  } else {
+    for (const row of usageReport.rows) {
+      if (row.ownerPrincipalName) {
+        usageByUpn.set(row.ownerPrincipalName.toLowerCase(), row);
+      }
+    }
+    console.log(`[graph] fetchAllOneDriveInventories: loaded ${usageByUpn.size} usage report rows`);
+  }
+
+  // Step 2: Fetch all enabled member users with dept/title
   const users: Array<{ id: string; displayName: string | null; userPrincipalName: string; department: string | null; jobTitle: string | null; mail: string | null }> = [];
   let url =
     `https://graph.microsoft.com/v1.0/users` +
@@ -3112,8 +3126,9 @@ export async function fetchAllOneDriveInventories(
     url = data["@odata.nextLink"] ?? null;
   }
 
-  // Step 2: Fetch drive info for each user concurrently (with concurrency limit)
+  // Step 3: Fetch drive info for each user concurrently (with concurrency limit)
   await asyncPool(users, GRAPH_CONCURRENCY, async (user) => {
+    const usageRow = usageByUpn.get(user.userPrincipalName.toLowerCase());
     try {
       const driveRes = await graphFetchWithRetry(
         `https://graph.microsoft.com/v1.0/users/${user.id}/drive?$select=id,driveType,quota`,
@@ -3121,7 +3136,6 @@ export async function fetchAllOneDriveInventories(
       );
       if (!driveRes.ok) {
         if (driveRes.status === 404) {
-          // User does not have OneDrive provisioned (no license or not yet set up)
           results.push({
             userId: user.id,
             userDisplayName: user.displayName,
@@ -3135,9 +3149,9 @@ export async function fetchAllOneDriveInventories(
             quotaUsedBytes: null,
             quotaRemainingBytes: null,
             quotaState: null,
-            lastActivityDate: null,
-            fileCount: null,
-            activeFileCount: null,
+            lastActivityDate: usageRow?.lastActivityDate || null,
+            fileCount: usageRow?.fileCount ?? null,
+            activeFileCount: usageRow?.activeFileCount ?? null,
           });
         }
         if (driveRes.status === 401) {
@@ -3171,9 +3185,9 @@ export async function fetchAllOneDriveInventories(
         quotaUsedBytes: quota.used ?? null,
         quotaRemainingBytes: quota.remaining ?? null,
         quotaState: quota.state ?? null,
-        lastActivityDate: null,
-        fileCount: null,
-        activeFileCount: null,
+        lastActivityDate: usageRow?.lastActivityDate || null,
+        fileCount: usageRow?.fileCount ?? null,
+        activeFileCount: usageRow?.activeFileCount ?? null,
       });
     } catch (err: any) {
       console.warn(`[graph] OneDrive inventory for ${user.userPrincipalName}: ${err.message}`);

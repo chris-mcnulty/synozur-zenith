@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { eq, desc, sql, asc } from "drizzle-orm";
+import { eq, desc, sql, asc, and } from "drizzle-orm";
 import { db } from "../db";
 import {
   workspaces,
@@ -52,7 +52,10 @@ router.get("/api/content-governance/summary", requireAuth(), async (req: Authent
         totalStorage: sql<number>`coalesce(sum(${onedriveInventory.quotaUsedBytes}), 0)::bigint`,
       })
       .from(onedriveInventory)
-      .where(eq(onedriveInventory.tenantConnectionId, tenantConnectionId));
+      .where(and(
+        eq(onedriveInventory.tenantConnectionId, tenantConnectionId),
+        eq(onedriveInventory.excluded, false),
+      ));
 
     res.json({
       snapshot: snapshot ?? null,

@@ -14,7 +14,7 @@ import {
 } from "@/components/ui/select";
 import {
   HardDrive, Search, Loader2, RefreshCw, AlertTriangle, CheckCircle2,
-  UserX, Clock, Link2, Trash2,
+  UserX, Clock, Link2, Trash2, EyeOff, Eye, Ban,
 } from "lucide-react";
 
 interface OneDriveItem {
@@ -37,6 +37,8 @@ interface OneDriveItem {
   activeFileCount: number | null;
   lastDiscoveredAt: string | null;
   discoveryStatus: string;
+  excluded: boolean;
+  exclusionReason: string | null;
 }
 
 interface SharingLinkItem {
@@ -87,17 +89,19 @@ export default function OneDriveInventoryPage() {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [quotaFilter, setQuotaFilter] = useState("all");
+  const [showExcluded, setShowExcluded] = useState(false);
   const { selectedTenant, isFeatureEnabled } = useTenant();
   const { toast } = useToast();
   const tenantConnectionId = selectedTenant?.id;
   const featureDisabled = !isFeatureEnabled("onedriveInventory");
 
   const { data: drives = [], isLoading } = useQuery<OneDriveItem[]>({
-    queryKey: ["/api/onedrive-inventory", tenantConnectionId, search],
+    queryKey: ["/api/onedrive-inventory", tenantConnectionId, search, showExcluded],
     queryFn: async () => {
       const params = new URLSearchParams();
       if (search) params.set("search", search);
       if (tenantConnectionId) params.set("tenantConnectionId", tenantConnectionId);
+      if (showExcluded) params.set("includeExcluded", "true");
       const res = await fetch(`/api/onedrive-inventory?${params}`, { credentials: "include" });
       if (!res.ok) return [];
       const data = await res.json();
@@ -174,24 +178,67 @@ export default function OneDriveInventoryPage() {
     },
   });
 
-  // Compute stats
-  const totalUsed = drives.reduce((s, d) => s + (d.quotaUsedBytes ?? 0), 0);
-  const inactiveCount = drives.filter(d => isInactive(d.lastActivityDate)).length;
-  const noDriveCount = drives.filter(d => !d.driveId).length;
-  const criticalCount = drives.filter(d => d.quotaState === "critical" || d.quotaState === "exceeded").length;
+  const excludeMutation = useMutation({
+    mutationFn: async ({ id, excluded, exclusionReason }: { id: string; excluded: boolean; exclusionReason?: string }) => {
+      const res = await fetch(`/api/onedrive-inventory/${id}/exclusion`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ excluded, exclusionReason }),
+      });
+      if (!res.ok) throw new Error("Failed to update exclusion");
+      return res.json();
+    },
+    onSuccess: (_data, variables) => {
+      toast({ title: variables.excluded ? "Account excluded" : "Account included" });
+      queryClient.invalidateQueries({ queryKey: ["/api/onedrive-inventory"] });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Failed to update", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const bulkExcludeMutation = useMutation({
+    mutationFn: async () => {
+      if (!tenantConnectionId) throw new Error("No tenant selected");
+      const res = await fetch(`/api/onedrive-inventory/bulk-exclude-no-drive`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ tenantConnectionId, exclusionReason: "No drive provisioned" }),
+      });
+      if (!res.ok) throw new Error("Failed to bulk exclude");
+      return res.json();
+    },
+    onSuccess: (data: { excluded: number }) => {
+      toast({ title: "Bulk exclude complete", description: `${data.excluded} accounts without drives excluded.` });
+      queryClient.invalidateQueries({ queryKey: ["/api/onedrive-inventory"] });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Bulk exclude failed", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const activeDrives = useMemo(() => drives.filter(d => !d.excluded), [drives]);
+  const excludedCount = useMemo(() => drives.filter(d => d.excluded).length, [drives]);
+
+  const totalUsed = activeDrives.reduce((s, d) => s + (d.quotaUsedBytes ?? 0), 0);
+  const inactiveCount = activeDrives.filter(d => isInactive(d.lastActivityDate)).length;
+  const noDriveCount = activeDrives.filter(d => !d.driveId).length;
+  const criticalCount = activeDrives.filter(d => d.quotaState === "critical" || d.quotaState === "exceeded").length;
   const avgUtilization = useMemo(() => {
-    const withQuota = drives.filter(d => d.quotaTotalBytes && d.quotaTotalBytes > 0);
+    const withQuota = activeDrives.filter(d => d.quotaTotalBytes && d.quotaTotalBytes > 0);
     if (withQuota.length === 0) return 0;
     const totalPct = withQuota.reduce((s, d) => s + ((d.quotaUsedBytes ?? 0) / d.quotaTotalBytes!) * 100, 0);
     return Math.round(totalPct / withQuota.length);
-  }, [drives]);
+  }, [activeDrives]);
 
-  // Apply filters
   const filteredDrives = useMemo(() => {
     let result = drives;
-    if (statusFilter === "active") result = result.filter(d => !isInactive(d.lastActivityDate));
-    if (statusFilter === "inactive") result = result.filter(d => isInactive(d.lastActivityDate));
-    if (statusFilter === "no-drive") result = result.filter(d => !d.driveId);
+    if (statusFilter === "active") result = result.filter(d => !isInactive(d.lastActivityDate) && !d.excluded);
+    if (statusFilter === "inactive") result = result.filter(d => isInactive(d.lastActivityDate) && !d.excluded);
+    if (statusFilter === "no-drive") result = result.filter(d => !d.driveId && !d.excluded);
+    if (statusFilter === "excluded") result = result.filter(d => d.excluded);
     if (quotaFilter === "normal") result = result.filter(d => d.quotaState === "normal");
     if (quotaFilter === "nearing") result = result.filter(d => d.quotaState === "nearing");
     if (quotaFilter === "critical") result = result.filter(d => d.quotaState === "critical" || d.quotaState === "exceeded");
@@ -233,11 +280,11 @@ export default function OneDriveInventoryPage() {
       </div>
 
       {/* Summary Stats */}
-      <div className="grid grid-cols-2 sm:grid-cols-6 gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-7 gap-4">
         <Card>
           <CardContent className="pt-5 pb-4 px-5">
             <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Total Users</p>
-            <p className="text-2xl font-bold">{drives.length}</p>
+            <p className="text-2xl font-bold" data-testid="text-total-users">{activeDrives.length}</p>
           </CardContent>
         </Card>
         <Card>
@@ -276,6 +323,17 @@ export default function OneDriveInventoryPage() {
             <p className="text-2xl font-bold">{avgUtilization}%</p>
           </CardContent>
         </Card>
+        {showExcluded && (
+          <Card>
+            <CardContent className="pt-5 pb-4 px-5">
+              <div className="flex items-center gap-1 mb-1">
+                <EyeOff className="w-3 h-3 text-muted-foreground" />
+                <p className="text-xs text-muted-foreground uppercase tracking-wider">Excluded</p>
+              </div>
+              <p className="text-2xl font-bold text-muted-foreground" data-testid="text-excluded-count">{excludedCount}</p>
+            </CardContent>
+          </Card>
+        )}
       </div>
 
       <Tabs defaultValue="inventory" className="w-full">
@@ -294,10 +352,11 @@ export default function OneDriveInventoryPage() {
                 value={search}
                 onChange={e => setSearch(e.target.value)}
                 className="pl-9"
+                data-testid="input-search-onedrive"
               />
             </div>
             <Select value={statusFilter} onValueChange={setStatusFilter}>
-              <SelectTrigger className="w-40">
+              <SelectTrigger className="w-40" data-testid="select-status-filter">
                 <SelectValue placeholder="Status" />
               </SelectTrigger>
               <SelectContent>
@@ -305,10 +364,11 @@ export default function OneDriveInventoryPage() {
                 <SelectItem value="active">Active</SelectItem>
                 <SelectItem value="inactive">Inactive (90d+)</SelectItem>
                 <SelectItem value="no-drive">No Drive</SelectItem>
+                {showExcluded && <SelectItem value="excluded">Excluded</SelectItem>}
               </SelectContent>
             </Select>
             <Select value={quotaFilter} onValueChange={setQuotaFilter}>
-              <SelectTrigger className="w-40">
+              <SelectTrigger className="w-40" data-testid="select-quota-filter">
                 <SelectValue placeholder="Quota" />
               </SelectTrigger>
               <SelectContent>
@@ -318,6 +378,31 @@ export default function OneDriveInventoryPage() {
                 <SelectItem value="critical">Critical/Exceeded</SelectItem>
               </SelectContent>
             </Select>
+            <Button
+              variant={showExcluded ? "secondary" : "outline"}
+              size="sm"
+              onClick={() => {
+                const next = !showExcluded;
+                setShowExcluded(next);
+                if (!next && statusFilter === "excluded") setStatusFilter("all");
+              }}
+              data-testid="button-toggle-excluded"
+            >
+              {showExcluded ? <><Eye className="mr-1.5 h-3.5 w-3.5" />Showing Excluded</> : <><EyeOff className="mr-1.5 h-3.5 w-3.5" />Show Excluded</>}
+            </Button>
+            {noDriveCount > 0 && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => bulkExcludeMutation.mutate()}
+                disabled={bulkExcludeMutation.isPending || !tenantConnectionId}
+                data-testid="button-bulk-exclude-no-drive"
+              >
+                {bulkExcludeMutation.isPending
+                  ? <><Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />Excluding…</>
+                  : <><Ban className="mr-1.5 h-3.5 w-3.5" />Exclude All No-Drive ({noDriveCount})</>}
+              </Button>
+            )}
           </div>
 
           {/* Table */}
@@ -348,6 +433,7 @@ export default function OneDriveInventoryPage() {
                       <TableHead>Usage %</TableHead>
                       <TableHead>Status</TableHead>
                       <TableHead>Activity</TableHead>
+                      <TableHead>Actions</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -358,9 +444,11 @@ export default function OneDriveInventoryPage() {
                         <TableRow
                           key={d.id}
                           className={
+                            d.excluded ? "bg-muted/40 opacity-60" :
                             !d.driveId ? "bg-red-50/30 dark:bg-red-950/10" :
                             inactive ? "bg-amber-50/30 dark:bg-amber-950/10" : ""
                           }
+                          data-testid={`row-onedrive-${d.id}`}
                         >
                           <TableCell>
                             <div className="flex flex-col">
@@ -387,7 +475,12 @@ export default function OneDriveInventoryPage() {
                             )}
                           </TableCell>
                           <TableCell>
-                            <div className="flex gap-1">
+                            <div className="flex gap-1 flex-wrap">
+                              {d.excluded && (
+                                <Badge variant="outline" className="text-muted-foreground border-muted bg-muted/50 text-[10px]">
+                                  <EyeOff className="w-2.5 h-2.5 mr-0.5" />Excluded
+                                </Badge>
+                              )}
                               {quotaStateBadge(d.quotaState)}
                               {!d.driveId && (
                                 <Badge variant="outline" className="text-red-600 border-red-300 bg-red-50 text-[10px]">
@@ -405,6 +498,35 @@ export default function OneDriveInventoryPage() {
                               <span className="text-xs text-muted-foreground">{new Date(d.lastActivityDate).toLocaleDateString()}</span>
                             ) : (
                               <span className="text-xs text-muted-foreground">—</span>
+                            )}
+                          </TableCell>
+                          <TableCell>
+                            {d.excluded ? (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-7 text-xs"
+                                onClick={() => excludeMutation.mutate({ id: d.id, excluded: false })}
+                                disabled={excludeMutation.isPending}
+                                data-testid={`button-include-${d.id}`}
+                              >
+                                <Eye className="w-3 h-3 mr-1" /> Include
+                              </Button>
+                            ) : (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-7 text-xs text-muted-foreground hover:text-foreground"
+                                onClick={() => excludeMutation.mutate({
+                                  id: d.id,
+                                  excluded: true,
+                                  exclusionReason: !d.driveId ? "No drive provisioned" : "Manually excluded",
+                                })}
+                                disabled={excludeMutation.isPending}
+                                data-testid={`button-exclude-${d.id}`}
+                              >
+                                <EyeOff className="w-3 h-3 mr-1" /> Exclude
+                              </Button>
                             )}
                           </TableCell>
                         </TableRow>

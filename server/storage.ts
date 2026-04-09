@@ -307,8 +307,10 @@ export interface IStorage {
 
   // OneDrive inventory
   upsertOnedriveInventory(data: InsertOnedriveInventory): Promise<OnedriveInventoryItem>;
-  getOnedriveInventory(tenantConnectionIds?: string[], search?: string): Promise<OnedriveInventoryItem[]>;
+  getOnedriveInventory(tenantConnectionIds?: string[], search?: string, includeExcluded?: boolean): Promise<OnedriveInventoryItem[]>;
   getOnedriveInventoryItem(id: string): Promise<OnedriveInventoryItem | undefined>;
+  updateOnedriveInventoryExclusion(id: string, excluded: boolean, exclusionReason?: string | null): Promise<OnedriveInventoryItem | undefined>;
+  bulkExcludeNoDriveAccounts(tenantConnectionId: string, exclusionReason?: string): Promise<number>;
 
   // Support tickets
   createSupportTicket(data: Omit<SupportTicket, 'id' | 'createdAt' | 'updatedAt' | 'resolvedAt' | 'resolvedBy' | 'assignedTo'>): Promise<SupportTicket>;
@@ -2088,8 +2090,11 @@ export class DatabaseStorage implements IStorage {
     return result;
   }
 
-  async getOnedriveInventory(tenantConnectionIds?: string[], search?: string): Promise<OnedriveInventoryItem[]> {
+  async getOnedriveInventory(tenantConnectionIds?: string[], search?: string, includeExcluded?: boolean): Promise<OnedriveInventoryItem[]> {
     const conditions = [eq(onedriveInventory.discoveryStatus, "ACTIVE")];
+    if (!includeExcluded) {
+      conditions.push(eq(onedriveInventory.excluded, false));
+    }
     if (tenantConnectionIds && tenantConnectionIds.length > 0) {
       conditions.push(
         sql`${onedriveInventory.tenantConnectionId} IN (${sql.join(
@@ -2118,6 +2123,28 @@ export class DatabaseStorage implements IStorage {
     if (!result) return undefined;
     const [decrypted] = await this.decryptRows([result], "onedrive_inventory");
     return decrypted as OnedriveInventoryItem;
+  }
+
+  async updateOnedriveInventoryExclusion(id: string, excluded: boolean, exclusionReason?: string | null): Promise<OnedriveInventoryItem | undefined> {
+    const [result] = await db.update(onedriveInventory)
+      .set({ excluded, exclusionReason: exclusionReason ?? null })
+      .where(eq(onedriveInventory.id, id))
+      .returning();
+    if (!result) return undefined;
+    const [decrypted] = await this.decryptRows([result], "onedrive_inventory");
+    return decrypted as OnedriveInventoryItem;
+  }
+
+  async bulkExcludeNoDriveAccounts(tenantConnectionId: string, exclusionReason?: string): Promise<number> {
+    const result = await db.update(onedriveInventory)
+      .set({ excluded: true, exclusionReason: exclusionReason ?? "No drive provisioned" })
+      .where(and(
+        eq(onedriveInventory.tenantConnectionId, tenantConnectionId),
+        sql`${onedriveInventory.driveId} IS NULL`,
+        eq(onedriveInventory.excluded, false),
+      ))
+      .returning({ id: onedriveInventory.id });
+    return result.length;
   }
 
   // ── Content Governance: Sharing Links Inventory ──────────────────────────
