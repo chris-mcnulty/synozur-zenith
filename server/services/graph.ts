@@ -3966,6 +3966,7 @@ export interface UserLicenseInfo {
   jobTitle: string | null;
   accountEnabled: boolean;
   assignedLicenses: { skuId: string; disabledPlans: string[] }[];
+  signInActivity?: { lastSignInDateTime: string | null };
 }
 
 export async function getAllUserLicenseDetails(
@@ -3975,7 +3976,7 @@ export async function getAllUserLicenseDetails(
     const users: UserLicenseInfo[] = [];
     let url: string | null =
       `https://graph.microsoft.com/v1.0/users` +
-      `?$select=id,displayName,userPrincipalName,department,jobTitle,accountEnabled,assignedLicenses` +
+      `?$select=id,displayName,userPrincipalName,department,jobTitle,accountEnabled,assignedLicenses,signInActivity` +
       `&$top=999`;
 
     while (url) {
@@ -4004,6 +4005,7 @@ export async function getAllUserLicenseDetails(
             skuId: l.skuId,
             disabledPlans: l.disabledPlans || [],
           })),
+          signInActivity: u.signInActivity ? { lastSignInDateTime: u.signInActivity.lastSignInDateTime ?? null } : undefined,
         });
       }
       url = data["@odata.nextLink"] ?? null;

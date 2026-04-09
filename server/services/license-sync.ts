@@ -26,7 +26,11 @@ export async function syncLicenses(
   const now = new Date();
 
   // ── Sync subscriptions ───────────────────────────────────────────────────
-  const skus = await getSubscribedSkus(token);
+  const skuResult = await getSubscribedSkus(token);
+  if (skuResult.error) {
+    throw new Error(`Failed to fetch subscribed SKUs: ${skuResult.error}`);
+  }
+  const skus = skuResult.skus;
   for (const sku of skus) {
     const enabledPlans = sku.servicePlans
       .filter((p) => p.appliesTo === "User")
@@ -62,7 +66,11 @@ export async function syncLicenses(
   }
 
   // ── Sync user assignments ────────────────────────────────────────────────
-  const users = await getAllUserLicenseDetails(token);
+  const userResult = await getAllUserLicenseDetails(token);
+  if (userResult.error) {
+    throw new Error(`Failed to fetch user license details: ${userResult.error}`);
+  }
+  const users = userResult.users;
   // Build a quick lookup for SKU part numbers
   const skuLookup = new Map(skus.map((s) => [s.skuId, s.skuPartNumber]));
 
