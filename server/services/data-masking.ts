@@ -68,10 +68,10 @@ export const SENSITIVE_FIELDS: Record<string, string[]> = {
     "displayName", "description", "webUrl",
   ],
   sharing_links_inventory: [
-    "resourceName", "resourceId", "linkId", "createdBy",
+    "resourceName", "createdBy",
   ],
   governance_review_findings: [
-    "resourceName", "resourceId", "description", "recommendedAction",
+    "resourceName", "description", "recommendedAction",
   ],
 };
 

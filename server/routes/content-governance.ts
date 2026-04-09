@@ -73,6 +73,11 @@ router.get("/api/content-governance/risk", requireAuth(), async (req: Authentica
     const tenantConnectionId = req.query.tenantConnectionId as string;
     if (!tenantConnectionId) return res.status(400).json({ error: "tenantConnectionId is required" });
 
+    const allowedTenantConnectionIds = await getOrgTenantConnectionIds(req);
+    if (allowedTenantConnectionIds !== null && !allowedTenantConnectionIds.includes(tenantConnectionId)) {
+      return res.status(403).json({ error: "Forbidden" });
+    }
+
     const riskySites = await storage.getWorkspacesAtRisk(tenantConnectionId);
 
     res.json({ count: riskySites.length, workspaces: riskySites });
@@ -88,6 +93,11 @@ router.get("/api/content-governance/ownership", requireAuth(), async (req: Authe
     const tenantConnectionId = req.query.tenantConnectionId as string;
     if (!tenantConnectionId) return res.status(400).json({ error: "tenantConnectionId is required" });
 
+    const allowedTenantConnectionIds = await getOrgTenantConnectionIds(req);
+    if (allowedTenantConnectionIds !== null && !allowedTenantConnectionIds.includes(tenantConnectionId)) {
+      return res.status(403).json({ error: "Forbidden" });
+    }
+
     const orphaned = await storage.getOrphanedWorkspaces(tenantConnectionId);
 
     res.json({ count: orphaned.length, workspaces: orphaned });
@@ -102,6 +112,11 @@ router.get("/api/content-governance/storage", requireAuth(), async (req: Authent
   try {
     const tenantConnectionId = req.query.tenantConnectionId as string;
     if (!tenantConnectionId) return res.status(400).json({ error: "tenantConnectionId is required" });
+
+    const allowedTenantConnectionIds = await getOrgTenantConnectionIds(req);
+    if (allowedTenantConnectionIds !== null && !allowedTenantConnectionIds.includes(tenantConnectionId)) {
+      return res.status(403).json({ error: "Forbidden" });
+    }
 
     // Fetch decrypted workspaces via storage, then sort by storage used desc
     // (storageUsedBytes is numeric and unmasked, so sorting after decrypt is safe).
@@ -278,6 +293,11 @@ router.get("/api/content-governance/reviews/:id", requireAuth(), async (req: Aut
       .where(eq(governanceReviewTasks.id, id as string));
 
     if (!task) return res.status(404).json({ error: "Review task not found" });
+
+    const allowedTenantConnectionIds = await getOrgTenantConnectionIds(req);
+    if (allowedTenantConnectionIds !== null && !allowedTenantConnectionIds.includes(task.tenantConnectionId)) {
+      return res.status(403).json({ error: "Forbidden" });
+    }
 
     const findings = await storage.getGovernanceReviewFindingsForTask(id);
 

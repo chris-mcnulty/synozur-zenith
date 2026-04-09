@@ -55,15 +55,15 @@ const TABLE_MAP: Record<string, TableMapEntry> = {
     getWhere: async (t) => eq(sharingLinksInventory.tenantConnectionId, t),
   },
   governance_review_findings: {
-    // Findings have no tenantConnectionId column; scope them via their parent review task.
+    // Findings have no tenantConnectionId column; scope them via their parent review task
+    // using a subquery so the DB performs the join without materialising task IDs in Node.
     table: governanceReviewFindings,
     getWhere: async (t) => {
-      const taskRows = await db
+      const sq = db
         .select({ id: governanceReviewTasks.id })
         .from(governanceReviewTasks)
         .where(eq(governanceReviewTasks.tenantConnectionId, t));
-      if (taskRows.length === 0) return undefined;
-      return inArray(governanceReviewFindings.reviewTaskId, taskRows.map((r: { id: string }) => r.id));
+      return inArray(governanceReviewFindings.reviewTaskId, sq);
     },
   },
 };
