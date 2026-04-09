@@ -1066,7 +1066,9 @@ export type InsertSupportTicketReply = z.infer<typeof insertSupportTicketReplySc
 export type SupportTicketReply = typeof supportTicketReplies.$inferSelect;
 
 // ── Content Types ─────────────────────────────────────────────────────────────
-// Stores Content Type Hub content types synced from Microsoft 365 Graph API.
+// Stores tenant-level content types synced from Microsoft 365 Graph API.
+// Scope: HUB = Content Type Hub, SITE = defined at a site that is not the hub.
+// libraryUsageCount / siteUsageCount are rollups maintained from libraryContentTypes.
 export const contentTypes = pgTable("content_types", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   tenantConnectionId: varchar("tenant_connection_id").notNull(),
@@ -1075,7 +1077,10 @@ export const contentTypes = pgTable("content_types", {
   group: text("group"),
   description: text("description"),
   isHub: boolean("is_hub").notNull().default(false),
+  scope: text("scope").notNull().default("HUB"), // HUB | SITE
   subscribedSiteCount: integer("subscribed_site_count").notNull().default(0),
+  libraryUsageCount: integer("library_usage_count").notNull().default(0),
+  siteUsageCount: integer("site_usage_count").notNull().default(0),
   syncedAt: timestamp("synced_at").defaultNow(),
 }, (table) => [
   unique("uq_tenant_content_type").on(table.tenantConnectionId, table.contentTypeId),
@@ -1088,6 +1093,73 @@ export const insertContentTypeSchema = createInsertSchema(contentTypes).omit({
 
 export type InsertContentType = z.infer<typeof insertContentTypeSchema>;
 export type ContentType = typeof contentTypes.$inferSelect;
+
+// ── Information Architecture: per-library inventory ──────────────────────────
+// libraryContentTypes: rows are the content types applied to a specific library.
+// scope is derived at sync time:
+//   HUB     — contentTypeId matches a row in content_types with isHub=true
+//   SITE    — isInherited=true but not a hub match (inherited from a site CT)
+//   LIBRARY — not inherited (locally defined on the library)
+export const libraryContentTypes = pgTable("library_content_types", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  workspaceId: varchar("workspace_id").notNull(),
+  tenantConnectionId: varchar("tenant_connection_id").notNull(),
+  documentLibraryId: varchar("document_library_id").notNull(),
+  contentTypeId: text("content_type_id").notNull(),
+  parentContentTypeId: text("parent_content_type_id"),
+  name: text("name").notNull(),
+  group: text("group"),
+  description: text("description"),
+  scope: text("scope").notNull().default("LIBRARY"), // HUB | SITE | LIBRARY
+  isBuiltIn: boolean("is_built_in").notNull().default(false),
+  isInherited: boolean("is_inherited").notNull().default(false),
+  hidden: boolean("hidden").notNull().default(false),
+  lastSyncAt: timestamp("last_sync_at").defaultNow(),
+}, (table) => [
+  unique("uq_library_content_type").on(table.documentLibraryId, table.contentTypeId),
+]);
+
+export const insertLibraryContentTypeSchema = createInsertSchema(libraryContentTypes).omit({
+  id: true,
+  lastSyncAt: true,
+});
+
+export type InsertLibraryContentType = z.infer<typeof insertLibraryContentTypeSchema>;
+export type LibraryContentType = typeof libraryContentTypes.$inferSelect;
+
+// libraryColumns: rows are the columns present on a specific library.
+// scope:
+//   SITE    — column also exists on the parent site's site-columns (same internal name)
+//   LIBRARY — column defined locally on the library
+export const libraryColumns = pgTable("library_columns", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  workspaceId: varchar("workspace_id").notNull(),
+  tenantConnectionId: varchar("tenant_connection_id").notNull(),
+  documentLibraryId: varchar("document_library_id").notNull(),
+  columnInternalName: text("column_internal_name").notNull(),
+  displayName: text("display_name").notNull(),
+  columnType: text("column_type").notNull(),
+  columnGroup: text("column_group"),
+  description: text("description"),
+  scope: text("scope").notNull().default("LIBRARY"), // SITE | LIBRARY
+  isCustom: boolean("is_custom").notNull().default(false),
+  isSyntexManaged: boolean("is_syntex_managed").notNull().default(false),
+  isSealed: boolean("is_sealed").notNull().default(false),
+  isReadOnly: boolean("is_read_only").notNull().default(false),
+  isIndexed: boolean("is_indexed").notNull().default(false),
+  isRequired: boolean("is_required").notNull().default(false),
+  lastSyncAt: timestamp("last_sync_at").defaultNow(),
+}, (table) => [
+  unique("uq_library_column").on(table.documentLibraryId, table.columnInternalName),
+]);
+
+export const insertLibraryColumnSchema = createInsertSchema(libraryColumns).omit({
+  id: true,
+  lastSyncAt: true,
+});
+
+export type InsertLibraryColumn = z.infer<typeof insertLibraryColumnSchema>;
+export type LibraryColumn = typeof libraryColumns.$inferSelect;
 
 export const tenantAccessGrants = pgTable("tenant_access_grants", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),

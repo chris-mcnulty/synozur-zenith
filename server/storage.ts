@@ -90,6 +90,12 @@ import {
   contentTypes,
   type ContentType,
   type InsertContentType,
+  libraryContentTypes,
+  type LibraryContentType,
+  type InsertLibraryContentType,
+  libraryColumns,
+  type LibraryColumn,
+  type InsertLibraryColumn,
   tenantAccessGrants,
   type TenantAccessGrant,
   type InsertTenantAccessGrant,
@@ -325,6 +331,17 @@ export interface IStorage {
   // Content Types
   upsertContentType(data: InsertContentType): Promise<ContentType>;
   getContentTypes(tenantConnectionId: string): Promise<ContentType[]>;
+
+  // Information Architecture: library-level CTs + columns
+  upsertLibraryContentType(data: InsertLibraryContentType): Promise<LibraryContentType>;
+  upsertLibraryColumn(data: InsertLibraryColumn): Promise<LibraryColumn>;
+  deleteLibraryContentTypes(documentLibraryId: string): Promise<void>;
+  deleteLibraryColumns(documentLibraryId: string): Promise<void>;
+  getLibraryContentTypesByTenant(tenantConnectionId: string): Promise<LibraryContentType[]>;
+  getLibraryColumnsByTenant(tenantConnectionId: string): Promise<LibraryColumn[]>;
+  getLibraryContentTypesForLibrary(documentLibraryId: string): Promise<LibraryContentType[]>;
+  getLibraryColumnsForLibrary(documentLibraryId: string): Promise<LibraryColumn[]>;
+  updateContentTypeUsageCounts(tenantConnectionId: string): Promise<void>;
 
   // Tenant Access Grants & Codes
   getTenantAccessGrants(tenantConnectionId: string): Promise<TenantAccessGrant[]>;
@@ -2380,6 +2397,120 @@ export class DatabaseStorage implements IStorage {
     return db.select().from(contentTypes)
       .where(eq(contentTypes.tenantConnectionId, tenantConnectionId))
       .orderBy(contentTypes.name);
+  }
+
+  // ── Information Architecture: library-level CTs + columns ─────────────────
+
+  async upsertLibraryContentType(data: InsertLibraryContentType): Promise<LibraryContentType> {
+    const [result] = await db.insert(libraryContentTypes)
+      .values(data)
+      .onConflictDoUpdate({
+        target: [libraryContentTypes.documentLibraryId, libraryContentTypes.contentTypeId],
+        set: {
+          parentContentTypeId: data.parentContentTypeId,
+          name: data.name,
+          group: data.group,
+          description: data.description,
+          scope: data.scope,
+          isBuiltIn: data.isBuiltIn,
+          isInherited: data.isInherited,
+          hidden: data.hidden,
+          lastSyncAt: new Date(),
+        },
+      })
+      .returning();
+    return result;
+  }
+
+  async upsertLibraryColumn(data: InsertLibraryColumn): Promise<LibraryColumn> {
+    const [result] = await db.insert(libraryColumns)
+      .values(data)
+      .onConflictDoUpdate({
+        target: [libraryColumns.documentLibraryId, libraryColumns.columnInternalName],
+        set: {
+          displayName: data.displayName,
+          columnType: data.columnType,
+          columnGroup: data.columnGroup,
+          description: data.description,
+          scope: data.scope,
+          isCustom: data.isCustom,
+          isSyntexManaged: data.isSyntexManaged,
+          isSealed: data.isSealed,
+          isReadOnly: data.isReadOnly,
+          isIndexed: data.isIndexed,
+          isRequired: data.isRequired,
+          lastSyncAt: new Date(),
+        },
+      })
+      .returning();
+    return result;
+  }
+
+  async deleteLibraryContentTypes(documentLibraryId: string): Promise<void> {
+    await db.delete(libraryContentTypes)
+      .where(eq(libraryContentTypes.documentLibraryId, documentLibraryId));
+  }
+
+  async deleteLibraryColumns(documentLibraryId: string): Promise<void> {
+    await db.delete(libraryColumns)
+      .where(eq(libraryColumns.documentLibraryId, documentLibraryId));
+  }
+
+  async getLibraryContentTypesByTenant(tenantConnectionId: string): Promise<LibraryContentType[]> {
+    return db.select().from(libraryContentTypes)
+      .where(eq(libraryContentTypes.tenantConnectionId, tenantConnectionId))
+      .orderBy(libraryContentTypes.name);
+  }
+
+  async getLibraryColumnsByTenant(tenantConnectionId: string): Promise<LibraryColumn[]> {
+    return db.select().from(libraryColumns)
+      .where(eq(libraryColumns.tenantConnectionId, tenantConnectionId))
+      .orderBy(libraryColumns.displayName);
+  }
+
+  async getLibraryContentTypesForLibrary(documentLibraryId: string): Promise<LibraryContentType[]> {
+    return db.select().from(libraryContentTypes)
+      .where(eq(libraryContentTypes.documentLibraryId, documentLibraryId))
+      .orderBy(libraryContentTypes.name);
+  }
+
+  async getLibraryColumnsForLibrary(documentLibraryId: string): Promise<LibraryColumn[]> {
+    return db.select().from(libraryColumns)
+      .where(eq(libraryColumns.documentLibraryId, documentLibraryId))
+      .orderBy(libraryColumns.displayName);
+  }
+
+  // Recomputes libraryUsageCount / siteUsageCount on content_types from the
+  // library_content_types rollup. Cheap; runs after a tenant sync.
+  async updateContentTypeUsageCounts(tenantConnectionId: string): Promise<void> {
+    // libraryUsageCount = distinct documentLibraryIds per contentTypeId
+    // siteUsageCount    = distinct workspaceIds per contentTypeId
+    const rollup = await db
+      .select({
+        contentTypeId: libraryContentTypes.contentTypeId,
+        libraryCount: sql<number>`count(distinct ${libraryContentTypes.documentLibraryId})`,
+        siteCount: sql<number>`count(distinct ${libraryContentTypes.workspaceId})`,
+      })
+      .from(libraryContentTypes)
+      .where(eq(libraryContentTypes.tenantConnectionId, tenantConnectionId))
+      .groupBy(libraryContentTypes.contentTypeId);
+
+    // Zero-out all counts for this tenant first so CTs that no longer appear go to 0.
+    await db.update(contentTypes)
+      .set({ libraryUsageCount: 0, siteUsageCount: 0 })
+      .where(eq(contentTypes.tenantConnectionId, tenantConnectionId));
+
+    for (const row of rollup) {
+      await db.update(contentTypes)
+        .set({
+          libraryUsageCount: Number(row.libraryCount) || 0,
+          siteUsageCount: Number(row.siteCount) || 0,
+        })
+        .where(and(
+          eq(contentTypes.tenantConnectionId, tenantConnectionId),
+          eq(contentTypes.contentTypeId, row.contentTypeId),
+        ));
+    }
   }
 
   async getTenantAccessGrants(tenantConnectionId: string): Promise<TenantAccessGrant[]> {
