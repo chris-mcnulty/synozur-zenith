@@ -2514,6 +2514,17 @@ router.get("/api/admin/tenants/:id/content-types", requireAuth(), async (req: Au
 // and columns into library_content_types / library_columns with derived scope,
 // then refreshes content_types usage rollups. Safe to run standalone or as
 // part of the main tenant sync.
+
+function classifyCtScope(
+  contentTypeId: string,
+  isInherited: boolean,
+  hubCtIds: Set<string>,
+): 'HUB' | 'SITE' | 'LIBRARY' {
+  if (hubCtIds.has(contentTypeId)) return 'HUB';
+  if (isInherited) return 'SITE';
+  return 'LIBRARY';
+}
+
 router.post("/api/admin/tenants/:id/sync-ia", requireRole(ZENITH_ROLES.TENANT_ADMIN), async (req: AuthenticatedRequest, res) => {
   try {
     const allowedTenantIds = await getOrgTenantConnectionIds(req);
@@ -2618,7 +2629,7 @@ router.post("/api/admin/tenants/:id/sync-ia", requireRole(ZENITH_ROLES.TENANT_AD
               name: ct.name,
               group: ct.group,
               description: ct.description,
-              scope: (hubCtIds.has(ct.id) ? 'HUB' : ct.isInherited ? 'SITE' : 'LIBRARY') as 'HUB' | 'SITE' | 'LIBRARY',
+              scope: classifyCtScope(ct.id, ct.isInherited, hubCtIds),
               isBuiltIn: ct.isBuiltIn,
               isInherited: ct.isInherited,
               hidden: ct.hidden,

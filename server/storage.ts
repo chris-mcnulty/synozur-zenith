@@ -2459,55 +2459,25 @@ export class DatabaseStorage implements IStorage {
 
   // Atomically replaces all IA rows for a single library inside a transaction.
   // Deleting and re-inserting happens as a single unit so a mid-write failure
-  // never leaves the library in a partially-empty state.
+  // never leaves the library in an inconsistent state.
   async replaceLibraryIaData(
     documentLibraryId: string,
     contentTypeRows: InsertLibraryContentType[],
     columnRows: InsertLibraryColumn[],
   ): Promise<{ contentTypesCount: number; columnsCount: number }> {
     return db.transaction(async (tx) => {
+      // Delete all existing rows first; after this point there are no conflicts.
       await tx.delete(libraryContentTypes)
         .where(eq(libraryContentTypes.documentLibraryId, documentLibraryId));
       await tx.delete(libraryColumns)
         .where(eq(libraryColumns.documentLibraryId, documentLibraryId));
 
       if (contentTypeRows.length > 0) {
-        await tx.insert(libraryContentTypes).values(contentTypeRows)
-          .onConflictDoUpdate({
-            target: [libraryContentTypes.documentLibraryId, libraryContentTypes.contentTypeId],
-            set: {
-              parentContentTypeId: sql`excluded.parent_content_type_id`,
-              name: sql`excluded.name`,
-              group: sql`excluded."group"`,
-              description: sql`excluded.description`,
-              scope: sql`excluded.scope`,
-              isBuiltIn: sql`excluded.is_built_in`,
-              isInherited: sql`excluded.is_inherited`,
-              hidden: sql`excluded.hidden`,
-              lastSyncAt: new Date(),
-            },
-          });
+        await tx.insert(libraryContentTypes).values(contentTypeRows);
       }
 
       if (columnRows.length > 0) {
-        await tx.insert(libraryColumns).values(columnRows)
-          .onConflictDoUpdate({
-            target: [libraryColumns.documentLibraryId, libraryColumns.columnInternalName],
-            set: {
-              displayName: sql`excluded.display_name`,
-              columnType: sql`excluded.column_type`,
-              columnGroup: sql`excluded.column_group`,
-              description: sql`excluded.description`,
-              scope: sql`excluded.scope`,
-              isCustom: sql`excluded.is_custom`,
-              isSyntexManaged: sql`excluded.is_syntex_managed`,
-              isSealed: sql`excluded.is_sealed`,
-              isReadOnly: sql`excluded.is_read_only`,
-              isIndexed: sql`excluded.is_indexed`,
-              isRequired: sql`excluded.is_required`,
-              lastSyncAt: new Date(),
-            },
-          });
+        await tx.insert(libraryColumns).values(columnRows);
       }
 
       return { contentTypesCount: contentTypeRows.length, columnsCount: columnRows.length };
