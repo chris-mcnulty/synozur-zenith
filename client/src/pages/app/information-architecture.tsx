@@ -575,7 +575,7 @@ function LibrariesTab({ tenantConnectionId }: { tenantConnectionId: string }) {
           )}
           {filtered.length > 0 && (
             <div className="p-4 border-t border-border/50 text-xs text-center text-muted-foreground">
-              Showing {filtered.length} of {libraries.length} libraries across {new Set(filtered.map((l) => l.workspaceName)).size} sites{" · "}Click a library to view content types, columns, and Syntex models
+              Showing {filtered.length} of {libraries.length} libraries across {new Set(filtered.map((l) => l.workspaceName)).size} sites · Click a library to view content types, columns, and Syntex models
             </div>
           )}
         </CardContent>
@@ -631,16 +631,16 @@ function ContentTypesTab({ tenantConnectionId }: { tenantConnectionId: string })
 
   const syncMutation = useMutation({
     mutationFn: async () => {
-      const res = await fetch(`/api/admin/tenants/${tenantConnectionId}/sync`, { method: "POST", credentials: "include" });
-      if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.message || "Sync failed"); }
+      const res = await fetch(`/api/admin/tenants/${tenantConnectionId}/sync-ia`, { method: "POST", credentials: "include" });
+      if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.message || "IA sync failed"); }
       return res.json();
     },
     onSuccess: (data) => {
-      const synced = data?.contentTypes?.synced ?? 0;
-      toast({ title: "Sync complete", description: `${synced} content type${synced !== 1 ? "s" : ""} synced.` });
+      const processed = data?.librariesProcessed ?? 0;
+      toast({ title: "IA sync complete", description: `${processed} libraries processed.` });
       queryClient.invalidateQueries({ queryKey: ["/api/admin/tenants", tenantConnectionId, "ia", "content-types"] });
     },
-    onError: (err: Error) => toast({ title: "Sync failed", description: err.message, variant: "destructive" }),
+    onError: (err: Error) => toast({ title: "IA sync failed", description: err.message, variant: "destructive" }),
   });
 
   const filtered = useMemo(() => {
@@ -704,7 +704,7 @@ function ContentTypesTab({ tenantConnectionId }: { tenantConnectionId: string })
               </div>
               <Button variant="outline" size="sm" className="gap-2" onClick={() => syncMutation.mutate()} disabled={syncMutation.isPending} data-testid="button-sync-content-types">
                 {syncMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
-                Sync
+                Sync IA
               </Button>
             </div>
           </div>
@@ -716,12 +716,12 @@ function ContentTypesTab({ tenantConnectionId }: { tenantConnectionId: string })
             <div className="flex flex-col items-center justify-center py-16 gap-3 text-center">
               <AlertCircle className="w-10 h-10 text-red-400" />
               <p className="text-sm text-red-400">{(error as Error)?.message}</p>
-              <p className="text-xs text-muted-foreground">Run a tenant sync to populate content type data.</p>
+              <p className="text-xs text-muted-foreground">Run an IA sync to populate content type data.</p>
             </div>
           ) : filtered.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-16 gap-3 text-center">
               <FileText className="w-10 h-10 text-muted-foreground/30" />
-              <p className="text-sm text-muted-foreground">{searchTerm || scopeFilter !== "all" ? "No content types match your filters." : "No content types synced yet. Run a tenant sync."}</p>
+              <p className="text-sm text-muted-foreground">{searchTerm || scopeFilter !== "all" ? "No content types match your filters." : "No content types synced yet. Run an IA sync."}</p>
             </div>
           ) : (
             <Table>
