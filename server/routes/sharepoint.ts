@@ -2579,17 +2579,19 @@ router.post("/api/admin/tenants/:id/sync-ia", requireRole(ZENITH_ROLES.TENANT_AD
         const graphSiteId = ws.m365ObjectId;
 
         // Load the site's site-columns once so we can tag library columns as SITE vs LIBRARY.
+        // Page through all results to handle sites with >200 columns.
         const siteColumnNames = new Set<string>();
         try {
-          const sres = await fetch(
-            `https://graph.microsoft.com/v1.0/sites/${graphSiteId}/columns?$select=id,name&$top=200`,
-            { headers: { Authorization: `Bearer ${token}` } }
-          );
-          if (sres.ok) {
+          let pageUrl: string | null =
+            `https://graph.microsoft.com/v1.0/sites/${graphSiteId}/columns?$select=id,name&$top=200`;
+          while (pageUrl) {
+            const sres = await fetch(pageUrl, { headers: { Authorization: `Bearer ${token}` } });
+            if (!sres.ok) break;
             const sdata = await sres.json();
             for (const sc of sdata.value || []) {
               if (sc.name) siteColumnNames.add(sc.name);
             }
+            pageUrl = sdata['@odata.nextLink'] || null;
           }
         } catch (e: any) {
           console.warn(`[ia-sync] Could not fetch site columns for ${graphSiteId}: ${e.message}`);
@@ -2605,54 +2607,44 @@ router.post("/api/admin/tenants/:id/sync-ia", requireRole(ZENITH_ROLES.TENANT_AD
               continue;
             }
 
-            // Clear stale rows for this library so deletions in M365 propagate.
-            await storage.deleteLibraryContentTypes(lib.id);
-            await storage.deleteLibraryColumns(lib.id);
+            // Build the row arrays first, then persist atomically so a mid-write
+            // failure never leaves this library with partially-empty IA data.
+            const ctRows = details.contentTypes.map(ct => ({
+              workspaceId: lib.workspaceId,
+              tenantConnectionId: req.params.id,
+              documentLibraryId: lib.id,
+              contentTypeId: ct.id,
+              parentContentTypeId: ct.parentId,
+              name: ct.name,
+              group: ct.group,
+              description: ct.description,
+              scope: (hubCtIds.has(ct.id) ? 'HUB' : ct.isInherited ? 'SITE' : 'LIBRARY') as 'HUB' | 'SITE' | 'LIBRARY',
+              isBuiltIn: ct.isBuiltIn,
+              isInherited: ct.isInherited,
+              hidden: ct.hidden,
+            }));
 
-            for (const ct of details.contentTypes) {
-              const scope: 'HUB' | 'SITE' | 'LIBRARY' =
-                hubCtIds.has(ct.id) ? 'HUB' :
-                ct.isInherited ? 'SITE' :
-                'LIBRARY';
-              await storage.upsertLibraryContentType({
-                workspaceId: lib.workspaceId,
-                tenantConnectionId: req.params.id,
-                documentLibraryId: lib.id,
-                contentTypeId: ct.id,
-                parentContentTypeId: ct.parentId,
-                name: ct.name,
-                group: ct.group,
-                description: ct.description,
-                scope,
-                isBuiltIn: ct.isBuiltIn,
-                isInherited: ct.isInherited,
-                hidden: ct.hidden,
-              });
-              result.contentTypesUpserted++;
-            }
+            const colRows = details.columns.map(col => ({
+              workspaceId: lib.workspaceId,
+              tenantConnectionId: req.params.id,
+              documentLibraryId: lib.id,
+              columnInternalName: col.name,
+              displayName: col.displayName,
+              columnType: col.type,
+              columnGroup: col.columnGroup,
+              description: col.description,
+              scope: (siteColumnNames.has(col.name) ? 'SITE' : 'LIBRARY') as 'SITE' | 'LIBRARY',
+              isCustom: col.isCustom,
+              isSyntexManaged: col.isSyntexManaged,
+              isSealed: col.sealed,
+              isReadOnly: col.readOnly,
+              isIndexed: col.indexed,
+              isRequired: col.required,
+            }));
 
-            for (const col of details.columns) {
-              const scope: 'SITE' | 'LIBRARY' =
-                siteColumnNames.has(col.name) ? 'SITE' : 'LIBRARY';
-              await storage.upsertLibraryColumn({
-                workspaceId: lib.workspaceId,
-                tenantConnectionId: req.params.id,
-                documentLibraryId: lib.id,
-                columnInternalName: col.name,
-                displayName: col.displayName,
-                columnType: col.type,
-                columnGroup: col.columnGroup,
-                description: col.description,
-                scope,
-                isCustom: col.isCustom,
-                isSyntexManaged: col.isSyntexManaged,
-                isSealed: col.sealed,
-                isReadOnly: col.readOnly,
-                isIndexed: col.indexed,
-                isRequired: col.required,
-              });
-              result.columnsUpserted++;
-            }
+            const counts = await storage.replaceLibraryIaData(lib.id, ctRows, colRows);
+            result.contentTypesUpserted += counts.contentTypesCount;
+            result.columnsUpserted += counts.columnsCount;
 
             result.librariesProcessed++;
           } catch (libErr: any) {
@@ -2683,12 +2675,26 @@ router.post("/api/admin/tenants/:id/sync-ia", requireRole(ZENITH_ROLES.TENANT_AD
     res.json({ success: true, ...result });
   } catch (err: any) {
     console.error(`[ia-sync] Error: ${err.message}`);
+    try {
+      await storage.createAuditEntry({
+        userId: req.user?.id || null,
+        userEmail: req.user?.email || null,
+        action: 'IA_SYNC_FAILED',
+        resource: 'tenant_connection',
+        resourceId: req.params.id,
+        organizationId: req.user?.organizationId || null,
+        tenantConnectionId: req.params.id,
+        details: { error: err.message },
+        result: 'FAILURE',
+        ipAddress: req.ip || null,
+      });
+    } catch { /* ignore audit write errors */ }
     res.status(500).json({ success: false, error: err.message });
   }
 });
 
 // Aggregated content-type view across the tenant (includes library usage counts).
-router.get("/api/admin/tenants/:id/ia/content-types", requireAuth(), async (req: AuthenticatedRequest, res) => {
+router.get("/api/admin/tenants/:id/ia/content-types", requirePermission('inventory:read'), async (req: AuthenticatedRequest, res) => {
   try {
     const allowedTenantIds = await getOrgTenantConnectionIds(req);
     if (allowedTenantIds !== null && !allowedTenantIds.includes(req.params.id)) {
@@ -2767,7 +2773,7 @@ router.get("/api/admin/tenants/:id/ia/content-types", requireAuth(), async (req:
 });
 
 // Aggregated column view across the tenant.
-router.get("/api/admin/tenants/:id/ia/columns", requireAuth(), async (req: AuthenticatedRequest, res) => {
+router.get("/api/admin/tenants/:id/ia/columns", requirePermission('inventory:read'), async (req: AuthenticatedRequest, res) => {
   try {
     const allowedTenantIds = await getOrgTenantConnectionIds(req);
     if (allowedTenantIds !== null && !allowedTenantIds.includes(req.params.id)) {
@@ -2836,7 +2842,7 @@ router.get("/api/admin/tenants/:id/ia/columns", requireAuth(), async (req: Authe
 //   2. columnPromotionCandidates — library columns in ≥3 libraries across ≥2 sites
 //   3. librariesWithoutCustomCt — libraries whose CTs are all built-in
 //   4. columnNameCollisions    — same displayName, different columnType
-router.get("/api/admin/tenants/:id/ia/patterns", requireAuth(), async (req: AuthenticatedRequest, res) => {
+router.get("/api/admin/tenants/:id/ia/patterns", requirePermission('inventory:read'), async (req: AuthenticatedRequest, res) => {
   try {
     const allowedTenantIds = await getOrgTenantConnectionIds(req);
     if (allowedTenantIds !== null && !allowedTenantIds.includes(req.params.id)) {

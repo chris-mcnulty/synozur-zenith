@@ -337,6 +337,7 @@ export interface IStorage {
   upsertLibraryColumn(data: InsertLibraryColumn): Promise<LibraryColumn>;
   deleteLibraryContentTypes(documentLibraryId: string): Promise<void>;
   deleteLibraryColumns(documentLibraryId: string): Promise<void>;
+  replaceLibraryIaData(documentLibraryId: string, contentTypeRows: InsertLibraryContentType[], columnRows: InsertLibraryColumn[]): Promise<{ contentTypesCount: number; columnsCount: number }>;
   getLibraryContentTypesByTenant(tenantConnectionId: string): Promise<LibraryContentType[]>;
   getLibraryColumnsByTenant(tenantConnectionId: string): Promise<LibraryColumn[]>;
   getLibraryContentTypesForLibrary(documentLibraryId: string): Promise<LibraryContentType[]>;
@@ -2456,6 +2457,63 @@ export class DatabaseStorage implements IStorage {
       .where(eq(libraryColumns.documentLibraryId, documentLibraryId));
   }
 
+  // Atomically replaces all IA rows for a single library inside a transaction.
+  // Deleting and re-inserting happens as a single unit so a mid-write failure
+  // never leaves the library in a partially-empty state.
+  async replaceLibraryIaData(
+    documentLibraryId: string,
+    contentTypeRows: InsertLibraryContentType[],
+    columnRows: InsertLibraryColumn[],
+  ): Promise<{ contentTypesCount: number; columnsCount: number }> {
+    return db.transaction(async (tx) => {
+      await tx.delete(libraryContentTypes)
+        .where(eq(libraryContentTypes.documentLibraryId, documentLibraryId));
+      await tx.delete(libraryColumns)
+        .where(eq(libraryColumns.documentLibraryId, documentLibraryId));
+
+      if (contentTypeRows.length > 0) {
+        await tx.insert(libraryContentTypes).values(contentTypeRows)
+          .onConflictDoUpdate({
+            target: [libraryContentTypes.documentLibraryId, libraryContentTypes.contentTypeId],
+            set: {
+              parentContentTypeId: sql`excluded.parent_content_type_id`,
+              name: sql`excluded.name`,
+              group: sql`excluded."group"`,
+              description: sql`excluded.description`,
+              scope: sql`excluded.scope`,
+              isBuiltIn: sql`excluded.is_built_in`,
+              isInherited: sql`excluded.is_inherited`,
+              hidden: sql`excluded.hidden`,
+              lastSyncAt: new Date(),
+            },
+          });
+      }
+
+      if (columnRows.length > 0) {
+        await tx.insert(libraryColumns).values(columnRows)
+          .onConflictDoUpdate({
+            target: [libraryColumns.documentLibraryId, libraryColumns.columnInternalName],
+            set: {
+              displayName: sql`excluded.display_name`,
+              columnType: sql`excluded.column_type`,
+              columnGroup: sql`excluded.column_group`,
+              description: sql`excluded.description`,
+              scope: sql`excluded.scope`,
+              isCustom: sql`excluded.is_custom`,
+              isSyntexManaged: sql`excluded.is_syntex_managed`,
+              isSealed: sql`excluded.is_sealed`,
+              isReadOnly: sql`excluded.is_read_only`,
+              isIndexed: sql`excluded.is_indexed`,
+              isRequired: sql`excluded.is_required`,
+              lastSyncAt: new Date(),
+            },
+          });
+      }
+
+      return { contentTypesCount: contentTypeRows.length, columnsCount: columnRows.length };
+    });
+  }
+
   async getLibraryContentTypesByTenant(tenantConnectionId: string): Promise<LibraryContentType[]> {
     return db.select().from(libraryContentTypes)
       .where(eq(libraryContentTypes.tenantConnectionId, tenantConnectionId))
@@ -2481,36 +2539,28 @@ export class DatabaseStorage implements IStorage {
   }
 
   // Recomputes libraryUsageCount / siteUsageCount on content_types from the
-  // library_content_types rollup. Cheap; runs after a tenant sync.
+  // library_content_types rollup. Uses a single set-based UPDATE inside a
+  // transaction so a partial failure cannot leave counts in an inconsistent state.
   async updateContentTypeUsageCounts(tenantConnectionId: string): Promise<void> {
-    // libraryUsageCount = distinct documentLibraryIds per contentTypeId
-    // siteUsageCount    = distinct workspaceIds per contentTypeId
-    const rollup = await db
-      .select({
-        contentTypeId: libraryContentTypes.contentTypeId,
-        libraryCount: sql<number>`count(distinct ${libraryContentTypes.documentLibraryId})`,
-        siteCount: sql<number>`count(distinct ${libraryContentTypes.workspaceId})`,
-      })
-      .from(libraryContentTypes)
-      .where(eq(libraryContentTypes.tenantConnectionId, tenantConnectionId))
-      .groupBy(libraryContentTypes.contentTypeId);
-
-    // Zero-out all counts for this tenant first so CTs that no longer appear go to 0.
-    await db.update(contentTypes)
-      .set({ libraryUsageCount: 0, siteUsageCount: 0 })
-      .where(eq(contentTypes.tenantConnectionId, tenantConnectionId));
-
-    for (const row of rollup) {
-      await db.update(contentTypes)
-        .set({
-          libraryUsageCount: Number(row.libraryCount) || 0,
-          siteUsageCount: Number(row.siteCount) || 0,
-        })
-        .where(and(
-          eq(contentTypes.tenantConnectionId, tenantConnectionId),
-          eq(contentTypes.contentTypeId, row.contentTypeId),
-        ));
-    }
+    await db.transaction(async (tx) => {
+      await tx.execute(sql`
+        UPDATE content_types
+        SET
+          library_usage_count = coalesce((
+            SELECT count(DISTINCT lct.document_library_id)
+            FROM library_content_types lct
+            WHERE lct.content_type_id = content_types.content_type_id
+              AND lct.tenant_connection_id = ${tenantConnectionId}
+          ), 0),
+          site_usage_count = coalesce((
+            SELECT count(DISTINCT lct.workspace_id)
+            FROM library_content_types lct
+            WHERE lct.content_type_id = content_types.content_type_id
+              AND lct.tenant_connection_id = ${tenantConnectionId}
+          ), 0)
+        WHERE content_types.tenant_connection_id = ${tenantConnectionId}
+      `);
+    });
   }
 
   async getTenantAccessGrants(tenantConnectionId: string): Promise<TenantAccessGrant[]> {
