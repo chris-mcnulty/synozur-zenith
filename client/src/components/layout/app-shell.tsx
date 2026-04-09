@@ -114,7 +114,7 @@ const navGroups: NavGroup[] = [
     label: "Management",
     minRole: "operator",
     items: [
-      { name: "Site Governance", href: "/app/governance", icon: ShieldCheck },
+      { name: "SharePoint Sites", href: "/app/governance", icon: ShieldCheck },
       { name: "Policy Builder", href: "/app/admin/policies", icon: ShieldCheck, badge: "Ent+", minRole: "governance_admin" },
       { name: "What-If Planner", href: "/app/admin/policy-whatif", icon: FlaskConical, badge: "Ent+", minRole: "governance_admin" },
       { name: "Teams & Channels", href: "/app/teams-channels", icon: MessagesSquare, featureToggle: "teamsDiscovery" },

@@ -109,7 +109,7 @@ export default function SplashPage() {
               <div className="w-10 h-10 rounded-lg bg-emerald-500/10 flex items-center justify-center text-emerald-500 mb-4 border border-emerald-500/20">
                 <ShieldCheck className="w-5 h-5" />
               </div>
-              <h3 className="text-lg font-semibold mb-2">Site Governance</h3>
+              <h3 className="text-lg font-semibold mb-2">SharePoint Sites</h3>
               <p className="text-sm text-muted-foreground leading-relaxed">Enforce sensitivity labels, sharing policies, and ownership requirements across your entire SharePoint estate.</p>
             </div>
             <div className="glass-panel p-6 rounded-2xl border border-border/50 transition-all hover:-translate-y-1 duration-300">

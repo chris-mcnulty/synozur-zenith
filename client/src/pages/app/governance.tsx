@@ -997,7 +997,7 @@ export default function GovernancePage() {
       <div className="space-y-6 animate-in fade-in duration-500 pb-10">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div>
-            <h1 className="text-3xl font-bold tracking-tight">Site Governance</h1>
+            <h1 className="text-3xl font-bold tracking-tight">SharePoint Sites</h1>
             <p className="text-muted-foreground mt-1">Enumerate and inspect SharePoint sites across your tenant</p>
           </div>
         </div>
@@ -1014,7 +1014,7 @@ export default function GovernancePage() {
     <div className="space-y-6 animate-in fade-in duration-500 pb-10">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">Site Governance</h1>
+          <h1 className="text-3xl font-bold tracking-tight">SharePoint Sites</h1>
           <p className="text-muted-foreground mt-1">Enumerate and inspect SharePoint sites across your tenant</p>
         </div>
       </div>
