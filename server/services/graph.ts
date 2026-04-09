@@ -4210,7 +4210,7 @@ export interface SentMessageMeta {
 
 /**
  * Fetch a single page of Sent Items messages for a user, with minimal
- * $select and a sentDateTime range filter. Message body and subject are
+ * $select and a receivedDateTime range filter. Message body and subject are
  * never requested — only metadata needed for storage estimation.
  *
  * The 429/5xx retry behavior is delegated to graphFetchWithRetry.
@@ -4224,7 +4224,7 @@ export async function fetchSentMessagesPage(
   nextLink?: string,
 ): Promise<{ messages: SentMessageMeta[]; nextLink: string | null; status: number }> {
   const top = Math.min(Math.max(pageSize, 1), 1000);
-  const filter = `sentDateTime ge ${startIso} and sentDateTime lt ${endIso}`;
+  const filter = `receivedDateTime ge ${startIso} and receivedDateTime lt ${endIso}`;
   const select = "id,sentDateTime,hasAttachments,size,sender,toRecipients,ccRecipients,bccRecipients";
   const url =
     nextLink ??
@@ -4233,7 +4233,7 @@ export async function fetchSentMessagesPage(
       `?$select=${select}` +
       `&$filter=${encodeURIComponent(filter)}` +
       `&$top=${top}` +
-      `&$orderby=sentDateTime desc`;
+      `&$orderby=receivedDateTime desc`;
 
   const res = await graphFetchWithRetry(url, {
     headers: {
@@ -4242,6 +4242,13 @@ export async function fetchSentMessagesPage(
   });
 
   if (!res.ok) {
+    let errorBody = "";
+    try {
+      errorBody = await res.text();
+    } catch {}
+    console.warn(
+      `[fetchSentMessagesPage] Graph returned status ${res.status} for user ${userId}: ${errorBody.substring(0, 500)}`,
+    );
     return { messages: [], nextLink: null, status: res.status };
   }
 
