@@ -584,7 +584,7 @@ router.get("/api/admin/tenants/:id/reconsent", requireRole(ZENITH_ROLES.TENANT_A
       isReconsent: true,
     })).toString('base64url');
 
-    const consentUrl = `https://login.microsoftonline.com/${conn.domain}/adminconsent?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&state=${state}`;
+    const consentUrl = `https://login.microsoftonline.com/common/adminconsent?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&state=${state}`;
     res.json({ consentUrl, tenantDomain: conn.domain });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
