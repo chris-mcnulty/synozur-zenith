@@ -4259,7 +4259,7 @@ export async function fetchSentMessagesPage(
 ): Promise<{ messages: SentMessageMeta[]; nextLink: string | null; status: number }> {
   const top = Math.min(Math.max(pageSize, 1), 1000);
   const filter = `receivedDateTime ge ${startIso} and receivedDateTime lt ${endIso}`;
-  const select = "id,sentDateTime,hasAttachments,size,sender,toRecipients,ccRecipients,bccRecipients";
+  const select = "id,sentDateTime,hasAttachments,sender,toRecipients,ccRecipients,bccRecipients";
   const url =
     nextLink ??
     `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(userId)}` +
