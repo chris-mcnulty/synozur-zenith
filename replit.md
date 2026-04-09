@@ -37,6 +37,32 @@ The frontend utilizes React, Vite, TanStack Query, shadcn/ui, and wouter to deli
 - **CSV Export/Import**: Allows exporting workspace data to CSV (including custom fields) and importing updates for editable fields based on Site URL.
 - **Document Library Detail View**: Provides detailed views of content types, custom columns, and Syntex/AI models for document libraries, fetched live from Graph API.
 
+## Entra App Registration — Required Permissions (v4)
+
+### Application Permissions (Microsoft Graph)
+| Permission | Feature | Required |
+|---|---|---|
+| Sites.Read.All | Site Inventory | Yes |
+| Sites.ReadWrite.All | SPE Container Management | Yes |
+| Group.Read.All | Site Inventory | Yes |
+| Group.ReadWrite.All | Sensitivity Label Write-Back | Yes |
+| Directory.Read.All | Site Inventory | Yes |
+| Reports.Read.All | Usage Analytics | Yes |
+| User.Read.All | License Inventory | Yes |
+| Mail.Read | Email Storage Report | Yes |
+| InformationProtectionPolicy.Read.All | Purview Sensitivity Labels | Yes |
+| RecordsManagement.Read.All | Purview Retention Labels | Yes (requires M365 E5 Compliance) |
+| AuditLog.Read.All | License Sign-In Activity | No (optional) |
+
+### Delegated Permissions (Microsoft Graph)
+openid, profile, email, User.Read, offline_access, RecordsManagement.Read.All, Group.ReadWrite.All
+
+### SharePoint REST API Permissions
+| Permission | Type | Feature |
+|---|---|---|
+| AllSites.FullControl | Delegated | SPE container management |
+| Sites.FullControl.All | Application | SPE container management |
+
 ## External Dependencies
 - **Microsoft 365 / SharePoint**: Core platform for M365 governance.
 - **Microsoft Entra ID**: For SSO authentication and identity management.

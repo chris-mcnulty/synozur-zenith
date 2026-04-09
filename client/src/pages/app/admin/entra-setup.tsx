@@ -47,8 +47,11 @@ const GRAPH_PERMISSIONS = [
   { name: "Group.ReadWrite.All", description: "Sensitivity label write-back — update group properties" },
   { name: "Directory.Read.All", description: "Site inventory — read directory and tenant data" },
   { name: "Reports.Read.All", description: "Usage analytics — read Microsoft 365 usage reports" },
+  { name: "User.Read.All", description: "License inventory — read all users' license assignments" },
+  { name: "Mail.Read", description: "Email storage report — read mail in all mailboxes" },
   { name: "InformationProtectionPolicy.Read.All", description: "Purview sensitivity label sync" },
   { name: "RecordsManagement.Read.All", description: "Purview retention label sync (requires M365 E5 Compliance)" },
+  { name: "AuditLog.Read.All", description: "License inventory — user sign-in activity (optional)" },
 ];
 
 type CheckResult = { step: string; status: "pass" | "fail" | "warn"; message: string };

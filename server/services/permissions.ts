@@ -60,9 +60,30 @@ export const REQUIRED_PERMISSIONS: RequiredPermission[] = [
     required: true,
     licenseNote: "Requires M365 E5 Compliance or Records Management add-on",
   },
+  {
+    roleId: "df021288-bdef-4463-88db-98f22de89214",
+    name: "User.Read.All",
+    description: "Read all users' full profiles",
+    feature: "License Inventory",
+    required: true,
+  },
+  {
+    roleId: "810c84a8-4a9e-49e6-bf7d-12d183f40d01",
+    name: "Mail.Read",
+    description: "Read mail in all mailboxes",
+    feature: "Email Storage Report",
+    required: true,
+  },
+  {
+    roleId: "b0afded3-3588-46d8-8b3d-9842eff778da",
+    name: "AuditLog.Read.All",
+    description: "Read audit log and sign-in activity data",
+    feature: "License Inventory (Sign-In Activity)",
+    required: false,
+  },
 ];
 
-export const PERMISSIONS_VERSION = 3;
+export const PERMISSIONS_VERSION = 4;
 
 export interface PermissionCheckResult {
   granted: string[];
@@ -103,7 +124,7 @@ export async function checkTenantPermissions(
     const isGranted = grantedRoleIds.has(perm.roleId);
     if (isGranted) {
       granted.push(perm.name);
-    } else {
+    } else if (perm.required) {
       missing.push(perm.name);
     }
     details.push({ ...perm, status: isGranted ? "granted" : "missing" });

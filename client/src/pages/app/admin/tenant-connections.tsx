@@ -906,6 +906,11 @@ export default function TenantConnectionsPage() {
                               <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" />
                               <span className="text-xs text-emerald-500">Granted</span>
                             </div>
+                          ) : !perm.required ? (
+                            <div className="flex items-center gap-1">
+                              <AlertTriangle className="w-3.5 h-3.5 text-amber-500" />
+                              <span className="text-xs text-amber-500">Optional</span>
+                            </div>
                           ) : (
                             <div className="flex items-center gap-1">
                               <XCircle className="w-3.5 h-3.5 text-red-500" />
