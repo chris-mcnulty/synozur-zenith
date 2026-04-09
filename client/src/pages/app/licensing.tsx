@@ -52,6 +52,21 @@ interface Subscription {
   costPerUnit: number | null;
 }
 
+interface RawSubscription {
+  id: string;
+  displayName?: string | null;
+  skuDisplayName?: string | null;
+  skuPartNumber?: string | null;
+  totalUnits: number;
+  consumedUnits: number;
+  customPricePerUnit?: string | null;
+  costPerUnit?: number | null;
+}
+
+interface RawSubscriptionsResponse {
+  subscriptions?: RawSubscription[];
+}
+
 interface Assignment {
   id: string;
   userDisplayName: string;
@@ -64,6 +79,30 @@ interface Assignment {
   lastSignInDateTime: string | null;
 }
 
+interface RawAssignment {
+  id: string;
+  userDisplayName: string;
+  userPrincipalName: string;
+  userDepartment?: string | null;
+  department?: string | null;
+  userJobTitle?: string | null;
+  jobTitle?: string | null;
+  skuDisplayName?: string | null;
+  skuPartNumber?: string | null;
+  skuId: string;
+  accountEnabled: boolean;
+  lastSignInDate?: string | null;
+  lastSignInDateTime?: string | null;
+}
+
+interface RawAssignmentsResponse {
+  assignments?: RawAssignment[];
+  items?: RawAssignment[];
+  total?: number;
+  page?: number;
+  pageSize?: number;
+}
+
 interface AssignmentsResponse {
   items: Assignment[];
   total: number;
@@ -71,15 +110,86 @@ interface AssignmentsResponse {
   pageSize: number;
 }
 
+type FindingType = "unassigned" | "disabled_account" | "inactive_user" | "overlapping";
+type FindingStatus = "open" | "acknowledged" | "dismissed" | "resolved";
+
 interface Finding {
   id: string;
-  type: "unassigned" | "disabled_account" | "inactive_user" | "overlapping";
+  type: FindingType;
   userDisplayName: string | null;
   userPrincipalName: string | null;
   skuDisplayName: string | null;
   description: string;
   estimatedMonthlySavings: number | null;
-  status: "open" | "acknowledged" | "dismissed" | "resolved";
+  status: FindingStatus;
+}
+
+interface RawFinding {
+  id: string;
+  findingType?: string;
+  type?: string;
+  userDisplayName?: string | null;
+  userPrincipalName?: string | null;
+  skuDisplayName?: string | null;
+  description: string;
+  estimatedMonthlySavings?: string | number | null;
+  status: string;
+}
+
+interface RawFindingsResponse {
+  findings?: RawFinding[];
+}
+
+const FINDING_TYPE_MAP: Record<string, FindingType> = {
+  UNASSIGNED_LICENSE: "unassigned",
+  unassigned_license: "unassigned",
+  unassigned: "unassigned",
+  DISABLED_ACCOUNT: "disabled_account",
+  disabled_account: "disabled_account",
+  INACTIVE_USER: "inactive_user",
+  inactive_user: "inactive_user",
+  OVERLAP_DETECTION: "overlapping",
+  overlap_detection: "overlapping",
+  overlapping: "overlapping",
+};
+
+function normalizeSubscription(s: RawSubscription): Subscription {
+  return {
+    id: s.id,
+    skuDisplayName: s.displayName ?? s.skuDisplayName ?? s.skuPartNumber ?? "",
+    skuPartNumber: s.skuPartNumber ?? "",
+    totalUnits: s.totalUnits,
+    consumedUnits: s.consumedUnits,
+    costPerUnit: s.customPricePerUnit != null ? parseFloat(s.customPricePerUnit) : (s.costPerUnit ?? null),
+  };
+}
+
+function normalizeAssignment(a: RawAssignment): Assignment {
+  return {
+    id: a.id,
+    userDisplayName: a.userDisplayName,
+    userPrincipalName: a.userPrincipalName,
+    department: a.userDepartment ?? a.department ?? null,
+    jobTitle: a.userJobTitle ?? a.jobTitle ?? null,
+    skuDisplayName: a.skuDisplayName ?? a.skuPartNumber ?? "",
+    skuId: a.skuId,
+    accountEnabled: a.accountEnabled,
+    lastSignInDateTime: a.lastSignInDate ?? a.lastSignInDateTime ?? null,
+  };
+}
+
+function normalizeFinding(f: RawFinding): Finding {
+  const rawType = f.findingType ?? f.type ?? "";
+  return {
+    id: f.id,
+    type: FINDING_TYPE_MAP[rawType] ?? (rawType.toLowerCase() as FindingType),
+    userDisplayName: f.userDisplayName ?? null,
+    userPrincipalName: f.userPrincipalName ?? null,
+    skuDisplayName: f.skuDisplayName ?? null,
+    description: f.description,
+    estimatedMonthlySavings: f.estimatedMonthlySavings != null ? parseFloat(String(f.estimatedMonthlySavings)) : null,
+    status: (f.status ?? "open").toLowerCase() as FindingStatus,
+  };
 }
 
 // Helpers
@@ -107,7 +217,9 @@ function OverviewTab({ tenantConnectionId }: { tenantConnectionId: string | unde
       if (tenantConnectionId) params.set("tenantConnectionId", tenantConnectionId);
       const res = await fetch(`/api/licensing/subscriptions?${params}`, { credentials: "include" });
       if (!res.ok) return [];
-      return res.json();
+      const data: RawSubscriptionsResponse = await res.json();
+      const subs: RawSubscription[] = data.subscriptions ?? [];
+      return subs.map(normalizeSubscription);
     },
   });
 
@@ -117,7 +229,7 @@ function OverviewTab({ tenantConnectionId }: { tenantConnectionId: string | unde
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ costPerUnit }),
+        body: JSON.stringify({ price: costPerUnit, tenantConnectionId }),
       });
       if (!res.ok) throw new Error("Failed to update price");
       return res.json();
@@ -325,13 +437,16 @@ function AssignmentsTab({ tenantConnectionId }: { tenantConnectionId: string | u
       if (tenantConnectionId) params.set("tenantConnectionId", tenantConnectionId);
       if (search) params.set("search", search);
       if (skuFilter !== "all") params.set("skuId", skuFilter);
-      if (statusFilter !== "all") params.set("accountStatus", statusFilter);
+      if (statusFilter !== "all") params.set("accountEnabled", statusFilter === "enabled" ? "true" : "false");
       if (activityFilter !== "all") params.set("activity", activityFilter);
       params.set("page", String(page));
       params.set("pageSize", String(pageSize));
       const res = await fetch(`/api/licensing/assignments?${params}`, { credentials: "include" });
       if (!res.ok) throw new Error("Failed to load assignments");
-      return res.json();
+      const raw: RawAssignmentsResponse = await res.json();
+      const rawItems: RawAssignment[] = raw.assignments ?? raw.items ?? [];
+      const items = rawItems.map(normalizeAssignment);
+      return { items, total: raw.total ?? 0, page: raw.page ?? 1, pageSize: raw.pageSize ?? pageSize };
     },
   });
 
@@ -342,7 +457,9 @@ function AssignmentsTab({ tenantConnectionId }: { tenantConnectionId: string | u
       if (tenantConnectionId) params.set("tenantConnectionId", tenantConnectionId);
       const res = await fetch(`/api/licensing/subscriptions?${params}`, { credentials: "include" });
       if (!res.ok) return [];
-      return res.json();
+      const data: RawSubscriptionsResponse = await res.json();
+      const subs: RawSubscription[] = data.subscriptions ?? [];
+      return subs.map(normalizeSubscription);
     },
   });
 
@@ -355,7 +472,7 @@ function AssignmentsTab({ tenantConnectionId }: { tenantConnectionId: string | u
     if (tenantConnectionId) params.set("tenantConnectionId", tenantConnectionId);
     if (search) params.set("search", search);
     if (skuFilter !== "all") params.set("skuId", skuFilter);
-    if (statusFilter !== "all") params.set("accountStatus", statusFilter);
+    if (statusFilter !== "all") params.set("accountEnabled", statusFilter === "enabled" ? "true" : "false");
     if (activityFilter !== "all") params.set("activity", activityFilter);
     const res = await fetch(`/api/licensing/assignments/export?${params}`, { credentials: "include" });
     if (!res.ok) return;
@@ -533,19 +650,26 @@ function OptimizationTab({ tenantConnectionId }: { tenantConnectionId: string | 
       if (tenantConnectionId) params.set("tenantConnectionId", tenantConnectionId);
       const res = await fetch(`/api/licensing/optimization/findings?${params}`, { credentials: "include" });
       if (!res.ok) return [];
-      return res.json();
+      const data: RawFindingsResponse = await res.json();
+      const rawFindings: RawFinding[] = data.findings ?? [];
+      return rawFindings.map(normalizeFinding);
     },
   });
 
   const actionMutation = useMutation({
     mutationFn: async ({ id, action }: { id: string; action: string }) => {
+      const statusMap: Record<string, string> = {
+        acknowledge: "ACKNOWLEDGED",
+        dismiss: "DISMISSED",
+        resolve: "RESOLVED",
+      };
       const res = await fetch(`/api/licensing/optimization/findings/${id}`, {
         method: "PATCH",
         credentials: "include",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ status: action }),
+        body: JSON.stringify({ status: statusMap[action] ?? action.toUpperCase() }),
       });
       if (!res.ok) throw new Error(`Failed to ${action} finding`);
       return res.json();
