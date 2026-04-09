@@ -96,8 +96,9 @@ export default function LoginPage() {
       />
       <div className="absolute inset-0 z-0 pointer-events-none bg-gradient-to-t from-background/80 via-background/60 to-background/50" />
       <div className="mb-8 text-center relative z-10">
-        <div className="flex items-center justify-center gap-2 mb-2">
-          <img src="/images/brand/synozur-mark-color.png" alt="Zenith" className="w-10 h-10" />
+        <div className="flex items-center justify-center gap-3 mb-2">
+          <img src="/images/brand/synozur-logo-color.png" alt="Synozur" className="h-7" />
+          <span className="text-muted-foreground/50 font-light text-xl">|</span>
           <span className="font-bold text-2xl tracking-tight">Zenith</span>
         </div>
         <p className="text-muted-foreground text-sm">Microsoft 365 Governance Platform</p>

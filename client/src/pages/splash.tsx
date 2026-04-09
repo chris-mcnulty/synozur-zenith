@@ -16,9 +16,10 @@ export default function SplashPage() {
       {/* Navigation */}
       <nav className="relative z-10 w-full border-b border-border/40 bg-background/50 backdrop-blur-md sticky top-0">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <img src="/images/brand/synozur-mark-color.png" alt="Zenith" className="w-8 h-8" />
-            <span className="font-bold text-xl tracking-tight">Zenith</span>
+          <div className="flex items-center gap-3">
+            <img src="/images/brand/synozur-logo-color.png" alt="Synozur" className="h-6" />
+            <span className="text-muted-foreground/50 font-light">|</span>
+            <span className="font-bold text-lg tracking-tight">Zenith</span>
           </div>
           <div className="hidden md:flex items-center space-x-8 text-sm font-medium text-muted-foreground">
             <a href="#product" className="hover:text-foreground transition-colors">Product</a>
@@ -37,6 +38,8 @@ export default function SplashPage() {
       </nav>
       {/* Hero Section */}
       <main className="flex-1 flex flex-col items-center justify-center relative z-10 w-full px-4 text-center pt-24 pb-32">
+        <img src="/images/brand/zenith-logo-white.png" alt="Zenith" className="h-36 md:h-48 mb-8" />
+
         <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-primary/10 text-primary text-sm font-medium mb-8 border border-primary/20 backdrop-blur-sm shadow-sm">
           <span className="flex h-2 w-2 rounded-full bg-primary animate-pulse"></span>
           Now available for Microsoft 365
@@ -254,9 +257,8 @@ export default function SplashPage() {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-16">
           <div className="grid grid-cols-2 md:grid-cols-4 gap-8 lg:gap-12">
             <div className="col-span-2 md:col-span-1">
-              <div className="flex items-center gap-2 mb-4">
-                <img src="/images/brand/synozur-mark-color.png" alt="Zenith" className="w-8 h-8" />
-                <span className="font-bold text-xl tracking-tight">Zenith</span>
+              <div className="flex items-center mb-4">
+                <img src="/images/brand/zenith-logo-color.png" alt="Zenith" className="h-9" />
               </div>
               <p className="text-sm text-muted-foreground leading-relaxed mb-5">
                 Enterprise governance for Microsoft 365. Part of the Synozur application portfolio.

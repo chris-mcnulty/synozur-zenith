@@ -687,7 +687,7 @@ function AboutPanel() {
     <div className="space-y-8">
       <div className="flex items-start gap-6">
         <div className="w-16 h-16 rounded-2xl bg-primary/10 flex items-center justify-center shrink-0">
-          <img src="/images/brand/synozur-mark-color.png" alt="Zenith" className="w-10 h-10" />
+          <img src="/images/brand/zenith-logo-color.png" alt="Zenith" className="h-10" />
         </div>
         <div>
           <h2 className="text-2xl font-bold tracking-tight">Zenith</h2>
