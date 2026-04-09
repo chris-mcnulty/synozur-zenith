@@ -3834,40 +3834,7 @@ function mapPermissionToLink(p: any, item?: { id: string; name: string; path: st
   };
 }
 
-async function collectAllDriveItems(
-  token: string,
-  driveBaseUrl: string,
-  contextLabel: string,
-): Promise<{ items: Array<{ id: string; name: string; path: string; isFolder: boolean }>; errors: Array<{ context: string; message: string }> }> {
-  const allItems: Array<{ id: string; name: string; path: string; isFolder: boolean }> = [];
-  const errors: Array<{ context: string; message: string }> = [];
-
-  const queue: Array<{ folderId: string | null; folderPath: string }> = [{ folderId: null, folderPath: "" }];
-
-  while (queue.length > 0) {
-    const { folderId, folderPath } = queue.shift()!;
-    const url = folderId
-      ? `${driveBaseUrl}/items/${folderId}/children?$select=id,name,folder,file&$top=200`
-      : `${driveBaseUrl}/root/children?$select=id,name,folder,file&$top=200`;
-    const { items: children, error } = await fetchAllPages<any>(url, token);
-    if (error) {
-      errors.push({ context: `${contextLabel}:list:${folderPath || "/"}`, message: error });
-      continue;
-    }
-    for (const child of children) {
-      const childPath = `${folderPath}/${child.name}`;
-      const isFolder = !!child.folder;
-      allItems.push({ id: child.id, name: child.name, path: childPath, isFolder });
-      if (isFolder) {
-        queue.push({ folderId: child.id, folderPath: childPath });
-      }
-    }
-  }
-
-  return { items: allItems, errors };
-}
-
-async function scanDriveItemsForLinks(
+async function scanDriveForSharedItems(
   token: string,
   driveBaseUrl: string,
   contextLabel: string,
@@ -3887,28 +3854,38 @@ async function scanDriveItemsForLinks(
   }
   itemsScanned++;
 
-  const { items: allItems, errors: listErrors } = await collectAllDriveItems(token, driveBaseUrl, contextLabel);
-  errors.push(...listErrors);
+  const searchUrl = `${driveBaseUrl}/search(q='*')?$select=id,name,parentReference,shared&$top=200`;
+  const { items: searchResults, error: searchError } = await fetchAllPages<any>(searchUrl, token);
+  if (searchError) {
+    errors.push({ context: `${contextLabel}:search`, message: searchError });
+    return { permissions, itemsScanned, errors };
+  }
 
-  for (const item of allItems) {
+  const sharedItems = searchResults.filter((item: any) => item.shared);
+  itemsScanned += searchResults.length;
+
+  for (const item of sharedItems) {
+    const itemPath = item.parentReference?.path
+      ? `${item.parentReference.path.replace(/^\/drive\/root:?/, "")}/${item.name}`
+      : `/${item.name}`;
     try {
       const { items: perms, error: permError } = await fetchAllPages<any>(
         `${driveBaseUrl}/items/${item.id}/permissions`,
         token,
       );
       if (permError) {
-        errors.push({ context: `${contextLabel}:item:${item.name}`, message: permError });
+        errors.push({ context: `${contextLabel}:perm:${item.name}`, message: permError });
+        continue;
       }
 
       for (const p of perms) {
         if (p.link) {
-          permissions.push(mapPermissionToLink(p, { id: item.id, name: item.name, path: item.path }));
+          permissions.push(mapPermissionToLink(p, { id: item.id, name: item.name, path: itemPath }));
         }
       }
     } catch (err: any) {
-      errors.push({ context: `${contextLabel}:item:${item.name}`, message: err.message });
+      errors.push({ context: `${contextLabel}:perm:${item.name}`, message: err.message });
     }
-    itemsScanned++;
   }
 
   return { permissions, itemsScanned, errors };
@@ -3918,15 +3895,49 @@ export async function getSharingLinks(
   token: string,
   siteId: string,
 ): Promise<DriveItemSharingResult> {
+  const allPermissions: SharingLinkPermission[] = [];
+  const allErrors: Array<{ context: string; message: string }> = [];
+  let totalItemsScanned = 0;
+
   try {
-    return await scanDriveItemsForLinks(
+    const drivesResult = await fetchAllPages<any>(
+      `https://graph.microsoft.com/v1.0/sites/${siteId}/drives?$select=id,name`,
       token,
-      `https://graph.microsoft.com/v1.0/sites/${siteId}/drive`,
-      `sp:${siteId}`,
     );
+    if (drivesResult.error) {
+      allErrors.push({ context: `sp:${siteId}:drives`, message: drivesResult.error });
+      return { permissions: allPermissions, itemsScanned: totalItemsScanned, errors: allErrors };
+    }
+
+    const drives = drivesResult.items;
+    if (drives.length === 0) {
+      const fallback = await scanDriveForSharedItems(
+        token,
+        `https://graph.microsoft.com/v1.0/sites/${siteId}/drive`,
+        `sp:${siteId}:default`,
+      );
+      return fallback;
+    }
+
+    for (const drive of drives) {
+      try {
+        const result = await scanDriveForSharedItems(
+          token,
+          `https://graph.microsoft.com/v1.0/drives/${drive.id}`,
+          `sp:${siteId}:${drive.name}`,
+        );
+        allPermissions.push(...result.permissions);
+        allErrors.push(...result.errors);
+        totalItemsScanned += result.itemsScanned;
+      } catch (err: any) {
+        allErrors.push({ context: `sp:${siteId}:${drive.name}`, message: err.message });
+      }
+    }
   } catch (err: any) {
-    return { permissions: [], itemsScanned: 0, errors: [{ context: `sp:${siteId}`, message: err.message }] };
+    allErrors.push({ context: `sp:${siteId}`, message: err.message });
   }
+
+  return { permissions: allPermissions, itemsScanned: totalItemsScanned, errors: allErrors };
 }
 
 export async function getOneDriveSharingLinks(
@@ -3934,7 +3945,7 @@ export async function getOneDriveSharingLinks(
   userId: string,
 ): Promise<DriveItemSharingResult> {
   try {
-    return await scanDriveItemsForLinks(
+    return await scanDriveForSharedItems(
       token,
       `https://graph.microsoft.com/v1.0/users/${userId}/drive`,
       `od:${userId}`,
