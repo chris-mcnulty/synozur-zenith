@@ -494,6 +494,46 @@ async function ensureTenantConnectionsSchema() {
       )
     `);
 
+    // ── Backfill columns that may be missing on tables created by earlier migrations ──
+    await client.query(`
+      ALTER TABLE content_types ADD COLUMN IF NOT EXISTS scope text NOT NULL DEFAULT 'HUB';
+      ALTER TABLE content_types ADD COLUMN IF NOT EXISTS subscribed_site_count integer NOT NULL DEFAULT 0;
+      ALTER TABLE content_types ADD COLUMN IF NOT EXISTS library_usage_count integer NOT NULL DEFAULT 0;
+      ALTER TABLE content_types ADD COLUMN IF NOT EXISTS site_usage_count integer NOT NULL DEFAULT 0;
+      ALTER TABLE content_types ADD COLUMN IF NOT EXISTS is_hub boolean NOT NULL DEFAULT false;
+      ALTER TABLE content_types ADD COLUMN IF NOT EXISTS "group" text;
+      ALTER TABLE content_types ADD COLUMN IF NOT EXISTS description text;
+      ALTER TABLE content_types ADD COLUMN IF NOT EXISTS synced_at timestamp DEFAULT now();
+    `);
+
+    await client.query(`
+      ALTER TABLE library_content_types ADD COLUMN IF NOT EXISTS workspace_id varchar NOT NULL DEFAULT '';
+      ALTER TABLE library_content_types ADD COLUMN IF NOT EXISTS tenant_connection_id varchar NOT NULL DEFAULT '';
+      ALTER TABLE library_content_types ADD COLUMN IF NOT EXISTS parent_content_type_id text;
+      ALTER TABLE library_content_types ADD COLUMN IF NOT EXISTS "group" text;
+      ALTER TABLE library_content_types ADD COLUMN IF NOT EXISTS description text;
+      ALTER TABLE library_content_types ADD COLUMN IF NOT EXISTS scope text NOT NULL DEFAULT 'LIBRARY';
+      ALTER TABLE library_content_types ADD COLUMN IF NOT EXISTS is_built_in boolean NOT NULL DEFAULT false;
+      ALTER TABLE library_content_types ADD COLUMN IF NOT EXISTS is_inherited boolean NOT NULL DEFAULT false;
+      ALTER TABLE library_content_types ADD COLUMN IF NOT EXISTS hidden boolean NOT NULL DEFAULT false;
+      ALTER TABLE library_content_types ADD COLUMN IF NOT EXISTS last_sync_at timestamp DEFAULT now();
+    `);
+
+    await client.query(`
+      ALTER TABLE library_columns ADD COLUMN IF NOT EXISTS workspace_id varchar NOT NULL DEFAULT '';
+      ALTER TABLE library_columns ADD COLUMN IF NOT EXISTS tenant_connection_id varchar NOT NULL DEFAULT '';
+      ALTER TABLE library_columns ADD COLUMN IF NOT EXISTS column_group text;
+      ALTER TABLE library_columns ADD COLUMN IF NOT EXISTS description text;
+      ALTER TABLE library_columns ADD COLUMN IF NOT EXISTS scope text NOT NULL DEFAULT 'LIBRARY';
+      ALTER TABLE library_columns ADD COLUMN IF NOT EXISTS is_custom boolean NOT NULL DEFAULT false;
+      ALTER TABLE library_columns ADD COLUMN IF NOT EXISTS is_syntex_managed boolean NOT NULL DEFAULT false;
+      ALTER TABLE library_columns ADD COLUMN IF NOT EXISTS is_sealed boolean NOT NULL DEFAULT false;
+      ALTER TABLE library_columns ADD COLUMN IF NOT EXISTS is_read_only boolean NOT NULL DEFAULT false;
+      ALTER TABLE library_columns ADD COLUMN IF NOT EXISTS is_indexed boolean NOT NULL DEFAULT false;
+      ALTER TABLE library_columns ADD COLUMN IF NOT EXISTS is_required boolean NOT NULL DEFAULT false;
+      ALTER TABLE library_columns ADD COLUMN IF NOT EXISTS last_sync_at timestamp DEFAULT now();
+    `);
+
     await client.query(`
       CREATE INDEX IF NOT EXISTS idx_license_subs_tenant ON license_subscriptions(tenant_connection_id);
       CREATE INDEX IF NOT EXISTS idx_license_asgn_tenant ON license_assignments(tenant_connection_id);
