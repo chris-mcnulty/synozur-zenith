@@ -6,6 +6,7 @@ import { decryptToken } from "../utils/encryption";
 import { runTeamsRecordingsDiscovery } from "../services/recordings-discovery";
 import { runTeamsInventoryDiscovery } from "../services/teams-inventory-discovery";
 import { runOneDriveInventoryDiscovery } from "../services/onedrive-inventory-discovery";
+import { runSharingLinkDiscovery } from "../services/sharing-link-discovery";
 
 const router = Router();
 
@@ -300,6 +301,36 @@ router.post(
     runOneDriveInventoryDiscovery(conn.id, conn.tenantId, clientId, clientSecret)
       .catch((err) => {
         console.error("[onedrive-inventory] discovery failed:", err);
+      });
+  },
+);
+
+// POST /api/admin/tenants/:id/sharing-links/sync — trigger sharing link discovery
+router.post(
+  "/api/admin/tenants/:id/sharing-links/sync",
+  requireAuth(),
+  requireRole("tenant_admin"),
+  async (req: AuthenticatedRequest, res) => {
+    const conn = await storage.getTenantConnection(req.params.id);
+    if (!conn) return res.status(404).json({ message: "Tenant connection not found" });
+
+    if (!conn.contentGovernanceEnabled) {
+      return res.status(403).json({ message: "Content Governance is disabled for this tenant. Enable it in Feature Settings before running a scan." });
+    }
+
+    const allowedIds = await getOrgTenantConnectionIds(req.user);
+    if (allowedIds && !allowedIds.includes(conn.id)) {
+      return res.status(403).json({ message: "Access denied" });
+    }
+
+    const clientId = conn.clientId || process.env.AZURE_CLIENT_ID!;
+    const clientSecret = getEffectiveClientSecret(conn);
+
+    res.json({ message: "Sharing link discovery started" });
+
+    runSharingLinkDiscovery(conn.id, conn.tenantId, clientId, clientSecret)
+      .catch((err) => {
+        console.error("[sharing-links] discovery failed:", err);
       });
   },
 );
