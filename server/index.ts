@@ -434,6 +434,67 @@ async function ensureTenantConnectionsSchema() {
     `);
 
     await client.query(`
+      CREATE TABLE IF NOT EXISTS content_types (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        tenant_connection_id varchar NOT NULL,
+        content_type_id text NOT NULL,
+        name text NOT NULL,
+        "group" text,
+        description text,
+        is_hub boolean NOT NULL DEFAULT false,
+        scope text NOT NULL DEFAULT 'HUB',
+        subscribed_site_count integer NOT NULL DEFAULT 0,
+        library_usage_count integer NOT NULL DEFAULT 0,
+        site_usage_count integer NOT NULL DEFAULT 0,
+        synced_at timestamp DEFAULT now(),
+        CONSTRAINT uq_tenant_content_type UNIQUE (tenant_connection_id, content_type_id)
+      )
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS library_content_types (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        workspace_id varchar NOT NULL,
+        tenant_connection_id varchar NOT NULL,
+        document_library_id varchar NOT NULL,
+        content_type_id text NOT NULL,
+        parent_content_type_id text,
+        name text NOT NULL,
+        "group" text,
+        description text,
+        scope text NOT NULL DEFAULT 'LIBRARY',
+        is_built_in boolean NOT NULL DEFAULT false,
+        is_inherited boolean NOT NULL DEFAULT false,
+        hidden boolean NOT NULL DEFAULT false,
+        last_sync_at timestamp DEFAULT now(),
+        CONSTRAINT uq_library_content_type UNIQUE (document_library_id, content_type_id)
+      )
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS library_columns (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        workspace_id varchar NOT NULL,
+        tenant_connection_id varchar NOT NULL,
+        document_library_id varchar NOT NULL,
+        column_internal_name text NOT NULL,
+        display_name text NOT NULL,
+        column_type text NOT NULL,
+        column_group text,
+        description text,
+        scope text NOT NULL DEFAULT 'LIBRARY',
+        is_custom boolean NOT NULL DEFAULT false,
+        is_syntex_managed boolean NOT NULL DEFAULT false,
+        is_sealed boolean NOT NULL DEFAULT false,
+        is_read_only boolean NOT NULL DEFAULT false,
+        is_indexed boolean NOT NULL DEFAULT false,
+        is_required boolean NOT NULL DEFAULT false,
+        last_sync_at timestamp DEFAULT now(),
+        CONSTRAINT uq_library_column UNIQUE (document_library_id, column_internal_name)
+      )
+    `);
+
+    await client.query(`
       CREATE INDEX IF NOT EXISTS idx_license_subs_tenant ON license_subscriptions(tenant_connection_id);
       CREATE INDEX IF NOT EXISTS idx_license_asgn_tenant ON license_assignments(tenant_connection_id);
       CREATE INDEX IF NOT EXISTS idx_cg_snapshots_tenant ON content_governance_snapshots(tenant_connection_id);
@@ -442,6 +503,11 @@ async function ensureTenantConnectionsSchema() {
       CREATE INDEX IF NOT EXISTS idx_user_inventory_tenant_status ON user_inventory(tenant_connection_id, discovery_status);
       CREATE INDEX IF NOT EXISTS idx_user_inventory_runs_tenant ON user_inventory_runs(tenant_connection_id, started_at DESC);
       CREATE INDEX IF NOT EXISTS idx_email_storage_reports_tenant ON email_storage_reports(tenant_connection_id, started_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_content_types_tenant ON content_types(tenant_connection_id);
+      CREATE INDEX IF NOT EXISTS idx_lib_ct_doclib ON library_content_types(document_library_id);
+      CREATE INDEX IF NOT EXISTS idx_lib_ct_tenant ON library_content_types(tenant_connection_id);
+      CREATE INDEX IF NOT EXISTS idx_lib_col_doclib ON library_columns(document_library_id);
+      CREATE INDEX IF NOT EXISTS idx_lib_col_tenant ON library_columns(tenant_connection_id);
     `);
 
     log('Schema migration ensureTenantConnectionsSchema completed');
