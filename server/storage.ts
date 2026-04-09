@@ -114,6 +114,9 @@ import {
   sharingLinksInventory,
   type SharingLink,
   type InsertSharingLink,
+  sharingLinkDiscoveryRuns,
+  type SharingLinkDiscoveryRun,
+  type InsertSharingLinkDiscoveryRun,
   governanceReviewTasks,
   governanceReviewFindings,
   type GovernanceReviewFinding,
@@ -359,6 +362,18 @@ export interface IStorage {
     page: number;
     pageSize: number;
   }): Promise<{ items: SharingLink[]; total: number }>;
+  createSharingLinkDiscoveryRun(data: InsertSharingLinkDiscoveryRun): Promise<SharingLinkDiscoveryRun>;
+  updateSharingLinkDiscoveryRun(id: string, updates: {
+    status?: string;
+    completedAt?: Date;
+    sharePointLinksFound?: number;
+    oneDriveLinksFound?: number;
+    sitesScanned?: number;
+    usersScanned?: number;
+    itemsScanned?: number;
+    errors?: Array<{ context: string; message: string }>;
+  }): Promise<SharingLinkDiscoveryRun | undefined>;
+  getLatestSharingLinkDiscoveryRun(tenantConnectionId: string): Promise<SharingLinkDiscoveryRun | undefined>;
 
   // Content Governance - review findings
   createGovernanceReviewFinding(data: InsertGovernanceReviewFinding): Promise<GovernanceReviewFinding>;
@@ -938,6 +953,7 @@ export class DatabaseStorage implements IStorage {
       await tx.delete(speContainers).where(eq(speContainers.tenantConnectionId, id));
       await tx.delete(speContainerTypes).where(eq(speContainerTypes.tenantConnectionId, id));
 
+      await tx.delete(sharingLinkDiscoveryRuns).where(eq(sharingLinkDiscoveryRuns.tenantConnectionId, id));
       await tx.delete(teamsRecordings).where(eq(teamsRecordings.tenantConnectionId, id));
       await tx.delete(teamsDiscoveryRuns).where(eq(teamsDiscoveryRuns.tenantConnectionId, id));
       await tx.delete(teamsInventory).where(eq(teamsInventory.tenantConnectionId, id));
@@ -1057,6 +1073,7 @@ export class DatabaseStorage implements IStorage {
           await tx.delete(workspaces).where(inArray(workspaces.id, wsIds));
         }
 
+        await tx.delete(sharingLinkDiscoveryRuns).where(inArray(sharingLinkDiscoveryRuns.tenantConnectionId, connIds));
         await tx.delete(teamsRecordings).where(inArray(teamsRecordings.tenantConnectionId, connIds));
         await tx.delete(teamsDiscoveryRuns).where(inArray(teamsDiscoveryRuns.tenantConnectionId, connIds));
         await tx.delete(channelsInventory).where(inArray(channelsInventory.tenantConnectionId, connIds));
@@ -2185,11 +2202,14 @@ export class DatabaseStorage implements IStorage {
       .insert(sharingLinksInventory)
       .values(valuesToWrite)
       .onConflictDoUpdate({
-        target: [sharingLinksInventory.tenantConnectionId, sharingLinksInventory.linkId],
+        target: [sharingLinksInventory.tenantConnectionId, sharingLinksInventory.resourceId, sharingLinksInventory.itemId, sharingLinksInventory.linkId],
         set: {
           resourceType: valuesToWrite.resourceType,
           resourceId: valuesToWrite.resourceId,
           resourceName: valuesToWrite.resourceName,
+          itemId: valuesToWrite.itemId,
+          itemName: valuesToWrite.itemName,
+          itemPath: valuesToWrite.itemPath,
           linkType: valuesToWrite.linkType,
           linkScope: valuesToWrite.linkScope,
           createdBy: valuesToWrite.createdBy,
@@ -2234,6 +2254,36 @@ export class DatabaseStorage implements IStorage {
 
     const decrypted = await this.decryptRows(rows, "sharing_links_inventory") as SharingLink[];
     return { items: decrypted, total: countRow?.total ?? 0 };
+  }
+
+  async createSharingLinkDiscoveryRun(data: InsertSharingLinkDiscoveryRun): Promise<SharingLinkDiscoveryRun> {
+    const [result] = await db.insert(sharingLinkDiscoveryRuns).values(data).returning();
+    return result;
+  }
+
+  async updateSharingLinkDiscoveryRun(id: string, updates: {
+    status?: string;
+    completedAt?: Date;
+    sharePointLinksFound?: number;
+    oneDriveLinksFound?: number;
+    sitesScanned?: number;
+    usersScanned?: number;
+    itemsScanned?: number;
+    errors?: Array<{ context: string; message: string }>;
+  }): Promise<SharingLinkDiscoveryRun | undefined> {
+    const [result] = await db.update(sharingLinkDiscoveryRuns)
+      .set(updates)
+      .where(eq(sharingLinkDiscoveryRuns.id, id))
+      .returning();
+    return result;
+  }
+
+  async getLatestSharingLinkDiscoveryRun(tenantConnectionId: string): Promise<SharingLinkDiscoveryRun | undefined> {
+    const [result] = await db.select().from(sharingLinkDiscoveryRuns)
+      .where(eq(sharingLinkDiscoveryRuns.tenantConnectionId, tenantConnectionId))
+      .orderBy(desc(sharingLinkDiscoveryRuns.startedAt))
+      .limit(1);
+    return result;
   }
 
   // ── Content Governance: Review Findings ──────────────────────────────────
@@ -2648,6 +2698,8 @@ export class DatabaseStorage implements IStorage {
     const links = await db.delete(sharingLinksInventory)
       .where(eq(sharingLinksInventory.tenantConnectionId, tenantConnectionId))
       .returning({ id: sharingLinksInventory.id });
+    await db.delete(sharingLinkDiscoveryRuns)
+      .where(eq(sharingLinkDiscoveryRuns.tenantConnectionId, tenantConnectionId));
     const tasks = await db.select({ id: governanceReviewTasks.id })
       .from(governanceReviewTasks)
       .where(eq(governanceReviewTasks.tenantConnectionId, tenantConnectionId));

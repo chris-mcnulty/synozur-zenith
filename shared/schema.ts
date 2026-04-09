@@ -1185,6 +1185,9 @@ export const sharingLinksInventory = pgTable("sharing_links_inventory", {
   resourceType: text("resource_type").notNull(), // SHAREPOINT_SITE, ONEDRIVE
   resourceId: text("resource_id").notNull(),
   resourceName: text("resource_name"),
+  itemId: text("item_id"),
+  itemName: text("item_name"),
+  itemPath: text("item_path"),
   linkId: text("link_id").notNull(),
   linkType: text("link_type").notNull(), // anonymous, organization, specific
   linkScope: text("link_scope"), // read, write, review
@@ -1196,7 +1199,7 @@ export const sharingLinksInventory = pgTable("sharing_links_inventory", {
   lastDiscoveredAt: timestamp("last_discovered_at").defaultNow(),
   createdAt: timestamp("created_at").defaultNow(),
 }, (table) => [
-  unique("uq_tenant_link").on(table.tenantConnectionId, table.linkId),
+  unique("uq_tenant_item_link").on(table.tenantConnectionId, table.resourceId, table.itemId, table.linkId),
 ]);
 
 export const insertSharingLinkSchema = createInsertSchema(sharingLinksInventory).omit({
@@ -1205,6 +1208,29 @@ export const insertSharingLinkSchema = createInsertSchema(sharingLinksInventory)
 });
 export type InsertSharingLink = z.infer<typeof insertSharingLinkSchema>;
 export type SharingLink = typeof sharingLinksInventory.$inferSelect;
+
+export const sharingLinkDiscoveryRuns = pgTable("sharing_link_discovery_runs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantConnectionId: varchar("tenant_connection_id").notNull(),
+  startedAt: timestamp("started_at").defaultNow().notNull(),
+  completedAt: timestamp("completed_at"),
+  status: text("status").notNull().default("RUNNING"), // RUNNING | COMPLETED | FAILED | PARTIAL
+  sharePointLinksFound: integer("share_point_links_found").default(0),
+  oneDriveLinksFound: integer("one_drive_links_found").default(0),
+  sitesScanned: integer("sites_scanned").default(0),
+  usersScanned: integer("users_scanned").default(0),
+  itemsScanned: integer("items_scanned").default(0),
+  errors: jsonb("errors").$type<Array<{ context: string; message: string }>>(),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertSharingLinkDiscoveryRunSchema = createInsertSchema(sharingLinkDiscoveryRuns).omit({
+  id: true,
+  createdAt: true,
+  startedAt: true,
+});
+export type InsertSharingLinkDiscoveryRun = z.infer<typeof insertSharingLinkDiscoveryRunSchema>;
+export type SharingLinkDiscoveryRun = typeof sharingLinkDiscoveryRuns.$inferSelect;
 
 export const governanceReviewTasks = pgTable("governance_review_tasks", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),

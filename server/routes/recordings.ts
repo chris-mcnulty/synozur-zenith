@@ -385,6 +385,24 @@ router.post(
   },
 );
 
+// GET /api/admin/tenants/:id/sharing-links/latest-run — latest sharing link discovery run status
+router.get(
+  "/api/admin/tenants/:id/sharing-links/latest-run",
+  requireAuth(),
+  async (req: AuthenticatedRequest, res) => {
+    const conn = await storage.getTenantConnection(req.params.id);
+    if (!conn) return res.status(404).json({ message: "Tenant connection not found" });
+
+    const allowedIds = await getOrgTenantConnectionIds(req.user);
+    if (allowedIds && !allowedIds.includes(conn.id)) {
+      return res.status(403).json({ message: "Access denied" });
+    }
+
+    const run = await storage.getLatestSharingLinkDiscoveryRun(conn.id);
+    res.json(run ?? null);
+  },
+);
+
 // GET /api/admin/tenants/:id/recordings/latest-run — latest run status for polling
 router.get(
   "/api/admin/tenants/:id/recordings/latest-run",

@@ -3779,86 +3779,159 @@ export interface SharingLinkPermission {
   grantedToIdentitiesV2?: any[];
   expirationDateTime?: string;
   hasPassword?: boolean;
+  itemId?: string;
+  itemName?: string;
+  itemPath?: string;
+}
+
+export interface DriveItemSharingResult {
+  permissions: SharingLinkPermission[];
+  itemsScanned: number;
+  errors: Array<{ context: string; message: string }>;
+}
+
+async function fetchAllPages<T>(url: string, token: string): Promise<{ items: T[]; error?: string }> {
+  const items: T[] = [];
+  let nextUrl: string | null = url;
+  while (nextUrl) {
+    const res = await fetch(nextUrl, { headers: { Authorization: `Bearer ${token}` } });
+    if (!res.ok) {
+      const errText = await res.text();
+      return { items, error: `Graph API error ${res.status}: ${errText.substring(0, 300)}` };
+    }
+    const data = await res.json();
+    items.push(...(data.value || []));
+    nextUrl = data["@odata.nextLink"] || null;
+  }
+  return { items };
+}
+
+function mapPermissionToLink(p: any, item?: { id: string; name: string; path: string }): SharingLinkPermission {
+  return {
+    id: p.id,
+    roles: p.roles || [],
+    link: {
+      scope: p.link.scope,
+      type: p.link.type,
+      webUrl: p.link.webUrl,
+      preventsDownload: p.link.preventsDownload,
+    },
+    grantedToIdentitiesV2: p.grantedToIdentitiesV2,
+    expirationDateTime: p.expirationDateTime,
+    hasPassword: p.hasPassword,
+    itemId: item?.id,
+    itemName: item?.name,
+    itemPath: item?.path,
+  };
+}
+
+async function collectAllDriveItems(
+  token: string,
+  driveBaseUrl: string,
+  contextLabel: string,
+): Promise<{ items: Array<{ id: string; name: string; path: string; isFolder: boolean }>; errors: Array<{ context: string; message: string }> }> {
+  const allItems: Array<{ id: string; name: string; path: string; isFolder: boolean }> = [];
+  const errors: Array<{ context: string; message: string }> = [];
+
+  const queue: Array<{ folderId: string | null; folderPath: string }> = [{ folderId: null, folderPath: "" }];
+
+  while (queue.length > 0) {
+    const { folderId, folderPath } = queue.shift()!;
+    const url = folderId
+      ? `${driveBaseUrl}/items/${folderId}/children?$select=id,name,folder,file&$top=200`
+      : `${driveBaseUrl}/root/children?$select=id,name,folder,file&$top=200`;
+    const { items: children, error } = await fetchAllPages<any>(url, token);
+    if (error) {
+      errors.push({ context: `${contextLabel}:list:${folderPath || "/"}`, message: error });
+      continue;
+    }
+    for (const child of children) {
+      const childPath = `${folderPath}/${child.name}`;
+      const isFolder = !!child.folder;
+      allItems.push({ id: child.id, name: child.name, path: childPath, isFolder });
+      if (isFolder) {
+        queue.push({ folderId: child.id, folderPath: childPath });
+      }
+    }
+  }
+
+  return { items: allItems, errors };
+}
+
+async function scanDriveItemsForLinks(
+  token: string,
+  driveBaseUrl: string,
+  contextLabel: string,
+): Promise<DriveItemSharingResult> {
+  const permissions: SharingLinkPermission[] = [];
+  const errors: Array<{ context: string; message: string }> = [];
+  let itemsScanned = 0;
+
+  const rootPermsResult = await fetchAllPages<any>(`${driveBaseUrl}/root/permissions`, token);
+  if (rootPermsResult.error) {
+    errors.push({ context: `${contextLabel}:rootPerms`, message: rootPermsResult.error });
+  }
+  for (const p of rootPermsResult.items) {
+    if (p.link) {
+      permissions.push(mapPermissionToLink(p, { id: "root", name: "/", path: "/" }));
+    }
+  }
+  itemsScanned++;
+
+  const { items: allItems, errors: listErrors } = await collectAllDriveItems(token, driveBaseUrl, contextLabel);
+  errors.push(...listErrors);
+
+  for (const item of allItems) {
+    try {
+      const { items: perms, error: permError } = await fetchAllPages<any>(
+        `${driveBaseUrl}/items/${item.id}/permissions`,
+        token,
+      );
+      if (permError) {
+        errors.push({ context: `${contextLabel}:item:${item.name}`, message: permError });
+      }
+
+      for (const p of perms) {
+        if (p.link) {
+          permissions.push(mapPermissionToLink(p, { id: item.id, name: item.name, path: item.path }));
+        }
+      }
+    } catch (err: any) {
+      errors.push({ context: `${contextLabel}:item:${item.name}`, message: err.message });
+    }
+    itemsScanned++;
+  }
+
+  return { permissions, itemsScanned, errors };
 }
 
 export async function getSharingLinks(
   token: string,
   siteId: string,
-): Promise<{ permissions: SharingLinkPermission[]; error?: string }> {
+): Promise<DriveItemSharingResult> {
   try {
-    const res = await fetch(
-      `https://graph.microsoft.com/v1.0/sites/${siteId}/drive/root/permissions`,
-      { headers: { Authorization: `Bearer ${token}` } },
+    return await scanDriveItemsForLinks(
+      token,
+      `https://graph.microsoft.com/v1.0/sites/${siteId}/drive`,
+      `sp:${siteId}`,
     );
-
-    if (!res.ok) {
-      const errText = await res.text();
-      return { permissions: [], error: `Graph API error ${res.status}: ${errText.substring(0, 300)}` };
-    }
-
-    const data = await res.json();
-    const allPerms: any[] = data.value || [];
-
-    // Filter to only permissions that represent sharing links
-    const linkPerms: SharingLinkPermission[] = allPerms
-      .filter((p: any) => p.link)
-      .map((p: any) => ({
-        id: p.id,
-        roles: p.roles || [],
-        link: {
-          scope: p.link.scope,
-          type: p.link.type,
-          webUrl: p.link.webUrl,
-          preventsDownload: p.link.preventsDownload,
-        },
-        grantedToIdentitiesV2: p.grantedToIdentitiesV2,
-        expirationDateTime: p.expirationDateTime,
-        hasPassword: p.hasPassword,
-      }));
-
-    return { permissions: linkPerms };
   } catch (err: any) {
-    return { permissions: [], error: err.message };
+    return { permissions: [], itemsScanned: 0, errors: [{ context: `sp:${siteId}`, message: err.message }] };
   }
 }
 
 export async function getOneDriveSharingLinks(
   token: string,
   userId: string,
-): Promise<{ permissions: SharingLinkPermission[]; error?: string }> {
+): Promise<DriveItemSharingResult> {
   try {
-    const res = await fetch(
-      `https://graph.microsoft.com/v1.0/users/${userId}/drive/root/permissions`,
-      { headers: { Authorization: `Bearer ${token}` } },
+    return await scanDriveItemsForLinks(
+      token,
+      `https://graph.microsoft.com/v1.0/users/${userId}/drive`,
+      `od:${userId}`,
     );
-
-    if (!res.ok) {
-      const errText = await res.text();
-      return { permissions: [], error: `Graph API error ${res.status}: ${errText.substring(0, 300)}` };
-    }
-
-    const data = await res.json();
-    const allPerms: any[] = data.value || [];
-
-    const linkPerms: SharingLinkPermission[] = allPerms
-      .filter((p: any) => p.link)
-      .map((p: any) => ({
-        id: p.id,
-        roles: p.roles || [],
-        link: {
-          scope: p.link.scope,
-          type: p.link.type,
-          webUrl: p.link.webUrl,
-          preventsDownload: p.link.preventsDownload,
-        },
-        grantedToIdentitiesV2: p.grantedToIdentitiesV2,
-        expirationDateTime: p.expirationDateTime,
-        hasPassword: p.hasPassword,
-      }));
-
-    return { permissions: linkPerms };
   } catch (err: any) {
-    return { permissions: [], error: err.message };
+    return { permissions: [], itemsScanned: 0, errors: [{ context: `od:${userId}`, message: err.message }] };
   }
 }
 
