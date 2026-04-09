@@ -4045,11 +4045,13 @@ export interface UserLicenseInfo {
 export async function getAllUserLicenseDetails(
   token: string,
 ): Promise<{ users: UserLicenseInfo[]; error?: string }> {
-  try {
+  const baseFields = "id,displayName,userPrincipalName,department,jobTitle,accountEnabled,assignedLicenses";
+
+  const fetchAllPages = async (selectFields: string): Promise<{ users: UserLicenseInfo[]; error?: string; status?: number }> => {
     const users: UserLicenseInfo[] = [];
     let url: string | null =
       `https://graph.microsoft.com/v1.0/users` +
-      `?$select=id,displayName,userPrincipalName,department,jobTitle,accountEnabled,assignedLicenses,signInActivity` +
+      `?$select=${selectFields}` +
       `&$top=999`;
 
     while (url) {
@@ -4062,7 +4064,7 @@ export async function getAllUserLicenseDetails(
 
       if (!res.ok) {
         const errText = await res.text();
-        return { users, error: `Graph API error ${res.status}: ${errText.substring(0, 300)}` };
+        return { users, error: `Graph API error ${res.status}: ${errText.substring(0, 300)}`, status: res.status };
       }
 
       const data = await res.json();
@@ -4083,9 +4085,21 @@ export async function getAllUserLicenseDetails(
       }
       url = data["@odata.nextLink"] ?? null;
     }
-
-    console.log(`[graph] getAllUserLicenseDetails: ${users.length} users`);
     return { users };
+  };
+
+  try {
+    const result = await fetchAllPages(`${baseFields},signInActivity`);
+    if (result.status === 403 && result.error?.includes("AuditLog.Read.All")) {
+      console.log("[graph] signInActivity requires AuditLog.Read.All — retrying without it");
+      const fallback = await fetchAllPages(baseFields);
+      if (fallback.error) return fallback;
+      console.log(`[graph] getAllUserLicenseDetails: ${fallback.users.length} users (no signInActivity)`);
+      return fallback;
+    }
+    if (result.error) return result;
+    console.log(`[graph] getAllUserLicenseDetails: ${result.users.length} users`);
+    return { users: result.users };
   } catch (err: any) {
     return { users: [], error: err.message };
   }
