@@ -428,8 +428,13 @@ router.post("/api/spe/tenants/:id/sync", requireRole(ZENITH_ROLES.TENANT_ADMIN),
             retentionLabel: null as string | null,
             sharingCapability: sharingCap,
             externalSharing: isExternal,
-            ownerDisplayName: driveOwnerDisplay || ext._owningAppName || null,
-            ownerPrincipalName: driveOwnerPrincipal || (typeof ext._owners === "string" ? ext._owners : null),
+            ownerDisplayName: driveOwnerDisplay
+              || (typeof ext._ownerDisplayName === "string" && ext._ownerDisplayName ? ext._ownerDisplayName : null)
+              || (ext._owningAppName ? `${ext._owningAppName} (App)` : null),
+            ownerPrincipalName: driveOwnerPrincipal
+              || (typeof ext._ownerLoginName === "string" && ext._ownerLoginName
+                ? ext._ownerLoginName.replace(/^i:0#\.f\|membership\|/i, "").replace(/^i:0#\.f\|[^|]+\|/i, "")
+                : null),
             permissions: ext._owningAppName || "System",
             containerCreatedDate: gc.createdDateTime || null,
             lastSyncAt: new Date(),

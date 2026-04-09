@@ -1246,7 +1246,8 @@ export async function fetchAllSpeContainers(
             _sharingCapability: item.SharingCapability ?? null,
             _lockState: item.LockState ?? null,
             _siteUrl: item.ContainerSiteUrl || item.SiteUrl || null,
-            _owners: item.Owners || item.OwnerLoginName || null,
+            _ownerDisplayName: item.Owners || null,
+            _ownerLoginName: item.OwnerLoginName || null,
           } as any);
         }
 
@@ -1433,7 +1434,8 @@ export async function fetchAllSpeContainers(
             _sharingCapability: item.SharingCapability ?? null,
             _lockState: item.LockState ?? null,
             _siteUrl: item.ContainerSiteUrl || item.SiteUrl || null,
-            _owners: item.Owners || item.OwnerLoginName || null,
+            _ownerDisplayName: item.Owners || null,
+            _ownerLoginName: item.OwnerLoginName || null,
           } as any);
         }
       }
@@ -1461,7 +1463,25 @@ export async function fetchSpeContainerDriveDetails(graphToken: string, containe
     if (driveRes.ok) {
       const driveData = await driveRes.json();
       result.storageUsedInBytes = driveData?.quota?.used;
-      result.itemCount = driveData?.quota?.fileCount;
+    }
+  } catch {}
+
+  try {
+    const listItemsRes = await fetch(
+      `https://graph.microsoft.com/v1.0/storage/fileStorage/containers/${containerId}/drive/list/items?$top=1&$count=true`,
+      {
+        headers: {
+          Authorization: `Bearer ${graphToken}`,
+          ConsistencyLevel: "eventual",
+        },
+      },
+    );
+    if (listItemsRes.ok) {
+      const listItemsData = await listItemsRes.json();
+      const count = listItemsData["@odata.count"];
+      if (typeof count === "number") {
+        result.itemCount = count;
+      }
     }
   } catch {}
 
