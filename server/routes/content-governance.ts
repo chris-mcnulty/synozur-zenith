@@ -152,6 +152,11 @@ router.get("/api/content-governance/sharing/links", requireAuth(), async (req: A
     const tenantConnectionId = req.query.tenantConnectionId as string;
     if (!tenantConnectionId) return res.status(400).json({ error: "tenantConnectionId is required" });
 
+    const allowedTenantConnectionIds = await getOrgTenantConnectionIds(req);
+    if (allowedTenantConnectionIds !== null && !allowedTenantConnectionIds.includes(tenantConnectionId)) {
+      return res.status(403).json({ error: "Forbidden" });
+    }
+
     const resourceType = req.query.resourceType as string | undefined;
     const linkType = req.query.linkType as string | undefined;
     const page = Math.max(1, parseInt(req.query.page as string || "1", 10));
@@ -180,7 +185,7 @@ router.get("/api/content-governance/sharing/links", requireAuth(), async (req: A
 // ── DELETE /api/content-governance/sharing/links/:id ───────────────────────
 router.delete("/api/content-governance/sharing/links/:id", requireAuth(), async (req: AuthenticatedRequest, res) => {
   try {
-    const { id } = req.params;
+    const id = req.params.id as string;
     const tenantConnectionId = (req.body?.tenantConnectionId ?? req.query.tenantConnectionId) as string;
     if (!tenantConnectionId) return res.status(400).json({ error: "tenantConnectionId is required" });
 
@@ -285,7 +290,7 @@ router.get("/api/content-governance/reviews", requireAuth(), async (req: Authent
 // ── GET /api/content-governance/reviews/:id ────────────────────────────────
 router.get("/api/content-governance/reviews/:id", requireAuth(), async (req: AuthenticatedRequest, res) => {
   try {
-    const { id } = req.params;
+    const id = req.params.id as string;
 
     const [task] = await db
       .select()

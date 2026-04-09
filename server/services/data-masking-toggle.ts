@@ -12,6 +12,7 @@ import {
   governanceReviewTasks,
 } from "@shared/schema";
 import { eq, inArray, type SQL } from "drizzle-orm";
+import type { PgTable } from "drizzle-orm/pg-core";
 import {
   generateTenantEncryptionKey,
   getTenantKeyBuffer,
@@ -21,7 +22,7 @@ import {
 } from "./data-masking";
 
 type TableMapEntry = {
-  table: any;
+  table: PgTable;
   getWhere: (tenantConnectionId: string) => Promise<SQL | undefined>;
 };
 

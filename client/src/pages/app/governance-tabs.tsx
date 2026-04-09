@@ -15,7 +15,7 @@ import {
 import {
   ShieldAlert, Users, HardDrive, Link2, ClipboardList,
   AlertTriangle, CheckCircle2, XCircle, Loader2, Search,
-  Trash2, Eye, Clock,
+  Trash2, Eye, Clock, RefreshCw,
 } from "lucide-react";
 
 function formatBytes(bytes: number | null | undefined): string {
@@ -384,6 +384,29 @@ export function GovernanceSharingTab({ tenantConnectionId }: { tenantConnectionI
   const [search, setSearch] = useState("");
   const { toast } = useToast();
 
+  const scanMutation = useMutation({
+    mutationFn: async () => {
+      const res = await fetch(`/api/admin/tenants/${tenantConnectionId}/sharing-links/sync`, {
+        method: "POST",
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.message || "Failed to start scan");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Sharing link scan started", description: "Scanning SharePoint sites and OneDrive drives for sharing links…" });
+      setTimeout(() => {
+        queryClient.invalidateQueries({ queryKey: ["/api/content-governance/sharing/links"] });
+      }, 10000);
+    },
+    onError: (err: Error) => {
+      toast({ title: "Scan failed", description: err.message, variant: "destructive" });
+    },
+  });
+
   const { data: links = [], isLoading } = useQuery<SharingLinkItem[]>({
     queryKey: ["/api/content-governance/sharing/links", tenantConnectionId, linkTypeFilter],
     queryFn: async () => {
@@ -426,23 +449,36 @@ export function GovernanceSharingTab({ tenantConnectionId }: { tenantConnectionI
 
   return (
     <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <h3 className="text-lg font-semibold">Sharing Links</h3>
+        <Button
+          onClick={() => scanMutation.mutate()}
+          disabled={scanMutation.isPending || !tenantConnectionId}
+          data-testid="button-scan-sharing-links"
+        >
+          {scanMutation.isPending
+            ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Scanning…</>
+            : <><RefreshCw className="mr-2 h-4 w-4" />Scan Sharing Links</>}
+        </Button>
+      </div>
+
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <Card>
           <CardContent className="pt-5 pb-4 px-5">
             <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Anonymous Links</p>
-            <p className="text-2xl font-bold text-red-600">{anonymousCount}</p>
+            <p className="text-2xl font-bold text-red-600" data-testid="text-anonymous-count">{anonymousCount}</p>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="pt-5 pb-4 px-5">
             <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Organization Links</p>
-            <p className="text-2xl font-bold text-amber-600">{orgCount}</p>
+            <p className="text-2xl font-bold text-amber-600" data-testid="text-org-count">{orgCount}</p>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="pt-5 pb-4 px-5">
             <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Specific People Links</p>
-            <p className="text-2xl font-bold">{specificCount}</p>
+            <p className="text-2xl font-bold" data-testid="text-specific-count">{specificCount}</p>
           </CardContent>
         </Card>
       </div>

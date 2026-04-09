@@ -1,4 +1,4 @@
-import { eq, desc, ilike, or, and, sql, gt, max, gte, lte, inArray, isNull } from "drizzle-orm";
+import { eq, desc, ilike, or, and, sql, gt, lt, max, gte, lte, inArray, isNull } from "drizzle-orm";
 import { db } from "./db";
 import {
   workspaces,
@@ -102,6 +102,15 @@ import {
   tenantEncryptionKeys,
   type TenantEncryptionKey,
   type InsertTenantEncryptionKey,
+  userInventory,
+  type UserInventoryItem,
+  type InsertUserInventory,
+  userInventoryRuns,
+  type UserInventoryRun,
+  type InsertUserInventoryRun,
+  emailStorageReports,
+  type EmailStorageReport,
+  type InsertEmailStorageReport,
   sharingLinksInventory,
   type SharingLink,
   type InsertSharingLink,
@@ -2124,22 +2133,12 @@ export class DatabaseStorage implements IStorage {
       lastDiscoveredAt: encrypted.lastDiscoveredAt ?? new Date(),
     };
 
-    const existingRows = await db
-      .select()
-      .from(sharingLinksInventory)
-      .where(eq(sharingLinksInventory.tenantConnectionId, data.tenantConnectionId));
-
-    const decryptedExistingRows = await this.decryptRows(existingRows, "sharing_links_inventory");
-    const existingRow = decryptedExistingRows.find((row) => row.linkId === data.linkId) as
-      | (SharingLink & { id?: string | number })
-      | undefined;
-
-    let result: any;
-
-    if (existingRow?.id !== undefined && existingRow.id !== null) {
-      const [updated] = await db
-        .update(sharingLinksInventory)
-        .set({
+    const [result] = await db
+      .insert(sharingLinksInventory)
+      .values(valuesToWrite)
+      .onConflictDoUpdate({
+        target: [sharingLinksInventory.tenantConnectionId, sharingLinksInventory.linkId],
+        set: {
           resourceType: valuesToWrite.resourceType,
           resourceId: valuesToWrite.resourceId,
           resourceName: valuesToWrite.resourceName,
@@ -2151,17 +2150,10 @@ export class DatabaseStorage implements IStorage {
           isActive: valuesToWrite.isActive,
           lastAccessedAt: valuesToWrite.lastAccessedAt,
           lastDiscoveredAt: valuesToWrite.lastDiscoveredAt,
-        })
-        .where(eq((sharingLinksInventory as any).id, existingRow.id as any))
-        .returning();
-      result = updated;
-    } else {
-      const [inserted] = await db
-        .insert(sharingLinksInventory)
-        .values(valuesToWrite)
-        .returning();
-      result = inserted;
-    }
+        },
+      })
+      .returning();
+
     const [decrypted] = await this.decryptRows([result], "sharing_links_inventory");
     return decrypted as SharingLink;
   }

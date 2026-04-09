@@ -6,7 +6,7 @@ import type { FeatureToggleKey } from "@shared/schema";
  * are on-demand and not gated by a tenant feature toggle. The union below
  * keeps the type narrow but admits additional report-level scopes.
  */
-export type CancellationScope = FeatureToggleKey | "emailContentStorageReport";
+export type CancellationScope = FeatureToggleKey | "emailContentStorageReport" | "sharingLinks";
 
 const cancellationFlags = new Map<string, Set<string>>();
 

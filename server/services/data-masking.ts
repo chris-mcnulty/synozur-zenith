@@ -67,6 +67,9 @@ export const SENSITIVE_FIELDS: Record<string, string[]> = {
   document_libraries: [
     "displayName", "description", "webUrl",
   ],
+  user_inventory: [
+    "userPrincipalName", "mail", "displayName",
+  ],
   sharing_links_inventory: [
     "resourceName", "createdBy",
   ],

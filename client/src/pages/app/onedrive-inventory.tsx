@@ -151,6 +151,29 @@ export default function OneDriveInventoryPage() {
     },
   });
 
+  const scanSharingMutation = useMutation({
+    mutationFn: async () => {
+      const res = await fetch(`/api/admin/tenants/${tenantConnectionId}/sharing-links/sync`, {
+        method: "POST",
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.message || "Failed to start scan");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Sharing link scan started", description: "Scanning OneDrive drives for sharing links…" });
+      setTimeout(() => {
+        queryClient.invalidateQueries({ queryKey: ["/api/content-governance/sharing/links"] });
+      }, 10000);
+    },
+    onError: (err: Error) => {
+      toast({ title: "Scan failed", description: err.message, variant: "destructive" });
+    },
+  });
+
   // Compute stats
   const totalUsed = drives.reduce((s, d) => s + (d.quotaUsedBytes ?? 0), 0);
   const inactiveCount = drives.filter(d => isInactive(d.lastActivityDate)).length;
@@ -396,15 +419,26 @@ export default function OneDriveInventoryPage() {
 
         <TabsContent value="sharing" className="mt-4 space-y-4">
           <Card>
-            <CardHeader className="pb-3">
+            <CardHeader className="pb-3 flex flex-row items-center justify-between">
               <CardTitle className="text-base flex items-center gap-2">
                 <Link2 className="w-4 h-4" /> OneDrive Sharing Links
               </CardTitle>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => scanSharingMutation.mutate()}
+                disabled={scanSharingMutation.isPending || !tenantConnectionId}
+                data-testid="button-scan-od-sharing"
+              >
+                {scanSharingMutation.isPending
+                  ? <><Loader2 className="mr-2 h-3 w-3 animate-spin" />Scanning…</>
+                  : <><RefreshCw className="mr-2 h-3 w-3" />Scan Sharing Links</>}
+              </Button>
             </CardHeader>
             <CardContent className="p-0">
               {sharingLinks.length === 0 ? (
                 <div className="flex items-center justify-center h-32 text-muted-foreground">
-                  No OneDrive sharing links discovered
+                  No OneDrive sharing links discovered — click "Scan Sharing Links" to begin.
                 </div>
               ) : (
                 <Table>
