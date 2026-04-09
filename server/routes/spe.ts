@@ -141,13 +141,16 @@ router.get("/api/spe/containers/:id/usage", requireAuth(), async (req: Authentic
 
 router.post("/api/spe/container-types", requireRole(ZENITH_ROLES.TENANT_ADMIN), async (req: AuthenticatedRequest, res) => {
   try {
-    const { tenantConnectionId, displayName, azureAppId, description } = req.body;
-    if (!tenantConnectionId || !displayName || !azureAppId) {
-      return res.status(400).json({ error: "tenantConnectionId, displayName, and azureAppId are required" });
+    const { tenantConnectionId, displayName, azureAppId, containerTypeId, description } = req.body;
+    if (!tenantConnectionId || !displayName || !containerTypeId) {
+      return res.status(400).json({ error: "tenantConnectionId, displayName, and containerTypeId are required" });
     }
 
     const guidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-    if (!guidRegex.test(azureAppId)) {
+    if (!guidRegex.test(containerTypeId)) {
+      return res.status(400).json({ error: "containerTypeId must be a valid GUID" });
+    }
+    if (azureAppId && !guidRegex.test(azureAppId)) {
       return res.status(400).json({ error: "azureAppId must be a valid GUID" });
     }
 
@@ -157,17 +160,17 @@ router.post("/api/spe/container-types", requireRole(ZENITH_ROLES.TENANT_ADMIN), 
     }
 
     const existing = (await storage.getSpeContainerTypes(tenantConnectionId))
-      .find(ct => ct.azureAppId === azureAppId);
+      .find(ct => ct.containerTypeId === containerTypeId);
     if (existing) {
-      return res.status(409).json({ error: "An application with this App ID is already registered", existing });
+      return res.status(409).json({ error: "A container type with this Container Type ID is already registered", existing });
     }
 
     const created = await storage.createSpeContainerType({
       tenantConnectionId,
-      containerTypeId: azureAppId,
+      containerTypeId,
       displayName,
       description: description || `${displayName} containers`,
-      azureAppId,
+      azureAppId: azureAppId || null,
       status: "ACTIVE",
     });
 
@@ -280,6 +283,14 @@ router.post("/api/spe/tenants/:id/sync", requireRole(ZENITH_ROLES.TENANT_ADMIN),
     }
 
     const existingTypesForApps = await storage.getSpeContainerTypes(conn.id);
+    for (const ct of existingTypesForApps) {
+      if (ct.containerTypeId && !typeIdMap.has(ct.containerTypeId)) {
+        typeIdMap.set(ct.containerTypeId, ct.id);
+      }
+      if (ct.azureAppId && !typeIdMap.has(ct.azureAppId)) {
+        typeIdMap.set(ct.azureAppId, ct.id);
+      }
+    }
     const customApps = existingTypesForApps
       .filter(ct => ct.azureAppId)
       .map(ct => ({ name: ct.displayName, appId: ct.azureAppId! }));
@@ -368,6 +379,37 @@ router.post("/api/spe/tenants/:id/sync", requireRole(ZENITH_ROLES.TENANT_ADMIN),
           const isExternal = sharingCap === "1" || sharingCap === "2" ||
             sharingCap === "ExternalUserSharingOnly" || sharingCap === "ExternalUserAndGuestSharing";
 
+          let driveFileCount: number | null = null;
+          let driveActiveFileCount: number | null = null;
+          let driveLastActivity: string | null = null;
+          let driveOwnerDisplay: string | null = null;
+          let driveOwnerPrincipal: string | null = null;
+
+          if (graphToken && gc.id) {
+            try {
+              const driveDetails = await fetchSpeContainerDriveDetails(graphToken, gc.id);
+              if (driveDetails.itemCount != null) {
+                driveFileCount = driveDetails.itemCount;
+                driveActiveFileCount = driveDetails.itemCount;
+              }
+              if (driveDetails.lastActivityDate) {
+                driveLastActivity = driveDetails.lastActivityDate;
+              }
+              if (driveDetails.owners && driveDetails.owners.length > 0) {
+                driveOwnerDisplay = driveDetails.owners
+                  .map(o => o.displayName)
+                  .filter(Boolean)
+                  .join(", ") || null;
+                driveOwnerPrincipal = driveDetails.owners
+                  .map(o => o.userPrincipalName)
+                  .filter(Boolean)
+                  .join(", ") || null;
+              }
+            } catch (err: any) {
+              console.warn(`[spe-sync] Could not fetch drive details for container ${gc.id}: ${err.message}`);
+            }
+          }
+
           const containerData = {
             tenantConnectionId: conn.id,
             containerTypeId: zenithTypeId || null,
@@ -377,17 +419,17 @@ router.post("/api/spe/tenants/:id/sync", requireRole(ZENITH_ROLES.TENANT_ADMIN),
             status: gc.status === "active" ? "Active" : gc.status === "inactive" ? "Inactive" : (gc.status || "Active"),
             storageUsedBytes: ext._storageUsed ?? null,
             storageAllocatedBytes: ext._storageTotal ?? null,
-            fileCount: null as number | null,
-            activeFileCount: null as number | null,
-            lastActivityDate: null as string | null,
+            fileCount: driveFileCount,
+            activeFileCount: driveActiveFileCount,
+            lastActivityDate: driveLastActivity,
             sensitivityLabelId: null as string | null,
             sensitivityLabel: ext._sensitivityLabel || null,
             retentionLabelId: null as string | null,
             retentionLabel: null as string | null,
             sharingCapability: sharingCap,
             externalSharing: isExternal,
-            ownerDisplayName: ext._owningAppName || null,
-            ownerPrincipalName: typeof ext._owners === "string" ? ext._owners : null,
+            ownerDisplayName: driveOwnerDisplay || ext._owningAppName || null,
+            ownerPrincipalName: driveOwnerPrincipal || (typeof ext._owners === "string" ? ext._owners : null),
             permissions: ext._owningAppName || "System",
             containerCreatedDate: gc.createdDateTime || null,
             lastSyncAt: new Date(),

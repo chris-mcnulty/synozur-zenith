@@ -100,6 +100,7 @@ export default function EmbeddedContainersPage() {
   const [filterType, setFilterType] = useState<string | null>(null);
   const [addAppOpen, setAddAppOpen] = useState(false);
   const [newAppName, setNewAppName] = useState("");
+  const [newContainerTypeId, setNewContainerTypeId] = useState("");
   const [newAppId, setNewAppId] = useState("");
   const [newAppDesc, setNewAppDesc] = useState("");
 
@@ -156,7 +157,8 @@ export default function EmbeddedContainersPage() {
       const res = await apiRequest("POST", "/api/spe/container-types", {
         tenantConnectionId,
         displayName: newAppName.trim(),
-        azureAppId: newAppId.trim().toLowerCase(),
+        containerTypeId: newContainerTypeId.trim().toLowerCase(),
+        azureAppId: newAppId.trim().toLowerCase() || undefined,
         description: newAppDesc.trim() || undefined,
       });
       return res.json();
@@ -166,6 +168,7 @@ export default function EmbeddedContainersPage() {
       toast({ title: "Application Registered", description: `${newAppName} has been added. Run Sync to discover its containers.` });
       setAddAppOpen(false);
       setNewAppName("");
+      setNewContainerTypeId("");
       setNewAppId("");
       setNewAppDesc("");
     },
@@ -558,7 +561,7 @@ export default function EmbeddedContainersPage() {
                       <DialogHeader>
                         <DialogTitle>Register SPE Application</DialogTitle>
                         <DialogDescription>
-                          Add a third-party or custom SPE application by entering its Entra App Registration ID (GUID). Its containers will be discovered on the next sync.
+                          Add a third-party or custom SPE application. The Container Type ID is assigned by Microsoft when a container type is registered. The Entra App ID is optional and used for reference.
                         </DialogDescription>
                       </DialogHeader>
                       <div className="space-y-4 py-2">
@@ -573,7 +576,19 @@ export default function EmbeddedContainersPage() {
                           />
                         </div>
                         <div className="space-y-2">
-                          <Label htmlFor="app-id">Entra App ID (GUID)</Label>
+                          <Label htmlFor="container-type-id">Container Type ID (GUID)</Label>
+                          <Input
+                            id="container-type-id"
+                            placeholder="e.g. a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+                            className="font-mono text-sm"
+                            value={newContainerTypeId}
+                            onChange={(e) => setNewContainerTypeId(e.target.value)}
+                            data-testid="input-container-type-id"
+                          />
+                          <p className="text-xs text-muted-foreground">The unique ID assigned by Microsoft when the container type was registered. This is NOT the same as the Entra App ID.</p>
+                        </div>
+                        <div className="space-y-2">
+                          <Label htmlFor="app-id">Entra App ID (optional)</Label>
                           <Input
                             id="app-id"
                             placeholder="e.g. a1b2c3d4-e5f6-7890-abcd-ef1234567890"
@@ -582,6 +597,7 @@ export default function EmbeddedContainersPage() {
                             onChange={(e) => setNewAppId(e.target.value)}
                             data-testid="input-app-id"
                           />
+                          <p className="text-xs text-muted-foreground">The Entra Application (Client) ID of the owning app, for reference only.</p>
                         </div>
                         <div className="space-y-2">
                           <Label htmlFor="app-desc">Description (optional)</Label>
@@ -598,7 +614,7 @@ export default function EmbeddedContainersPage() {
                         <Button variant="outline" onClick={() => setAddAppOpen(false)}>Cancel</Button>
                         <Button
                           onClick={() => addAppMutation.mutate()}
-                          disabled={!newAppName.trim() || !newAppId.trim() || addAppMutation.isPending}
+                          disabled={!newAppName.trim() || !newContainerTypeId.trim() || addAppMutation.isPending}
                           data-testid="button-confirm-add-app"
                         >
                           {addAppMutation.isPending && <Loader2 className="w-4 h-4 animate-spin mr-2" />}
@@ -627,6 +643,7 @@ export default function EmbeddedContainersPage() {
                     <TableHeader className="bg-muted/30">
                       <TableRow>
                         <TableHead className="pl-6">Application Name</TableHead>
+                        <TableHead>Container Type ID</TableHead>
                         <TableHead>Entra App ID</TableHead>
                         <TableHead>Containers</TableHead>
                         <TableHead>Default Quota</TableHead>
@@ -644,6 +661,11 @@ export default function EmbeddedContainersPage() {
                                 <span className="font-medium text-sm">{ct.displayName}</span>
                                 {ct.description && <span className="text-[10px] text-muted-foreground">{ct.description}</span>}
                               </div>
+                            </TableCell>
+                            <TableCell>
+                              <span className="font-mono text-xs text-muted-foreground">
+                                {ct.containerTypeId || "—"}
+                              </span>
                             </TableCell>
                             <TableCell>
                               <span className="font-mono text-xs text-muted-foreground">
