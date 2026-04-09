@@ -126,7 +126,7 @@ const navGroups: NavGroup[] = [
       { name: "Content Types", href: "/app/content-types", icon: FileText, isMock: true },
       { name: "Embedded Containers", href: "/app/embedded-containers", icon: Box, featureToggle: "speDiscovery" },
       { name: "Discover & Migrate", href: "/app/discover", icon: Search, badge: "Ent+", isMock: true },
-      { name: "Archive & Backup", href: "/app/archive-backup", icon: Archive, isMock: true },
+      { name: "Archive & Backup", href: "/app/archive-backup", icon: Archive },
       { name: "Lifecycle", href: "/app/lifecycle", icon: Clock, isMock: true },
       { name: "Syntex", href: "/app/syntex", icon: BrainCircuit, isMock: true },
       { name: "Purview", href: "/app/purview", icon: Fingerprint },
