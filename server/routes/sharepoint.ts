@@ -2265,6 +2265,15 @@ router.post("/api/admin/tenants/:id/sync", requireRole(ZENITH_ROLES.TENANT_ADMIN
       }
     }
 
+    // Refresh the library/site usage rollups on content_types. Cheap — the
+    // heavy lifting (walking libraries) already happened in the IA sync flow;
+    // this just aggregates what's already in library_content_types.
+    try {
+      await storage.updateContentTypeUsageCounts(req.params.id);
+    } catch (rollupErr: any) {
+      console.warn(`[content-type-sync] Usage count rollup failed: ${rollupErr.message}`);
+    }
+
     if (contentTypeSyncResult.error) {
       permissionWarnings.push({
         area: "Content Types",
@@ -2495,6 +2504,466 @@ router.get("/api/admin/tenants/:id/content-types", requireAuth(), async (req: Au
   try {
     const types = await storage.getContentTypes(req.params.id);
     res.json(types);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Information Architecture ───────────────────────────────────────────────
+// Walks all visible libraries for a tenant, persists per-library content types
+// and columns into library_content_types / library_columns with derived scope,
+// then refreshes content_types usage rollups. Safe to run standalone or as
+// part of the main tenant sync.
+
+function classifyCtScope(
+  contentTypeId: string,
+  isInherited: boolean,
+  hubCtIds: Set<string>,
+): 'HUB' | 'SITE' | 'LIBRARY' {
+  if (hubCtIds.has(contentTypeId)) return 'HUB';
+  if (isInherited) return 'SITE';
+  return 'LIBRARY';
+}
+
+router.post("/api/admin/tenants/:id/sync-ia", requireRole(ZENITH_ROLES.TENANT_ADMIN), async (req: AuthenticatedRequest, res) => {
+  try {
+    const allowedTenantIds = await getOrgTenantConnectionIds(req);
+    if (allowedTenantIds !== null && !allowedTenantIds.includes(req.params.id)) {
+      return res.status(403).json({ message: "Tenant connection is outside your organization scope" });
+    }
+    const connection = await storage.getTenantConnection(req.params.id);
+    if (!connection) return res.status(404).json({ error: "Tenant not found" });
+
+    let token: string | null = null;
+    const clientId = connection.clientId;
+    const clientSecret = clientId ? getEffectiveClientSecret(connection) : undefined;
+    if (clientId && clientSecret) {
+      try { token = await getAppToken(connection.tenantId, clientId, clientSecret); } catch {}
+    }
+    if (!token) {
+      token = await getDelegatedTokenForRetention(req.session?.userId, connection.organizationId);
+    }
+    if (!token) return res.status(500).json({ error: "No Graph API token available. Please sign in with SSO." });
+
+    await storage.createAuditEntry({
+      userId: req.user?.id || null,
+      userEmail: req.user?.email || null,
+      action: 'IA_SYNC_STARTED',
+      resource: 'tenant_connection',
+      resourceId: req.params.id,
+      organizationId: req.user?.organizationId || null,
+      tenantConnectionId: req.params.id,
+      details: { tenantName: connection.tenantName },
+      result: 'SUCCESS',
+      ipAddress: req.ip || null,
+    });
+
+    // Pre-load known hub content-type IDs so we can classify library CTs as HUB.
+    const hubContentTypes = await storage.getContentTypes(req.params.id);
+    const hubCtIds = new Set(hubContentTypes.filter(c => c.isHub).map(c => c.contentTypeId));
+
+    const allLibraries = await storage.getDocumentLibrariesByTenant(req.params.id);
+    const visibleLibraries = allLibraries.filter(l => !l.hidden);
+    const byWorkspace = new Map<string, typeof visibleLibraries>();
+    for (const lib of visibleLibraries) {
+      const arr = byWorkspace.get(lib.workspaceId) || [];
+      arr.push(lib);
+      byWorkspace.set(lib.workspaceId, arr);
+    }
+    const workspaceIds = Array.from(byWorkspace.keys());
+    console.log(`[ia-sync] Starting IA sync for ${visibleLibraries.length} libraries across ${workspaceIds.length} workspaces`);
+
+    const result = {
+      workspacesProcessed: 0,
+      librariesProcessed: 0,
+      contentTypesUpserted: 0,
+      columnsUpserted: 0,
+      errors: 0,
+    };
+
+    const BATCH_SIZE = 5;
+    for (let i = 0; i < workspaceIds.length; i += BATCH_SIZE) {
+      const batch = workspaceIds.slice(i, i + BATCH_SIZE);
+      await Promise.allSettled(batch.map(async (wsId) => {
+        const ws = await storage.getWorkspace(wsId);
+        if (!ws?.m365ObjectId) return;
+        const graphSiteId = ws.m365ObjectId;
+
+        // Load the site's site-columns once so we can tag library columns as SITE vs LIBRARY.
+        // Page through all results to handle sites with >200 columns.
+        const siteColumnNames = new Set<string>();
+        try {
+          let pageUrl: string | null =
+            `https://graph.microsoft.com/v1.0/sites/${graphSiteId}/columns?$select=id,name&$top=200`;
+          while (pageUrl) {
+            const sres = await fetch(pageUrl, { headers: { Authorization: `Bearer ${token}` } });
+            if (!sres.ok) break;
+            const sdata = await sres.json();
+            for (const sc of sdata.value || []) {
+              if (sc.name) siteColumnNames.add(sc.name);
+            }
+            pageUrl = sdata['@odata.nextLink'] || null;
+          }
+        } catch (e: any) {
+          console.warn(`[ia-sync] Could not fetch site columns for ${graphSiteId}: ${e.message}`);
+        }
+
+        const libs = byWorkspace.get(wsId) || [];
+        for (const lib of libs) {
+          try {
+            const details = await fetchLibraryDetails(token, graphSiteId, lib.m365ListId);
+            if (details.error) {
+              result.errors++;
+              console.warn(`[ia-sync] fetchLibraryDetails error for ${lib.displayName}: ${details.error}`);
+              continue;
+            }
+
+            // Build the row arrays first, then persist atomically so a mid-write
+            // failure never leaves this library with partially-empty IA data.
+            const ctRows = details.contentTypes.map(ct => ({
+              workspaceId: lib.workspaceId,
+              tenantConnectionId: req.params.id,
+              documentLibraryId: lib.id,
+              contentTypeId: ct.id,
+              parentContentTypeId: ct.parentId,
+              name: ct.name,
+              group: ct.group,
+              description: ct.description,
+              scope: classifyCtScope(ct.id, ct.isInherited, hubCtIds),
+              isBuiltIn: ct.isBuiltIn,
+              isInherited: ct.isInherited,
+              hidden: ct.hidden,
+            }));
+
+            const colRows = details.columns.map(col => ({
+              workspaceId: lib.workspaceId,
+              tenantConnectionId: req.params.id,
+              documentLibraryId: lib.id,
+              columnInternalName: col.name,
+              displayName: col.displayName,
+              columnType: col.type,
+              columnGroup: col.columnGroup,
+              description: col.description,
+              scope: (siteColumnNames.has(col.name) ? 'SITE' : 'LIBRARY') as 'SITE' | 'LIBRARY',
+              isCustom: col.isCustom,
+              isSyntexManaged: col.isSyntexManaged,
+              isSealed: col.sealed,
+              isReadOnly: col.readOnly,
+              isIndexed: col.indexed,
+              isRequired: col.required,
+            }));
+
+            const counts = await storage.replaceLibraryIaData(lib.id, ctRows, colRows);
+            result.contentTypesUpserted += counts.contentTypesCount;
+            result.columnsUpserted += counts.columnsCount;
+
+            result.librariesProcessed++;
+          } catch (libErr: any) {
+            result.errors++;
+            console.error(`[ia-sync] Library ${lib.displayName} failed: ${libErr.message}`);
+          }
+        }
+        result.workspacesProcessed++;
+      }));
+    }
+
+    await storage.updateContentTypeUsageCounts(req.params.id);
+    console.log(`[ia-sync] Complete: ${result.librariesProcessed} libraries, ${result.contentTypesUpserted} CTs, ${result.columnsUpserted} columns, ${result.errors} errors`);
+
+    await storage.createAuditEntry({
+      userId: req.user?.id || null,
+      userEmail: req.user?.email || null,
+      action: 'IA_SYNC_COMPLETED',
+      resource: 'tenant_connection',
+      resourceId: req.params.id,
+      organizationId: req.user?.organizationId || null,
+      tenantConnectionId: req.params.id,
+      details: result,
+      result: result.errors === 0 ? 'SUCCESS' : 'PARTIAL',
+      ipAddress: req.ip || null,
+    });
+
+    res.json({ success: true, ...result });
+  } catch (err: any) {
+    console.error(`[ia-sync] Error: ${err.message}`);
+    try {
+      await storage.createAuditEntry({
+        userId: req.user?.id || null,
+        userEmail: req.user?.email || null,
+        action: 'IA_SYNC_FAILED',
+        resource: 'tenant_connection',
+        resourceId: req.params.id,
+        organizationId: req.user?.organizationId || null,
+        tenantConnectionId: req.params.id,
+        details: { error: err.message },
+        result: 'FAILURE',
+        ipAddress: req.ip || null,
+      });
+    } catch { /* ignore audit write errors */ }
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Aggregated content-type view across the tenant (includes library usage counts).
+router.get("/api/admin/tenants/:id/ia/content-types", requirePermission('inventory:read'), async (req: AuthenticatedRequest, res) => {
+  try {
+    const allowedTenantIds = await getOrgTenantConnectionIds(req);
+    if (allowedTenantIds !== null && !allowedTenantIds.includes(req.params.id)) {
+      return res.status(403).json({ message: "Tenant connection is outside your organization scope" });
+    }
+
+    const [tenantCts, libraryCts] = await Promise.all([
+      storage.getContentTypes(req.params.id),
+      storage.getLibraryContentTypesByTenant(req.params.id),
+    ]);
+
+    // Aggregate library CTs by name so locally-defined CTs (which share a name
+    // across libraries but have different contentTypeIds) still roll up.
+    const aggByKey = new Map<string, {
+      contentTypeId: string;
+      name: string;
+      group: string | null;
+      scope: 'HUB' | 'SITE' | 'LIBRARY';
+      description: string | null;
+      libraryCount: number;
+      siteCount: Set<string>;
+      isBuiltIn: boolean;
+    }>();
+    for (const lct of libraryCts) {
+      const key = `${lct.scope}::${lct.name}`;
+      const existing = aggByKey.get(key);
+      if (existing) {
+        existing.libraryCount++;
+        existing.siteCount.add(lct.workspaceId);
+      } else {
+        aggByKey.set(key, {
+          contentTypeId: lct.contentTypeId,
+          name: lct.name,
+          group: lct.group,
+          scope: lct.scope as 'HUB' | 'SITE' | 'LIBRARY',
+          description: lct.description,
+          libraryCount: 1,
+          siteCount: new Set([lct.workspaceId]),
+          isBuiltIn: lct.isBuiltIn,
+        });
+      }
+    }
+
+    const libraryRollups = Array.from(aggByKey.values()).map(r => ({
+      contentTypeId: r.contentTypeId,
+      name: r.name,
+      group: r.group,
+      scope: r.scope,
+      description: r.description,
+      isBuiltIn: r.isBuiltIn,
+      libraryUsageCount: r.libraryCount,
+      siteUsageCount: r.siteCount.size,
+      source: 'library' as const,
+    }));
+
+    // Hub CTs from content_types that were never seen in any library still show up.
+    const librarySeenIds = new Set(libraryCts.map(l => l.contentTypeId));
+    const hubOnly = tenantCts
+      .filter(c => !librarySeenIds.has(c.contentTypeId))
+      .map(c => ({
+        contentTypeId: c.contentTypeId,
+        name: c.name,
+        group: c.group,
+        scope: (c.scope || 'HUB') as 'HUB' | 'SITE' | 'LIBRARY',
+        description: c.description,
+        isBuiltIn: false,
+        libraryUsageCount: c.libraryUsageCount,
+        siteUsageCount: c.siteUsageCount,
+        source: 'tenant' as const,
+      }));
+
+    res.json([...libraryRollups, ...hubOnly].sort((a, b) => a.name.localeCompare(b.name)));
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Aggregated column view across the tenant.
+router.get("/api/admin/tenants/:id/ia/columns", requirePermission('inventory:read'), async (req: AuthenticatedRequest, res) => {
+  try {
+    const allowedTenantIds = await getOrgTenantConnectionIds(req);
+    if (allowedTenantIds !== null && !allowedTenantIds.includes(req.params.id)) {
+      return res.status(403).json({ message: "Tenant connection is outside your organization scope" });
+    }
+
+    const rows = await storage.getLibraryColumnsByTenant(req.params.id);
+
+    // Group by internalName + type so same name/type rolls up.
+    const byKey = new Map<string, {
+      columnInternalName: string;
+      displayName: string;
+      columnType: string;
+      columnGroup: string | null;
+      scope: 'SITE' | 'LIBRARY';
+      isCustom: boolean;
+      isSyntexManaged: boolean;
+      libraryCount: number;
+      siteCount: Set<string>;
+    }>();
+    for (const c of rows) {
+      const key = `${c.columnInternalName}::${c.columnType}`;
+      const existing = byKey.get(key);
+      if (existing) {
+        existing.libraryCount++;
+        existing.siteCount.add(c.workspaceId);
+        // Any SITE observation promotes the rollup to SITE scope.
+        if (c.scope === 'SITE') existing.scope = 'SITE';
+      } else {
+        byKey.set(key, {
+          columnInternalName: c.columnInternalName,
+          displayName: c.displayName,
+          columnType: c.columnType,
+          columnGroup: c.columnGroup,
+          scope: c.scope as 'SITE' | 'LIBRARY',
+          isCustom: c.isCustom,
+          isSyntexManaged: c.isSyntexManaged,
+          libraryCount: 1,
+          siteCount: new Set([c.workspaceId]),
+        });
+      }
+    }
+
+    const result = Array.from(byKey.values())
+      .map(r => ({
+        columnInternalName: r.columnInternalName,
+        displayName: r.displayName,
+        columnType: r.columnType,
+        columnGroup: r.columnGroup,
+        scope: r.scope,
+        isCustom: r.isCustom,
+        isSyntexManaged: r.isSyntexManaged,
+        libraryUsageCount: r.libraryCount,
+        siteUsageCount: r.siteCount.size,
+      }))
+      .sort((a, b) => a.displayName.localeCompare(b.displayName));
+
+    res.json(result);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// IA anti-pattern analyzers. Four findings:
+//   1. localCtDuplicatesHub    — LIBRARY-scope CTs whose name matches a HUB CT
+//   2. columnPromotionCandidates — library columns in ≥3 libraries across ≥2 sites
+//   3. librariesWithoutCustomCt — libraries whose CTs are all built-in
+//   4. columnNameCollisions    — same displayName, different columnType
+router.get("/api/admin/tenants/:id/ia/patterns", requirePermission('inventory:read'), async (req: AuthenticatedRequest, res) => {
+  try {
+    const allowedTenantIds = await getOrgTenantConnectionIds(req);
+    if (allowedTenantIds !== null && !allowedTenantIds.includes(req.params.id)) {
+      return res.status(403).json({ message: "Tenant connection is outside your organization scope" });
+    }
+
+    const [hubCts, libCts, libCols, libraries] = await Promise.all([
+      storage.getContentTypes(req.params.id),
+      storage.getLibraryContentTypesByTenant(req.params.id),
+      storage.getLibraryColumnsByTenant(req.params.id),
+      storage.getDocumentLibrariesByTenant(req.params.id),
+    ]);
+
+    const libraryById = new Map(libraries.map(l => [l.id, l]));
+    const hubNames = new Set(hubCts.filter(c => c.isHub).map(c => c.name.toLowerCase()));
+
+    // 1. Local CTs that shadow a hub CT by name
+    const localCtDuplicatesHub = libCts
+      .filter(l => l.scope === 'LIBRARY' && hubNames.has(l.name.toLowerCase()))
+      .map(l => ({
+        libraryId: l.documentLibraryId,
+        libraryName: libraryById.get(l.documentLibraryId)?.displayName || '(unknown)',
+        contentTypeName: l.name,
+        contentTypeId: l.contentTypeId,
+      }));
+
+    // 2. Columns appearing in >= 3 libraries across >= 2 sites at LIBRARY scope
+    //    (good candidates to promote to site columns)
+    type ColRollup = {
+      columnInternalName: string;
+      displayName: string;
+      columnType: string;
+      libraryCount: number;
+      siteSet: Set<string>;
+    };
+    const colRoll = new Map<string, ColRollup>();
+    for (const c of libCols) {
+      if (c.scope !== 'LIBRARY') continue;
+      if (!c.isCustom) continue;
+      const key = `${c.columnInternalName}::${c.columnType}`;
+      const existing = colRoll.get(key);
+      if (existing) {
+        existing.libraryCount++;
+        existing.siteSet.add(c.workspaceId);
+      } else {
+        colRoll.set(key, {
+          columnInternalName: c.columnInternalName,
+          displayName: c.displayName,
+          columnType: c.columnType,
+          libraryCount: 1,
+          siteSet: new Set([c.workspaceId]),
+        });
+      }
+    }
+    const PROMOTION_MIN_LIBRARIES = 3;
+    const PROMOTION_MIN_SITES = 2;
+    const columnPromotionCandidates = Array.from(colRoll.values())
+      .filter(r => r.libraryCount >= PROMOTION_MIN_LIBRARIES && r.siteSet.size >= PROMOTION_MIN_SITES)
+      .map(r => ({
+        columnInternalName: r.columnInternalName,
+        displayName: r.displayName,
+        columnType: r.columnType,
+        libraryCount: r.libraryCount,
+        siteCount: r.siteSet.size,
+      }));
+
+    // 3. Libraries whose CTs are all built-in (no custom IA applied)
+    const libCtsByLibrary = new Map<string, typeof libCts>();
+    for (const l of libCts) {
+      const arr = libCtsByLibrary.get(l.documentLibraryId) || [];
+      arr.push(l);
+      libCtsByLibrary.set(l.documentLibraryId, arr);
+    }
+    const librariesWithoutCustomCt = libraries
+      .filter(l => !l.hidden)
+      .filter(l => {
+        const cts = libCtsByLibrary.get(l.id) || [];
+        if (cts.length === 0) return false; // no data yet — not a finding
+        return cts.every(c => c.isBuiltIn);
+      })
+      .map(l => ({
+        libraryId: l.id,
+        libraryName: l.displayName,
+        workspaceId: l.workspaceId,
+      }));
+
+    // 4. Column name collisions — same displayName, different columnType
+    const displayNameMap = new Map<string, Set<string>>();
+    for (const c of libCols) {
+      const existing = displayNameMap.get(c.displayName) || new Set<string>();
+      existing.add(c.columnType);
+      displayNameMap.set(c.displayName, existing);
+    }
+    const columnNameCollisions = Array.from(displayNameMap.entries())
+      .filter(([, types]) => types.size > 1)
+      .map(([displayName, types]) => ({
+        displayName,
+        columnTypes: Array.from(types),
+      }));
+
+    res.json({
+      localCtDuplicatesHub,
+      columnPromotionCandidates,
+      librariesWithoutCustomCt,
+      columnNameCollisions,
+      thresholds: {
+        promotionMinLibraries: PROMOTION_MIN_LIBRARIES,
+        promotionMinSites: PROMOTION_MIN_SITES,
+      },
+    });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

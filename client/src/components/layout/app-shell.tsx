@@ -24,9 +24,7 @@ import {
   Layers,
   Check,
   BrainCircuit,
-  Library,
   LayoutTemplate,
-  FileText,
   Box,
   Archive,
   CreditCard,
@@ -45,6 +43,7 @@ import {
   KeySquare,
   Lock,
   Mail,
+  Network,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -122,13 +121,11 @@ const navGroups: NavGroup[] = [
       { name: "Recordings Discovery", href: "/app/recordings", icon: MonitorPlay, featureToggle: "recordingsDiscovery" },
       { name: "Email Content Report", href: "/app/email-storage-report", icon: Mail, badge: "Ent+" },
       { name: "Structures", href: "/app/structures", icon: Layers },
-      { name: "Document Library", href: "/app/document-library", icon: Library },
-      { name: "Content Types", href: "/app/content-types", icon: FileText, isMock: true },
+      { name: "Information Architecture", href: "/app/information-architecture", icon: Network },
       { name: "Embedded Containers", href: "/app/embedded-containers", icon: Box, featureToggle: "speDiscovery" },
       { name: "Discover & Migrate", href: "/app/discover", icon: Search, badge: "Ent+", isMock: true },
       { name: "Archive & Backup", href: "/app/archive-backup", icon: Archive },
       { name: "Lifecycle", href: "/app/lifecycle", icon: Clock, isMock: true },
-      { name: "Syntex", href: "/app/syntex", icon: BrainCircuit, isMock: true },
       { name: "Purview", href: "/app/purview", icon: Fingerprint },
     ]
   },

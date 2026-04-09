@@ -2563,6 +2563,9 @@ export interface LibraryContentType {
   description: string | null;
   hidden: boolean;
   group: string | null;
+  parentId: string | null;
+  isInherited: boolean;
+  isBuiltIn: boolean;
 }
 
 export interface LibraryColumn {
@@ -2593,7 +2596,7 @@ export async function fetchLibraryDetails(
   try {
     const [ctRes, colRes] = await Promise.all([
       fetch(
-        `https://graph.microsoft.com/v1.0/sites/${graphSiteId}/lists/${listId}/contentTypes?$top=100`,
+        `https://graph.microsoft.com/v1.0/sites/${graphSiteId}/lists/${listId}/contentTypes?$top=100&$select=id,name,displayName,description,hidden,group,parentId,inheritedFrom,isBuiltIn`,
         { headers: { Authorization: `Bearer ${token}` } }
       ),
       fetch(
@@ -2612,6 +2615,12 @@ export async function fetchLibraryDetails(
           description: ct.description || null,
           hidden: ct.hidden || false,
           group: ct.group || null,
+          parentId: ct.parentId || null,
+          // Graph returns `inheritedFrom` only when the CT is inherited from
+          // a parent scope (site or content-type hub). Use its presence as
+          // the signal; some responses also expose a boolean, so accept both.
+          isInherited: Boolean(ct.inheritedFrom) || ct.isInherited === true,
+          isBuiltIn: ct.isBuiltIn === true,
         });
       }
     } else {

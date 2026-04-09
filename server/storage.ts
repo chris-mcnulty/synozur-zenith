@@ -90,6 +90,12 @@ import {
   contentTypes,
   type ContentType,
   type InsertContentType,
+  libraryContentTypes,
+  type LibraryContentType,
+  type InsertLibraryContentType,
+  libraryColumns,
+  type LibraryColumn,
+  type InsertLibraryColumn,
   tenantAccessGrants,
   type TenantAccessGrant,
   type InsertTenantAccessGrant,
@@ -328,6 +334,18 @@ export interface IStorage {
   // Content Types
   upsertContentType(data: InsertContentType): Promise<ContentType>;
   getContentTypes(tenantConnectionId: string): Promise<ContentType[]>;
+
+  // Information Architecture: library-level CTs + columns
+  upsertLibraryContentType(data: InsertLibraryContentType): Promise<LibraryContentType>;
+  upsertLibraryColumn(data: InsertLibraryColumn): Promise<LibraryColumn>;
+  deleteLibraryContentTypes(documentLibraryId: string): Promise<void>;
+  deleteLibraryColumns(documentLibraryId: string): Promise<void>;
+  replaceLibraryIaData(documentLibraryId: string, contentTypeRows: InsertLibraryContentType[], columnRows: InsertLibraryColumn[]): Promise<{ contentTypesCount: number; columnsCount: number }>;
+  getLibraryContentTypesByTenant(tenantConnectionId: string): Promise<LibraryContentType[]>;
+  getLibraryColumnsByTenant(tenantConnectionId: string): Promise<LibraryColumn[]>;
+  getLibraryContentTypesForLibrary(documentLibraryId: string): Promise<LibraryContentType[]>;
+  getLibraryColumnsForLibrary(documentLibraryId: string): Promise<LibraryColumn[]>;
+  updateContentTypeUsageCounts(tenantConnectionId: string): Promise<void>;
 
   // Tenant Access Grants & Codes
   getTenantAccessGrants(tenantConnectionId: string): Promise<TenantAccessGrant[]>;
@@ -2430,6 +2448,139 @@ export class DatabaseStorage implements IStorage {
     return db.select().from(contentTypes)
       .where(eq(contentTypes.tenantConnectionId, tenantConnectionId))
       .orderBy(contentTypes.name);
+  }
+
+  // ── Information Architecture: library-level CTs + columns ─────────────────
+
+  async upsertLibraryContentType(data: InsertLibraryContentType): Promise<LibraryContentType> {
+    const [result] = await db.insert(libraryContentTypes)
+      .values(data)
+      .onConflictDoUpdate({
+        target: [libraryContentTypes.documentLibraryId, libraryContentTypes.contentTypeId],
+        set: {
+          parentContentTypeId: data.parentContentTypeId,
+          name: data.name,
+          group: data.group,
+          description: data.description,
+          scope: data.scope,
+          isBuiltIn: data.isBuiltIn,
+          isInherited: data.isInherited,
+          hidden: data.hidden,
+          lastSyncAt: new Date(),
+        },
+      })
+      .returning();
+    return result;
+  }
+
+  async upsertLibraryColumn(data: InsertLibraryColumn): Promise<LibraryColumn> {
+    const [result] = await db.insert(libraryColumns)
+      .values(data)
+      .onConflictDoUpdate({
+        target: [libraryColumns.documentLibraryId, libraryColumns.columnInternalName],
+        set: {
+          displayName: data.displayName,
+          columnType: data.columnType,
+          columnGroup: data.columnGroup,
+          description: data.description,
+          scope: data.scope,
+          isCustom: data.isCustom,
+          isSyntexManaged: data.isSyntexManaged,
+          isSealed: data.isSealed,
+          isReadOnly: data.isReadOnly,
+          isIndexed: data.isIndexed,
+          isRequired: data.isRequired,
+          lastSyncAt: new Date(),
+        },
+      })
+      .returning();
+    return result;
+  }
+
+  async deleteLibraryContentTypes(documentLibraryId: string): Promise<void> {
+    await db.delete(libraryContentTypes)
+      .where(eq(libraryContentTypes.documentLibraryId, documentLibraryId));
+  }
+
+  async deleteLibraryColumns(documentLibraryId: string): Promise<void> {
+    await db.delete(libraryColumns)
+      .where(eq(libraryColumns.documentLibraryId, documentLibraryId));
+  }
+
+  // Atomically replaces all IA rows for a single library inside a transaction.
+  // Deleting and re-inserting happens as a single unit so a mid-write failure
+  // never leaves the library in an inconsistent state.
+  async replaceLibraryIaData(
+    documentLibraryId: string,
+    contentTypeRows: InsertLibraryContentType[],
+    columnRows: InsertLibraryColumn[],
+  ): Promise<{ contentTypesCount: number; columnsCount: number }> {
+    return db.transaction(async (tx) => {
+      // Delete all existing rows first; after this point there are no conflicts.
+      await tx.delete(libraryContentTypes)
+        .where(eq(libraryContentTypes.documentLibraryId, documentLibraryId));
+      await tx.delete(libraryColumns)
+        .where(eq(libraryColumns.documentLibraryId, documentLibraryId));
+
+      if (contentTypeRows.length > 0) {
+        await tx.insert(libraryContentTypes).values(contentTypeRows);
+      }
+
+      if (columnRows.length > 0) {
+        await tx.insert(libraryColumns).values(columnRows);
+      }
+
+      return { contentTypesCount: contentTypeRows.length, columnsCount: columnRows.length };
+    });
+  }
+
+  async getLibraryContentTypesByTenant(tenantConnectionId: string): Promise<LibraryContentType[]> {
+    return db.select().from(libraryContentTypes)
+      .where(eq(libraryContentTypes.tenantConnectionId, tenantConnectionId))
+      .orderBy(libraryContentTypes.name);
+  }
+
+  async getLibraryColumnsByTenant(tenantConnectionId: string): Promise<LibraryColumn[]> {
+    return db.select().from(libraryColumns)
+      .where(eq(libraryColumns.tenantConnectionId, tenantConnectionId))
+      .orderBy(libraryColumns.displayName);
+  }
+
+  async getLibraryContentTypesForLibrary(documentLibraryId: string): Promise<LibraryContentType[]> {
+    return db.select().from(libraryContentTypes)
+      .where(eq(libraryContentTypes.documentLibraryId, documentLibraryId))
+      .orderBy(libraryContentTypes.name);
+  }
+
+  async getLibraryColumnsForLibrary(documentLibraryId: string): Promise<LibraryColumn[]> {
+    return db.select().from(libraryColumns)
+      .where(eq(libraryColumns.documentLibraryId, documentLibraryId))
+      .orderBy(libraryColumns.displayName);
+  }
+
+  // Recomputes libraryUsageCount / siteUsageCount on content_types from the
+  // library_content_types rollup. Uses a single set-based UPDATE inside a
+  // transaction so a partial failure cannot leave counts in an inconsistent state.
+  async updateContentTypeUsageCounts(tenantConnectionId: string): Promise<void> {
+    await db.transaction(async (tx) => {
+      await tx.execute(sql`
+        UPDATE content_types
+        SET
+          library_usage_count = coalesce((
+            SELECT count(DISTINCT lct.document_library_id)
+            FROM library_content_types lct
+            WHERE lct.content_type_id = content_types.content_type_id
+              AND lct.tenant_connection_id = ${tenantConnectionId}
+          ), 0),
+          site_usage_count = coalesce((
+            SELECT count(DISTINCT lct.workspace_id)
+            FROM library_content_types lct
+            WHERE lct.content_type_id = content_types.content_type_id
+              AND lct.tenant_connection_id = ${tenantConnectionId}
+          ), 0)
+        WHERE content_types.tenant_connection_id = ${tenantConnectionId}
+      `);
+    });
   }
 
   async getTenantAccessGrants(tenantConnectionId: string): Promise<TenantAccessGrant[]> {
