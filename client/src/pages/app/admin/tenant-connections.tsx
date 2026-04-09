@@ -1866,6 +1866,8 @@ const FEATURE_KEYS = [
   { key: "teamsDiscovery", label: "Teams & Channels Discovery", description: "Discover all Teams and Channels with rich properties and metadata." },
   { key: "telemetry", label: "Workspace Telemetry", description: "Capture storage usage, file counts, and activity telemetry for SharePoint sites." },
   { key: "speDiscovery", label: "SPE Container Discovery", description: "Discover and monitor SharePoint Embedded containers and their usage." },
+  { key: "contentGovernance", label: "Content Governance Reporting", description: "Scan sharing links, risk assessments, and governance review findings across SharePoint and OneDrive." },
+  { key: "licensing", label: "Licensing Reporting", description: "Track and report on Microsoft 365 license assignments and usage." },
 ] as const;
 
 function FeatureSettingsPanel({ tenantConnectionId }: { tenantConnectionId: string }) {

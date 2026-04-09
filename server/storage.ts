@@ -370,6 +370,7 @@ export interface IStorage {
   purgeTeamsInventory(tenantConnectionId: string): Promise<number>;
   purgeWorkspaceTelemetry(tenantConnectionId: string): Promise<number>;
   purgeSpeData(tenantConnectionId: string): Promise<number>;
+  purgeContentGovernance(tenantConnectionId: string): Promise<number>;
 
   // Data counts for purge confirmation
   countOnedriveInventory(tenantConnectionId: string): Promise<number>;
@@ -377,6 +378,7 @@ export interface IStorage {
   countTeamsInventory(tenantConnectionId: string): Promise<number>;
   countWorkspaceTelemetry(tenantConnectionId: string): Promise<number>;
   countSpeData(tenantConnectionId: string): Promise<number>;
+  countContentGovernance(tenantConnectionId: string): Promise<number>;
 
   // ── Zenith User Inventory ─────────────────────────────────────────────────
   upsertUserInventory(data: InsertUserInventory): Promise<UserInventoryItem>;
@@ -2640,6 +2642,33 @@ export class DatabaseStorage implements IStorage {
       .from(speContainerTypes)
       .where(eq(speContainerTypes.tenantConnectionId, tenantConnectionId));
     return (containers?.count ?? 0) + (types?.count ?? 0);
+  }
+
+  async purgeContentGovernance(tenantConnectionId: string): Promise<number> {
+    const links = await db.delete(sharingLinksInventory)
+      .where(eq(sharingLinksInventory.tenantConnectionId, tenantConnectionId))
+      .returning({ id: sharingLinksInventory.id });
+    const tasks = await db.select({ id: governanceReviewTasks.id })
+      .from(governanceReviewTasks)
+      .where(eq(governanceReviewTasks.tenantConnectionId, tenantConnectionId));
+    if (tasks.length > 0) {
+      await db.delete(governanceReviewFindings)
+        .where(inArray(governanceReviewFindings.reviewTaskId, tasks.map(t => t.id)));
+    }
+    const deletedTasks = await db.delete(governanceReviewTasks)
+      .where(eq(governanceReviewTasks.tenantConnectionId, tenantConnectionId))
+      .returning({ id: governanceReviewTasks.id });
+    return links.length + deletedTasks.length;
+  }
+
+  async countContentGovernance(tenantConnectionId: string): Promise<number> {
+    const [links] = await db.select({ count: sql<number>`count(*)::int` })
+      .from(sharingLinksInventory)
+      .where(eq(sharingLinksInventory.tenantConnectionId, tenantConnectionId));
+    const [tasks] = await db.select({ count: sql<number>`count(*)::int` })
+      .from(governanceReviewTasks)
+      .where(eq(governanceReviewTasks.tenantConnectionId, tenantConnectionId));
+    return (links?.count ?? 0) + (tasks?.count ?? 0);
   }
 
   // ── Zenith User Inventory ─────────────────────────────────────────────────

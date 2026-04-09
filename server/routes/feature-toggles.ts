@@ -26,6 +26,8 @@ const PURGE_METHODS: Record<FeatureToggleKey, {
   teamsDiscovery: { purge: (id) => storage.purgeTeamsInventory(id), count: (id) => storage.countTeamsInventory(id) },
   telemetry: { purge: (id) => storage.purgeWorkspaceTelemetry(id), count: (id) => storage.countWorkspaceTelemetry(id) },
   speDiscovery: { purge: (id) => storage.purgeSpeData(id), count: (id) => storage.countSpeData(id) },
+  contentGovernance: { purge: (id) => storage.purgeContentGovernance(id), count: (id) => storage.countContentGovernance(id) },
+  licensing: { purge: async () => 0, count: async () => 0 },
 };
 
 router.get(
