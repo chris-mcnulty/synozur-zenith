@@ -132,6 +132,8 @@ async function ensureTenantConnectionsSchema() {
       "ALTER TABLE tenant_connections ADD COLUMN IF NOT EXISTS teams_discovery_enabled boolean NOT NULL DEFAULT false",
       "ALTER TABLE tenant_connections ADD COLUMN IF NOT EXISTS telemetry_enabled boolean NOT NULL DEFAULT false",
       "ALTER TABLE tenant_connections ADD COLUMN IF NOT EXISTS spe_discovery_enabled boolean NOT NULL DEFAULT false",
+      "ALTER TABLE tenant_connections ADD COLUMN IF NOT EXISTS content_governance_enabled boolean NOT NULL DEFAULT false",
+      "ALTER TABLE tenant_connections ADD COLUMN IF NOT EXISTS licensing_enabled boolean NOT NULL DEFAULT false",
     ];
 
     for (const stmt of alterStatements) {
@@ -208,6 +210,238 @@ async function ensureTenantConnectionsSchema() {
     await client.query(`
       CREATE INDEX IF NOT EXISTS idx_page_views_created_at ON page_views(created_at);
       CREATE INDEX IF NOT EXISTS idx_page_views_path ON page_views(path);
+    `);
+
+    // ── Content Governance tables ─────────────────────────────────────────
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS content_governance_snapshots (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        tenant_connection_id varchar NOT NULL,
+        snapshot_date date NOT NULL,
+        total_sharepoint_sites integer DEFAULT 0,
+        total_onedrive_accounts integer DEFAULT 0,
+        inactive_onedrive_count integer DEFAULT 0,
+        unlicensed_onedrive_count integer DEFAULT 0,
+        orphaned_site_count integer DEFAULT 0,
+        sites_missing_labels integer DEFAULT 0,
+        external_sharing_site_count integer DEFAULT 0,
+        anonymous_link_count integer DEFAULT 0,
+        company_link_count integer DEFAULT 0,
+        specific_people_link_count integer DEFAULT 0,
+        total_storage_used_bytes bigint DEFAULT 0,
+        total_onedrive_storage_used_bytes bigint DEFAULT 0,
+        sites_over_quota_warning integer DEFAULT 0,
+        created_at timestamp DEFAULT now(),
+        CONSTRAINT uq_tenant_snapshot_date UNIQUE (tenant_connection_id, snapshot_date)
+      )
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS sharing_links_inventory (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        tenant_connection_id varchar NOT NULL,
+        resource_type text NOT NULL,
+        resource_id text NOT NULL,
+        resource_name text,
+        link_id text NOT NULL,
+        link_type text NOT NULL,
+        link_scope text,
+        created_by text,
+        created_at_graph timestamp,
+        expires_at timestamp,
+        is_active boolean NOT NULL DEFAULT true,
+        last_accessed_at timestamp,
+        last_discovered_at timestamp DEFAULT now(),
+        created_at timestamp DEFAULT now(),
+        CONSTRAINT uq_tenant_link UNIQUE (tenant_connection_id, link_id)
+      )
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS governance_review_tasks (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        tenant_connection_id varchar NOT NULL,
+        organization_id varchar NOT NULL,
+        review_type text NOT NULL,
+        trigger_type text NOT NULL DEFAULT 'MANUAL',
+        trigger_config jsonb,
+        status text NOT NULL DEFAULT 'PENDING',
+        target_resource_type text NOT NULL DEFAULT 'ALL',
+        target_resource_ids text[],
+        findings_count integer DEFAULT 0,
+        resolved_count integer DEFAULT 0,
+        assigned_to varchar,
+        due_date timestamp,
+        completed_at timestamp,
+        created_at timestamp DEFAULT now()
+      )
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS governance_review_findings (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        review_task_id varchar NOT NULL REFERENCES governance_review_tasks(id) ON DELETE CASCADE,
+        resource_type text NOT NULL,
+        resource_id text NOT NULL,
+        resource_name text,
+        finding_type text NOT NULL,
+        severity text NOT NULL DEFAULT 'MEDIUM',
+        description text,
+        recommended_action text,
+        status text NOT NULL DEFAULT 'OPEN',
+        resolved_by varchar,
+        resolved_at timestamp,
+        created_at timestamp DEFAULT now()
+      )
+    `);
+
+    // ── Licensing tables ──────────────────────────────────────────────────
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS license_subscriptions (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        tenant_connection_id varchar NOT NULL,
+        sku_id text NOT NULL,
+        sku_part_number text,
+        display_name text,
+        total_units integer DEFAULT 0,
+        consumed_units integer DEFAULT 0,
+        suspended_units integer DEFAULT 0,
+        warning_units integer DEFAULT 0,
+        enabled_service_plans jsonb,
+        custom_price_per_unit numeric(10,2),
+        billing_cycle text,
+        last_synced_at timestamp,
+        created_at timestamp DEFAULT now(),
+        CONSTRAINT uq_tenant_sku UNIQUE (tenant_connection_id, sku_id)
+      )
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS license_assignments (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        tenant_connection_id varchar NOT NULL,
+        user_id text NOT NULL,
+        user_principal_name text,
+        user_display_name text,
+        user_department text,
+        user_job_title text,
+        account_enabled boolean,
+        last_sign_in_date text,
+        sku_id text NOT NULL,
+        sku_part_number text,
+        assigned_date text,
+        disabled_plans text[],
+        last_synced_at timestamp,
+        created_at timestamp DEFAULT now(),
+        CONSTRAINT uq_tenant_user_sku UNIQUE (tenant_connection_id, user_id, sku_id)
+      )
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS license_optimization_rules (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        tenant_connection_id varchar NOT NULL,
+        organization_id varchar NOT NULL,
+        rule_type text NOT NULL,
+        config jsonb DEFAULT '{}'::jsonb,
+        is_active boolean NOT NULL DEFAULT true,
+        created_at timestamp DEFAULT now()
+      )
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS license_optimization_findings (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        tenant_connection_id varchar NOT NULL,
+        rule_id varchar,
+        finding_type text NOT NULL,
+        user_id text,
+        user_principal_name text,
+        sku_id text,
+        sku_display_name text,
+        estimated_monthly_savings numeric(10,2),
+        description text,
+        status text NOT NULL DEFAULT 'OPEN',
+        resolved_at timestamp,
+        created_at timestamp DEFAULT now()
+      )
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS user_inventory (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        tenant_connection_id varchar NOT NULL,
+        user_id text NOT NULL,
+        user_principal_name text NOT NULL,
+        mail text,
+        display_name text,
+        account_enabled boolean NOT NULL DEFAULT true,
+        user_type text NOT NULL DEFAULT 'Member',
+        mailbox_license_hint text,
+        last_known_mail_activity text,
+        last_refreshed_at timestamp NOT NULL DEFAULT now(),
+        discovery_status text NOT NULL DEFAULT 'ACTIVE',
+        created_at timestamp DEFAULT now(),
+        CONSTRAINT uq_tenant_user_inventory UNIQUE (tenant_connection_id, user_id)
+      )
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS user_inventory_runs (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        tenant_connection_id varchar NOT NULL,
+        started_at timestamp NOT NULL DEFAULT now(),
+        completed_at timestamp,
+        status text NOT NULL DEFAULT 'RUNNING',
+        max_users_cap integer,
+        users_discovered integer DEFAULT 0,
+        users_marked_deleted integer DEFAULT 0,
+        pages_fetched integer DEFAULT 0,
+        errors jsonb,
+        created_at timestamp DEFAULT now()
+      )
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS email_storage_reports (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        tenant_connection_id varchar NOT NULL,
+        mode text NOT NULL,
+        window_days integer NOT NULL,
+        window_start timestamp NOT NULL,
+        window_end timestamp NOT NULL,
+        status text NOT NULL DEFAULT 'RUNNING',
+        started_at timestamp NOT NULL DEFAULT now(),
+        completed_at timestamp,
+        limits jsonb NOT NULL,
+        users_planned integer DEFAULT 0,
+        users_processed integer DEFAULT 0,
+        messages_analyzed integer DEFAULT 0,
+        messages_with_attachments integer DEFAULT 0,
+        estimated_attachment_bytes bigint DEFAULT 0,
+        inventory_snapshot_at timestamp,
+        inventory_sampled_count integer,
+        inventory_total_count integer,
+        verified_domains jsonb,
+        data_masking_applied boolean NOT NULL DEFAULT false,
+        summary jsonb,
+        caps_hit jsonb,
+        accuracy_caveats jsonb,
+        errors jsonb,
+        triggered_by_user_id varchar,
+        created_at timestamp DEFAULT now()
+      )
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_license_subs_tenant ON license_subscriptions(tenant_connection_id);
+      CREATE INDEX IF NOT EXISTS idx_license_asgn_tenant ON license_assignments(tenant_connection_id);
+      CREATE INDEX IF NOT EXISTS idx_cg_snapshots_tenant ON content_governance_snapshots(tenant_connection_id);
+      CREATE INDEX IF NOT EXISTS idx_sharing_links_tenant ON sharing_links_inventory(tenant_connection_id);
+      CREATE INDEX IF NOT EXISTS idx_user_inventory_tenant ON user_inventory(tenant_connection_id);
+      CREATE INDEX IF NOT EXISTS idx_user_inventory_tenant_status ON user_inventory(tenant_connection_id, discovery_status);
+      CREATE INDEX IF NOT EXISTS idx_user_inventory_runs_tenant ON user_inventory_runs(tenant_connection_id, started_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_email_storage_reports_tenant ON email_storage_reports(tenant_connection_id, started_at DESC);
     `);
 
     log('Schema migration ensureTenantConnectionsSchema completed');

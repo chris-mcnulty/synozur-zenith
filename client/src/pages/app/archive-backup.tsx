@@ -336,6 +336,16 @@ export default function ArchiveBackupPage() {
           </TabsContent>
 
           <TabsContent value="backup" className="m-0">
+            <div className="flex items-start gap-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 mb-4" data-testid="banner-backup-demo">
+              <AlertTriangle className="w-4 h-4 text-amber-500 mt-0.5 shrink-0" />
+              <div>
+                <p className="text-sm font-medium text-amber-600 dark:text-amber-400">Demo Data — Coming Soon</p>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  The backup policies below are illustrative examples. Live policy management via the Microsoft 365 Backup API is on the roadmap.
+                </p>
+              </div>
+            </div>
+
             <Card className="glass-panel border-border/50 shadow-xl">
               <CardHeader className="pb-4 border-b border-border/40 bg-muted/10">
                 <div className="flex items-start gap-3">

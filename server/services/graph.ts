@@ -2755,7 +2755,7 @@ const GRAPH_MAX_BACKOFF_MS = 64000;
  * Fetch a Graph URL with automatic retry/backoff for 429 and 5xx responses.
  * Respects the Retry-After header returned by Graph on 429 responses.
  */
-async function graphFetchWithRetry(
+export async function graphFetchWithRetry(
   url: string,
   options: RequestInit,
   maxRetries = GRAPH_MAX_RETRIES,
@@ -4137,4 +4137,183 @@ export async function getSharePointSiteUsageReport(
   } catch (err: any) {
     return { rows: [], error: err.message };
   }
+}
+
+// ── User Inventory & Email Content Storage helpers ───────────────────────────
+// Narrow, least-privilege Graph helpers used by the Zenith User Inventory
+// layer and the Email Content Storage Report. These do NOT enumerate Entra
+// beyond what is strictly required for the inventory refresh.
+
+export interface InventoryUser {
+  id: string;
+  userPrincipalName: string;
+  mail: string | null;
+  displayName: string | null;
+  accountEnabled: boolean;
+  userType: "Member" | "Guest" | string;
+}
+
+/**
+ * Fetch a single page of tenant users for inventory refresh. Returns the
+ * raw nextLink so callers can checkpoint between pages (throttling-safe).
+ *
+ * Selects only the minimal fields required by the User Inventory schema.
+ * This is the ONLY Graph /users enumeration Zenith performs — reports must
+ * consume the cached inventory, not call this directly.
+ */
+export async function fetchUserInventoryPage(
+  token: string,
+  nextLink?: string,
+): Promise<{ users: InventoryUser[]; nextLink: string | null; status: number }> {
+  const url =
+    nextLink ??
+    "https://graph.microsoft.com/v1.0/users" +
+      "?$select=id,userPrincipalName,mail,displayName,accountEnabled,userType" +
+      "&$top=999";
+
+  const res = await graphFetchWithRetry(url, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      ConsistencyLevel: "eventual",
+    },
+  });
+
+  if (!res.ok) {
+    return { users: [], nextLink: null, status: res.status };
+  }
+
+  const data: any = await res.json();
+  const users: InventoryUser[] = (data.value || []).map((u: any) => ({
+    id: u.id,
+    userPrincipalName: u.userPrincipalName,
+    mail: u.mail ?? null,
+    displayName: u.displayName ?? null,
+    accountEnabled: u.accountEnabled !== false,
+    userType: u.userType ?? "Member",
+  }));
+
+  return {
+    users,
+    nextLink: (data["@odata.nextLink"] as string) ?? null,
+    status: res.status,
+  };
+}
+
+export interface SentMessageMeta {
+  id: string;
+  sentDateTime: string | null;
+  hasAttachments: boolean;
+  size: number;                // message size in bytes (proxy for attachment size)
+  senderAddress: string | null;
+  recipientAddresses: string[];
+}
+
+/**
+ * Fetch a single page of Sent Items messages for a user, with minimal
+ * $select and a sentDateTime range filter. Message body and subject are
+ * never requested — only metadata needed for storage estimation.
+ *
+ * The 429/5xx retry behavior is delegated to graphFetchWithRetry.
+ */
+export async function fetchSentMessagesPage(
+  token: string,
+  userId: string,
+  startIso: string,
+  endIso: string,
+  pageSize: number,
+  nextLink?: string,
+): Promise<{ messages: SentMessageMeta[]; nextLink: string | null; status: number }> {
+  const top = Math.min(Math.max(pageSize, 1), 1000);
+  const filter = `sentDateTime ge ${startIso} and sentDateTime lt ${endIso}`;
+  const select = "id,sentDateTime,hasAttachments,size,sender,toRecipients,ccRecipients,bccRecipients";
+  const url =
+    nextLink ??
+    `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(userId)}` +
+      `/mailFolders('sentitems')/messages` +
+      `?$select=${select}` +
+      `&$filter=${encodeURIComponent(filter)}` +
+      `&$top=${top}` +
+      `&$orderby=sentDateTime desc`;
+
+  const res = await graphFetchWithRetry(url, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  });
+
+  if (!res.ok) {
+    return { messages: [], nextLink: null, status: res.status };
+  }
+
+  const data: any = await res.json();
+
+  const toAddr = (r: any): string | null => {
+    const a = r?.emailAddress?.address;
+    return typeof a === "string" && a.length > 0 ? a : null;
+  };
+
+  const messages: SentMessageMeta[] = (data.value || []).map((m: any) => {
+    const recipients: string[] = [];
+    for (const key of ["toRecipients", "ccRecipients", "bccRecipients"]) {
+      for (const r of m[key] || []) {
+        const addr = toAddr(r);
+        if (addr) recipients.push(addr);
+      }
+    }
+    return {
+      id: m.id,
+      sentDateTime: m.sentDateTime ?? null,
+      hasAttachments: !!m.hasAttachments,
+      size: typeof m.size === "number" ? m.size : 0,
+      senderAddress: toAddr(m.sender) ?? toAddr(m.from),
+      recipientAddresses: recipients,
+    };
+  });
+
+  return {
+    messages,
+    nextLink: (data["@odata.nextLink"] as string) ?? null,
+    status: res.status,
+  };
+}
+
+export interface AttachmentMeta {
+  name: string | null;
+  contentType: string | null;
+  size: number;
+}
+
+/**
+ * Fetch attachment metadata for a single message (METADATA mode only).
+ * Never downloads attachment content — $select restricts the response
+ * to name/contentType/size. Bounded by the caller via maxAttachmentsPerMessage.
+ */
+export async function fetchMessageAttachmentsMeta(
+  token: string,
+  userId: string,
+  messageId: string,
+  maxAttachments: number,
+): Promise<{ attachments: AttachmentMeta[]; status: number }> {
+  const top = Math.min(Math.max(maxAttachments, 1), 100);
+  const url =
+    `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(userId)}` +
+    `/messages/${encodeURIComponent(messageId)}/attachments` +
+    `?$select=name,contentType,size&$top=${top}`;
+
+  const res = await graphFetchWithRetry(url, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+
+  if (!res.ok) {
+    return { attachments: [], status: res.status };
+  }
+
+  const data: any = await res.json();
+  const attachments: AttachmentMeta[] = (data.value || []).slice(0, top).map((a: any) => ({
+    name: typeof a.name === "string" ? a.name : null,
+    contentType: typeof a.contentType === "string" ? a.contentType : null,
+    size: typeof a.size === "number" ? a.size : 0,
+  }));
+
+  return { attachments, status: res.status };
 }

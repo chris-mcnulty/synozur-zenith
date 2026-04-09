@@ -17,13 +17,13 @@ import { storage } from "../storage";
 const router = Router();
 
 // ── GET /api/content-governance/summary ────────────────────────────────────
-router.get("/api/content-governance/summary", requireAuth("inventory:read"), async (req: AuthenticatedRequest, res) => {
+router.get("/api/content-governance/summary", requireAuth(), async (req: AuthenticatedRequest, res) => {
   try {
     const tenantConnectionId = req.query.tenantConnectionId as string;
     if (!tenantConnectionId) return res.status(400).json({ error: "tenantConnectionId is required" });
 
     const allowedTenantConnectionIds = await getOrgTenantConnectionIds(req);
-    if (!allowedTenantConnectionIds.includes(tenantConnectionId)) {
+    if (allowedTenantConnectionIds !== null && !allowedTenantConnectionIds.includes(tenantConnectionId)) {
       return res.status(403).json({ error: "Forbidden" });
     }
     // Latest snapshot
@@ -172,7 +172,7 @@ router.delete("/api/content-governance/sharing/links/:id", requireAuth(), async 
     const [link] = await db
       .select()
       .from(sharingLinksInventory)
-      .where(eq(sharingLinksInventory.id, id))
+      .where(eq(sharingLinksInventory.id, id as string))
       .limit(1);
 
     if (!link) return res.status(404).json({ error: "Sharing link not found" });
@@ -275,7 +275,7 @@ router.get("/api/content-governance/reviews/:id", requireAuth(), async (req: Aut
     const [task] = await db
       .select()
       .from(governanceReviewTasks)
-      .where(eq(governanceReviewTasks.id, id));
+      .where(eq(governanceReviewTasks.id, id as string));
 
     if (!task) return res.status(404).json({ error: "Review task not found" });
 
@@ -304,7 +304,7 @@ router.patch("/api/content-governance/reviews/:id/findings/:findingId", requireA
     const [updated] = await db
       .update(governanceReviewFindings)
       .set(updates)
-      .where(eq(governanceReviewFindings.id, findingId))
+      .where(eq(governanceReviewFindings.id, findingId as string))
       .returning();
 
     if (!updated) return res.status(404).json({ error: "Finding not found" });

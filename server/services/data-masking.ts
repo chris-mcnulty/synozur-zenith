@@ -114,3 +114,43 @@ export function decryptRecord<T extends Record<string, any>>(
   }
   return result;
 }
+
+// ── Email Content Storage Report summary masking ─────────────────────────────
+// The email report's `summary` lives in a jsonb column, so the field-level
+// map above does not cover it. These helpers walk the known PII slots
+// (sender addresses) and encrypt/decrypt each in place.
+
+export function maskEmailReportSummary<T extends Record<string, any> | null | undefined>(
+  summary: T,
+  keyBuffer: Buffer,
+): T {
+  if (!summary || typeof summary !== "object") return summary;
+  const out: any = { ...summary };
+  if (Array.isArray(out.topSenders)) {
+    out.topSenders = out.topSenders.map((s: any) => {
+      if (!s || typeof s.sender !== "string" || s.sender.length === 0) return s;
+      if (isMaskedValue(s.sender)) return s;
+      return { ...s, sender: encryptField(s.sender, keyBuffer) };
+    });
+  }
+  return out;
+}
+
+export function unmaskEmailReportSummary<T extends Record<string, any> | null | undefined>(
+  summary: T,
+  keyBuffer: Buffer,
+): T {
+  if (!summary || typeof summary !== "object") return summary;
+  const out: any = { ...summary };
+  if (Array.isArray(out.topSenders)) {
+    out.topSenders = out.topSenders.map((s: any) => {
+      if (!s || typeof s.sender !== "string" || !isMaskedValue(s.sender)) return s;
+      try {
+        return { ...s, sender: decryptField(s.sender, keyBuffer) };
+      } catch {
+        return s;
+      }
+    });
+  }
+  return out;
+}
