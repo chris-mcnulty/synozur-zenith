@@ -18,12 +18,10 @@ import ProvisionNewPage from "./pages/app/provision-new";
 import GovernancePage from "./pages/app/governance";
 import WorkspaceDetailsPage from "./pages/app/workspace-details";
 import PurviewConfigPage from "./pages/app/purview";
-import SyntexPage from "./pages/app/syntex";
 import AdminTemplatesPage from "./pages/app/admin/templates";
-import DocumentLibraryPage from "./pages/app/document-library";
 import StructuresPage from "./pages/app/structures";
 import ReportsPage from "./pages/app/reports";
-import ContentTypesPage from "./pages/app/content-types";
+import InformationArchitecturePage from "./pages/app/information-architecture";
 import EmbeddedContainersPage from "./pages/app/embedded-containers";
 import ArchiveBackupPage from "./pages/app/archive-backup";
 import LifecycleReviewHub from "./pages/app/lifecycle-review";
@@ -132,12 +130,14 @@ function AppRoutes() {
         <Route path="/app/provision" component={() => <EmptyPage title="Provisioning Requests" />} />
         <Route path="/app/governance/workspaces/:id" component={WorkspaceDetailsPage} />
         <Route path="/app/governance" component={GovernancePage} />
-        <Route path="/app/syntex" component={SyntexPage} />
+        <Route path="/app/information-architecture" component={InformationArchitecturePage} />
+        {/* Legacy redirects for consolidated pages */}
+        <Route path="/app/document-library"><Redirect to="/app/information-architecture" /></Route>
+        <Route path="/app/content-types"><Redirect to="/app/information-architecture" /></Route>
+        <Route path="/app/syntex"><Redirect to="/app/information-architecture" /></Route>
         <Route path="/app/purview" component={PurviewConfigPage} />
         <Route path="/app/reports" component={ReportsPage} />
-        <Route path="/app/document-library" component={DocumentLibraryPage} />
         <Route path="/app/structures" component={StructuresPage} />
-        <Route path="/app/content-types" component={ContentTypesPage} />
         <Route path="/app/embedded-containers" component={EmbeddedContainersPage} />
         <Route path="/app/archive-backup" component={ArchiveBackupPage} />
         <Route path="/app/lifecycle" component={LifecycleReviewHub} />
