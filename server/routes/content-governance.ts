@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { eq, and, desc, sql, asc, or, isNull } from "drizzle-orm";
+import { eq, desc, sql, asc } from "drizzle-orm";
 import { db } from "../db";
 import {
   workspaces,
@@ -12,6 +12,7 @@ import {
 import { requireAuth, type AuthenticatedRequest } from "../middleware/rbac";
 import { computeGovernanceSnapshot } from "../services/governance-snapshot";
 import { getOrgTenantConnectionIds } from "./scope-helpers";
+import { storage } from "../storage";
 
 const router = Router();
 
@@ -72,20 +73,12 @@ router.get("/api/content-governance/risk", requireAuth(), async (req: Authentica
     const tenantConnectionId = req.query.tenantConnectionId as string;
     if (!tenantConnectionId) return res.status(400).json({ error: "tenantConnectionId is required" });
 
-    const riskySites = await db
-      .select()
-      .from(workspaces)
-      .where(
-        and(
-          eq(workspaces.tenantConnectionId, tenantConnectionId),
-          or(
-            isNull(workspaces.sensitivityLabelId),
-            eq(workspaces.retentionPolicy, ""),
-            eq(workspaces.externalSharing, true),
-          ),
-        ),
-      )
-      .orderBy(desc(workspaces.storageUsedBytes));
+    const allowedTenantConnectionIds = await getOrgTenantConnectionIds(req);
+    if (allowedTenantConnectionIds !== null && !allowedTenantConnectionIds.includes(tenantConnectionId)) {
+      return res.status(403).json({ error: "Forbidden" });
+    }
+
+    const riskySites = await storage.getWorkspacesAtRisk(tenantConnectionId);
 
     res.json({ count: riskySites.length, workspaces: riskySites });
   } catch (err: any) {
@@ -100,16 +93,12 @@ router.get("/api/content-governance/ownership", requireAuth(), async (req: Authe
     const tenantConnectionId = req.query.tenantConnectionId as string;
     if (!tenantConnectionId) return res.status(400).json({ error: "tenantConnectionId is required" });
 
-    const orphaned = await db
-      .select()
-      .from(workspaces)
-      .where(
-        and(
-          eq(workspaces.tenantConnectionId, tenantConnectionId),
-          sql`${workspaces.owners} < 2`,
-        ),
-      )
-      .orderBy(workspaces.displayName);
+    const allowedTenantConnectionIds = await getOrgTenantConnectionIds(req);
+    if (allowedTenantConnectionIds !== null && !allowedTenantConnectionIds.includes(tenantConnectionId)) {
+      return res.status(403).json({ error: "Forbidden" });
+    }
+
+    const orphaned = await storage.getOrphanedWorkspaces(tenantConnectionId);
 
     res.json({ count: orphaned.length, workspaces: orphaned });
   } catch (err: any) {
@@ -124,12 +113,20 @@ router.get("/api/content-governance/storage", requireAuth(), async (req: Authent
     const tenantConnectionId = req.query.tenantConnectionId as string;
     if (!tenantConnectionId) return res.status(400).json({ error: "tenantConnectionId is required" });
 
-    const sites = await db
-      .select()
-      .from(workspaces)
-      .where(eq(workspaces.tenantConnectionId, tenantConnectionId))
-      .orderBy(desc(workspaces.storageUsedBytes));
+    const allowedTenantConnectionIds = await getOrgTenantConnectionIds(req);
+    if (allowedTenantConnectionIds !== null && !allowedTenantConnectionIds.includes(tenantConnectionId)) {
+      return res.status(403).json({ error: "Forbidden" });
+    }
 
+    // Fetch decrypted workspaces via storage, then sort by storage used desc
+    // (storageUsedBytes is numeric and unmasked, so sorting after decrypt is safe).
+    const allSites = await storage.getWorkspaces(undefined, tenantConnectionId);
+    const sites = [...allSites].sort(
+      (a, b) => Number(b.storageUsedBytes ?? 0) - Number(a.storageUsedBytes ?? 0),
+    );
+
+    // Aggregate runs directly against the DB: all summed columns are numeric
+    // and not part of SENSITIVE_FIELDS, so decryption is not required.
     const [agg] = await db
       .select({
         totalUsed: sql<number>`coalesce(sum(${workspaces.storageUsedBytes}), 0)::bigint`,
@@ -160,27 +157,16 @@ router.get("/api/content-governance/sharing/links", requireAuth(), async (req: A
     const page = Math.max(1, parseInt(req.query.page as string || "1", 10));
     const pageSize = Math.min(200, Math.max(1, parseInt(req.query.pageSize as string || "50", 10)));
 
-    const conditions = [eq(sharingLinksInventory.tenantConnectionId, tenantConnectionId)];
-    if (resourceType) conditions.push(eq(sharingLinksInventory.resourceType, resourceType));
-    if (linkType) conditions.push(eq(sharingLinksInventory.linkType, linkType));
-
-    const where = and(...conditions);
-
-    const [countRow] = await db
-      .select({ total: sql<number>`count(*)::int` })
-      .from(sharingLinksInventory)
-      .where(where);
-
-    const links = await db
-      .select()
-      .from(sharingLinksInventory)
-      .where(where)
-      .orderBy(desc(sharingLinksInventory.createdAt))
-      .limit(pageSize)
-      .offset((page - 1) * pageSize);
+    const { items: links, total } = await storage.getSharingLinksPaginated({
+      tenantConnectionId,
+      resourceType,
+      linkType,
+      page,
+      pageSize,
+    });
 
     res.json({
-      total: countRow?.total ?? 0,
+      total,
       page,
       pageSize,
       links,
@@ -308,11 +294,12 @@ router.get("/api/content-governance/reviews/:id", requireAuth(), async (req: Aut
 
     if (!task) return res.status(404).json({ error: "Review task not found" });
 
-    const findings = await db
-      .select()
-      .from(governanceReviewFindings)
-      .where(eq(governanceReviewFindings.reviewTaskId, id as string))
-      .orderBy(desc(governanceReviewFindings.createdAt));
+    const allowedTenantConnectionIds = await getOrgTenantConnectionIds(req);
+    if (allowedTenantConnectionIds !== null && !allowedTenantConnectionIds.includes(task.tenantConnectionId)) {
+      return res.status(403).json({ error: "Forbidden" });
+    }
+
+    const findings = await storage.getGovernanceReviewFindingsForTask(id);
 
     res.json({ task, findings });
   } catch (err: any) {

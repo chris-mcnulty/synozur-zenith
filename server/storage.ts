@@ -1,4 +1,4 @@
-import { eq, desc, ilike, or, and, sql, gt, lt, max, gte, lte, inArray } from "drizzle-orm";
+import { eq, desc, ilike, or, and, sql, gt, max, gte, lte, inArray, isNull } from "drizzle-orm";
 import { db } from "./db";
 import {
   workspaces,
@@ -102,15 +102,13 @@ import {
   tenantEncryptionKeys,
   type TenantEncryptionKey,
   type InsertTenantEncryptionKey,
-  userInventory,
-  type UserInventoryItem,
-  type InsertUserInventory,
-  userInventoryRuns,
-  type UserInventoryRun,
-  type InsertUserInventoryRun,
-  emailStorageReports,
-  type EmailStorageReport,
-  type InsertEmailStorageReport,
+  sharingLinksInventory,
+  type SharingLink,
+  type InsertSharingLink,
+  governanceReviewTasks,
+  governanceReviewFindings,
+  type GovernanceReviewFinding,
+  type InsertGovernanceReviewFinding,
 } from "@shared/schema";
 import {
   decryptRecord,
@@ -139,6 +137,8 @@ export interface TeamsChannelsSummary {
 export interface IStorage {
   getWorkspaces(search?: string, tenantConnectionId?: string, organizationId?: string): Promise<Workspace[]>;
   getWorkspacesPaginated(params: { page: number; pageSize: number; search?: string; tenantConnectionId?: string; tenantConnectionIds?: string[]; organizationId?: string }): Promise<{ items: Workspace[]; total: number }>;
+  getWorkspacesAtRisk(tenantConnectionId: string): Promise<Workspace[]>;
+  getOrphanedWorkspaces(tenantConnectionId: string): Promise<Workspace[]>;
   getWorkspace(id: string): Promise<Workspace | undefined>;
   getWorkspaceByM365ObjectId(m365ObjectId: string): Promise<Workspace | undefined>;
   createWorkspace(workspace: InsertWorkspace): Promise<Workspace>;
@@ -339,6 +339,20 @@ export interface IStorage {
   upsertTenantEncryptionKey(data: InsertTenantEncryptionKey): Promise<TenantEncryptionKey>;
   deleteTenantEncryptionKey(tenantConnectionId: string): Promise<void>;
 
+  // Content Governance - sharing links inventory
+  upsertSharingLink(data: InsertSharingLink): Promise<SharingLink>;
+  getSharingLinksPaginated(params: {
+    tenantConnectionId: string;
+    resourceType?: string;
+    linkType?: string;
+    page: number;
+    pageSize: number;
+  }): Promise<{ items: SharingLink[]; total: number }>;
+
+  // Content Governance - review findings
+  createGovernanceReviewFinding(data: InsertGovernanceReviewFinding): Promise<GovernanceReviewFinding>;
+  getGovernanceReviewFindingsForTask(taskId: string): Promise<GovernanceReviewFinding[]>;
+
   // Data purge methods
   purgeOnedriveInventory(tenantConnectionId: string): Promise<number>;
   purgeTeamsRecordings(tenantConnectionId: string): Promise<number>;
@@ -527,6 +541,41 @@ export class DatabaseStorage implements IStorage {
     const total = Number(countResult[0]?.count ?? 0);
     const decryptedItems = await this.decryptRows(items, "workspaces") as Workspace[];
     return { items: decryptedItems, total };
+  }
+
+  async getWorkspacesAtRisk(tenantConnectionId: string): Promise<Workspace[]> {
+    const rows = await db
+      .select()
+      .from(workspaces)
+      .where(
+        and(
+          eq(workspaces.tenantConnectionId, tenantConnectionId),
+          or(
+            isNull(workspaces.sensitivityLabelId),
+            eq(workspaces.retentionPolicy, ""),
+            eq(workspaces.externalSharing, true),
+          ),
+        ),
+      )
+      .orderBy(desc(workspaces.storageUsedBytes));
+    return this.decryptRows(rows, "workspaces") as Promise<Workspace[]>;
+  }
+
+  async getOrphanedWorkspaces(tenantConnectionId: string): Promise<Workspace[]> {
+    const rows = await db
+      .select()
+      .from(workspaces)
+      .where(
+        and(
+          eq(workspaces.tenantConnectionId, tenantConnectionId),
+          sql`${workspaces.owners} < 2`,
+        ),
+      );
+    // Sort in memory after decryption: displayName may be masked at rest.
+    const decrypted = await this.decryptRows(rows, "workspaces") as Workspace[];
+    return decrypted.sort((a, b) =>
+      (a.displayName ?? "").localeCompare(b.displayName ?? ""),
+    );
   }
 
   async getWorkspace(id: string): Promise<Workspace | undefined> {
@@ -2060,6 +2109,136 @@ export class DatabaseStorage implements IStorage {
     if (!result) return undefined;
     const [decrypted] = await this.decryptRows([result], "onedrive_inventory");
     return decrypted as OnedriveInventoryItem;
+  }
+
+  // ── Content Governance: Sharing Links Inventory ──────────────────────────
+  async upsertSharingLink(data: InsertSharingLink): Promise<SharingLink> {
+    const encrypted = await this.encryptForTenant(
+      data as Record<string, any>,
+      "sharing_links_inventory",
+      data.tenantConnectionId,
+    ) as InsertSharingLink;
+
+    const valuesToWrite: InsertSharingLink = {
+      ...encrypted,
+      lastDiscoveredAt: encrypted.lastDiscoveredAt ?? new Date(),
+    };
+
+    const existingRows = await db
+      .select()
+      .from(sharingLinksInventory)
+      .where(eq(sharingLinksInventory.tenantConnectionId, data.tenantConnectionId));
+
+    const decryptedExistingRows = await this.decryptRows(existingRows, "sharing_links_inventory");
+    const existingRow = decryptedExistingRows.find((row) => row.linkId === data.linkId) as
+      | (SharingLink & { id?: string | number })
+      | undefined;
+
+    let result: any;
+
+    if (existingRow?.id !== undefined && existingRow.id !== null) {
+      const [updated] = await db
+        .update(sharingLinksInventory)
+        .set({
+          resourceType: valuesToWrite.resourceType,
+          resourceId: valuesToWrite.resourceId,
+          resourceName: valuesToWrite.resourceName,
+          linkType: valuesToWrite.linkType,
+          linkScope: valuesToWrite.linkScope,
+          createdBy: valuesToWrite.createdBy,
+          createdAtGraph: valuesToWrite.createdAtGraph,
+          expiresAt: valuesToWrite.expiresAt,
+          isActive: valuesToWrite.isActive,
+          lastAccessedAt: valuesToWrite.lastAccessedAt,
+          lastDiscoveredAt: valuesToWrite.lastDiscoveredAt,
+        })
+        .where(eq((sharingLinksInventory as any).id, existingRow.id as any))
+        .returning();
+      result = updated;
+    } else {
+      const [inserted] = await db
+        .insert(sharingLinksInventory)
+        .values(valuesToWrite)
+        .returning();
+      result = inserted;
+    }
+    const [decrypted] = await this.decryptRows([result], "sharing_links_inventory");
+    return decrypted as SharingLink;
+  }
+
+  async getSharingLinksPaginated(params: {
+    tenantConnectionId: string;
+    resourceType?: string;
+    linkType?: string;
+    page: number;
+    pageSize: number;
+  }): Promise<{ items: SharingLink[]; total: number }> {
+    const { tenantConnectionId, resourceType, linkType, page, pageSize } = params;
+    const conditions = [eq(sharingLinksInventory.tenantConnectionId, tenantConnectionId)];
+    if (resourceType) conditions.push(eq(sharingLinksInventory.resourceType, resourceType));
+    if (linkType) conditions.push(eq(sharingLinksInventory.linkType, linkType));
+    const where = and(...conditions);
+
+    const [countRow] = await db
+      .select({ total: sql<number>`count(*)::int` })
+      .from(sharingLinksInventory)
+      .where(where);
+
+    const rows = await db
+      .select()
+      .from(sharingLinksInventory)
+      .where(where)
+      .orderBy(desc(sharingLinksInventory.createdAt))
+      .limit(pageSize)
+      .offset((page - 1) * pageSize);
+
+    const decrypted = await this.decryptRows(rows, "sharing_links_inventory") as SharingLink[];
+    return { items: decrypted, total: countRow?.total ?? 0 };
+  }
+
+  // ── Content Governance: Review Findings ──────────────────────────────────
+  // Findings have no tenantConnectionId column; the key is resolved via the
+  // parent review task so encryption and decryption can still be tenant-scoped.
+  async createGovernanceReviewFinding(data: InsertGovernanceReviewFinding): Promise<GovernanceReviewFinding> {
+    const [task] = await db
+      .select({ tenantConnectionId: governanceReviewTasks.tenantConnectionId })
+      .from(governanceReviewTasks)
+      .where(eq(governanceReviewTasks.id, data.reviewTaskId));
+
+    let toInsert: InsertGovernanceReviewFinding = data;
+    if (task?.tenantConnectionId) {
+      toInsert = await this.encryptForTenant(
+        data as Record<string, any>,
+        "governance_review_findings",
+        task.tenantConnectionId,
+      ) as InsertGovernanceReviewFinding;
+    }
+
+    const [result] = await db.insert(governanceReviewFindings).values(toInsert).returning();
+
+    if (task?.tenantConnectionId) {
+      const buf = await this.getKeyBufferForTenant(task.tenantConnectionId);
+      if (buf) return decryptRecord(result as Record<string, any>, "governance_review_findings", buf) as GovernanceReviewFinding;
+    }
+    return result;
+  }
+
+  async getGovernanceReviewFindingsForTask(taskId: string): Promise<GovernanceReviewFinding[]> {
+    const [task] = await db
+      .select({ tenantConnectionId: governanceReviewTasks.tenantConnectionId })
+      .from(governanceReviewTasks)
+      .where(eq(governanceReviewTasks.id, taskId));
+
+    const rows = await db
+      .select()
+      .from(governanceReviewFindings)
+      .where(eq(governanceReviewFindings.reviewTaskId, taskId))
+      .orderBy(desc(governanceReviewFindings.createdAt));
+
+    if (!task?.tenantConnectionId || rows.length === 0) return rows;
+    const buf = await this.getKeyBufferForTenant(task.tenantConnectionId);
+    if (!buf) return rows;
+    return rows.map((row) => decryptRecord(row as Record<string, any>, "governance_review_findings", buf) as GovernanceReviewFinding);
   }
 
   async getNextTicketNumber(orgId: string): Promise<number> {
