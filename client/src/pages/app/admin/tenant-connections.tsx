@@ -93,8 +93,8 @@ export default function TenantConnectionsPage() {
 
   const [form, setForm] = useState({
     domain: "",
-    ownershipType: "MSP",
-    installMode: "MSP",
+    ownershipType: "Customer",
+    installMode: "CUSTOMER",
     adminEmail: "",
   });
 
@@ -374,7 +374,7 @@ export default function TenantConnectionsPage() {
             <TicketCheck className="w-4 h-4" />
             Enter Access Code
           </Button>
-          <Dialog open={showAddDialog} onOpenChange={(open) => { setShowAddDialog(open); if (!open) setForm({ domain: "", ownershipType: "MSP", installMode: "MSP", adminEmail: "" }); }}>
+          <Dialog open={showAddDialog} onOpenChange={(open) => { setShowAddDialog(open); if (!open) setForm({ domain: "", ownershipType: "Customer", installMode: "CUSTOMER", adminEmail: "" }); }}>
             <DialogTrigger asChild>
               <Button className="gap-2 shadow-md shadow-primary/20" data-testid="button-connect-tenant">
                 <Plus className="w-4 h-4" />
