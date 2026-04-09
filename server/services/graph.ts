@@ -4397,6 +4397,8 @@ export interface AttachmentMeta {
   name: string | null;
   contentType: string | null;
   size: number;
+  odataType: string | null;
+  isInline: boolean;
 }
 
 /**
@@ -4414,7 +4416,7 @@ export async function fetchMessageAttachmentsMeta(
   const url =
     `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(userId)}` +
     `/messages/${encodeURIComponent(messageId)}/attachments` +
-    `?$select=name,contentType,size&$top=${top}`;
+    `?$select=name,contentType,size,isInline&$top=${top}`;
 
   const res = await graphFetchWithRetry(url, {
     headers: { Authorization: `Bearer ${token}` },
@@ -4429,6 +4431,8 @@ export async function fetchMessageAttachmentsMeta(
     name: typeof a.name === "string" ? a.name : null,
     contentType: typeof a.contentType === "string" ? a.contentType : null,
     size: typeof a.size === "number" ? a.size : 0,
+    odataType: typeof a["@odata.type"] === "string" ? a["@odata.type"] : null,
+    isInline: !!a.isInline,
   }));
 
   return { attachments, status: res.status };

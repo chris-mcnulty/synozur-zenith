@@ -277,10 +277,7 @@ export async function runEmailContentStorageReport(
   }
 
   // ── Finalize ─────────────────────────────────────────────────────────────
-  const summary = aggregator.toSummary({
-    topN: 10,
-    includeMetadataAggregates: mode === "METADATA",
-  });
+  const summary = aggregator.toSummary({ topN: 10 });
 
   const capsHit: EmailReportCapsHit = {
     ...capsUsersHit,
@@ -314,12 +311,23 @@ export async function runEmailContentStorageReport(
     );
   }
 
+  if (aggregator.attachmentFetchErrors > 0) {
+    accuracyCaveats.push(
+      `${aggregator.attachmentFetchErrors} attachment metadata fetch(es) failed. ` +
+        "Those messages are counted but their attachment bytes are reported as 0.",
+    );
+  }
+
   if (cancelled) {
     accuracyCaveats.push(
       `Run was cancelled by an admin after processing ${usersProcessed}/${inventory.length} users. ` +
         "Partial aggregates are preserved.",
     );
   }
+
+  const hasSignificantFetchErrors = aggregator.attachmentFetchErrors > 0 &&
+    aggregator.messagesWithAttachments > 0 &&
+    aggregator.attachmentFetchErrors / aggregator.messagesWithAttachments > 0.1;
 
   const finalStatus: EmailStorageReport["status"] = cancelled
     ? "CANCELLED"
@@ -329,7 +337,8 @@ export async function runEmailContentStorageReport(
           capsHit.maxUsers ||
           capsHit.maxTotalMessages ||
           capsHit.maxMessagesWithMetadata ||
-          inventoryStale
+          inventoryStale ||
+          hasSignificantFetchErrors
         ? "PARTIAL"
         : "COMPLETED";
 
@@ -439,32 +448,36 @@ async function processUser(params: {
       }
       if (checkCancelled()) return;
 
-      aggregator.recordMessage({
-        sizeBytes: msg.size,
-        hasAttachments: msg.hasAttachments,
-        senderAddress: msg.senderAddress,
-        recipientAddresses: msg.recipientAddresses,
-      });
-      caps.recordMessage();
-      userMessageCount++;
-
-      // METADATA enrichment (bounded, opt-in)
-      if (mode === "METADATA" && msg.hasAttachments && caps.canProcessMetadataFor(msg.size)) {
+      let attachmentBytes = 0;
+      if (msg.hasAttachments) {
         try {
-          const { attachments } = await fetchMessageAttachmentsMeta(
+          const { attachments, status } = await fetchMessageAttachmentsMeta(
             token,
             user.userId,
             msg.id,
             limits.maxAttachmentsPerMessage,
           );
-          for (const a of attachments) {
-            aggregator.recordAttachment(a);
+          if (status !== 200) {
+            aggregator.attachmentFetchErrors++;
+          } else {
+            for (const a of attachments) {
+              aggregator.recordAttachment(a);
+              attachmentBytes += a.size;
+            }
           }
-          caps.recordMetadataMessage();
         } catch {
-          // Fall back to estimate-only for this message on any error.
+          aggregator.attachmentFetchErrors++;
         }
       }
+
+      aggregator.recordMessage({
+        hasAttachments: msg.hasAttachments,
+        senderAddress: msg.senderAddress,
+        recipientAddresses: msg.recipientAddresses,
+        attachmentBytes,
+      });
+      caps.recordMessage();
+      userMessageCount++;
     }
 
     nextLink = page.nextLink ?? null;
@@ -566,6 +579,15 @@ export function renderReportCsv(report: EmailStorageReport): string {
         row(["repeatedAttachmentPatterns", p.key, p.bytes, p.count]);
       }
     }
+
+    lines.push("");
+    row(["Section", "Metric", "Value"]);
+    row(["attachmentBreakdown", "classicAttachmentCount", summary.classicAttachments?.count ?? 0]);
+    row(["attachmentBreakdown", "classicAttachmentBytes", summary.classicAttachments?.bytes ?? 0]);
+    row(["attachmentBreakdown", "referenceAttachmentCount", summary.referenceAttachments?.count ?? 0]);
+    row(["attachmentBreakdown", "inlineAttachmentCount", summary.inlineAttachments?.count ?? 0]);
+    row(["attachmentBreakdown", "inlineAttachmentBytes", summary.inlineAttachments?.bytes ?? 0]);
+    row(["attachmentBreakdown", "attachmentFetchErrors", summary.attachmentFetchErrors ?? 0]);
   }
 
   if (report.accuracyCaveats && report.accuracyCaveats.length > 0) {

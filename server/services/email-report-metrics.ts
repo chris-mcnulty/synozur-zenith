@@ -230,11 +230,17 @@ export class EmailReportAggregator {
   externalMessages = 0;
   externalBytes = 0;
 
+  classicAttachmentCount = 0;
+  classicAttachmentBytes = 0;
+  referenceAttachmentCount = 0;
+  inlineAttachmentCount = 0;
+  inlineAttachmentBytes = 0;
+  attachmentFetchErrors = 0;
+
   private readonly attachmentSizes: number[] = [];
   private readonly senderTotals = new Map<string, { bytes: number; count: number }>();
   private readonly domainTotals = new Map<string, { bytes: number; count: number }>();
 
-  // Metadata-mode only
   private readonly contentTypeTotals = new Map<string, { bytes: number; count: number }>();
   private readonly patternTotals = new Map<string, { bytes: number; count: number }>();
 
@@ -242,49 +248,43 @@ export class EmailReportAggregator {
     this.verifiedDomains = normalizeVerifiedDomains(verifiedDomains);
   }
 
-  /**
-   * Record one sent-item message. In Estimate mode the caller passes the
-   * message's total `size` as the attachment byte proxy ONLY when the
-   * message has attachments.
-   */
   recordMessage(params: {
-    sizeBytes: number;
     hasAttachments: boolean;
     senderAddress: string | null;
     recipientAddresses: string[];
+    attachmentBytes: number;
   }): void {
     this.totalMessagesAnalyzed++;
     if (!params.hasAttachments) return;
 
     this.messagesWithAttachments++;
-    this.estimatedAttachmentBytes += params.sizeBytes;
-    this.attachmentSizes.push(params.sizeBytes);
+    this.estimatedAttachmentBytes += params.attachmentBytes;
+    if (params.attachmentBytes > 0) {
+      this.attachmentSizes.push(params.attachmentBytes);
+    }
 
-    // Sender totals (bytes + count)
     if (params.senderAddress) {
       const key = params.senderAddress.toLowerCase();
       const prev = this.senderTotals.get(key) ?? { bytes: 0, count: 0 };
-      prev.bytes += params.sizeBytes;
+      prev.bytes += params.attachmentBytes;
       prev.count += 1;
       this.senderTotals.set(key, prev);
     }
 
-    // Recipient domain totals (one hit per unique domain on the message)
     const seenDomains = new Set<string>();
     for (const r of params.recipientAddresses) {
       const domain = extractDomain(r);
       if (!domain || seenDomains.has(domain)) continue;
       seenDomains.add(domain);
       const prev = this.domainTotals.get(domain) ?? { bytes: 0, count: 0 };
-      prev.bytes += params.sizeBytes;
+      prev.bytes += params.attachmentBytes;
       prev.count += 1;
       this.domainTotals.set(domain, prev);
     }
 
-    // Internal vs external attribution
     const split = splitRecipientAttribution(
       params.recipientAddresses,
-      params.sizeBytes,
+      params.attachmentBytes,
       this.verifiedDomains,
     );
     this.internalMessages += split.internalMessages;
@@ -293,13 +293,25 @@ export class EmailReportAggregator {
     this.externalBytes += split.externalBytes;
   }
 
-  /**
-   * METADATA mode only: record one individual attachment with its true size
-   * and content type. This does NOT adjust the `estimatedAttachmentBytes`
-   * totals (those came from message size in Estimate mode) — it only adds
-   * top-attachment-type and repeated-pattern insights.
-   */
-  recordAttachment(params: { name: string | null; contentType: string | null; size: number }): void {
+  recordAttachment(params: {
+    name: string | null;
+    contentType: string | null;
+    size: number;
+    odataType: string | null;
+    isInline: boolean;
+  }): void {
+    const isReference = params.odataType === "#microsoft.graph.referenceAttachment";
+
+    if (params.isInline && !isReference) {
+      this.inlineAttachmentCount++;
+      this.inlineAttachmentBytes += params.size;
+    } else if (isReference) {
+      this.referenceAttachmentCount++;
+    } else {
+      this.classicAttachmentCount++;
+      this.classicAttachmentBytes += params.size;
+    }
+
     const ct = (params.contentType ?? "application/octet-stream").toLowerCase();
     const prev = this.contentTypeTotals.get(ct) ?? { bytes: 0, count: 0 };
     prev.bytes += params.size;
@@ -307,10 +319,7 @@ export class EmailReportAggregator {
     this.contentTypeTotals.set(ct, prev);
 
     if (params.name) {
-      // Repeated attachment heuristic: SHA-256 of lowercased filename + rounded size bucket.
-      // Filenames may contain PII (names, project titles), so we hash rather than persisting
-      // the raw value. The hash is stable across runs for the same filename+size combination.
-      const sizeBucket = Math.round(params.size / 1024); // KB bucket
+      const sizeBucket = Math.round(params.size / 1024);
       const hashInput = `${params.name.toLowerCase()}|${sizeBucket}`;
       const key = createHash("sha256").update(hashInput).digest("hex").substring(0, 16);
       const p = this.patternTotals.get(key) ?? { bytes: 0, count: 0 };
@@ -320,17 +329,15 @@ export class EmailReportAggregator {
     }
   }
 
-  /** Emit the final EmailReportSummary payload. */
   toSummary(options: {
     topN?: number;
-    includeMetadataAggregates?: boolean;
   } = {}): EmailReportSummary {
     const topN = options.topN ?? 10;
 
     const topList = (m: Map<string, { bytes: number; count: number }>) =>
       Array.from(m.entries())
         .map(([k, v]) => ({ key: k, ...v }))
-        .sort((a, b) => b.bytes - a.bytes)
+        .sort((a, b) => b.bytes - a.bytes || b.count - a.count)
         .slice(0, topN);
 
     const pct =
@@ -365,18 +372,19 @@ export class EmailReportAggregator {
         bytes: e.bytes,
         count: e.count,
       })),
-    };
-
-    if (options.includeMetadataAggregates) {
-      summary.topAttachmentTypes = topList(this.contentTypeTotals).map(e => ({
+      topAttachmentTypes: topList(this.contentTypeTotals).map(e => ({
         contentType: e.key,
         bytes: e.bytes,
         count: e.count,
-      }));
-      summary.repeatedAttachmentPatterns = topList(this.patternTotals)
+      })),
+      repeatedAttachmentPatterns: topList(this.patternTotals)
         .filter(e => e.count > 1)
-        .map(e => ({ key: e.key, bytes: e.bytes, count: e.count }));
-    }
+        .map(e => ({ key: e.key, bytes: e.bytes, count: e.count })),
+      classicAttachments: { count: this.classicAttachmentCount, bytes: this.classicAttachmentBytes },
+      referenceAttachments: { count: this.referenceAttachmentCount },
+      inlineAttachments: { count: this.inlineAttachmentCount, bytes: this.inlineAttachmentBytes },
+      attachmentFetchErrors: this.attachmentFetchErrors,
+    };
 
     return summary;
   }
@@ -478,12 +486,10 @@ export function buildAccuracyCaveats(params: {
 }): string[] {
   const caveats: string[] = [];
 
-  if (params.mode === "ESTIMATE") {
-    caveats.push(
-      "Estimate Mode: message `size` is used as a proxy for attachment storage. " +
-        "Actual attachment bytes may be lower once MIME/body is excluded.",
-    );
-  }
+  caveats.push(
+    "Attachment sizes are fetched per-message from Graph API metadata. " +
+      "Reference attachments (OneDrive/SharePoint links) report 0 bytes since the data lives in ODSP.",
+  );
 
   if (params.capsHit.maxUsers) {
     caveats.push(

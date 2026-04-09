@@ -97,13 +97,26 @@ function StatCard({ label, value, sub, icon }: { label: string; value: string; s
 
 function RunResults({ report }: { report: EmailStorageReport }) {
   const tenantId = report.tenantConnectionId;
-  const s = report.summary;
+  const s = report.summary as (EmailStorageReport["summary"] & {
+    classicAttachments?: { count: number; bytes: number };
+    referenceAttachments?: { count: number };
+    inlineAttachments?: { count: number; bytes: number };
+    attachmentFetchErrors?: number;
+  }) | null;
 
   const csvHref = `/api/admin/tenants/${tenantId}/email-storage-report/runs/${report.id}/export.csv`;
 
+  const classicCount = s?.classicAttachments?.count ?? 0;
+  const classicBytes = s?.classicAttachments?.bytes ?? 0;
+  const referenceCount = s?.referenceAttachments?.count ?? 0;
+  const inlineCount = s?.inlineAttachments?.count ?? 0;
+  const inlineBytes = s?.inlineAttachments?.bytes ?? 0;
+  const totalAttachments = classicCount + referenceCount + inlineCount;
+  const classicPct = totalAttachments > 0 ? classicCount / totalAttachments : 0;
+  const referencePct = totalAttachments > 0 ? referenceCount / totalAttachments : 0;
+
   return (
     <div className="space-y-4 mt-2" data-testid="section-run-results">
-      {/* Summary stat cards */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <StatCard
           label="Messages Analysed"
@@ -117,9 +130,9 @@ function RunResults({ report }: { report: EmailStorageReport }) {
           icon={<BarChart2 className="h-4 w-4 text-purple-500" />}
         />
         <StatCard
-          label="Est. Attachment Storage"
+          label="Attachment Storage"
           value={formatBytes(report.estimatedAttachmentBytes ?? 0)}
-          sub={report.mode === "ESTIMATE" ? "Estimate mode" : "Metadata mode"}
+          sub="Actual attachment bytes"
           icon={<TrendingUp className="h-4 w-4 text-emerald-500" />}
         />
         <StatCard
@@ -132,7 +145,74 @@ function RunResults({ report }: { report: EmailStorageReport }) {
 
       {s && (
         <>
-          {/* Internal / External */}
+          {totalAttachments > 0 && (
+            <Card data-testid="card-attachment-breakdown">
+              <CardHeader className="pb-2 pt-4 px-4">
+                <CardTitle className="text-sm">Attachment Breakdown — File vs Link</CardTitle>
+                <CardDescription className="text-xs">
+                  Classic files are stored in the mailbox. Reference links point to OneDrive / SharePoint — no data duplication.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="px-4 pb-4 space-y-3">
+                <div className="flex gap-1 h-4 rounded-full overflow-hidden bg-muted/40">
+                  {classicPct > 0 && (
+                    <div
+                      className="bg-red-500 rounded-l-full transition-all"
+                      style={{ width: `${Math.max(classicPct * 100, 2)}%` }}
+                      title={`Classic files: ${pct(classicPct)}`}
+                    />
+                  )}
+                  {referencePct > 0 && (
+                    <div
+                      className="bg-emerald-500 transition-all"
+                      style={{ width: `${Math.max(referencePct * 100, 2)}%` }}
+                      title={`Links: ${pct(referencePct)}`}
+                    />
+                  )}
+                  {inlineCount > 0 && (
+                    <div
+                      className="bg-slate-400 transition-all"
+                      style={{ width: `${Math.max((inlineCount / totalAttachments) * 100, 2)}%` }}
+                      title={`Inline: ${inlineCount}`}
+                    />
+                  )}
+                </div>
+                <div className="grid grid-cols-3 gap-4 text-sm">
+                  <div className="space-y-0.5">
+                    <div className="flex items-center gap-1.5">
+                      <span className="w-2.5 h-2.5 rounded-full bg-red-500 shrink-0" />
+                      <span className="text-muted-foreground text-xs">Classic Files</span>
+                    </div>
+                    <p className="font-semibold" data-testid="stat-classic-count">{classicCount.toLocaleString()}</p>
+                    <p className="text-xs text-muted-foreground">{formatBytes(classicBytes)} in mailboxes</p>
+                  </div>
+                  <div className="space-y-0.5">
+                    <div className="flex items-center gap-1.5">
+                      <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 shrink-0" />
+                      <span className="text-muted-foreground text-xs">Links (ODSP)</span>
+                    </div>
+                    <p className="font-semibold" data-testid="stat-reference-count">{referenceCount.toLocaleString()}</p>
+                    <p className="text-xs text-muted-foreground">Data lives in OneDrive/SPO</p>
+                  </div>
+                  <div className="space-y-0.5">
+                    <div className="flex items-center gap-1.5">
+                      <span className="w-2.5 h-2.5 rounded-full bg-slate-400 shrink-0" />
+                      <span className="text-muted-foreground text-xs">Inline / Images</span>
+                    </div>
+                    <p className="font-semibold" data-testid="stat-inline-count">{inlineCount.toLocaleString()}</p>
+                    <p className="text-xs text-muted-foreground">{formatBytes(inlineBytes)}</p>
+                  </div>
+                </div>
+                {(s?.attachmentFetchErrors ?? 0) > 0 && (
+                  <div className="flex items-center gap-1.5 text-xs text-amber-600 mt-1" data-testid="stat-fetch-errors">
+                    <AlertTriangle className="h-3 w-3 shrink-0" />
+                    {s!.attachmentFetchErrors} attachment fetch(es) failed — those messages show 0 bytes
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          )}
+
           <div className="grid grid-cols-2 gap-3">
             <Card>
               <CardHeader className="pb-2 pt-4 px-4">
@@ -141,7 +221,7 @@ function RunResults({ report }: { report: EmailStorageReport }) {
               </CardHeader>
               <CardContent className="px-4 pb-4 space-y-1 text-sm">
                 <div className="flex justify-between"><span className="text-muted-foreground">Messages</span><span className="font-medium">{s.internal.messages.toLocaleString()}</span></div>
-                <div className="flex justify-between"><span className="text-muted-foreground">Est. Bytes</span><span className="font-medium">{formatBytes(s.internal.bytes)}</span></div>
+                <div className="flex justify-between"><span className="text-muted-foreground">Attachment Bytes</span><span className="font-medium">{formatBytes(s.internal.bytes)}</span></div>
               </CardContent>
             </Card>
             <Card>
@@ -151,35 +231,63 @@ function RunResults({ report }: { report: EmailStorageReport }) {
               </CardHeader>
               <CardContent className="px-4 pb-4 space-y-1 text-sm">
                 <div className="flex justify-between"><span className="text-muted-foreground">Messages</span><span className="font-medium">{s.external.messages.toLocaleString()}</span></div>
-                <div className="flex justify-between"><span className="text-muted-foreground">Est. Bytes</span><span className="font-medium">{formatBytes(s.external.bytes)}</span></div>
+                <div className="flex justify-between"><span className="text-muted-foreground">Attachment Bytes</span><span className="font-medium">{formatBytes(s.external.bytes)}</span></div>
               </CardContent>
             </Card>
           </div>
 
-          {/* Size stats */}
-          <Card>
-            <CardHeader className="pb-2 pt-4 px-4">
-              <CardTitle className="text-sm flex items-center gap-2"><BarChart2 className="h-4 w-4" /> Message Size Distribution (attachment messages)</CardTitle>
-            </CardHeader>
-            <CardContent className="px-4 pb-4">
-              <div className="grid grid-cols-5 gap-2 text-center text-sm">
-                {[
-                  { label: "Avg", value: formatBytes(s.sizeStats.avgBytes) },
-                  { label: "Median", value: formatBytes(s.sizeStats.medianBytes) },
-                  { label: "P90", value: formatBytes(s.sizeStats.p90Bytes) },
-                  { label: "P95", value: formatBytes(s.sizeStats.p95Bytes) },
-                  { label: "Max", value: formatBytes(s.sizeStats.maxBytes) },
-                ].map(({ label, value }) => (
-                  <div key={label} className="flex flex-col gap-0.5">
-                    <span className="text-xs text-muted-foreground">{label}</span>
-                    <span className="font-semibold text-sm">{value}</span>
-                  </div>
-                ))}
-              </div>
-            </CardContent>
-          </Card>
+          {s.sizeStats.maxBytes > 0 && (
+            <Card>
+              <CardHeader className="pb-2 pt-4 px-4">
+                <CardTitle className="text-sm flex items-center gap-2"><BarChart2 className="h-4 w-4" /> Attachment Size Distribution</CardTitle>
+              </CardHeader>
+              <CardContent className="px-4 pb-4">
+                <div className="grid grid-cols-5 gap-2 text-center text-sm">
+                  {[
+                    { label: "Avg", value: formatBytes(s.sizeStats.avgBytes) },
+                    { label: "Median", value: formatBytes(s.sizeStats.medianBytes) },
+                    { label: "P90", value: formatBytes(s.sizeStats.p90Bytes) },
+                    { label: "P95", value: formatBytes(s.sizeStats.p95Bytes) },
+                    { label: "Max", value: formatBytes(s.sizeStats.maxBytes) },
+                  ].map(({ label, value }) => (
+                    <div key={label} className="flex flex-col gap-0.5">
+                      <span className="text-xs text-muted-foreground">{label}</span>
+                      <span className="font-semibold text-sm">{value}</span>
+                    </div>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
+          )}
 
-          {/* Top senders */}
+          {s.topAttachmentTypes && s.topAttachmentTypes.length > 0 && (
+            <Card>
+              <CardHeader className="pb-2 pt-4 px-4">
+                <CardTitle className="text-sm">Top Attachment Types</CardTitle>
+              </CardHeader>
+              <CardContent className="p-0">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="pl-4">Content Type</TableHead>
+                      <TableHead className="text-right">Count</TableHead>
+                      <TableHead className="text-right pr-4">Bytes</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {s.topAttachmentTypes.map((t, i) => (
+                      <TableRow key={i} data-testid={`row-top-type-${i}`}>
+                        <TableCell className="pl-4 font-mono text-xs">{t.contentType}</TableCell>
+                        <TableCell className="text-right text-sm">{t.count.toLocaleString()}</TableCell>
+                        <TableCell className="text-right pr-4 text-sm">{formatBytes(t.bytes)}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </CardContent>
+            </Card>
+          )}
+
           {s.topSenders.length > 0 && (
             <Card>
               <CardHeader className="pb-2 pt-4 px-4">
@@ -191,7 +299,7 @@ function RunResults({ report }: { report: EmailStorageReport }) {
                     <TableRow>
                       <TableHead className="pl-4">Sender</TableHead>
                       <TableHead className="text-right">Messages</TableHead>
-                      <TableHead className="text-right pr-4">Est. Bytes</TableHead>
+                      <TableHead className="text-right pr-4">Bytes</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -208,7 +316,6 @@ function RunResults({ report }: { report: EmailStorageReport }) {
             </Card>
           )}
 
-          {/* Top recipient domains */}
           {s.topRecipientDomains.length > 0 && (
             <Card>
               <CardHeader className="pb-2 pt-4 px-4">
@@ -220,7 +327,7 @@ function RunResults({ report }: { report: EmailStorageReport }) {
                     <TableRow>
                       <TableHead className="pl-4">Domain</TableHead>
                       <TableHead className="text-right">Messages</TableHead>
-                      <TableHead className="text-right pr-4">Est. Bytes</TableHead>
+                      <TableHead className="text-right pr-4">Bytes</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -239,7 +346,6 @@ function RunResults({ report }: { report: EmailStorageReport }) {
         </>
       )}
 
-      {/* Accuracy caveats */}
       {report.accuracyCaveats && report.accuracyCaveats.length > 0 && (
         <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 px-4 py-3 space-y-1" data-testid="section-accuracy-caveats">
           <p className="text-xs font-semibold text-amber-700 dark:text-amber-400 flex items-center gap-1.5">
@@ -253,7 +359,6 @@ function RunResults({ report }: { report: EmailStorageReport }) {
         </div>
       )}
 
-      {/* CSV export */}
       {(report.status === "COMPLETED" || report.status === "PARTIAL") && (
         <div className="flex justify-end">
           <a href={csvHref} download data-testid="link-export-csv">

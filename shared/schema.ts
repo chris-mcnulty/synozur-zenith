@@ -1488,8 +1488,12 @@ export interface EmailReportSummary {
   external: { messages: number; bytes: number };
   topSenders: Array<{ sender: string; bytes: number; count: number }>;
   topRecipientDomains: Array<{ domain: string; bytes: number; count: number }>;
-  topAttachmentTypes?: Array<{ contentType: string; bytes: number; count: number }>; // METADATA only
-  repeatedAttachmentPatterns?: Array<{ key: string; count: number; bytes: number }>; // METADATA only
+  topAttachmentTypes?: Array<{ contentType: string; bytes: number; count: number }>;
+  repeatedAttachmentPatterns?: Array<{ key: string; count: number; bytes: number }>;
+  classicAttachments?: { count: number; bytes: number };
+  referenceAttachments?: { count: number };
+  inlineAttachments?: { count: number; bytes: number };
+  attachmentFetchErrors?: number;
 }
 
 export interface EmailReportCapsHit {
