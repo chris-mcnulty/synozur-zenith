@@ -2118,26 +2118,50 @@ export class DatabaseStorage implements IStorage {
       "sharing_links_inventory",
       data.tenantConnectionId,
     ) as InsertSharingLink;
-    const [result] = await db
-      .insert(sharingLinksInventory)
-      .values(encrypted)
-      .onConflictDoUpdate({
-        target: [sharingLinksInventory.tenantConnectionId, sharingLinksInventory.linkId],
-        set: {
-          resourceType: encrypted.resourceType,
-          resourceId: encrypted.resourceId,
-          resourceName: encrypted.resourceName,
-          linkType: encrypted.linkType,
-          linkScope: encrypted.linkScope,
-          createdBy: encrypted.createdBy,
-          createdAtGraph: encrypted.createdAtGraph,
-          expiresAt: encrypted.expiresAt,
-          isActive: encrypted.isActive,
-          lastAccessedAt: encrypted.lastAccessedAt,
-          lastDiscoveredAt: encrypted.lastDiscoveredAt ?? new Date(),
-        },
-      })
-      .returning();
+
+    const valuesToWrite: InsertSharingLink = {
+      ...encrypted,
+      lastDiscoveredAt: encrypted.lastDiscoveredAt ?? new Date(),
+    };
+
+    const existingRows = await db
+      .select()
+      .from(sharingLinksInventory)
+      .where(eq(sharingLinksInventory.tenantConnectionId, data.tenantConnectionId));
+
+    const decryptedExistingRows = await this.decryptRows(existingRows, "sharing_links_inventory");
+    const existingRow = decryptedExistingRows.find((row) => row.linkId === data.linkId) as
+      | (SharingLink & { id?: string | number })
+      | undefined;
+
+    let result: any;
+
+    if (existingRow?.id !== undefined && existingRow.id !== null) {
+      const [updated] = await db
+        .update(sharingLinksInventory)
+        .set({
+          resourceType: valuesToWrite.resourceType,
+          resourceId: valuesToWrite.resourceId,
+          resourceName: valuesToWrite.resourceName,
+          linkType: valuesToWrite.linkType,
+          linkScope: valuesToWrite.linkScope,
+          createdBy: valuesToWrite.createdBy,
+          createdAtGraph: valuesToWrite.createdAtGraph,
+          expiresAt: valuesToWrite.expiresAt,
+          isActive: valuesToWrite.isActive,
+          lastAccessedAt: valuesToWrite.lastAccessedAt,
+          lastDiscoveredAt: valuesToWrite.lastDiscoveredAt,
+        })
+        .where(eq((sharingLinksInventory as any).id, existingRow.id as any))
+        .returning();
+      result = updated;
+    } else {
+      const [inserted] = await db
+        .insert(sharingLinksInventory)
+        .values(valuesToWrite)
+        .returning();
+      result = inserted;
+    }
     const [decrypted] = await this.decryptRows([result], "sharing_links_inventory");
     return decrypted as SharingLink;
   }
