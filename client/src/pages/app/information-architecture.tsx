@@ -104,8 +104,25 @@ type LibraryDetails = {
   error?: string;
 };
 
+type IaLibraryRef = {
+  libraryId: string;
+  libraryName: string;
+  workspaceId: string;
+  workspaceName: string;
+  workspaceType: string;
+  webUrl: string | null;
+};
+
+type IaContentTypeRef = {
+  contentTypeIds: string[];
+  name: string;
+  group: string | null;
+  scope: "HUB" | "SITE" | "LIBRARY";
+  isBuiltIn: boolean;
+};
+
 type IaContentType = {
-  contentTypeId: string;
+  contentTypeIds: string[];
   name: string;
   group: string | null;
   scope: "HUB" | "SITE" | "LIBRARY";
@@ -113,7 +130,7 @@ type IaContentType = {
   isBuiltIn: boolean;
   libraryUsageCount: number;
   siteUsageCount: number;
-  source: "library" | "tenant";
+  libraries: IaLibraryRef[];
 };
 
 type IaColumn = {
@@ -126,6 +143,9 @@ type IaColumn = {
   isSyntexManaged: boolean;
   libraryUsageCount: number;
   siteUsageCount: number;
+  libraries: IaLibraryRef[];
+  likelyContentTypes: IaContentTypeRef[];
+  otherContentTypes: IaContentTypeRef[];
 };
 
 type IaPatterns = {
@@ -612,12 +632,94 @@ function LibrariesTab({ tenantConnectionId }: { tenantConnectionId: string }) {
   );
 }
 
+// ─── Library reference preview + detail panel (shared) ───────────────────────
+
+function LibraryRefInline({ libraries }: { libraries: IaLibraryRef[] }) {
+  if (libraries.length === 0) {
+    return <span className="text-[10px] text-muted-foreground">Not attached</span>;
+  }
+  // Show up to 2 library names inline; "+N more" handles the overflow.
+  const head = libraries.slice(0, 2);
+  const rest = libraries.length - head.length;
+  return (
+    <div className="flex items-center gap-1 flex-wrap">
+      {head.map((l) => (
+        <Badge key={l.libraryId} variant="outline" className="text-[10px] gap-1 bg-primary/5 border-primary/20">
+          <Library className="w-2.5 h-2.5" />
+          <span className="truncate max-w-[120px]">{l.libraryName}</span>
+          <span className="text-muted-foreground">· {l.workspaceName}</span>
+        </Badge>
+      ))}
+      {rest > 0 && <span className="text-[10px] text-muted-foreground">+{rest} more</span>}
+    </div>
+  );
+}
+
+function LibraryListPanel({ libraries }: { libraries: IaLibraryRef[] }) {
+  if (libraries.length === 0) {
+    return (
+      <div className="text-center py-8 text-muted-foreground">
+        <Library className="w-8 h-8 mx-auto mb-2 opacity-30" />
+        <p className="text-sm">Not attached to any document library</p>
+      </div>
+    );
+  }
+  // Group libraries by workspace so the user sees the site hierarchy at a glance.
+  const byWorkspace = new Map<string, IaLibraryRef[]>();
+  for (const l of libraries) {
+    const arr = byWorkspace.get(l.workspaceId) || [];
+    arr.push(l);
+    byWorkspace.set(l.workspaceId, arr);
+  }
+  const workspaceGroups = Array.from(byWorkspace.values())
+    .sort((a, b) => a[0].workspaceName.localeCompare(b[0].workspaceName));
+
+  return (
+    <div className="space-y-3">
+      {workspaceGroups.map((group) => {
+        const ws = group[0];
+        return (
+          <div key={ws.workspaceId} className="rounded-lg border border-border/30 overflow-hidden">
+            <div className="px-3 py-2 bg-muted/20 border-b border-border/30 flex items-center gap-2">
+              <Globe className="w-3.5 h-3.5 text-muted-foreground" />
+              <span className="text-xs font-medium">{ws.workspaceName}</span>
+              <span className="text-[10px] text-muted-foreground">
+                {ws.workspaceType === "TEAM_SITE" ? "Team Site"
+                  : ws.workspaceType === "COMMUNICATION_SITE" ? "Comm Site"
+                  : ws.workspaceType === "HUB_SITE" ? "Hub Site"
+                  : ws.workspaceType}
+              </span>
+            </div>
+            <div className="divide-y divide-border/20">
+              {group.map((l) => (
+                <div key={l.libraryId} className="px-3 py-2 flex items-center gap-2 hover:bg-muted/10">
+                  <Library className="w-3.5 h-3.5 text-primary shrink-0" />
+                  <span className="text-sm truncate flex-1">{l.libraryName}</span>
+                  {l.webUrl && (
+                    <a href={l.webUrl} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">
+                      <ExternalLink className="w-3 h-3" />
+                    </a>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 // ─── Tab: Content Types ───────────────────────────────────────────────────────
 
 function ContentTypesTab({ tenantConnectionId }: { tenantConnectionId: string }) {
   const { toast } = useToast();
   const [searchTerm, setSearchTerm] = useState("");
   const [scopeFilter, setScopeFilter] = useState<string>("all");
+  // Default to custom-only: the OOTB CTs attached to libraries (e.g. "Document"
+  // derivatives) are noise when the goal is finding IA customization.
+  const [customOnly, setCustomOnly] = useState(true);
+  const [selectedCt, setSelectedCt] = useState<IaContentType | null>(null);
 
   const { data: iaCts = [], isLoading, isError, error } = useQuery<IaContentType[]>({
     queryKey: ["/api/admin/tenants", tenantConnectionId, "ia", "content-types"],
@@ -647,35 +749,75 @@ function ContentTypesTab({ tenantConnectionId }: { tenantConnectionId: string })
     return iaCts.filter((ct) => {
       const matchSearch = !searchTerm || ct.name.toLowerCase().includes(searchTerm.toLowerCase()) || (ct.group ?? "").toLowerCase().includes(searchTerm.toLowerCase());
       const matchScope = scopeFilter === "all" || ct.scope === scopeFilter;
-      return matchSearch && matchScope;
+      const matchCustom = !customOnly || !ct.isBuiltIn;
+      return matchSearch && matchScope && matchCustom;
     });
-  }, [iaCts, searchTerm, scopeFilter]);
+  }, [iaCts, searchTerm, scopeFilter, customOnly]);
 
-  const hubCount = iaCts.filter((ct) => ct.scope === "HUB").length;
-  const siteCount = iaCts.filter((ct) => ct.scope === "SITE").length;
-  const libraryCount = iaCts.filter((ct) => ct.scope === "LIBRARY").length;
+  const { customCount, builtInAttachedCount, librariesWithCustomCtCount } = useMemo(() => {
+    let custom = 0;
+    let builtIn = 0;
+    const libSet = new Set<string>();
+    for (const ct of iaCts) {
+      if (ct.isBuiltIn) {
+        builtIn++;
+      } else {
+        custom++;
+        for (const l of ct.libraries ?? []) libSet.add(l.libraryId);
+      }
+    }
+    return { customCount: custom, builtInAttachedCount: builtIn, librariesWithCustomCtCount: libSet.size };
+  }, [iaCts]);
 
   return (
     <div className="space-y-4">
+      <Card className="glass-panel border-primary/20 bg-primary/5">
+        <CardContent className="flex items-start gap-3 pt-4 pb-4">
+          <Info className="w-4 h-4 text-primary mt-0.5 shrink-0" />
+          <p className="text-sm text-muted-foreground">
+            Only content types actually attached to a document library are shown. The base <strong>Document</strong>
+            content type is excluded (it's on every library). Click a row to see which libraries each type is applied to.
+          </p>
+        </CardContent>
+      </Card>
+
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        {[
-          { label: "Hub Content Types", value: hubCount, sub: "Published from Content Type Hub", color: "text-emerald-500", bg: "bg-emerald-500/10" },
-          { label: "Site Content Types", value: siteCount, sub: "Inherited at site level", color: "text-blue-500", bg: "bg-blue-500/10" },
-          { label: "Library Content Types", value: libraryCount, sub: "Defined locally on libraries", color: "text-orange-500", bg: "bg-orange-500/10" },
-        ].map((s) => (
-          <Card key={s.label} className="glass-panel border-border/50">
-            <CardContent className="p-4 flex items-center gap-3">
-              <div className={`w-10 h-10 rounded-lg ${s.bg} flex items-center justify-center shrink-0`}>
-                <FileText className={`w-5 h-5 ${s.color}`} />
-              </div>
-              <div>
-                <p className="text-xs text-muted-foreground">{s.label}</p>
-                {isLoading ? <div className="h-8 w-12 bg-muted/40 animate-pulse rounded mt-1" /> : <p className={`text-2xl font-bold ${s.color}`}>{s.value}</p>}
-                <p className="text-[10px] text-muted-foreground">{s.sub}</p>
-              </div>
-            </CardContent>
-          </Card>
-        ))}
+        <Card className="glass-panel border-border/50">
+          <CardContent className="p-4 flex items-center gap-3">
+            <div className="w-10 h-10 rounded-lg bg-emerald-500/10 flex items-center justify-center shrink-0">
+              <Sparkles className="w-5 h-5 text-emerald-500" />
+            </div>
+            <div>
+              <p className="text-xs text-muted-foreground">Custom Content Types</p>
+              {isLoading ? <div className="h-8 w-12 bg-muted/40 animate-pulse rounded mt-1" /> : <p className="text-2xl font-bold text-emerald-500">{customCount}</p>}
+              <p className="text-[10px] text-muted-foreground">Tenant-defined, attached to libraries</p>
+            </div>
+          </CardContent>
+        </Card>
+        <Card className="glass-panel border-border/50">
+          <CardContent className="p-4 flex items-center gap-3">
+            <div className="w-10 h-10 rounded-lg bg-muted/30 flex items-center justify-center shrink-0">
+              <FileType className="w-5 h-5 text-muted-foreground" />
+            </div>
+            <div>
+              <p className="text-xs text-muted-foreground">Built-in (Attached)</p>
+              {isLoading ? <div className="h-8 w-12 bg-muted/40 animate-pulse rounded mt-1" /> : <p className="text-2xl font-bold text-muted-foreground">{builtInAttachedCount}</p>}
+              <p className="text-[10px] text-muted-foreground">OOTB types applied to libraries</p>
+            </div>
+          </CardContent>
+        </Card>
+        <Card className="glass-panel border-border/50">
+          <CardContent className="p-4 flex items-center gap-3">
+            <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
+              <Library className="w-5 h-5 text-primary" />
+            </div>
+            <div>
+              <p className="text-xs text-muted-foreground">Libraries w/ Custom CTs</p>
+              {isLoading ? <div className="h-8 w-12 bg-muted/40 animate-pulse rounded mt-1" /> : <p className="text-2xl font-bold text-primary">{librariesWithCustomCtCount}</p>}
+              <p className="text-[10px] text-muted-foreground">Where IA customization exists</p>
+            </div>
+          </CardContent>
+        </Card>
       </div>
 
       <Card className="glass-panel border-border/50 shadow-xl">
@@ -684,9 +826,13 @@ function ContentTypesTab({ tenantConnectionId }: { tenantConnectionId: string })
             <CardTitle className="text-lg flex items-center gap-2">
               <FileText className="w-5 h-5 text-primary" />
               Content Types
-              {iaCts.length > 0 && <Badge variant="outline" className="ml-1 text-xs">{iaCts.length}</Badge>}
+              {iaCts.length > 0 && <Badge variant="outline" className="ml-1 text-xs">{filtered.length}</Badge>}
             </CardTitle>
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-3 flex-wrap">
+              <Button variant="ghost" size="sm" className={`gap-1 text-xs ${customOnly ? "bg-primary/10" : ""}`} onClick={() => setCustomOnly(!customOnly)} data-testid="button-custom-only-cts">
+                {customOnly ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
+                {customOnly ? "Custom Only" : "Include Built-in"}
+              </Button>
               <Select value={scopeFilter} onValueChange={setScopeFilter}>
                 <SelectTrigger className="w-[130px] h-8 text-xs">
                   <SelectValue />
@@ -721,7 +867,13 @@ function ContentTypesTab({ tenantConnectionId }: { tenantConnectionId: string })
           ) : filtered.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-16 gap-3 text-center">
               <FileText className="w-10 h-10 text-muted-foreground/30" />
-              <p className="text-sm text-muted-foreground">{searchTerm || scopeFilter !== "all" ? "No content types match your filters." : "No content types synced yet. Run an IA sync."}</p>
+              <p className="text-sm text-muted-foreground">
+                {iaCts.length === 0
+                  ? "No content types synced yet. Run an IA sync."
+                  : customOnly && iaCts.length > 0
+                  ? "No custom content types found. Toggle 'Include Built-in' to see all attached types."
+                  : "No content types match your filters."}
+              </p>
             </div>
           ) : (
             <Table>
@@ -730,27 +882,47 @@ function ContentTypesTab({ tenantConnectionId }: { tenantConnectionId: string })
                   <TableHead className="pl-6">Name</TableHead>
                   <TableHead>Scope</TableHead>
                   <TableHead>Group</TableHead>
-                  <TableHead className="text-center">Libraries</TableHead>
+                  <TableHead>Attached To</TableHead>
+                  <TableHead className="text-center">Libs</TableHead>
                   <TableHead className="text-center">Sites</TableHead>
+                  <TableHead className="w-8"></TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {filtered.map((ct) => (
-                  <TableRow key={`${ct.scope}-${ct.contentTypeId}`} className="hover:bg-muted/10 transition-colors" data-testid={`row-ct-${ct.contentTypeId}`}>
+                  <TableRow
+                    key={`${ct.scope}-${ct.name}`}
+                    className="hover:bg-muted/10 transition-colors cursor-pointer"
+                    onClick={() => setSelectedCt(ct)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        setSelectedCt(ct);
+                      }
+                    }}
+                    role="button"
+                    tabIndex={0}
+                    aria-label={`Open content type ${ct.name}`}
+                    data-testid={`row-ct-${ct.scope}-${ct.name}`}
+                  >
                     <TableCell className="pl-6">
                       <div className="flex items-center gap-2">
                         <FileText className="w-4 h-4 text-muted-foreground shrink-0" />
                         <div>
-                          <span className="font-medium text-sm">{ct.name}</span>
-                          {ct.isBuiltIn && <span className="text-[10px] text-muted-foreground ml-2">(built-in)</span>}
-                          {ct.description && <p className="text-[10px] text-muted-foreground">{ct.description}</p>}
+                          <div className="flex items-center gap-1.5">
+                            <span className="font-medium text-sm">{ct.name}</span>
+                            {ct.isBuiltIn && <Badge variant="outline" className="text-[9px] bg-muted/20 text-muted-foreground">Built-in</Badge>}
+                          </div>
+                          {ct.description && <p className="text-[10px] text-muted-foreground line-clamp-1">{ct.description}</p>}
                         </div>
                       </div>
                     </TableCell>
                     <TableCell>{scopeBadge(ct.scope)}</TableCell>
                     <TableCell className="text-sm text-muted-foreground">{ct.group || "—"}</TableCell>
-                    <TableCell className="text-center text-sm">{ct.libraryUsageCount > 0 ? ct.libraryUsageCount : "—"}</TableCell>
-                    <TableCell className="text-center text-sm">{ct.siteUsageCount > 0 ? ct.siteUsageCount : "—"}</TableCell>
+                    <TableCell><LibraryRefInline libraries={ct.libraries ?? []} /></TableCell>
+                    <TableCell className="text-center text-sm">{ct.libraryUsageCount || "—"}</TableCell>
+                    <TableCell className="text-center text-sm">{ct.siteUsageCount || "—"}</TableCell>
+                    <TableCell><ChevronRight className="w-4 h-4 text-muted-foreground" /></TableCell>
                   </TableRow>
                 ))}
               </TableBody>
@@ -758,6 +930,44 @@ function ContentTypesTab({ tenantConnectionId }: { tenantConnectionId: string })
           )}
         </CardContent>
       </Card>
+
+      <Sheet open={!!selectedCt} onOpenChange={(open) => { if (!open) setSelectedCt(null); }}>
+        <SheetContent className="w-full sm:max-w-xl overflow-y-auto" side="right">
+          <SheetHeader className="pb-4 border-b border-border/30">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-lg bg-primary/10 border border-primary/20 flex items-center justify-center shrink-0">
+                <FileType className="w-5 h-5 text-primary" />
+              </div>
+              <div className="min-w-0">
+                <SheetTitle className="text-lg truncate">{selectedCt?.name || "Content Type"}</SheetTitle>
+                <SheetDescription className="text-xs flex items-center gap-2 flex-wrap">
+                  {selectedCt && scopeBadge(selectedCt.scope)}
+                  {selectedCt?.isBuiltIn && <Badge variant="outline" className="text-[9px] bg-muted/20">Built-in</Badge>}
+                  {selectedCt?.group && <span className="text-muted-foreground">{selectedCt.group}</span>}
+                </SheetDescription>
+              </div>
+            </div>
+          </SheetHeader>
+          {selectedCt && (
+            <div className="mt-6 space-y-5">
+              {selectedCt.description && (
+                <p className="text-sm text-muted-foreground">{selectedCt.description}</p>
+              )}
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">
+                  Attached to {(selectedCt.libraries ?? []).length} {(selectedCt.libraries ?? []).length === 1 ? "library" : "libraries"} across {selectedCt.siteUsageCount} {selectedCt.siteUsageCount === 1 ? "site" : "sites"}
+                </p>
+                <LibraryListPanel libraries={selectedCt.libraries ?? []} />
+              </div>
+              <div className="p-3 rounded-lg bg-muted/20 border border-border/30">
+                {(selectedCt.contentTypeIds ?? []).map((id) => (
+                  <p key={id} className="text-[10px] font-mono text-muted-foreground break-all">{id}</p>
+                ))}
+              </div>
+            </div>
+          )}
+        </SheetContent>
+      </Sheet>
     </div>
   );
 }
@@ -768,7 +978,10 @@ function ColumnsTab({ tenantConnectionId }: { tenantConnectionId: string }) {
   const { toast } = useToast();
   const [searchTerm, setSearchTerm] = useState("");
   const [scopeFilter, setScopeFilter] = useState<string>("all");
-  const [customOnly, setCustomOnly] = useState(false);
+  // Default to custom-only: system/built-in columns are noise when the goal is
+  // to find where IA has been customized.
+  const [customOnly, setCustomOnly] = useState(true);
+  const [selectedColumn, setSelectedColumn] = useState<IaColumn | null>(null);
 
   const { data: columns = [], isLoading } = useQuery<IaColumn[]>({
     queryKey: ["/api/admin/tenants", tenantConnectionId, "ia", "columns"],
@@ -802,30 +1015,50 @@ function ColumnsTab({ tenantConnectionId }: { tenantConnectionId: string }) {
     });
   }, [columns, searchTerm, scopeFilter, customOnly]);
 
-  const siteColCount = columns.filter((c) => c.scope === "SITE").length;
-  const libColCount = columns.filter((c) => c.scope === "LIBRARY").length;
-  const syntexCount = columns.filter((c) => c.isSyntexManaged).length;
+  const { customCount, customLibraryCount, syntexCount } = useMemo(() => {
+    let custom = 0;
+    let syntex = 0;
+    const libSet = new Set<string>();
+    for (const c of columns) {
+      if (c.isCustom) {
+        custom++;
+        for (const l of c.libraries ?? []) libSet.add(l.libraryId);
+      }
+      if (c.isSyntexManaged) syntex++;
+    }
+    return { customCount: custom, customLibraryCount: libSet.size, syntexCount: syntex };
+  }, [columns]);
 
   return (
     <div className="space-y-4">
+      <Card className="glass-panel border-primary/20 bg-primary/5">
+        <CardContent className="flex items-start gap-3 pt-4 pb-4">
+          <Info className="w-4 h-4 text-primary mt-0.5 shrink-0" />
+          <p className="text-sm text-muted-foreground">
+            Click a column to see the libraries it lives on and the content types applied to those libraries.
+            Columns present on every library alongside a shared content type are likely defined by that content type.
+          </p>
+        </CardContent>
+      </Card>
+
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <Card className="glass-panel border-border/50">
           <CardContent className="p-4 flex items-center gap-3">
-            <div className="w-10 h-10 rounded-lg bg-blue-500/10 flex items-center justify-center shrink-0"><Columns3 className="w-5 h-5 text-blue-500" /></div>
+            <div className="w-10 h-10 rounded-lg bg-emerald-500/10 flex items-center justify-center shrink-0"><Sparkles className="w-5 h-5 text-emerald-500" /></div>
             <div>
-              <p className="text-xs text-muted-foreground">Site Columns</p>
-              {isLoading ? <div className="h-8 w-12 bg-muted/40 animate-pulse rounded mt-1" /> : <p className="text-2xl font-bold text-blue-500">{siteColCount}</p>}
-              <p className="text-[10px] text-muted-foreground">Promoted to site scope</p>
+              <p className="text-xs text-muted-foreground">Custom Columns</p>
+              {isLoading ? <div className="h-8 w-12 bg-muted/40 animate-pulse rounded mt-1" /> : <p className="text-2xl font-bold text-emerald-500">{customCount}</p>}
+              <p className="text-[10px] text-muted-foreground">Tenant-defined, non-system columns</p>
             </div>
           </CardContent>
         </Card>
         <Card className="glass-panel border-border/50">
           <CardContent className="p-4 flex items-center gap-3">
-            <div className="w-10 h-10 rounded-lg bg-orange-500/10 flex items-center justify-center shrink-0"><Library className="w-5 h-5 text-orange-500" /></div>
+            <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center shrink-0"><Library className="w-5 h-5 text-primary" /></div>
             <div>
-              <p className="text-xs text-muted-foreground">Library Columns</p>
-              {isLoading ? <div className="h-8 w-12 bg-muted/40 animate-pulse rounded mt-1" /> : <p className="text-2xl font-bold text-orange-500">{libColCount}</p>}
-              <p className="text-[10px] text-muted-foreground">Defined locally on libraries</p>
+              <p className="text-xs text-muted-foreground">Libraries w/ Custom Columns</p>
+              {isLoading ? <div className="h-8 w-12 bg-muted/40 animate-pulse rounded mt-1" /> : <p className="text-2xl font-bold text-primary">{customLibraryCount}</p>}
+              <p className="text-[10px] text-muted-foreground">Where metadata customization exists</p>
             </div>
           </CardContent>
         </Card>
@@ -847,10 +1080,10 @@ function ColumnsTab({ tenantConnectionId }: { tenantConnectionId: string }) {
             <CardTitle className="text-lg flex items-center gap-2">
               <Columns3 className="w-5 h-5 text-primary" />
               Column Inventory
-              {columns.length > 0 && <Badge variant="outline" className="ml-1 text-xs">{columns.length}</Badge>}
+              {columns.length > 0 && <Badge variant="outline" className="ml-1 text-xs">{filtered.length}</Badge>}
             </CardTitle>
             <div className="flex items-center gap-3 flex-wrap">
-              <Button variant="ghost" size="sm" className={`gap-1 text-xs ${customOnly ? "bg-primary/10" : ""}`} onClick={() => setCustomOnly(!customOnly)}>
+              <Button variant="ghost" size="sm" className={`gap-1 text-xs ${customOnly ? "bg-primary/10" : ""}`} onClick={() => setCustomOnly(!customOnly)} data-testid="button-custom-only-cols">
                 {customOnly ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
                 {customOnly ? "Custom Only" : "All Columns"}
               </Button>
@@ -881,7 +1114,13 @@ function ColumnsTab({ tenantConnectionId }: { tenantConnectionId: string }) {
           ) : filtered.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-16 gap-3 text-center">
               <Columns3 className="w-10 h-10 text-muted-foreground/30" />
-              <p className="text-sm text-muted-foreground">{searchTerm || scopeFilter !== "all" ? "No columns match your filters." : "No column data yet. Run an IA sync."}</p>
+              <p className="text-sm text-muted-foreground">
+                {columns.length === 0
+                  ? "No column data yet. Run an IA sync."
+                  : customOnly
+                  ? "No custom columns found. Toggle 'All Columns' to include system columns."
+                  : "No columns match your filters."}
+              </p>
             </div>
           ) : (
             <Table>
@@ -890,39 +1129,165 @@ function ColumnsTab({ tenantConnectionId }: { tenantConnectionId: string }) {
                   <TableHead className="pl-6">Column</TableHead>
                   <TableHead>Type</TableHead>
                   <TableHead>Scope</TableHead>
-                  <TableHead>Group</TableHead>
-                  <TableHead className="text-center">Libraries</TableHead>
+                  <TableHead>Attached To</TableHead>
+                  <TableHead>Likely Content Type</TableHead>
+                  <TableHead className="text-center">Libs</TableHead>
                   <TableHead className="text-center">Sites</TableHead>
+                  <TableHead className="w-8"></TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {filtered.map((col) => (
-                  <TableRow key={`${col.columnInternalName}-${col.columnType}`} className="hover:bg-muted/10 transition-colors">
-                    <TableCell className="pl-6">
-                      <div className="flex items-center gap-2">
-                        {COLUMN_TYPE_ICONS[col.columnType] || <Hash className="w-3.5 h-3.5 text-muted-foreground" />}
-                        <div>
-                          <p className="font-medium text-sm">{col.displayName}</p>
-                          <p className="text-[10px] text-muted-foreground font-mono">{col.columnInternalName}</p>
+                {filtered.map((col) => {
+                  // "Likely" content types are the CTs present in EVERY library
+                  // where this column appears — strong evidence of where it's
+                  // defined. Display up to 2 inline; drawer shows the full list.
+                  const likelyCts = col.likelyContentTypes ?? [];
+                  const topCts = likelyCts.slice(0, 2);
+                  const restCts = likelyCts.length - topCts.length;
+                  return (
+                    <TableRow
+                      key={`${col.columnInternalName}-${col.columnType}`}
+                      className="hover:bg-muted/10 transition-colors cursor-pointer"
+                      onClick={() => setSelectedColumn(col)}
+                      tabIndex={0}
+                      role="button"
+                      aria-label={`View details for column ${col.displayName}`}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" || event.key === " ") {
+                          event.preventDefault();
+                          setSelectedColumn(col);
+                        }
+                      }}
+                    >
+                      <TableCell className="pl-6">
+                        <div className="flex items-center gap-2">
+                          {COLUMN_TYPE_ICONS[col.columnType] || <Hash className="w-3.5 h-3.5 text-muted-foreground" />}
+                          <div>
+                            <div className="flex items-center gap-1.5">
+                              <p className="font-medium text-sm">{col.displayName}</p>
+                              {col.isSyntexManaged && <Badge className="text-[9px] bg-purple-500/20 text-purple-600 border-purple-500/30">Syntex</Badge>}
+                              {!col.isCustom && <Badge variant="outline" className="text-[9px] bg-muted/20 text-muted-foreground">System</Badge>}
+                            </div>
+                            <p className="text-[10px] text-muted-foreground font-mono">{col.columnInternalName}</p>
+                          </div>
                         </div>
-                      </div>
-                    </TableCell>
-                    <TableCell><Badge variant="secondary" className="text-[10px]">{col.columnType}</Badge></TableCell>
-                    <TableCell>
-                      {col.scope === "SITE"
-                        ? <Badge variant="outline" className="bg-blue-500/10 text-blue-600 border-blue-500/20 text-[10px]">Site</Badge>
-                        : <Badge variant="outline" className="bg-muted/30 text-muted-foreground text-[10px]">Library</Badge>}
-                    </TableCell>
-                    <TableCell className="text-xs text-muted-foreground">{col.columnGroup || "—"}</TableCell>
-                    <TableCell className="text-center text-sm">{col.libraryUsageCount}</TableCell>
-                    <TableCell className="text-center text-sm">{col.siteUsageCount}</TableCell>
-                  </TableRow>
-                ))}
+                      </TableCell>
+                      <TableCell><Badge variant="secondary" className="text-[10px]">{col.columnType}</Badge></TableCell>
+                      <TableCell>
+                        {col.scope === "SITE"
+                          ? <Badge variant="outline" className="bg-blue-500/10 text-blue-600 border-blue-500/20 text-[10px]">Site</Badge>
+                          : <Badge variant="outline" className="bg-muted/30 text-muted-foreground text-[10px]">Library</Badge>}
+                      </TableCell>
+                      <TableCell><LibraryRefInline libraries={col.libraries ?? []} /></TableCell>
+                      <TableCell>
+                        {topCts.length === 0 ? (
+                          <span className="text-[10px] text-muted-foreground italic">No shared CT</span>
+                        ) : (
+                          <div className="flex items-center gap-1 flex-wrap">
+                            {topCts.map((ct) => (
+                              <Badge key={`${ct.scope}-${ct.name}`} variant="outline" className="text-[10px] gap-1 bg-blue-500/5 border-blue-500/20">
+                                <FileType className="w-2.5 h-2.5" />
+                                <span className="truncate max-w-[120px]">{ct.name}</span>
+                              </Badge>
+                            ))}
+                            {restCts > 0 && <span className="text-[10px] text-muted-foreground">+{restCts}</span>}
+                          </div>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-center text-sm">{col.libraryUsageCount}</TableCell>
+                      <TableCell className="text-center text-sm">{col.siteUsageCount}</TableCell>
+                      <TableCell><ChevronRight className="w-4 h-4 text-muted-foreground" /></TableCell>
+                    </TableRow>
+                  );
+                })}
               </TableBody>
             </Table>
           )}
         </CardContent>
       </Card>
+
+      <Sheet open={!!selectedColumn} onOpenChange={(open) => { if (!open) setSelectedColumn(null); }}>
+        <SheetContent className="w-full sm:max-w-xl overflow-y-auto" side="right">
+          <SheetHeader className="pb-4 border-b border-border/30">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-lg bg-primary/10 border border-primary/20 flex items-center justify-center shrink-0">
+                {selectedColumn ? COLUMN_TYPE_ICONS[selectedColumn.columnType] || <Columns3 className="w-5 h-5 text-primary" /> : <Columns3 className="w-5 h-5 text-primary" />}
+              </div>
+              <div className="min-w-0">
+                <SheetTitle className="text-lg truncate">{selectedColumn?.displayName || "Column"}</SheetTitle>
+                <SheetDescription className="text-xs flex items-center gap-2 flex-wrap">
+                  <Badge variant="secondary" className="text-[10px]">{selectedColumn?.columnType}</Badge>
+                  {selectedColumn?.scope === "SITE"
+                    ? <Badge variant="outline" className="bg-blue-500/10 text-blue-600 border-blue-500/20 text-[10px]">Site Column</Badge>
+                    : <Badge variant="outline" className="bg-muted/30 text-muted-foreground text-[10px]">Library Column</Badge>}
+                  {selectedColumn?.isSyntexManaged && <Badge className="text-[10px] bg-purple-500/20 text-purple-600 border-purple-500/30">Syntex</Badge>}
+                  {selectedColumn?.columnGroup && <span className="text-muted-foreground">{selectedColumn.columnGroup}</span>}
+                </SheetDescription>
+              </div>
+            </div>
+          </SheetHeader>
+          {selectedColumn && (() => {
+            const selLibs = selectedColumn.libraries ?? [];
+            const selLikely = selectedColumn.likelyContentTypes ?? [];
+            const selOther = selectedColumn.otherContentTypes ?? [];
+            return (
+              <div className="mt-6 space-y-5">
+                <div className="p-3 rounded-lg bg-muted/20 border border-border/30">
+                  <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">Internal Name</p>
+                  <p className="text-xs font-mono break-all">{selectedColumn.columnInternalName}</p>
+                </div>
+
+                {selLikely.length > 0 && (
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">
+                      Likely Defining Content Type{selLikely.length === 1 ? "" : "s"}
+                    </p>
+                    <p className="text-[11px] text-muted-foreground mb-2">
+                      Present in every library where this column appears — strong signal it's inherited from this type.
+                    </p>
+                    <div className="space-y-1.5">
+                      {selLikely.map((ct) => (
+                        <div key={`${ct.scope}-${ct.name}`} className="flex items-center gap-2 p-2 rounded border border-blue-500/20 bg-blue-500/5">
+                          <FileType className="w-3.5 h-3.5 text-blue-500 shrink-0" />
+                          <span className="text-sm flex-1">{ct.name}</span>
+                          {scopeBadge(ct.scope)}
+                          {ct.isBuiltIn && <Badge variant="outline" className="text-[9px] bg-muted/20 text-muted-foreground">Built-in</Badge>}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {selOther.length > 0 && (
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">
+                      Also Co-located With
+                    </p>
+                    <p className="text-[11px] text-muted-foreground mb-2">
+                      These content types appear on some — but not all — of the libraries where this column lives.
+                    </p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {selOther.map((ct) => (
+                        <Badge key={`${ct.scope}-${ct.name}`} variant="outline" className="text-[10px] gap-1 bg-muted/20">
+                          <FileType className="w-2.5 h-2.5" />
+                          {ct.name}
+                        </Badge>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">
+                    Present in {selLibs.length} {selLibs.length === 1 ? "library" : "libraries"} across {selectedColumn.siteUsageCount} {selectedColumn.siteUsageCount === 1 ? "site" : "sites"}
+                  </p>
+                  <LibraryListPanel libraries={selLibs} />
+                </div>
+              </div>
+            );
+          })()}
+        </SheetContent>
+      </Sheet>
     </div>
   );
 }

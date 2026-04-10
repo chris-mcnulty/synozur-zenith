@@ -1972,9 +1972,9 @@ router.post("/api/admin/tenants/:id/sync", requireRole(ZENITH_ROLES.TENANT_ADMIN
           }
 
           const graphIdToHubSiteCollectionId = new Map<string, string>();
-          for (const [graphId, hubSiteCollectionId] of searchResult.associations) {
+          searchResult.associations.forEach((hubSiteCollectionId, graphId) => {
             graphIdToHubSiteCollectionId.set(graphId, hubSiteCollectionId);
-          }
+          });
 
           console.log(`[hub-sync] Graph Search found ${searchResult.associations.size} hub-associated sites`);
 
@@ -2704,7 +2704,60 @@ router.post("/api/admin/tenants/:id/sync-ia", requireRole(ZENITH_ROLES.TENANT_AD
   }
 });
 
-// Aggregated content-type view across the tenant (includes library usage counts).
+// Content type IDs that are always excluded from IA reporting.
+//   - 0x0101 = the base Document content type. Every document library on Earth
+//     has this applied, so reporting on it is noise ("as pervasive as sand on
+//     a beach"). Custom CTs derived from Document have a longer ID like
+//     0x0101006EAE... and are still included.
+const EXCLUDED_CONTENT_TYPE_IDS = new Set<string>(['0x0101']);
+
+function isExcludedContentType(contentTypeId: string): boolean {
+  return EXCLUDED_CONTENT_TYPE_IDS.has(contentTypeId);
+}
+
+// Shared shape for per-library cross-references returned by IA endpoints.
+type IaLibraryRef = {
+  libraryId: string;
+  libraryName: string;
+  workspaceId: string;
+  workspaceName: string;
+  workspaceType: string;
+  webUrl: string | null;
+};
+
+// Build a (libraryId → IaLibraryRef) lookup for a tenant. Used by both
+// /ia/content-types and /ia/columns so the join logic exists exactly once.
+function buildLibraryRefMap(
+  libraries: Array<{ id: string; displayName: string; workspaceId: string; webUrl: string | null }>,
+  workspaces: Array<{ id: string; displayName: string; type: string }>,
+): Map<string, IaLibraryRef> {
+  const workspaceById = new Map(workspaces.map(w => [w.id, w]));
+  const result = new Map<string, IaLibraryRef>();
+  for (const lib of libraries) {
+    const ws = workspaceById.get(lib.workspaceId);
+    result.set(lib.id, {
+      libraryId: lib.id,
+      libraryName: lib.displayName,
+      workspaceId: lib.workspaceId,
+      workspaceName: ws?.displayName ?? '(unknown site)',
+      workspaceType: ws?.type ?? '',
+      webUrl: lib.webUrl ?? null,
+    });
+  }
+  return result;
+}
+
+// Aggregated content-type view across the tenant. Cross-references each CT
+// with the libraries (and workspaces) it is attached to so the UI can show
+// WHERE the type is actually used rather than just a count.
+//
+// Filtering rules (driven by product requirements):
+//   1. The base Document content type (0x0101) is always excluded.
+//   2. Out-of-the-box CTs that are defined at hub/tenant level but NOT attached
+//      to any document library are excluded as noise. Only CTs actually applied
+//      to a library appear in this list. (Custom CTs that ARE attached still
+//      show, built-in CTs that ARE attached still show — filtering them further
+//      is a UI concern via the `isBuiltIn` flag on each row.)
 router.get("/api/admin/tenants/:id/ia/content-types", requirePermission('inventory:read'), async (req: AuthenticatedRequest, res) => {
   try {
     const allowedTenantIds = await getOrgTenantConnectionIds(req);
@@ -2712,78 +2765,87 @@ router.get("/api/admin/tenants/:id/ia/content-types", requirePermission('invento
       return res.status(403).json({ message: "Tenant connection is outside your organization scope" });
     }
 
-    const [tenantCts, libraryCts] = await Promise.all([
-      storage.getContentTypes(req.params.id),
+    const [libraryCts, libraries, workspaceRows] = await Promise.all([
       storage.getLibraryContentTypesByTenant(req.params.id),
+      storage.getDocumentLibrariesByTenant(req.params.id),
+      storage.getWorkspaces(undefined, req.params.id),
     ]);
 
-    // Aggregate library CTs by name so locally-defined CTs (which share a name
-    // across libraries but have different contentTypeIds) still roll up.
-    const aggByKey = new Map<string, {
-      contentTypeId: string;
+    const libraryRefById = buildLibraryRefMap(libraries, workspaceRows);
+
+    type CtAgg = {
+      // All contentTypeIds seen for this scope::name rollup. Locally-defined
+      // CTs often have different IDs across libraries even though they share a
+      // name, so we collect every ID rather than keeping just the first.
+      contentTypeIds: Set<string>;
       name: string;
       group: string | null;
       scope: 'HUB' | 'SITE' | 'LIBRARY';
       description: string | null;
-      libraryCount: number;
-      siteCount: Set<string>;
       isBuiltIn: boolean;
-    }>();
+      libraryRefs: Map<string, IaLibraryRef>;
+      workspaceIds: Set<string>;
+    };
+
+    // Aggregate library CTs by scope + name so locally-defined CTs (which share
+    // a name across libraries but have different contentTypeIds) still roll up.
+    const aggByKey = new Map<string, CtAgg>();
     for (const lct of libraryCts) {
+      if (isExcludedContentType(lct.contentTypeId)) continue;
+
+      const ref = libraryRefById.get(lct.documentLibraryId);
+      if (!ref) continue; // orphan CT row, library was deleted — skip
+
       const key = `${lct.scope}::${lct.name}`;
       const existing = aggByKey.get(key);
       if (existing) {
-        existing.libraryCount++;
-        existing.siteCount.add(lct.workspaceId);
+        existing.contentTypeIds.add(lct.contentTypeId);
+        existing.libraryRefs.set(lct.documentLibraryId, ref);
+        existing.workspaceIds.add(lct.workspaceId);
       } else {
         aggByKey.set(key, {
-          contentTypeId: lct.contentTypeId,
+          contentTypeIds: new Set([lct.contentTypeId]),
           name: lct.name,
           group: lct.group,
           scope: lct.scope as 'HUB' | 'SITE' | 'LIBRARY',
           description: lct.description,
-          libraryCount: 1,
-          siteCount: new Set([lct.workspaceId]),
           isBuiltIn: lct.isBuiltIn,
+          libraryRefs: new Map([[lct.documentLibraryId, ref]]),
+          workspaceIds: new Set([lct.workspaceId]),
         });
       }
     }
 
-    const libraryRollups = Array.from(aggByKey.values()).map(r => ({
-      contentTypeId: r.contentTypeId,
-      name: r.name,
-      group: r.group,
-      scope: r.scope,
-      description: r.description,
-      isBuiltIn: r.isBuiltIn,
-      libraryUsageCount: r.libraryCount,
-      siteUsageCount: r.siteCount.size,
-      source: 'library' as const,
-    }));
+    const result = Array.from(aggByKey.values())
+      .map(r => {
+        const libs = Array.from(r.libraryRefs.values())
+          .sort((a, b) => a.libraryName.localeCompare(b.libraryName));
+        return {
+          contentTypeIds: Array.from(r.contentTypeIds).sort(),
+          name: r.name,
+          group: r.group,
+          scope: r.scope,
+          description: r.description,
+          isBuiltIn: r.isBuiltIn,
+          libraryUsageCount: libs.length,
+          siteUsageCount: r.workspaceIds.size,
+          libraries: libs,
+        };
+      })
+      .sort((a, b) => a.name.localeCompare(b.name));
 
-    // Hub CTs from content_types that were never seen in any library still show up.
-    const librarySeenIds = new Set(libraryCts.map(l => l.contentTypeId));
-    const hubOnly = tenantCts
-      .filter(c => !librarySeenIds.has(c.contentTypeId))
-      .map(c => ({
-        contentTypeId: c.contentTypeId,
-        name: c.name,
-        group: c.group,
-        scope: (c.scope || 'HUB') as 'HUB' | 'SITE' | 'LIBRARY',
-        description: c.description,
-        isBuiltIn: false,
-        libraryUsageCount: c.libraryUsageCount,
-        siteUsageCount: c.siteUsageCount,
-        source: 'tenant' as const,
-      }));
-
-    res.json([...libraryRollups, ...hubOnly].sort((a, b) => a.name.localeCompare(b.name)));
+    res.json(result);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// Aggregated column view across the tenant.
+// Aggregated column view across the tenant. Each row cross-references the
+// libraries the column is present in AND the content types attached to those
+// libraries — since the DB does not track column→CT mapping directly, the CT
+// list for a column is derived from "CTs present in every library where this
+// column appears" (honest approximation: a CT that covers all observations of
+// the column is a likely definer, though not a guarantee).
 router.get("/api/admin/tenants/:id/ia/columns", requirePermission('inventory:read'), async (req: AuthenticatedRequest, res) => {
   try {
     const allowedTenantIds = await getOrgTenantConnectionIds(req);
@@ -2791,10 +2853,58 @@ router.get("/api/admin/tenants/:id/ia/columns", requirePermission('inventory:rea
       return res.status(403).json({ message: "Tenant connection is outside your organization scope" });
     }
 
-    const rows = await storage.getLibraryColumnsByTenant(req.params.id);
+    const [rows, libraryCts, libraries, workspaceRows] = await Promise.all([
+      storage.getLibraryColumnsByTenant(req.params.id),
+      storage.getLibraryContentTypesByTenant(req.params.id),
+      storage.getDocumentLibrariesByTenant(req.params.id),
+      storage.getWorkspaces(undefined, req.params.id),
+    ]);
 
-    // Group by internalName + type so same name/type rolls up.
-    const byKey = new Map<string, {
+    const libraryRefById = buildLibraryRefMap(libraries, workspaceRows);
+
+    type CtRef = {
+      // All IDs observed for this scope::name key across merged libraries.
+      // Same-name CTs with different IDs (locally-defined variants) are
+      // accumulated here so no ID is arbitrarily discarded. A Set is used
+      // for O(1) deduplication during merge.
+      contentTypeIds: Set<string>;
+      name: string;
+      group: string | null;
+      scope: 'HUB' | 'SITE' | 'LIBRARY';
+      isBuiltIn: boolean;
+    };
+
+    // Precompute once per library: the Set of CT keys and the Map of key→CtRef
+    // we'll share across every column row that belongs to that library. This
+    // turns the aggregation from O(rows * ctsPerLib) into O(libraries * ctsPerLib + rows).
+    type LibCtIndex = { keys: Set<string>; refs: Map<string, CtRef> };
+    const ctIndexByLibrary = new Map<string, LibCtIndex>();
+    for (const lct of libraryCts) {
+      if (isExcludedContentType(lct.contentTypeId)) continue;
+      const ctKey = `${lct.scope}::${lct.name}`;
+      let idx = ctIndexByLibrary.get(lct.documentLibraryId);
+      if (!idx) {
+        idx = { keys: new Set<string>(), refs: new Map<string, CtRef>() };
+        ctIndexByLibrary.set(lct.documentLibraryId, idx);
+      }
+      idx.keys.add(ctKey);
+      const existing = idx.refs.get(ctKey);
+      if (existing) {
+        // Accumulate IDs for same-name CTs that have different contentTypeIds.
+        existing.contentTypeIds.add(lct.contentTypeId);
+      } else {
+        idx.refs.set(ctKey, {
+          contentTypeIds: new Set([lct.contentTypeId]),
+          name: lct.name,
+          group: lct.group,
+          scope: lct.scope as 'HUB' | 'SITE' | 'LIBRARY',
+          isBuiltIn: lct.isBuiltIn,
+        });
+      }
+    }
+    const EMPTY_LIB_CT_INDEX: LibCtIndex = { keys: new Set(), refs: new Map() };
+
+    type ColAgg = {
       columnInternalName: string;
       displayName: string;
       columnType: string;
@@ -2802,16 +2912,43 @@ router.get("/api/admin/tenants/:id/ia/columns", requirePermission('inventory:rea
       scope: 'SITE' | 'LIBRARY';
       isCustom: boolean;
       isSyntexManaged: boolean;
-      libraryCount: number;
-      siteCount: Set<string>;
-    }>();
+      libraryRefs: Map<string, IaLibraryRef>;
+      workspaceIds: Set<string>;
+      // Per-library CT key set references (shared across rows — do not mutate).
+      // Intersected at the end to find the likely CT definers.
+      ctKeySetsPerLibrary: Array<Set<string>>;
+      // Lookup from key → CtRef so we can rehydrate after the intersection.
+      ctRefByKey: Map<string, CtRef>;
+    };
+
+    // Group by internalName + type so same name/type rolls up.
+    const byKey = new Map<string, ColAgg>();
     for (const c of rows) {
+      const ref = libraryRefById.get(c.documentLibraryId);
+      if (!ref) continue;
+
+      const libIdx = ctIndexByLibrary.get(c.documentLibraryId) ?? EMPTY_LIB_CT_INDEX;
       const key = `${c.columnInternalName}::${c.columnType}`;
       const existing = byKey.get(key);
       if (existing) {
-        existing.libraryCount++;
-        existing.siteCount.add(c.workspaceId);
-        // Any SITE observation promotes the rollup to SITE scope.
+        // libraryRefs is a Map keyed by library id — duplicate rows for the
+        // same (column, library) collapse naturally, so we only push the
+        // shared CT set once per library.
+        if (!existing.libraryRefs.has(c.documentLibraryId)) {
+          existing.libraryRefs.set(c.documentLibraryId, ref);
+          existing.ctKeySetsPerLibrary.push(libIdx.keys);
+          // Merge CT refs: accumulate contentTypeIds for the same key rather
+          // than overwriting so we never lose IDs from earlier libraries.
+          libIdx.refs.forEach((incoming, k) => {
+            const existingRef = existing.ctRefByKey.get(k);
+            if (existingRef) {
+              incoming.contentTypeIds.forEach(id => existingRef.contentTypeIds.add(id));
+            } else {
+              existing.ctRefByKey.set(k, incoming);
+            }
+          });
+        }
+        existing.workspaceIds.add(c.workspaceId);
         if (c.scope === 'SITE') existing.scope = 'SITE';
       } else {
         byKey.set(key, {
@@ -2822,24 +2959,67 @@ router.get("/api/admin/tenants/:id/ia/columns", requirePermission('inventory:rea
           scope: c.scope as 'SITE' | 'LIBRARY',
           isCustom: c.isCustom,
           isSyntexManaged: c.isSyntexManaged,
-          libraryCount: 1,
-          siteCount: new Set([c.workspaceId]),
+          libraryRefs: new Map([[c.documentLibraryId, ref]]),
+          workspaceIds: new Set([c.workspaceId]),
+          ctKeySetsPerLibrary: [libIdx.keys],
+          ctRefByKey: new Map(libIdx.refs),
         });
       }
     }
 
     const result = Array.from(byKey.values())
-      .map(r => ({
-        columnInternalName: r.columnInternalName,
-        displayName: r.displayName,
-        columnType: r.columnType,
-        columnGroup: r.columnGroup,
-        scope: r.scope,
-        isCustom: r.isCustom,
-        isSyntexManaged: r.isSyntexManaged,
-        libraryUsageCount: r.libraryCount,
-        siteUsageCount: r.siteCount.size,
-      }))
+      .map(r => {
+        const libs = Array.from(r.libraryRefs.values())
+          .sort((a, b) => a.libraryName.localeCompare(b.libraryName));
+
+        // The "likely defining content type" set is the intersection of the
+        // per-library CT sets — CTs present in EVERY library the column lives
+        // in are likely the ones defining it. Iterate the smallest set first
+        // and short-circuit once the intersection is empty.
+        const sortedSets = r.ctKeySetsPerLibrary.slice().sort((a, b) => a.size - b.size);
+        let likelyCtKeys = new Set<string>(sortedSets[0] ? Array.from(sortedSets[0]) : []);
+        for (let i = 1; i < sortedSets.length && likelyCtKeys.size > 0; i++) {
+          const next = sortedSets[i];
+          const intersected = new Set<string>();
+          likelyCtKeys.forEach((k) => {
+            if (next.has(k)) intersected.add(k);
+          });
+          likelyCtKeys = intersected;
+        }
+
+        const likelyCts: CtRef[] = [];
+        const otherCts: CtRef[] = [];
+        r.ctRefByKey.forEach((v, k) => {
+          if (likelyCtKeys.has(k)) likelyCts.push(v);
+          else otherCts.push(v);
+        });
+        likelyCts.sort((a, b) => a.name.localeCompare(b.name));
+        otherCts.sort((a, b) => a.name.localeCompare(b.name));
+
+        // Serialize CtRef: convert contentTypeIds Set to a sorted array for JSON output.
+        const serializeCtRef = (ct: CtRef) => ({
+          contentTypeIds: Array.from(ct.contentTypeIds).sort(),
+          name: ct.name,
+          group: ct.group,
+          scope: ct.scope,
+          isBuiltIn: ct.isBuiltIn,
+        });
+
+        return {
+          columnInternalName: r.columnInternalName,
+          displayName: r.displayName,
+          columnType: r.columnType,
+          columnGroup: r.columnGroup,
+          scope: r.scope,
+          isCustom: r.isCustom,
+          isSyntexManaged: r.isSyntexManaged,
+          libraryUsageCount: libs.length,
+          siteUsageCount: r.workspaceIds.size,
+          libraries: libs,
+          likelyContentTypes: likelyCts.map(serializeCtRef),
+          otherContentTypes: otherCts.map(serializeCtRef),
+        };
+      })
       .sort((a, b) => a.displayName.localeCompare(b.displayName));
 
     res.json(result);
