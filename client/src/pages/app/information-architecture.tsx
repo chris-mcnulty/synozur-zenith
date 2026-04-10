@@ -894,6 +894,15 @@ function ContentTypesTab({ tenantConnectionId }: { tenantConnectionId: string })
                     key={`${ct.scope}-${ct.contentTypeId}`}
                     className="hover:bg-muted/10 transition-colors cursor-pointer"
                     onClick={() => setSelectedCt(ct)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        setSelectedCt(ct);
+                      }
+                    }}
+                    role="button"
+                    tabIndex={0}
+                    aria-label={`Open content type ${ct.name}`}
                     data-testid={`row-ct-${ct.contentTypeId}`}
                   >
                     <TableCell className="pl-6">
