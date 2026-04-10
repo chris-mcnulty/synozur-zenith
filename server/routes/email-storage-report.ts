@@ -358,6 +358,41 @@ router.post(
   },
 );
 
+/**
+ * DELETE /api/admin/tenants/:id/email-storage-report/runs/:runId
+ *
+ * Delete a report run. Only terminal-state runs (COMPLETED, PARTIAL, FAILED,
+ * CANCELLED) can be deleted — a RUNNING report must be cancelled first.
+ */
+router.delete(
+  "/api/admin/tenants/:id/email-storage-report/runs/:runId",
+  requireAuth(),
+  requireRole("tenant_admin"),
+  requireFeature("emailContentStorageReport"),
+  async (req: AuthenticatedRequest, res) => {
+    const access = await assertTenantAccess(req, req.params.id);
+    if (!access.ok) return res.status(access.status).json({ message: access.message });
+
+    const runId = asStringParam(req.params.runId);
+    if (!runId) return res.status(400).json({ message: "runId is required" });
+
+    const report = await storage.getEmailStorageReport(runId);
+    if (!report || report.tenantConnectionId !== access.conn.id) {
+      return res.status(404).json({ message: "Report run not found" });
+    }
+
+    if (report.status === "RUNNING") {
+      return res.status(409).json({
+        message: "Cannot delete a running report. Cancel it first.",
+        status: report.status,
+      });
+    }
+
+    await storage.deleteEmailStorageReport(runId);
+    res.status(200).json({ message: "Report deleted", runId });
+  },
+);
+
 // ── Canonical-path aliases ───────────────────────────────────────────────────
 // The PR description documented shorter paths without the `/run` and `/runs/`
 // segments. These aliases make both forms valid so API consumers have a stable
@@ -510,6 +545,39 @@ router.post(
 
     requestEmailReportCancellation(access.conn.id, runId);
     res.status(202).json({ message: "Cancellation requested", runId, status: "RUNNING" });
+  },
+);
+
+/**
+ * DELETE /api/admin/tenants/:id/email-storage-report/:reportId
+ * Alias for DELETE /api/admin/tenants/:id/email-storage-report/runs/:runId
+ */
+router.delete(
+  "/api/admin/tenants/:id/email-storage-report/:reportId",
+  requireAuth(),
+  requireRole("tenant_admin"),
+  requireFeature("emailContentStorageReport"),
+  async (req: AuthenticatedRequest, res) => {
+    const access = await assertTenantAccess(req, req.params.id);
+    if (!access.ok) return res.status(access.status).json({ message: access.message });
+
+    const runId = asStringParam(req.params.reportId);
+    if (!runId) return res.status(400).json({ message: "reportId is required" });
+
+    const report = await storage.getEmailStorageReport(runId);
+    if (!report || report.tenantConnectionId !== access.conn.id) {
+      return res.status(404).json({ message: "Report run not found" });
+    }
+
+    if (report.status === "RUNNING") {
+      return res.status(409).json({
+        message: "Cannot delete a running report. Cancel it first.",
+        status: report.status,
+      });
+    }
+
+    await storage.deleteEmailStorageReport(runId);
+    res.status(200).json({ message: "Report deleted", runId });
   },
 );
 

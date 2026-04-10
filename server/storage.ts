@@ -455,6 +455,7 @@ export interface IStorage {
     updates: Partial<InsertEmailStorageReport> & { completedAt?: Date | null },
   ): Promise<EmailStorageReport | undefined>;
   getEmailStorageReport(id: string): Promise<EmailStorageReport | undefined>;
+  deleteEmailStorageReport(id: string): Promise<boolean>;
   getEmailStorageReports(
     tenantConnectionId: string,
     limit?: number,
@@ -3178,6 +3179,12 @@ export class DatabaseStorage implements IStorage {
       .orderBy(desc(emailStorageReports.startedAt))
       .limit(limit);
     return this.unmaskEmailReportRows(rows as EmailStorageReport[]);
+  }
+
+  async deleteEmailStorageReport(id: string): Promise<boolean> {
+    const result = await db.delete(emailStorageReports)
+      .where(eq(emailStorageReports.id, id));
+    return (result.rowCount ?? 0) > 0;
   }
 
   async getLatestEmailStorageReport(
