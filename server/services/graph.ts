@@ -4473,7 +4473,7 @@ export async function fetchMessageAttachmentsMeta(
   const url =
     `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(userId)}` +
     `/messages/${encodeURIComponent(messageId)}/attachments` +
-    `?$select=name,contentType,size,isInline&$top=${top}`;
+    `?$top=${top}`;
 
   const res = await graphFetchWithRetry(url, {
     headers: { Authorization: `Bearer ${token}` },
