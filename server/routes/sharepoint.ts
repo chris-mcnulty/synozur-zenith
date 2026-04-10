@@ -1972,9 +1972,9 @@ router.post("/api/admin/tenants/:id/sync", requireRole(ZENITH_ROLES.TENANT_ADMIN
           }
 
           const graphIdToHubSiteCollectionId = new Map<string, string>();
-          for (const [graphId, hubSiteCollectionId] of searchResult.associations) {
+          searchResult.associations.forEach((hubSiteCollectionId, graphId) => {
             graphIdToHubSiteCollectionId.set(graphId, hubSiteCollectionId);
-          }
+          });
 
           console.log(`[hub-sync] Graph Search found ${searchResult.associations.size} hub-associated sites`);
 
