@@ -243,6 +243,9 @@ async function ensureTenantConnectionsSchema() {
         resource_type text NOT NULL,
         resource_id text NOT NULL,
         resource_name text,
+        item_id text,
+        item_name text,
+        item_path text,
         link_id text NOT NULL,
         link_type text NOT NULL,
         link_scope text,
@@ -253,7 +256,24 @@ async function ensureTenantConnectionsSchema() {
         last_accessed_at timestamp,
         last_discovered_at timestamp DEFAULT now(),
         created_at timestamp DEFAULT now(),
-        CONSTRAINT uq_tenant_link UNIQUE (tenant_connection_id, link_id)
+        CONSTRAINT uq_tenant_item_link UNIQUE (tenant_connection_id, resource_id, item_id, link_id)
+      )
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS sharing_link_discovery_runs (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        tenant_connection_id varchar NOT NULL,
+        started_at timestamp NOT NULL DEFAULT now(),
+        completed_at timestamp,
+        status text NOT NULL DEFAULT 'RUNNING',
+        share_point_links_found integer DEFAULT 0,
+        one_drive_links_found integer DEFAULT 0,
+        sites_scanned integer DEFAULT 0,
+        users_scanned integer DEFAULT 0,
+        items_scanned integer DEFAULT 0,
+        errors jsonb,
+        created_at timestamp DEFAULT now()
       )
     `);
 
@@ -534,11 +554,32 @@ async function ensureTenantConnectionsSchema() {
       ALTER TABLE library_columns ADD COLUMN IF NOT EXISTS last_sync_at timestamp DEFAULT now();
     `);
 
+    // Backfill sharing_links_inventory columns added for per-item link tracking
+    await client.query(`
+      ALTER TABLE sharing_links_inventory ADD COLUMN IF NOT EXISTS item_id text;
+      ALTER TABLE sharing_links_inventory ADD COLUMN IF NOT EXISTS item_name text;
+      ALTER TABLE sharing_links_inventory ADD COLUMN IF NOT EXISTS item_path text;
+    `);
+    // Migrate unique constraint from old site-level to new item-level granularity
+    await client.query(`
+      DO $$
+      BEGIN
+        IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'uq_tenant_link') THEN
+          ALTER TABLE sharing_links_inventory DROP CONSTRAINT uq_tenant_link;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'uq_tenant_item_link') THEN
+          ALTER TABLE sharing_links_inventory
+            ADD CONSTRAINT uq_tenant_item_link UNIQUE (tenant_connection_id, resource_id, item_id, link_id);
+        END IF;
+      END $$;
+    `);
+
     await client.query(`
       CREATE INDEX IF NOT EXISTS idx_license_subs_tenant ON license_subscriptions(tenant_connection_id);
       CREATE INDEX IF NOT EXISTS idx_license_asgn_tenant ON license_assignments(tenant_connection_id);
       CREATE INDEX IF NOT EXISTS idx_cg_snapshots_tenant ON content_governance_snapshots(tenant_connection_id);
       CREATE INDEX IF NOT EXISTS idx_sharing_links_tenant ON sharing_links_inventory(tenant_connection_id);
+      CREATE INDEX IF NOT EXISTS idx_sharing_link_runs_tenant ON sharing_link_discovery_runs(tenant_connection_id, started_at DESC);
       CREATE INDEX IF NOT EXISTS idx_user_inventory_tenant ON user_inventory(tenant_connection_id);
       CREATE INDEX IF NOT EXISTS idx_user_inventory_tenant_status ON user_inventory(tenant_connection_id, discovery_status);
       CREATE INDEX IF NOT EXISTS idx_user_inventory_runs_tenant ON user_inventory_runs(tenant_connection_id, started_at DESC);
