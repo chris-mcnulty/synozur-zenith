@@ -394,9 +394,23 @@ interface SharingLinkDiscoveryRun {
   errors: Array<{ context: string; message: string }> | null;
 }
 
+interface ResourceSummary {
+  resourceId: string;
+  resourceName: string | null;
+  resourceType: string;
+  totalLinks: number;
+  anonymousLinks: number;
+  organizationLinks: number;
+  specificLinks: number;
+}
+
 export function GovernanceSharingTab({ tenantConnectionId }: { tenantConnectionId: string }) {
+  const [selectedResource, setSelectedResource] = useState<ResourceSummary | null>(null);
   const [linkTypeFilter, setLinkTypeFilter] = useState("all");
+  const [resourceTypeFilter, setResourceTypeFilter] = useState("all");
   const [search, setSearch] = useState("");
+  const [detailSearch, setDetailSearch] = useState("");
+  const [detailPage, setDetailPage] = useState(1);
   const { toast } = useToast();
 
   const { data: latestRun, refetch: refetchRun } = useQuery<SharingLinkDiscoveryRun | null>({
@@ -436,21 +450,33 @@ export function GovernanceSharingTab({ tenantConnectionId }: { tenantConnectionI
 
   useEffect(() => {
     if (latestRun?.status === "COMPLETED" || latestRun?.status === "PARTIAL" || latestRun?.status === "FAILED") {
+      queryClient.invalidateQueries({ queryKey: ["/api/content-governance/sharing/summary"] });
       queryClient.invalidateQueries({ queryKey: ["/api/content-governance/sharing/links"] });
     }
   }, [latestRun?.status]);
 
-  const { data: links = [], isLoading } = useQuery<SharingLinkItem[]>({
-    queryKey: ["/api/content-governance/sharing/links", tenantConnectionId, linkTypeFilter],
+  const { data: summary = [], isLoading: summaryLoading } = useQuery<ResourceSummary[]>({
+    queryKey: ["/api/content-governance/sharing/summary", tenantConnectionId],
     queryFn: async () => {
-      const params = new URLSearchParams({ tenantConnectionId });
-      if (linkTypeFilter !== "all") params.set("linkType", linkTypeFilter);
-      const res = await fetch(`/api/content-governance/sharing/links?${params}`, { credentials: "include" });
+      const res = await fetch(`/api/content-governance/sharing/summary?tenantConnectionId=${tenantConnectionId}`, { credentials: "include" });
       if (!res.ok) return [];
-      const data = await res.json();
-      return Array.isArray(data) ? data : (data.links ?? []);
+      return res.json();
     },
     enabled: !!tenantConnectionId,
+  });
+
+  const { data: detailData, isLoading: detailLoading } = useQuery<{ links: SharingLinkItem[]; total: number }>({
+    queryKey: ["/api/content-governance/sharing/links", tenantConnectionId, selectedResource?.resourceId, linkTypeFilter, detailPage],
+    queryFn: async () => {
+      const params = new URLSearchParams({ tenantConnectionId, page: String(detailPage), pageSize: "100" });
+      if (selectedResource) params.set("resourceId", selectedResource.resourceId);
+      if (linkTypeFilter !== "all") params.set("linkType", linkTypeFilter);
+      const res = await fetch(`/api/content-governance/sharing/links?${params}`, { credentials: "include" });
+      if (!res.ok) return { links: [], total: 0 };
+      const data = await res.json();
+      return { links: Array.isArray(data) ? data : (data.links ?? []), total: data.total ?? 0 };
+    },
+    enabled: !!tenantConnectionId && !!selectedResource,
   });
 
   const revokeMutation = useMutation({
@@ -464,21 +490,153 @@ export function GovernanceSharingTab({ tenantConnectionId }: { tenantConnectionI
     onSuccess: () => {
       toast({ title: "Sharing link revoked" });
       queryClient.invalidateQueries({ queryKey: ["/api/content-governance/sharing/links"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/content-governance/sharing/summary"] });
     },
     onError: (err: Error) => {
       toast({ title: "Failed to revoke", description: err.message, variant: "destructive" });
     },
   });
 
-  const anonymousCount = links.filter(l => l.linkType === "anonymous").length;
-  const orgCount = links.filter(l => l.linkType === "organization").length;
-  const specificCount = links.filter(l => l.linkType === "specific").length;
+  const totals = summary.reduce((acc, r) => ({
+    total: acc.total + r.totalLinks,
+    anonymous: acc.anonymous + r.anonymousLinks,
+    organization: acc.organization + r.organizationLinks,
+    specific: acc.specific + r.specificLinks,
+  }), { total: 0, anonymous: 0, organization: 0, specific: 0 });
 
-  const filtered = links.filter(l => {
+  const filteredSummary = summary.filter(r => {
+    if (resourceTypeFilter !== "all" && r.resourceType !== resourceTypeFilter) return false;
     if (!search) return true;
-    const s = search.toLowerCase();
-    return (l.resourceName?.toLowerCase().includes(s) || l.itemName?.toLowerCase().includes(s) || l.itemPath?.toLowerCase().includes(s) || l.createdBy?.toLowerCase().includes(s));
+    return r.resourceName?.toLowerCase().includes(search.toLowerCase());
   });
+
+  const detailLinks = detailData?.links ?? [];
+  const detailTotal = detailData?.total ?? 0;
+  const filteredDetail = detailLinks.filter(l => {
+    if (!detailSearch) return true;
+    const s = detailSearch.toLowerCase();
+    return (l.itemName?.toLowerCase().includes(s) || l.itemPath?.toLowerCase().includes(s) || l.createdBy?.toLowerCase().includes(s));
+  });
+
+  if (selectedResource) {
+    return (
+      <div className="space-y-4">
+        <div className="flex items-center gap-3">
+          <Button variant="ghost" size="sm" onClick={() => { setSelectedResource(null); setDetailPage(1); setDetailSearch(""); setLinkTypeFilter("all"); }} data-testid="button-back-to-summary">
+            ← Back
+          </Button>
+          <div>
+            <h3 className="text-lg font-semibold">{selectedResource.resourceName ?? "Unknown"}</h3>
+            <p className="text-xs text-muted-foreground">{selectedResource.resourceType === "SHAREPOINT_SITE" ? "SharePoint Site" : "OneDrive"} · {detailTotal} sharing links</p>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-3 gap-3">
+          <Card className={selectedResource.anonymousLinks > 0 ? "border-red-200" : ""}>
+            <CardContent className="pt-4 pb-3 px-4">
+              <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Anonymous</p>
+              <p className="text-xl font-bold text-red-600" data-testid="text-detail-anonymous">{selectedResource.anonymousLinks}</p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="pt-4 pb-3 px-4">
+              <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Organization</p>
+              <p className="text-xl font-bold text-amber-600" data-testid="text-detail-org">{selectedResource.organizationLinks}</p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="pt-4 pb-3 px-4">
+              <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Specific</p>
+              <p className="text-xl font-bold" data-testid="text-detail-specific">{selectedResource.specificLinks}</p>
+            </CardContent>
+          </Card>
+        </div>
+
+        <div className="flex gap-3 items-center">
+          <div className="relative max-w-xs flex-1">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+            <Input placeholder="Search items…" value={detailSearch} onChange={e => setDetailSearch(e.target.value)} className="pl-9" />
+          </div>
+          <Select value={linkTypeFilter} onValueChange={v => { setLinkTypeFilter(v); setDetailPage(1); }}>
+            <SelectTrigger className="w-44">
+              <SelectValue placeholder="Link type" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Types</SelectItem>
+              <SelectItem value="anonymous">Anonymous</SelectItem>
+              <SelectItem value="organization">Organization</SelectItem>
+              <SelectItem value="specific">Specific People</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+
+        <Card>
+          <CardContent className="p-0">
+            {detailLoading ? (
+              <div className="flex items-center justify-center h-32 text-muted-foreground gap-2">
+                <Loader2 className="h-4 w-4 animate-spin" /> Loading...
+              </div>
+            ) : filteredDetail.length === 0 ? (
+              <div className="flex items-center justify-center h-32 text-muted-foreground">No sharing links found</div>
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Item</TableHead>
+                    <TableHead>Type</TableHead>
+                    <TableHead>Scope</TableHead>
+                    <TableHead>Created By</TableHead>
+                    <TableHead>Expires</TableHead>
+                    <TableHead>Actions</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {filteredDetail.map(link => (
+                    <TableRow key={link.id} className={link.linkType === "anonymous" ? "bg-red-50/30 dark:bg-red-950/10" : ""}>
+                      <TableCell>
+                        <span className="font-medium text-sm">{link.itemName ?? "Root"}</span>
+                        {link.itemPath && <span className="block text-xs text-muted-foreground truncate max-w-[300px]" title={link.itemPath}>{link.itemPath}</span>}
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant={link.linkType === "anonymous" ? "destructive" : "outline"} className="text-[10px]">
+                          {link.linkType}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="text-sm">{link.linkScope ?? "—"}</TableCell>
+                      <TableCell className="text-sm text-muted-foreground">{link.createdBy ?? "—"}</TableCell>
+                      <TableCell className="text-sm text-muted-foreground">
+                        {link.expiresAt ? new Date(link.expiresAt).toLocaleDateString() : "Never"}
+                      </TableCell>
+                      <TableCell>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 text-xs text-red-600 hover:text-red-700"
+                          onClick={() => revokeMutation.mutate(link.id)}
+                          disabled={revokeMutation.isPending}
+                        >
+                          <Trash2 className="w-3 h-3 mr-1" /> Revoke
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
+          </CardContent>
+        </Card>
+        {detailTotal > 100 && (
+          <div className="flex items-center justify-between text-sm text-muted-foreground">
+            <span>Page {detailPage} of {Math.ceil(detailTotal / 100)} ({detailTotal} total)</span>
+            <div className="flex gap-2">
+              <Button variant="outline" size="sm" disabled={detailPage <= 1} onClick={() => setDetailPage(p => p - 1)}>Previous</Button>
+              <Button variant="outline" size="sm" disabled={detailPage >= Math.ceil(detailTotal / 100)} onClick={() => setDetailPage(p => p + 1)}>Next</Button>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -486,10 +644,10 @@ export function GovernanceSharingTab({ tenantConnectionId }: { tenantConnectionI
         <h3 className="text-lg font-semibold">Sharing Links</h3>
         <Button
           onClick={() => scanMutation.mutate()}
-          disabled={scanMutation.isPending || !tenantConnectionId}
+          disabled={scanMutation.isPending || latestRun?.status === "RUNNING" || !tenantConnectionId}
           data-testid="button-scan-sharing-links"
         >
-          {scanMutation.isPending
+          {scanMutation.isPending || latestRun?.status === "RUNNING"
             ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Scanning…</>
             : <><RefreshCw className="mr-2 h-4 w-4" />Scan Sharing Links</>}
         </Button>
@@ -547,96 +705,98 @@ export function GovernanceSharingTab({ tenantConnectionId }: { tenantConnectionI
         </Card>
       )}
 
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
         <Card>
           <CardContent className="pt-5 pb-4 px-5">
-            <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Anonymous Links</p>
-            <p className="text-2xl font-bold text-red-600" data-testid="text-anonymous-count">{anonymousCount}</p>
+            <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Total Links</p>
+            <p className="text-2xl font-bold" data-testid="text-total-count">{totals.total}</p>
+          </CardContent>
+        </Card>
+        <Card className={totals.anonymous > 0 ? "border-red-200" : ""}>
+          <CardContent className="pt-5 pb-4 px-5">
+            <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Anonymous</p>
+            <p className="text-2xl font-bold text-red-600" data-testid="text-anonymous-count">{totals.anonymous}</p>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="pt-5 pb-4 px-5">
-            <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Organization Links</p>
-            <p className="text-2xl font-bold text-amber-600" data-testid="text-org-count">{orgCount}</p>
+            <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Organization</p>
+            <p className="text-2xl font-bold text-amber-600" data-testid="text-org-count">{totals.organization}</p>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="pt-5 pb-4 px-5">
-            <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Specific People Links</p>
-            <p className="text-2xl font-bold" data-testid="text-specific-count">{specificCount}</p>
+            <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Specific People</p>
+            <p className="text-2xl font-bold" data-testid="text-specific-count">{totals.specific}</p>
           </CardContent>
         </Card>
       </div>
 
       <div className="flex gap-3 items-center">
-        <div className="relative max-w-xs">
+        <div className="relative max-w-xs flex-1">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-          <Input placeholder="Search by resource or creator..." value={search} onChange={e => setSearch(e.target.value)} className="pl-9" />
+          <Input placeholder="Search sites / drives…" value={search} onChange={e => setSearch(e.target.value)} className="pl-9" />
         </div>
-        <Select value={linkTypeFilter} onValueChange={setLinkTypeFilter}>
+        <Select value={resourceTypeFilter} onValueChange={setResourceTypeFilter}>
           <SelectTrigger className="w-44">
-            <SelectValue placeholder="Link type" />
+            <SelectValue placeholder="Resource type" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="all">All Types</SelectItem>
-            <SelectItem value="anonymous">Anonymous</SelectItem>
-            <SelectItem value="organization">Organization</SelectItem>
-            <SelectItem value="specific">Specific People</SelectItem>
+            <SelectItem value="all">All Sources</SelectItem>
+            <SelectItem value="SHAREPOINT_SITE">SharePoint</SelectItem>
+            <SelectItem value="ONEDRIVE">OneDrive</SelectItem>
           </SelectContent>
         </Select>
       </div>
 
       <Card>
         <CardContent className="p-0">
-          {isLoading ? (
+          {summaryLoading ? (
             <div className="flex items-center justify-center h-32 text-muted-foreground gap-2">
               <Loader2 className="h-4 w-4 animate-spin" /> Loading...
             </div>
-          ) : filtered.length === 0 ? (
-            <div className="flex items-center justify-center h-32 text-muted-foreground">No sharing links found</div>
+          ) : filteredSummary.length === 0 ? (
+            <div className="flex items-center justify-center h-32 text-muted-foreground">No sharing links found. Run a scan to discover sharing links.</div>
           ) : (
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Resource</TableHead>
-                  <TableHead>Item</TableHead>
-                  <TableHead>Type</TableHead>
-                  <TableHead>Scope</TableHead>
-                  <TableHead>Created By</TableHead>
-                  <TableHead>Expires</TableHead>
-                  <TableHead>Actions</TableHead>
+                  <TableHead>Site / Drive</TableHead>
+                  <TableHead>Source</TableHead>
+                  <TableHead className="text-right">Total</TableHead>
+                  <TableHead className="text-right">Anonymous</TableHead>
+                  <TableHead className="text-right">Organization</TableHead>
+                  <TableHead className="text-right">Specific</TableHead>
+                  <TableHead></TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {filtered.slice(0, 200).map(link => (
-                  <TableRow key={link.id} className={link.linkType === "anonymous" ? "bg-red-50/30 dark:bg-red-950/10" : ""}>
+                {filteredSummary.map(r => (
+                  <TableRow
+                    key={r.resourceId}
+                    className={`cursor-pointer hover:bg-muted/50 ${r.anonymousLinks > 0 ? "bg-red-50/30 dark:bg-red-950/10" : ""}`}
+                    onClick={() => setSelectedResource(r)}
+                    data-testid={`row-resource-${r.resourceId}`}
+                  >
                     <TableCell>
-                      <span className="font-medium text-sm">{link.resourceName ?? "—"}</span>
-                      <span className="block text-xs text-muted-foreground">{link.resourceType}</span>
+                      <span className="font-medium text-sm">{r.resourceName ?? "Unknown"}</span>
                     </TableCell>
                     <TableCell>
-                      <span className="text-sm">{link.itemName ?? "—"}</span>
-                      {link.itemPath && <span className="block text-xs text-muted-foreground truncate max-w-[200px]" title={link.itemPath}>{link.itemPath}</span>}
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant={link.linkType === "anonymous" ? "destructive" : "outline"} className="text-[10px]">
-                        {link.linkType}
+                      <Badge variant="outline" className="text-[10px]">
+                        {r.resourceType === "SHAREPOINT_SITE" ? "SharePoint" : "OneDrive"}
                       </Badge>
                     </TableCell>
-                    <TableCell className="text-sm">{link.linkScope ?? "—"}</TableCell>
-                    <TableCell className="text-sm text-muted-foreground">{link.createdBy ?? "—"}</TableCell>
-                    <TableCell className="text-sm text-muted-foreground">
-                      {link.expiresAt ? new Date(link.expiresAt).toLocaleDateString() : "Never"}
+                    <TableCell className="text-right font-medium">{r.totalLinks}</TableCell>
+                    <TableCell className="text-right">
+                      {r.anonymousLinks > 0
+                        ? <span className="text-red-600 font-semibold">{r.anonymousLinks}</span>
+                        : <span className="text-muted-foreground">0</span>}
                     </TableCell>
+                    <TableCell className="text-right text-amber-600">{r.organizationLinks}</TableCell>
+                    <TableCell className="text-right">{r.specificLinks}</TableCell>
                     <TableCell>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-7 text-xs text-red-600 hover:text-red-700"
-                        onClick={() => revokeMutation.mutate(link.id)}
-                        disabled={revokeMutation.isPending}
-                      >
-                        <Trash2 className="w-3 h-3 mr-1" /> Revoke
+                      <Button variant="ghost" size="sm" className="h-7 text-xs">
+                        <Eye className="w-3 h-3 mr-1" /> View
                       </Button>
                     </TableCell>
                   </TableRow>

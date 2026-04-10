@@ -373,9 +373,19 @@ export interface IStorage {
 
   // Content Governance - sharing links inventory
   upsertSharingLink(data: InsertSharingLink): Promise<SharingLink>;
+  getSharingLinkSummary(tenantConnectionId: string): Promise<Array<{
+    resourceId: string;
+    resourceName: string | null;
+    resourceType: string;
+    totalLinks: number;
+    anonymousLinks: number;
+    organizationLinks: number;
+    specificLinks: number;
+  }>>;
   getSharingLinksPaginated(params: {
     tenantConnectionId: string;
     resourceType?: string;
+    resourceId?: string;
     linkType?: string;
     page: number;
     pageSize: number;
@@ -2244,16 +2254,56 @@ export class DatabaseStorage implements IStorage {
     return decrypted as SharingLink;
   }
 
+  async getSharingLinkSummary(tenantConnectionId: string): Promise<Array<{
+    resourceId: string;
+    resourceName: string | null;
+    resourceType: string;
+    totalLinks: number;
+    anonymousLinks: number;
+    organizationLinks: number;
+    specificLinks: number;
+  }>> {
+    const rows = await db
+      .select({
+        resourceId: sharingLinksInventory.resourceId,
+        resourceName: sql<string>`max(${sharingLinksInventory.resourceName})`,
+        resourceType: sharingLinksInventory.resourceType,
+        totalLinks: sql<number>`count(*)::int`,
+        anonymousLinks: sql<number>`count(*) filter (where ${sharingLinksInventory.linkType} = 'anonymous')::int`,
+        organizationLinks: sql<number>`count(*) filter (where ${sharingLinksInventory.linkType} = 'organization')::int`,
+        specificLinks: sql<number>`count(*) filter (where ${sharingLinksInventory.linkType} = 'specific')::int`,
+      })
+      .from(sharingLinksInventory)
+      .where(
+        and(
+          eq(sharingLinksInventory.tenantConnectionId, tenantConnectionId),
+          eq(sharingLinksInventory.isActive, true),
+        ),
+      )
+      .groupBy(
+        sharingLinksInventory.resourceId,
+        sharingLinksInventory.resourceType,
+      )
+      .orderBy(sql`count(*) desc`);
+
+    return rows;
+  }
+
   async getSharingLinksPaginated(params: {
     tenantConnectionId: string;
     resourceType?: string;
+    resourceId?: string;
     linkType?: string;
     page: number;
     pageSize: number;
   }): Promise<{ items: SharingLink[]; total: number }> {
-    const { tenantConnectionId, resourceType, linkType, page, pageSize } = params;
-    const conditions = [eq(sharingLinksInventory.tenantConnectionId, tenantConnectionId)];
+    const { tenantConnectionId, resourceType, resourceId, linkType, page, pageSize } = params;
+    const conditions = [
+      eq(sharingLinksInventory.tenantConnectionId, tenantConnectionId),
+      eq(sharingLinksInventory.isActive, true),
+    ];
     if (resourceType) conditions.push(eq(sharingLinksInventory.resourceType, resourceType));
+    if (resourceId) conditions.push(eq(sharingLinksInventory.resourceId, resourceId));
     if (linkType) conditions.push(eq(sharingLinksInventory.linkType, linkType));
     const where = and(...conditions);
 

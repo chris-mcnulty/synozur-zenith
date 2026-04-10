@@ -3799,18 +3799,34 @@ export interface DriveItemSharingResult {
   errors: Array<{ context: string; message: string }>;
 }
 
-async function fetchAllPages<T>(url: string, token: string): Promise<{ items: T[]; error?: string }> {
+async function fetchAllPages<T>(url: string, token: string, maxRetries = 3): Promise<{ items: T[]; error?: string }> {
   const items: T[] = [];
   let nextUrl: string | null = url;
   while (nextUrl) {
-    const res = await fetch(nextUrl, { headers: { Authorization: `Bearer ${token}` } });
-    if (!res.ok) {
+    let lastError = "";
+    let success = false;
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      const res = await fetch(nextUrl, { headers: { Authorization: `Bearer ${token}` } });
+      if (res.ok) {
+        const data = await res.json();
+        items.push(...(data.value || []));
+        nextUrl = data["@odata.nextLink"] || null;
+        success = true;
+        break;
+      }
+      if (res.status === 429 && attempt < maxRetries) {
+        const retryAfter = parseInt(res.headers.get("Retry-After") || "10", 10);
+        const waitMs = Math.min(retryAfter, 30) * 1000;
+        await new Promise(r => setTimeout(r, waitMs));
+        continue;
+      }
       const errText = await res.text();
-      return { items, error: `Graph API error ${res.status}: ${errText.substring(0, 300)}` };
+      lastError = `Graph API error ${res.status}: ${errText.substring(0, 300)}`;
+      break;
     }
-    const data = await res.json();
-    items.push(...(data.value || []));
-    nextUrl = data["@odata.nextLink"] || null;
+    if (!success) {
+      return { items, error: lastError };
+    }
   }
   return { items };
 }
@@ -3949,16 +3965,16 @@ export async function getSharingLinks(
 
 export async function getOneDriveSharingLinks(
   token: string,
-  userId: string,
+  driveId: string,
 ): Promise<DriveItemSharingResult> {
   try {
     return await scanDriveForSharedItems(
       token,
-      `https://graph.microsoft.com/v1.0/users/${userId}/drive`,
-      `od:${userId}`,
+      `https://graph.microsoft.com/v1.0/drives/${driveId}`,
+      `od:${driveId}`,
     );
   } catch (err: any) {
-    return { permissions: [], itemsScanned: 0, errors: [{ context: `od:${userId}`, message: err.message }] };
+    return { permissions: [], itemsScanned: 0, errors: [{ context: `od:${driveId}`, message: err.message }] };
   }
 }
 

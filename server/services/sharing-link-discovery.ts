@@ -19,6 +19,29 @@ export interface SharingLinkDiscoveryResult {
   errors: Array<{ context: string; message: string }>;
 }
 
+async function refreshableToken(
+  tenantId: string,
+  clientId: string,
+  clientSecret: string,
+): Promise<{ getToken: () => Promise<string> }> {
+  let token = await getAppToken(tenantId, clientId, clientSecret);
+  let lastRefreshCheck = Date.now();
+  const CHECK_INTERVAL_MS = 5 * 60 * 1000;
+  return {
+    async getToken() {
+      if (Date.now() - lastRefreshCheck > CHECK_INTERVAL_MS) {
+        lastRefreshCheck = Date.now();
+        const freshToken = await getAppToken(tenantId, clientId, clientSecret);
+        if (freshToken !== token) {
+          console.log("[sharing-links] Token refreshed (cache returned new token)");
+          token = freshToken;
+        }
+      }
+      return token;
+    },
+  };
+}
+
 export async function runSharingLinkDiscovery(
   tenantConnectionId: string,
   tenantId: string,
@@ -37,9 +60,9 @@ export async function runSharingLinkDiscovery(
     status: "RUNNING",
   });
 
-  let token: string;
+  let tokenHolder: { getToken: () => Promise<string> };
   try {
-    token = await getAppToken(tenantId, clientId, clientSecret);
+    tokenHolder = await refreshableToken(tenantId, clientId, clientSecret);
   } catch (err: any) {
     errors.push({ context: "getAppToken", message: err.message });
     await storage.updateSharingLinkDiscoveryRun(run.id, {
@@ -75,6 +98,7 @@ export async function runSharingLinkDiscovery(
       }
 
       try {
+        const token = await tokenHolder.getToken();
         const result = await getSharingLinks(token, site.m365ObjectId!);
         errors.push(...result.errors);
         sitesScanned++;
@@ -136,7 +160,8 @@ export async function runSharingLinkDiscovery(
       }
 
       try {
-        const result = await getOneDriveSharingLinks(token, drive.userId);
+        const token = await tokenHolder.getToken();
+        const result = await getOneDriveSharingLinks(token, drive.driveId!);
         errors.push(...result.errors);
         usersScanned++;
         itemsScanned += result.itemsScanned;

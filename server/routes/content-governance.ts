@@ -149,6 +149,25 @@ router.get("/api/content-governance/storage", requireAuth(), async (req: Authent
   }
 });
 
+// ── GET /api/content-governance/sharing/summary ─────────────────────────────
+router.get("/api/content-governance/sharing/summary", requireAuth(), async (req: AuthenticatedRequest, res) => {
+  try {
+    const tenantConnectionId = req.query.tenantConnectionId as string;
+    if (!tenantConnectionId) return res.status(400).json({ error: "tenantConnectionId is required" });
+
+    const allowedTenantConnectionIds = await getOrgTenantConnectionIds(req);
+    if (allowedTenantConnectionIds !== null && !allowedTenantConnectionIds.includes(tenantConnectionId)) {
+      return res.status(403).json({ error: "Forbidden" });
+    }
+
+    const summary = await storage.getSharingLinkSummary(tenantConnectionId);
+    res.json(summary);
+  } catch (err: any) {
+    console.error("[content-governance] sharing summary error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── GET /api/content-governance/sharing/links ──────────────────────────────
 router.get("/api/content-governance/sharing/links", requireAuth(), async (req: AuthenticatedRequest, res) => {
   try {
@@ -161,6 +180,7 @@ router.get("/api/content-governance/sharing/links", requireAuth(), async (req: A
     }
 
     const resourceType = req.query.resourceType as string | undefined;
+    const resourceId = req.query.resourceId as string | undefined;
     const linkType = req.query.linkType as string | undefined;
     const page = Math.max(1, parseInt(req.query.page as string || "1", 10));
     const pageSize = Math.min(200, Math.max(1, parseInt(req.query.pageSize as string || "50", 10)));
@@ -168,6 +188,7 @@ router.get("/api/content-governance/sharing/links", requireAuth(), async (req: A
     const { items: links, total } = await storage.getSharingLinksPaginated({
       tenantConnectionId,
       resourceType,
+      resourceId,
       linkType,
       page,
       pageSize,
