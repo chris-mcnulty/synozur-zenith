@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient } from "@/lib/queryClient";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -371,6 +371,8 @@ interface SharingLinkItem {
   id: string;
   resourceType: string;
   resourceName: string | null;
+  itemName: string | null;
+  itemPath: string | null;
   linkType: string;
   linkScope: string | null;
   createdBy: string | null;
@@ -379,10 +381,37 @@ interface SharingLinkItem {
   createdAtGraph: string | null;
 }
 
+interface SharingLinkDiscoveryRun {
+  id: string;
+  status: string;
+  startedAt: string;
+  completedAt: string | null;
+  sharePointLinksFound: number;
+  oneDriveLinksFound: number;
+  sitesScanned: number;
+  usersScanned: number;
+  itemsScanned: number;
+  errors: Array<{ context: string; message: string }> | null;
+}
+
 export function GovernanceSharingTab({ tenantConnectionId }: { tenantConnectionId: string }) {
   const [linkTypeFilter, setLinkTypeFilter] = useState("all");
   const [search, setSearch] = useState("");
   const { toast } = useToast();
+
+  const { data: latestRun, refetch: refetchRun } = useQuery<SharingLinkDiscoveryRun | null>({
+    queryKey: [`/api/admin/tenants/${tenantConnectionId}/sharing-links/latest-run`],
+    queryFn: async () => {
+      const res = await fetch(`/api/admin/tenants/${tenantConnectionId}/sharing-links/latest-run`, { credentials: "include" });
+      if (!res.ok) return null;
+      return res.json();
+    },
+    enabled: !!tenantConnectionId,
+    refetchInterval: (query) => {
+      const run = query.state.data;
+      return run?.status === "RUNNING" ? 5000 : false;
+    },
+  });
 
   const scanMutation = useMutation({
     mutationFn: async () => {
@@ -398,14 +427,18 @@ export function GovernanceSharingTab({ tenantConnectionId }: { tenantConnectionI
     },
     onSuccess: () => {
       toast({ title: "Sharing link scan started", description: "Scanning SharePoint sites and OneDrive drives for sharing links…" });
-      setTimeout(() => {
-        queryClient.invalidateQueries({ queryKey: ["/api/content-governance/sharing/links"] });
-      }, 10000);
+      setTimeout(() => refetchRun(), 2000);
     },
     onError: (err: Error) => {
       toast({ title: "Scan failed", description: err.message, variant: "destructive" });
     },
   });
+
+  useEffect(() => {
+    if (latestRun?.status === "COMPLETED" || latestRun?.status === "PARTIAL" || latestRun?.status === "FAILED") {
+      queryClient.invalidateQueries({ queryKey: ["/api/content-governance/sharing/links"] });
+    }
+  }, [latestRun?.status]);
 
   const { data: links = [], isLoading } = useQuery<SharingLinkItem[]>({
     queryKey: ["/api/content-governance/sharing/links", tenantConnectionId, linkTypeFilter],
@@ -444,7 +477,7 @@ export function GovernanceSharingTab({ tenantConnectionId }: { tenantConnectionI
   const filtered = links.filter(l => {
     if (!search) return true;
     const s = search.toLowerCase();
-    return (l.resourceName?.toLowerCase().includes(s) || l.createdBy?.toLowerCase().includes(s));
+    return (l.resourceName?.toLowerCase().includes(s) || l.itemName?.toLowerCase().includes(s) || l.itemPath?.toLowerCase().includes(s) || l.createdBy?.toLowerCase().includes(s));
   });
 
   return (
@@ -461,6 +494,58 @@ export function GovernanceSharingTab({ tenantConnectionId }: { tenantConnectionI
             : <><RefreshCw className="mr-2 h-4 w-4" />Scan Sharing Links</>}
         </Button>
       </div>
+
+      {latestRun && (
+        <Card className={
+          latestRun.status === "RUNNING" ? "border-blue-200 bg-blue-50/50" :
+          latestRun.status === "FAILED" ? "border-red-200 bg-red-50/50" :
+          latestRun.status === "PARTIAL" ? "border-amber-200 bg-amber-50/50" :
+          "border-green-200 bg-green-50/50"
+        }>
+          <CardContent className="pt-4 pb-3 px-5">
+            <div className="flex items-center gap-3 text-sm">
+              {latestRun.status === "RUNNING" && <Loader2 className="h-4 w-4 animate-spin text-blue-600" />}
+              {latestRun.status === "COMPLETED" && <CheckCircle2 className="h-4 w-4 text-green-600" />}
+              {latestRun.status === "PARTIAL" && <AlertTriangle className="h-4 w-4 text-amber-600" />}
+              {latestRun.status === "FAILED" && <XCircle className="h-4 w-4 text-red-600" />}
+              <div className="flex-1">
+                <span className="font-medium">
+                  {latestRun.status === "RUNNING" ? "Scan in progress…" :
+                   latestRun.status === "COMPLETED" ? "Last scan completed" :
+                   latestRun.status === "PARTIAL" ? "Last scan completed with errors" :
+                   "Last scan failed"}
+                </span>
+                <span className="text-muted-foreground ml-2">
+                  {latestRun.sitesScanned} sites, {latestRun.usersScanned} users, {latestRun.itemsScanned} items scanned
+                  {" · "}{latestRun.sharePointLinksFound} SP + {latestRun.oneDriveLinksFound} OD links found
+                </span>
+              </div>
+              {latestRun.completedAt && (
+                <span className="text-xs text-muted-foreground">
+                  {new Date(latestRun.completedAt).toLocaleString()}
+                </span>
+              )}
+            </div>
+            {latestRun.errors && latestRun.errors.length > 0 && (
+              <details className="mt-2">
+                <summary className="text-xs text-muted-foreground cursor-pointer hover:text-foreground">
+                  {latestRun.errors.length} error{latestRun.errors.length !== 1 ? "s" : ""} — click to expand
+                </summary>
+                <div className="mt-1 max-h-40 overflow-y-auto text-xs font-mono space-y-0.5">
+                  {latestRun.errors.slice(0, 50).map((e, i) => (
+                    <div key={i} className="text-red-700">
+                      <span className="text-muted-foreground">[{e.context}]</span> {e.message.substring(0, 200)}
+                    </div>
+                  ))}
+                  {latestRun.errors.length > 50 && (
+                    <div className="text-muted-foreground">…and {latestRun.errors.length - 50} more</div>
+                  )}
+                </div>
+              </details>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <Card>
@@ -514,6 +599,7 @@ export function GovernanceSharingTab({ tenantConnectionId }: { tenantConnectionI
               <TableHeader>
                 <TableRow>
                   <TableHead>Resource</TableHead>
+                  <TableHead>Item</TableHead>
                   <TableHead>Type</TableHead>
                   <TableHead>Scope</TableHead>
                   <TableHead>Created By</TableHead>
@@ -527,6 +613,10 @@ export function GovernanceSharingTab({ tenantConnectionId }: { tenantConnectionI
                     <TableCell>
                       <span className="font-medium text-sm">{link.resourceName ?? "—"}</span>
                       <span className="block text-xs text-muted-foreground">{link.resourceType}</span>
+                    </TableCell>
+                    <TableCell>
+                      <span className="text-sm">{link.itemName ?? "—"}</span>
+                      {link.itemPath && <span className="block text-xs text-muted-foreground truncate max-w-[200px]" title={link.itemPath}>{link.itemPath}</span>}
                     </TableCell>
                     <TableCell>
                       <Badge variant={link.linkType === "anonymous" ? "destructive" : "outline"} className="text-[10px]">

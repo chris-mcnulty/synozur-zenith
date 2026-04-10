@@ -79,6 +79,11 @@ export async function runSharingLinkDiscovery(
         errors.push(...result.errors);
         sitesScanned++;
         itemsScanned += result.itemsScanned;
+        console.log(
+          `[sharing-links] SP site "${site.displayName}": ${result.permissions.length} links, ` +
+          `${result.itemsScanned} items scanned` +
+          (result.errors.length > 0 ? `, ${result.errors.length} errors` : ""),
+        );
 
         for (const perm of result.permissions) {
           const record: InsertSharingLink = {
@@ -135,6 +140,11 @@ export async function runSharingLinkDiscovery(
         errors.push(...result.errors);
         usersScanned++;
         itemsScanned += result.itemsScanned;
+        console.log(
+          `[sharing-links] OD user "${drive.userDisplayName}": ${result.permissions.length} links, ` +
+          `${result.itemsScanned} items scanned` +
+          (result.errors.length > 0 ? `, ${result.errors.length} errors` : ""),
+        );
 
         for (const perm of result.permissions) {
           const record: InsertSharingLink = {

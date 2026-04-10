@@ -3854,37 +3854,44 @@ async function scanDriveForSharedItems(
   }
   itemsScanned++;
 
-  const searchUrl = `${driveBaseUrl}/search(q='*')?$select=id,name,parentReference,shared&$top=200`;
-  const { items: searchResults, error: searchError } = await fetchAllPages<any>(searchUrl, token);
-  if (searchError) {
-    errors.push({ context: `${contextLabel}:search`, message: searchError });
-    return { permissions, itemsScanned, errors };
-  }
+  const queue: Array<{ folderId: string | null; folderPath: string }> = [{ folderId: null, folderPath: "" }];
 
-  const sharedItems = searchResults.filter((item: any) => item.shared);
-  itemsScanned += searchResults.length;
-
-  for (const item of sharedItems) {
-    const itemPath = item.parentReference?.path
-      ? `${item.parentReference.path.replace(/^\/drive\/root:?/, "")}/${item.name}`
-      : `/${item.name}`;
-    try {
-      const { items: perms, error: permError } = await fetchAllPages<any>(
-        `${driveBaseUrl}/items/${item.id}/permissions`,
-        token,
-      );
-      if (permError) {
-        errors.push({ context: `${contextLabel}:perm:${item.name}`, message: permError });
-        continue;
+  while (queue.length > 0) {
+    const { folderId, folderPath } = queue.shift()!;
+    const url = folderId
+      ? `${driveBaseUrl}/items/${folderId}/children?$select=id,name,folder,shared&$top=200`
+      : `${driveBaseUrl}/root/children?$select=id,name,folder,shared&$top=200`;
+    const { items: children, error } = await fetchAllPages<any>(url, token);
+    if (error) {
+      errors.push({ context: `${contextLabel}:list:${folderPath || "/"}`, message: error });
+      continue;
+    }
+    for (const child of children) {
+      const childPath = `${folderPath}/${child.name}`;
+      const isFolder = !!child.folder;
+      itemsScanned++;
+      if (isFolder) {
+        queue.push({ folderId: child.id, folderPath: childPath });
       }
-
-      for (const p of perms) {
-        if (p.link) {
-          permissions.push(mapPermissionToLink(p, { id: item.id, name: item.name, path: itemPath }));
+      if (child.shared) {
+        try {
+          const { items: perms, error: permError } = await fetchAllPages<any>(
+            `${driveBaseUrl}/items/${child.id}/permissions`,
+            token,
+          );
+          if (permError) {
+            errors.push({ context: `${contextLabel}:perm:${child.name}`, message: permError });
+            continue;
+          }
+          for (const p of perms) {
+            if (p.link) {
+              permissions.push(mapPermissionToLink(p, { id: child.id, name: child.name, path: childPath }));
+            }
+          }
+        } catch (err: any) {
+          errors.push({ context: `${contextLabel}:perm:${child.name}`, message: err.message });
         }
       }
-    } catch (err: any) {
-      errors.push({ context: `${contextLabel}:perm:${item.name}`, message: err.message });
     }
   }
 
