@@ -1147,6 +1147,15 @@ function ColumnsTab({ tenantConnectionId }: { tenantConnectionId: string }) {
                       key={`${col.columnInternalName}-${col.columnType}`}
                       className="hover:bg-muted/10 transition-colors cursor-pointer"
                       onClick={() => setSelectedColumn(col)}
+                      tabIndex={0}
+                      role="button"
+                      aria-label={`View details for column ${col.displayName}`}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" || event.key === " ") {
+                          event.preventDefault();
+                          setSelectedColumn(col);
+                        }
+                      }}
                     >
                       <TableCell className="pl-6">
                         <div className="flex items-center gap-2">
