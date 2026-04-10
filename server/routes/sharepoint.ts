@@ -2774,7 +2774,10 @@ router.get("/api/admin/tenants/:id/ia/content-types", requirePermission('invento
     const libraryRefById = buildLibraryRefMap(libraries, workspaceRows);
 
     type CtAgg = {
-      contentTypeId: string;
+      // All contentTypeIds seen for this scope::name rollup. Locally-defined
+      // CTs often have different IDs across libraries even though they share a
+      // name, so we collect every ID rather than keeping just the first.
+      contentTypeIds: Set<string>;
       name: string;
       group: string | null;
       scope: 'HUB' | 'SITE' | 'LIBRARY';
@@ -2796,11 +2799,12 @@ router.get("/api/admin/tenants/:id/ia/content-types", requirePermission('invento
       const key = `${lct.scope}::${lct.name}`;
       const existing = aggByKey.get(key);
       if (existing) {
+        existing.contentTypeIds.add(lct.contentTypeId);
         existing.libraryRefs.set(lct.documentLibraryId, ref);
         existing.workspaceIds.add(lct.workspaceId);
       } else {
         aggByKey.set(key, {
-          contentTypeId: lct.contentTypeId,
+          contentTypeIds: new Set([lct.contentTypeId]),
           name: lct.name,
           group: lct.group,
           scope: lct.scope as 'HUB' | 'SITE' | 'LIBRARY',
@@ -2817,7 +2821,7 @@ router.get("/api/admin/tenants/:id/ia/content-types", requirePermission('invento
         const libs = Array.from(r.libraryRefs.values())
           .sort((a, b) => a.libraryName.localeCompare(b.libraryName));
         return {
-          contentTypeId: r.contentTypeId,
+          contentTypeIds: Array.from(r.contentTypeIds).sort(),
           name: r.name,
           group: r.group,
           scope: r.scope,
@@ -2859,7 +2863,11 @@ router.get("/api/admin/tenants/:id/ia/columns", requirePermission('inventory:rea
     const libraryRefById = buildLibraryRefMap(libraries, workspaceRows);
 
     type CtRef = {
-      contentTypeId: string;
+      // All IDs observed for this scope::name key across merged libraries.
+      // Same-name CTs with different IDs (locally-defined variants) are
+      // accumulated here so no ID is arbitrarily discarded. A Set is used
+      // for O(1) deduplication during merge.
+      contentTypeIds: Set<string>;
       name: string;
       group: string | null;
       scope: 'HUB' | 'SITE' | 'LIBRARY';
@@ -2880,13 +2888,19 @@ router.get("/api/admin/tenants/:id/ia/columns", requirePermission('inventory:rea
         ctIndexByLibrary.set(lct.documentLibraryId, idx);
       }
       idx.keys.add(ctKey);
-      idx.refs.set(ctKey, {
-        contentTypeId: lct.contentTypeId,
-        name: lct.name,
-        group: lct.group,
-        scope: lct.scope as 'HUB' | 'SITE' | 'LIBRARY',
-        isBuiltIn: lct.isBuiltIn,
-      });
+      const existing = idx.refs.get(ctKey);
+      if (existing) {
+        // Accumulate IDs for same-name CTs that have different contentTypeIds.
+        existing.contentTypeIds.add(lct.contentTypeId);
+      } else {
+        idx.refs.set(ctKey, {
+          contentTypeIds: new Set([lct.contentTypeId]),
+          name: lct.name,
+          group: lct.group,
+          scope: lct.scope as 'HUB' | 'SITE' | 'LIBRARY',
+          isBuiltIn: lct.isBuiltIn,
+        });
+      }
     }
     const EMPTY_LIB_CT_INDEX: LibCtIndex = { keys: new Set(), refs: new Map() };
 
@@ -2923,7 +2937,16 @@ router.get("/api/admin/tenants/:id/ia/columns", requirePermission('inventory:rea
         if (!existing.libraryRefs.has(c.documentLibraryId)) {
           existing.libraryRefs.set(c.documentLibraryId, ref);
           existing.ctKeySetsPerLibrary.push(libIdx.keys);
-          libIdx.refs.forEach((v, k) => existing.ctRefByKey.set(k, v));
+          // Merge CT refs: accumulate contentTypeIds for the same key rather
+          // than overwriting so we never lose IDs from earlier libraries.
+          libIdx.refs.forEach((incoming, k) => {
+            const existingRef = existing.ctRefByKey.get(k);
+            if (existingRef) {
+              incoming.contentTypeIds.forEach(id => existingRef.contentTypeIds.add(id));
+            } else {
+              existing.ctRefByKey.set(k, incoming);
+            }
+          });
         }
         existing.workspaceIds.add(c.workspaceId);
         if (c.scope === 'SITE') existing.scope = 'SITE';
@@ -2973,6 +2996,15 @@ router.get("/api/admin/tenants/:id/ia/columns", requirePermission('inventory:rea
         likelyCts.sort((a, b) => a.name.localeCompare(b.name));
         otherCts.sort((a, b) => a.name.localeCompare(b.name));
 
+        // Serialize CtRef: convert contentTypeIds Set to a sorted array for JSON output.
+        const serializeCtRef = (ct: CtRef) => ({
+          contentTypeIds: Array.from(ct.contentTypeIds).sort(),
+          name: ct.name,
+          group: ct.group,
+          scope: ct.scope,
+          isBuiltIn: ct.isBuiltIn,
+        });
+
         return {
           columnInternalName: r.columnInternalName,
           displayName: r.displayName,
@@ -2984,8 +3016,8 @@ router.get("/api/admin/tenants/:id/ia/columns", requirePermission('inventory:rea
           libraryUsageCount: libs.length,
           siteUsageCount: r.workspaceIds.size,
           libraries: libs,
-          likelyContentTypes: likelyCts,
-          otherContentTypes: otherCts,
+          likelyContentTypes: likelyCts.map(serializeCtRef),
+          otherContentTypes: otherCts.map(serializeCtRef),
         };
       })
       .sort((a, b) => a.displayName.localeCompare(b.displayName));

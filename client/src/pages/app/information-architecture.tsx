@@ -114,7 +114,7 @@ type IaLibraryRef = {
 };
 
 type IaContentTypeRef = {
-  contentTypeId: string;
+  contentTypeIds: string[];
   name: string;
   group: string | null;
   scope: "HUB" | "SITE" | "LIBRARY";
@@ -122,7 +122,7 @@ type IaContentTypeRef = {
 };
 
 type IaContentType = {
-  contentTypeId: string;
+  contentTypeIds: string[];
   name: string;
   group: string | null;
   scope: "HUB" | "SITE" | "LIBRARY";
@@ -891,7 +891,7 @@ function ContentTypesTab({ tenantConnectionId }: { tenantConnectionId: string })
               <TableBody>
                 {filtered.map((ct) => (
                   <TableRow
-                    key={`${ct.scope}-${ct.contentTypeId}`}
+                    key={`${ct.scope}-${ct.name}`}
                     className="hover:bg-muted/10 transition-colors cursor-pointer"
                     onClick={() => setSelectedCt(ct)}
                     onKeyDown={(event) => {
@@ -903,7 +903,7 @@ function ContentTypesTab({ tenantConnectionId }: { tenantConnectionId: string })
                     role="button"
                     tabIndex={0}
                     aria-label={`Open content type ${ct.name}`}
-                    data-testid={`row-ct-${ct.contentTypeId}`}
+                    data-testid={`row-ct-${ct.scope}-${ct.name}`}
                   >
                     <TableCell className="pl-6">
                       <div className="flex items-center gap-2">
@@ -960,7 +960,9 @@ function ContentTypesTab({ tenantConnectionId }: { tenantConnectionId: string })
                 <LibraryListPanel libraries={selectedCt.libraries ?? []} />
               </div>
               <div className="p-3 rounded-lg bg-muted/20 border border-border/30">
-                <p className="text-[10px] font-mono text-muted-foreground break-all">{selectedCt.contentTypeId}</p>
+                {(selectedCt.contentTypeIds ?? []).map((id) => (
+                  <p key={id} className="text-[10px] font-mono text-muted-foreground break-all">{id}</p>
+                ))}
               </div>
             </div>
           )}
@@ -1183,7 +1185,7 @@ function ColumnsTab({ tenantConnectionId }: { tenantConnectionId: string }) {
                         ) : (
                           <div className="flex items-center gap-1 flex-wrap">
                             {topCts.map((ct) => (
-                              <Badge key={`${ct.scope}-${ct.contentTypeId}`} variant="outline" className="text-[10px] gap-1 bg-blue-500/5 border-blue-500/20">
+                              <Badge key={`${ct.scope}-${ct.name}`} variant="outline" className="text-[10px] gap-1 bg-blue-500/5 border-blue-500/20">
                                 <FileType className="w-2.5 h-2.5" />
                                 <span className="truncate max-w-[120px]">{ct.name}</span>
                               </Badge>
@@ -1245,7 +1247,7 @@ function ColumnsTab({ tenantConnectionId }: { tenantConnectionId: string }) {
                     </p>
                     <div className="space-y-1.5">
                       {selLikely.map((ct) => (
-                        <div key={`${ct.scope}-${ct.contentTypeId}`} className="flex items-center gap-2 p-2 rounded border border-blue-500/20 bg-blue-500/5">
+                        <div key={`${ct.scope}-${ct.name}`} className="flex items-center gap-2 p-2 rounded border border-blue-500/20 bg-blue-500/5">
                           <FileType className="w-3.5 h-3.5 text-blue-500 shrink-0" />
                           <span className="text-sm flex-1">{ct.name}</span>
                           {scopeBadge(ct.scope)}
@@ -1266,7 +1268,7 @@ function ColumnsTab({ tenantConnectionId }: { tenantConnectionId: string }) {
                     </p>
                     <div className="flex flex-wrap gap-1.5">
                       {selOther.map((ct) => (
-                        <Badge key={`${ct.scope}-${ct.contentTypeId}`} variant="outline" className="text-[10px] gap-1 bg-muted/20">
+                        <Badge key={`${ct.scope}-${ct.name}`} variant="outline" className="text-[10px] gap-1 bg-muted/20">
                           <FileType className="w-2.5 h-2.5" />
                           {ct.name}
                         </Badge>
