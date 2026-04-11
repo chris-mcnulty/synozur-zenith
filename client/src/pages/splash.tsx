@@ -108,7 +108,7 @@ export default function SplashPage() {
           <div className="text-center mb-16">
             <p className="text-sm font-semibold text-primary uppercase tracking-widest mb-3">Core Capabilities</p>
             <h2 className="text-3xl md:text-5xl font-bold tracking-tight mb-4">Govern Every Corner of M365</h2>
-            <p className="text-lg text-muted-foreground max-w-3xl mx-auto">Zenith replaces fragmented PowerShell scripts, manual spreadsheets, and reactive compliance responses with a proactive, automated governance layer built for organisations where Microsoft 365 is mission-critical infrastructure.</p>
+            <p className="text-lg text-muted-foreground max-w-3xl mx-auto">Zenith replaces fragmented PowerShell scripts, manual spreadsheets, and reactive compliance responses with a proactive, automated governance layer built for organizations where Microsoft 365 is mission-critical infrastructure.</p>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             <div className="glass-panel p-6 rounded-2xl border border-border/50 transition-all hover:-translate-y-1 duration-300">
@@ -184,7 +184,7 @@ export default function SplashPage() {
           <div className="text-center mb-16">
             <p className="text-sm font-semibold text-primary uppercase tracking-widest mb-3">AI-Powered</p>
             <h2 className="text-3xl md:text-5xl font-bold tracking-tight mb-4">AI Grounded in Your Standards</h2>
-            <p className="text-lg text-muted-foreground max-w-3xl mx-auto">Zenith's AI layer is powered by GPT-4o and GPT-5.x hosted on Azure AI Foundry — your own Azure subscription, so data never leaves the tenant boundary. Every AI response is grounded in Synozur governance standards plus your organisation's own policies.</p>
+            <p className="text-lg text-muted-foreground max-w-3xl mx-auto">Zenith's AI layer is powered by GPT-4o and GPT-5.x hosted on Azure AI Foundry — your own Azure subscription, so data never leaves the tenant boundary. Every AI response is grounded in Synozur governance standards plus your organization's own policies.</p>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div className="glass-panel p-8 rounded-2xl border border-border/50 transition-all hover:-translate-y-1 duration-300">
@@ -200,7 +200,7 @@ export default function SplashPage() {
                 <BookOpen className="w-6 h-6" />
               </div>
               <h3 className="text-xl font-semibold mb-3">Grounding Documents</h3>
-              <p className="text-sm text-muted-foreground leading-relaxed">Two layers of authoritative context anchor every AI response: system-level documents encoding Synozur's M365 governance standards, plus organisation-level documents encoding your naming conventions and IA policies. Outputs are specific and actionable, not generic AI knowledge.</p>
+              <p className="text-sm text-muted-foreground leading-relaxed">Two layers of authoritative context anchor every AI response: system-level documents encoding Synozur's M365 governance standards, plus organization-level documents encoding your naming conventions and IA policies. Outputs are specific and actionable, not generic AI knowledge.</p>
             </div>
 
             <div className="glass-panel p-8 rounded-2xl border border-border/50 transition-all hover:-translate-y-1 duration-300">
@@ -235,97 +235,97 @@ export default function SplashPage() {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-border/40 bg-muted/20">
-                    <th className="text-left font-semibold px-6 py-4 text-foreground">Capability</th>
-                    <th className="text-center font-semibold px-4 py-4 text-muted-foreground">Trial</th>
-                    <th className="text-center font-semibold px-4 py-4 text-muted-foreground">Standard</th>
-                    <th className="text-center font-semibold px-4 py-4 text-primary">Professional</th>
-                    <th className="text-center font-semibold px-4 py-4 text-primary">Enterprise</th>
+                    <th scope="col" className="text-left font-semibold px-6 py-4 text-foreground">Capability</th>
+                    <th scope="col" className="text-center font-semibold px-4 py-4 text-muted-foreground">Trial</th>
+                    <th scope="col" className="text-center font-semibold px-4 py-4 text-muted-foreground">Standard</th>
+                    <th scope="col" className="text-center font-semibold px-4 py-4 text-primary">Professional</th>
+                    <th scope="col" className="text-center font-semibold px-4 py-4 text-primary">Enterprise</th>
                   </tr>
                 </thead>
                 <tbody className="[&_td]:px-4 [&_td]:py-3.5 [&_tr]:border-b [&_tr]:border-border/20 [&_tr:last-child]:border-0">
                   <tr>
-                    <td className="!px-6 text-foreground">SharePoint inventory sync</td>
-                    <td className="text-center"><CheckCircle2 className="w-4 h-4 text-emerald-500 inline" /></td>
-                    <td className="text-center"><CheckCircle2 className="w-4 h-4 text-emerald-500 inline" /></td>
-                    <td className="text-center"><CheckCircle2 className="w-4 h-4 text-emerald-500 inline" /></td>
-                    <td className="text-center"><CheckCircle2 className="w-4 h-4 text-emerald-500 inline" /></td>
+                    <th scope="row" className="!px-6 py-3.5 text-foreground text-left font-normal">SharePoint inventory sync</th>
+                    <td className="text-center"><CheckCircle2 aria-hidden="true" className="w-4 h-4 text-emerald-500 inline" /><span className="sr-only">Included</span></td>
+                    <td className="text-center"><CheckCircle2 aria-hidden="true" className="w-4 h-4 text-emerald-500 inline" /><span className="sr-only">Included</span></td>
+                    <td className="text-center"><CheckCircle2 aria-hidden="true" className="w-4 h-4 text-emerald-500 inline" /><span className="sr-only">Included</span></td>
+                    <td className="text-center"><CheckCircle2 aria-hidden="true" className="w-4 h-4 text-emerald-500 inline" /><span className="sr-only">Included</span></td>
                   </tr>
                   <tr>
-                    <td className="!px-6 text-foreground">Governance policies &amp; write-back</td>
-                    <td className="text-center"><Minus className="w-4 h-4 text-muted-foreground/40 inline" /></td>
-                    <td className="text-center"><CheckCircle2 className="w-4 h-4 text-emerald-500 inline" /></td>
-                    <td className="text-center"><CheckCircle2 className="w-4 h-4 text-emerald-500 inline" /></td>
-                    <td className="text-center"><CheckCircle2 className="w-4 h-4 text-emerald-500 inline" /></td>
+                    <th scope="row" className="!px-6 py-3.5 text-foreground text-left font-normal">Governance policies &amp; write-back</th>
+                    <td className="text-center"><Minus aria-hidden="true" className="w-4 h-4 text-muted-foreground/40 inline" /><span className="sr-only">Not included</span></td>
+                    <td className="text-center"><CheckCircle2 aria-hidden="true" className="w-4 h-4 text-emerald-500 inline" /><span className="sr-only">Included</span></td>
+                    <td className="text-center"><CheckCircle2 aria-hidden="true" className="w-4 h-4 text-emerald-500 inline" /><span className="sr-only">Included</span></td>
+                    <td className="text-center"><CheckCircle2 aria-hidden="true" className="w-4 h-4 text-emerald-500 inline" /><span className="sr-only">Included</span></td>
                   </tr>
                   <tr>
-                    <td className="!px-6 text-foreground">AI Governance Assistant (GPT-backed)</td>
-                    <td className="text-center"><Minus className="w-4 h-4 text-muted-foreground/40 inline" /></td>
-                    <td className="text-center"><CheckCircle2 className="w-4 h-4 text-emerald-500 inline" /></td>
-                    <td className="text-center"><CheckCircle2 className="w-4 h-4 text-emerald-500 inline" /></td>
-                    <td className="text-center"><CheckCircle2 className="w-4 h-4 text-emerald-500 inline" /></td>
+                    <th scope="row" className="!px-6 py-3.5 text-foreground text-left font-normal">AI Governance Assistant (GPT-backed)</th>
+                    <td className="text-center"><Minus aria-hidden="true" className="w-4 h-4 text-muted-foreground/40 inline" /><span className="sr-only">Not included</span></td>
+                    <td className="text-center"><CheckCircle2 aria-hidden="true" className="w-4 h-4 text-emerald-500 inline" /><span className="sr-only">Included</span></td>
+                    <td className="text-center"><CheckCircle2 aria-hidden="true" className="w-4 h-4 text-emerald-500 inline" /><span className="sr-only">Included</span></td>
+                    <td className="text-center"><CheckCircle2 aria-hidden="true" className="w-4 h-4 text-emerald-500 inline" /><span className="sr-only">Included</span></td>
                   </tr>
                   <tr>
-                    <td className="!px-6 text-foreground">Copilot Readiness Dashboard</td>
-                    <td className="text-center"><Minus className="w-4 h-4 text-muted-foreground/40 inline" /></td>
-                    <td className="text-center"><Minus className="w-4 h-4 text-muted-foreground/40 inline" /></td>
-                    <td className="text-center"><CheckCircle2 className="w-4 h-4 text-emerald-500 inline" /></td>
-                    <td className="text-center"><CheckCircle2 className="w-4 h-4 text-emerald-500 inline" /></td>
+                    <th scope="row" className="!px-6 py-3.5 text-foreground text-left font-normal">Copilot Readiness Dashboard</th>
+                    <td className="text-center"><Minus aria-hidden="true" className="w-4 h-4 text-muted-foreground/40 inline" /><span className="sr-only">Not included</span></td>
+                    <td className="text-center"><Minus aria-hidden="true" className="w-4 h-4 text-muted-foreground/40 inline" /><span className="sr-only">Not included</span></td>
+                    <td className="text-center"><CheckCircle2 aria-hidden="true" className="w-4 h-4 text-emerald-500 inline" /><span className="sr-only">Included</span></td>
+                    <td className="text-center"><CheckCircle2 aria-hidden="true" className="w-4 h-4 text-emerald-500 inline" /><span className="sr-only">Included</span></td>
                   </tr>
                   <tr>
-                    <td className="!px-6 text-foreground">AI-Powered Assessments (Copilot + IA)</td>
-                    <td className="text-center"><Minus className="w-4 h-4 text-muted-foreground/40 inline" /></td>
-                    <td className="text-center"><Minus className="w-4 h-4 text-muted-foreground/40 inline" /></td>
-                    <td className="text-center"><CheckCircle2 className="w-4 h-4 text-emerald-500 inline" /></td>
-                    <td className="text-center"><CheckCircle2 className="w-4 h-4 text-emerald-500 inline" /></td>
+                    <th scope="row" className="!px-6 py-3.5 text-foreground text-left font-normal">AI-Powered Assessments (Copilot + IA)</th>
+                    <td className="text-center"><Minus aria-hidden="true" className="w-4 h-4 text-muted-foreground/40 inline" /><span className="sr-only">Not included</span></td>
+                    <td className="text-center"><Minus aria-hidden="true" className="w-4 h-4 text-muted-foreground/40 inline" /><span className="sr-only">Not included</span></td>
+                    <td className="text-center"><CheckCircle2 aria-hidden="true" className="w-4 h-4 text-emerald-500 inline" /><span className="sr-only">Included</span></td>
+                    <td className="text-center"><CheckCircle2 aria-hidden="true" className="w-4 h-4 text-emerald-500 inline" /><span className="sr-only">Included</span></td>
                   </tr>
                   <tr>
-                    <td className="!px-6 text-foreground">Azure AI Foundry provider + grounding docs</td>
-                    <td className="text-center"><Minus className="w-4 h-4 text-muted-foreground/40 inline" /></td>
-                    <td className="text-center"><Minus className="w-4 h-4 text-muted-foreground/40 inline" /></td>
-                    <td className="text-center"><CheckCircle2 className="w-4 h-4 text-emerald-500 inline" /></td>
-                    <td className="text-center"><CheckCircle2 className="w-4 h-4 text-emerald-500 inline" /></td>
+                    <th scope="row" className="!px-6 py-3.5 text-foreground text-left font-normal">Azure AI Foundry provider + grounding docs</th>
+                    <td className="text-center"><Minus aria-hidden="true" className="w-4 h-4 text-muted-foreground/40 inline" /><span className="sr-only">Not included</span></td>
+                    <td className="text-center"><Minus aria-hidden="true" className="w-4 h-4 text-muted-foreground/40 inline" /><span className="sr-only">Not included</span></td>
+                    <td className="text-center"><CheckCircle2 aria-hidden="true" className="w-4 h-4 text-emerald-500 inline" /><span className="sr-only">Included</span></td>
+                    <td className="text-center"><CheckCircle2 aria-hidden="true" className="w-4 h-4 text-emerald-500 inline" /><span className="sr-only">Included</span></td>
                   </tr>
                   <tr>
-                    <td className="!px-6 text-foreground">Sharing Link Discovery</td>
-                    <td className="text-center"><Minus className="w-4 h-4 text-muted-foreground/40 inline" /></td>
-                    <td className="text-center"><Minus className="w-4 h-4 text-muted-foreground/40 inline" /></td>
-                    <td className="text-center"><CheckCircle2 className="w-4 h-4 text-emerald-500 inline" /></td>
-                    <td className="text-center"><CheckCircle2 className="w-4 h-4 text-emerald-500 inline" /></td>
+                    <th scope="row" className="!px-6 py-3.5 text-foreground text-left font-normal">Sharing Link Discovery</th>
+                    <td className="text-center"><Minus aria-hidden="true" className="w-4 h-4 text-muted-foreground/40 inline" /><span className="sr-only">Not included</span></td>
+                    <td className="text-center"><Minus aria-hidden="true" className="w-4 h-4 text-muted-foreground/40 inline" /><span className="sr-only">Not included</span></td>
+                    <td className="text-center"><CheckCircle2 aria-hidden="true" className="w-4 h-4 text-emerald-500 inline" /><span className="sr-only">Included</span></td>
+                    <td className="text-center"><CheckCircle2 aria-hidden="true" className="w-4 h-4 text-emerald-500 inline" /><span className="sr-only">Included</span></td>
                   </tr>
                   <tr>
-                    <td className="!px-6 text-foreground">What-If Policy Planner</td>
-                    <td className="text-center"><Minus className="w-4 h-4 text-muted-foreground/40 inline" /></td>
-                    <td className="text-center"><Minus className="w-4 h-4 text-muted-foreground/40 inline" /></td>
-                    <td className="text-center"><Minus className="w-4 h-4 text-muted-foreground/40 inline" /></td>
-                    <td className="text-center"><CheckCircle2 className="w-4 h-4 text-emerald-500 inline" /></td>
+                    <th scope="row" className="!px-6 py-3.5 text-foreground text-left font-normal">What-If Policy Planner</th>
+                    <td className="text-center"><Minus aria-hidden="true" className="w-4 h-4 text-muted-foreground/40 inline" /><span className="sr-only">Not included</span></td>
+                    <td className="text-center"><Minus aria-hidden="true" className="w-4 h-4 text-muted-foreground/40 inline" /><span className="sr-only">Not included</span></td>
+                    <td className="text-center"><Minus aria-hidden="true" className="w-4 h-4 text-muted-foreground/40 inline" /><span className="sr-only">Not included</span></td>
+                    <td className="text-center"><CheckCircle2 aria-hidden="true" className="w-4 h-4 text-emerald-500 inline" /><span className="sr-only">Included</span></td>
                   </tr>
                   <tr>
-                    <td className="!px-6 text-foreground">Email Content Storage Report</td>
-                    <td className="text-center"><Minus className="w-4 h-4 text-muted-foreground/40 inline" /></td>
-                    <td className="text-center"><Minus className="w-4 h-4 text-muted-foreground/40 inline" /></td>
-                    <td className="text-center"><Minus className="w-4 h-4 text-muted-foreground/40 inline" /></td>
-                    <td className="text-center"><CheckCircle2 className="w-4 h-4 text-emerald-500 inline" /></td>
+                    <th scope="row" className="!px-6 py-3.5 text-foreground text-left font-normal">Email Content Storage Report</th>
+                    <td className="text-center"><Minus aria-hidden="true" className="w-4 h-4 text-muted-foreground/40 inline" /><span className="sr-only">Not included</span></td>
+                    <td className="text-center"><Minus aria-hidden="true" className="w-4 h-4 text-muted-foreground/40 inline" /><span className="sr-only">Not included</span></td>
+                    <td className="text-center"><Minus aria-hidden="true" className="w-4 h-4 text-muted-foreground/40 inline" /><span className="sr-only">Not included</span></td>
+                    <td className="text-center"><CheckCircle2 aria-hidden="true" className="w-4 h-4 text-emerald-500 inline" /><span className="sr-only">Included</span></td>
                   </tr>
                   <tr>
-                    <td className="!px-6 text-foreground">MSP multi-tenant access</td>
-                    <td className="text-center"><Minus className="w-4 h-4 text-muted-foreground/40 inline" /></td>
-                    <td className="text-center"><Minus className="w-4 h-4 text-muted-foreground/40 inline" /></td>
-                    <td className="text-center"><Minus className="w-4 h-4 text-muted-foreground/40 inline" /></td>
-                    <td className="text-center"><CheckCircle2 className="w-4 h-4 text-emerald-500 inline" /></td>
+                    <th scope="row" className="!px-6 py-3.5 text-foreground text-left font-normal">MSP multi-tenant access</th>
+                    <td className="text-center"><Minus aria-hidden="true" className="w-4 h-4 text-muted-foreground/40 inline" /><span className="sr-only">Not included</span></td>
+                    <td className="text-center"><Minus aria-hidden="true" className="w-4 h-4 text-muted-foreground/40 inline" /><span className="sr-only">Not included</span></td>
+                    <td className="text-center"><Minus aria-hidden="true" className="w-4 h-4 text-muted-foreground/40 inline" /><span className="sr-only">Not included</span></td>
+                    <td className="text-center"><CheckCircle2 aria-hidden="true" className="w-4 h-4 text-emerald-500 inline" /><span className="sr-only">Included</span></td>
                   </tr>
                   <tr>
-                    <td className="!px-6 text-foreground">Database masking</td>
-                    <td className="text-center"><Minus className="w-4 h-4 text-muted-foreground/40 inline" /></td>
-                    <td className="text-center"><Minus className="w-4 h-4 text-muted-foreground/40 inline" /></td>
-                    <td className="text-center"><Minus className="w-4 h-4 text-muted-foreground/40 inline" /></td>
-                    <td className="text-center"><CheckCircle2 className="w-4 h-4 text-emerald-500 inline" /></td>
+                    <th scope="row" className="!px-6 py-3.5 text-foreground text-left font-normal">Database masking</th>
+                    <td className="text-center"><Minus aria-hidden="true" className="w-4 h-4 text-muted-foreground/40 inline" /><span className="sr-only">Not included</span></td>
+                    <td className="text-center"><Minus aria-hidden="true" className="w-4 h-4 text-muted-foreground/40 inline" /><span className="sr-only">Not included</span></td>
+                    <td className="text-center"><Minus aria-hidden="true" className="w-4 h-4 text-muted-foreground/40 inline" /><span className="sr-only">Not included</span></td>
+                    <td className="text-center"><CheckCircle2 aria-hidden="true" className="w-4 h-4 text-emerald-500 inline" /><span className="sr-only">Included</span></td>
                   </tr>
                   <tr>
-                    <td className="!px-6 text-foreground">Unlimited tenants / sites / users</td>
-                    <td className="text-center"><Minus className="w-4 h-4 text-muted-foreground/40 inline" /></td>
-                    <td className="text-center"><Minus className="w-4 h-4 text-muted-foreground/40 inline" /></td>
-                    <td className="text-center"><Minus className="w-4 h-4 text-muted-foreground/40 inline" /></td>
-                    <td className="text-center"><CheckCircle2 className="w-4 h-4 text-emerald-500 inline" /></td>
+                    <th scope="row" className="!px-6 py-3.5 text-foreground text-left font-normal">Unlimited tenants / sites / users</th>
+                    <td className="text-center"><Minus aria-hidden="true" className="w-4 h-4 text-muted-foreground/40 inline" /><span className="sr-only">Not included</span></td>
+                    <td className="text-center"><Minus aria-hidden="true" className="w-4 h-4 text-muted-foreground/40 inline" /><span className="sr-only">Not included</span></td>
+                    <td className="text-center"><Minus aria-hidden="true" className="w-4 h-4 text-muted-foreground/40 inline" /><span className="sr-only">Not included</span></td>
+                    <td className="text-center"><CheckCircle2 aria-hidden="true" className="w-4 h-4 text-emerald-500 inline" /><span className="sr-only">Included</span></td>
                   </tr>
                 </tbody>
               </table>
@@ -341,7 +341,7 @@ export default function SplashPage() {
           <div className="text-center mb-16">
             <p className="text-sm font-semibold text-primary uppercase tracking-widest mb-3">Administration</p>
             <h2 className="text-3xl md:text-5xl font-bold tracking-tight mb-4">Built for Mission-Critical M365</h2>
-            <p className="text-lg text-muted-foreground max-w-2xl mx-auto">Multi-tenancy, role-based access, and full audit trails designed for organisations where Microsoft 365 is mission-critical infrastructure.</p>
+            <p className="text-lg text-muted-foreground max-w-2xl mx-auto">Multi-tenancy, role-based access, and full audit trails designed for organizations where Microsoft 365 is mission-critical infrastructure.</p>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
             <div className="glass-panel p-6 rounded-2xl text-center">
@@ -349,14 +349,14 @@ export default function SplashPage() {
                 <Building2 className="w-6 h-6" />
               </div>
               <h3 className="font-semibold mb-2">Multi-Tenant by Design</h3>
-              <p className="text-sm text-muted-foreground">MSP, Customer, and Hybrid organisations can connect unlimited tenants, with strict data isolation at the organisation boundary and consent-coded cross-tenant access.</p>
+              <p className="text-sm text-muted-foreground">MSP, Customer, and Hybrid organizations can connect unlimited tenants, with strict data isolation at the organization boundary and consent-coded cross-tenant access.</p>
             </div>
             <div className="glass-panel p-6 rounded-2xl text-center">
               <div className="w-12 h-12 rounded-xl bg-secondary/10 flex items-center justify-center text-secondary mx-auto mb-4 border border-secondary/20">
                 <Users className="w-6 h-6" />
               </div>
               <h3 className="font-semibold mb-2">Six-Role RBAC</h3>
-              <p className="text-sm text-muted-foreground">Platform Owner, Tenant Admin, Governance Admin, Operator, Viewer, and Read-Only Auditor — per-organisation role assignments enforced on every API route.</p>
+              <p className="text-sm text-muted-foreground">Platform Owner, Tenant Admin, Governance Admin, Operator, Viewer, and Read-Only Auditor — per-organization role assignments enforced on every API route.</p>
             </div>
             <div className="glass-panel p-6 rounded-2xl text-center">
               <div className="w-12 h-12 rounded-xl bg-emerald-500/10 flex items-center justify-center text-emerald-500 mx-auto mb-4 border border-emerald-500/20">
