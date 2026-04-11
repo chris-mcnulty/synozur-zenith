@@ -6,6 +6,9 @@ Zenith is an MVP Microsoft 365 governance platform designed for The Synozur Alli
 ## User Preferences
 I prefer clear and direct communication. When making changes, please explain the reasoning and impact before proceeding. I value iterative development and would like to be involved in key decision points. Do not make changes to the `shared/schema.ts` file without explicit approval. Always keep the Entra App Registration permissions documented in this file.
 
+## Related Codebases
+- **Orbit**: https://github.com/chris-mcnulty/synozur-orbit — full read access granted. This is a separate Synozur product in the same family as Zenith.
+
 ## System Architecture
 
 ### UI/UX Decisions
