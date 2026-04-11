@@ -5,6 +5,7 @@ import { storage } from "../storage";
 import { evaluatePolicy, evaluationResultsToCopilotRules, formatPolicyBagValue, type EvaluationContext } from "../services/policy-engine";
 import { getOrgTenantConnectionIds, isWorkspaceInScope } from "./scope-helpers";
 import { requireFeature } from "../services/feature-gate";
+import { scoreWorkspaces, scoreWorkspace } from "../services/copilot-scoring";
 
 const router = Router();
 
@@ -501,6 +502,124 @@ router.get("/api/workspaces/:id/policy-results", requireAuth(), requireFeature("
     passCount: allResults.filter(r => r.ruleResult === "PASS").length,
     failCount: allResults.filter(r => r.ruleResult === "FAIL").length,
   });
+});
+
+// ── Copilot Readiness Dashboard (BL-006) ──
+
+/**
+ * Org-wide Copilot readiness dashboard — summary, full workspace list, and
+ * remediation queue. Service-plan gated (Professional+).
+ */
+router.get("/api/copilot-readiness", requireAuth(), requireFeature("copilotReadiness"), async (req: AuthenticatedRequest, res) => {
+  try {
+    const isPlatformOwner = req.user?.role === ZENITH_ROLES.PLATFORM_OWNER;
+    const orgId = isPlatformOwner
+      ? ((req.query.orgId as string | undefined) || req.activeOrganizationId || req.user?.organizationId)
+      : (req.activeOrganizationId || req.user?.organizationId);
+
+    if (!orgId) {
+      return res.json({
+        summary: {
+          totalWorkspaces: 0,
+          evaluated: 0,
+          excluded: 0,
+          ready: 0,
+          nearlyReady: 0,
+          atRisk: 0,
+          blocked: 0,
+          averageScore: 0,
+          readinessPercent: 0,
+          blockerBreakdown: [],
+        },
+        workspaces: [],
+        remediationQueue: [],
+      });
+    }
+
+    const tenants = await storage.getTenantConnections(orgId);
+    const tenantIds = tenants.map(t => t.id);
+
+    let allWorkspaces: Awaited<ReturnType<typeof storage.getWorkspaces>> = [];
+    if (tenantIds.length > 0) {
+      const perTenantResults = await Promise.all(
+        tenantIds.map(tid => storage.getWorkspaces(undefined, tid)),
+      );
+      allWorkspaces = perTenantResults.flat();
+    }
+
+    // Optional tenant filter
+    const tenantFilter = req.query.tenantConnectionId as string | undefined;
+    if (tenantFilter) {
+      allWorkspaces = allWorkspaces.filter(w => w.tenantConnectionId === tenantFilter);
+    }
+
+    const result = scoreWorkspaces(allWorkspaces);
+    res.json(result);
+  } catch (err: any) {
+    console.error("[copilot-readiness] Error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * Per-workspace readiness breakdown — criteria, score, and remediation steps
+ * for a single workspace.
+ */
+router.get("/api/workspaces/:id/copilot-readiness", requireAuth(), requireFeature("copilotReadiness"), async (req: AuthenticatedRequest, res) => {
+  if (!(await isWorkspaceInScope(req, req.params.id))) {
+    return res.status(404).json({ message: "Workspace not found" });
+  }
+  const workspace = await storage.getWorkspace(req.params.id);
+  if (!workspace) return res.status(404).json({ message: "Workspace not found" });
+  res.json(scoreWorkspace(workspace));
+});
+
+/**
+ * Toggle the explicit Copilot-exclusion flag on a workspace. The value lives
+ * inside the existing `customFields` jsonb column to avoid a schema change.
+ */
+router.patch("/api/workspaces/:id/copilot-exclusion", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN), requireFeature("copilotReadiness"), async (req: AuthenticatedRequest, res) => {
+  if (!(await isWorkspaceInScope(req, req.params.id))) {
+    return res.status(404).json({ message: "Workspace not found" });
+  }
+  const workspace = await storage.getWorkspace(req.params.id);
+  if (!workspace) return res.status(404).json({ message: "Workspace not found" });
+
+  const { excluded, reason } = req.body as { excluded?: boolean; reason?: string };
+  if (typeof excluded !== "boolean") {
+    return res.status(400).json({ message: "Body must include `excluded: boolean`." });
+  }
+
+  const existingFields = (workspace.customFields as Record<string, any>) || {};
+  const nextFields: Record<string, any> = { ...existingFields };
+  if (excluded) {
+    nextFields.copilot_excluded = true;
+    if (reason) nextFields.copilot_exclusion_reason = reason;
+  } else {
+    delete nextFields.copilot_excluded;
+    delete nextFields.copilot_exclusion_reason;
+  }
+
+  const updated = await storage.updateWorkspace(req.params.id, { customFields: nextFields } as any);
+
+  await storage.createAuditEntry({
+    userId: req.user?.id || null,
+    userEmail: req.user?.email || null,
+    action: excluded ? 'COPILOT_EXCLUDED' : 'COPILOT_EXCLUSION_REMOVED',
+    resource: 'workspace',
+    resourceId: req.params.id,
+    organizationId: req.user?.organizationId || null,
+    tenantConnectionId: workspace.tenantConnectionId || null,
+    details: {
+      workspaceName: workspace.displayName,
+      excluded,
+      reason: reason || null,
+    },
+    result: 'SUCCESS',
+    ipAddress: req.ip || null,
+  });
+
+  res.json(updated ? scoreWorkspace(updated) : null);
 });
 
 export default router;

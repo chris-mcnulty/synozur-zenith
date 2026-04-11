@@ -146,6 +146,7 @@ router.get("/api/audit-log", requireAuth(), requireRole(ZENITH_ROLES.PLATFORM_OW
 
     const {
       action,
+      resource,
       userId,
       userEmail,
       result,
@@ -165,6 +166,7 @@ router.get("/api/audit-log", requireAuth(), requireRole(ZENITH_ROLES.PLATFORM_OW
     const { rows, total } = await storage.getAuditLog({
       orgId,
       action: action || undefined,
+      resource: resource || undefined,
       userId: userId || undefined,
       userEmail: userEmail || undefined,
       result: result || undefined,

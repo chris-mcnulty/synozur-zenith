@@ -44,6 +44,7 @@ import {
   Lock,
   Mail,
   Network,
+  Sparkles,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -139,7 +140,8 @@ const navGroups: NavGroup[] = [
   {
     label: "Insights & Intelligence",
     items: [
-      { name: "AI & Copilot", href: "/app/ai-copilot", icon: BrainCircuit, isMock: true },
+      { name: "Copilot Readiness", href: "/app/copilot-readiness", icon: Sparkles, badge: "Pro+" },
+      { name: "AI Assistant", href: "/app/ai-copilot", icon: BrainCircuit, isMock: true },
       { name: "Reports", href: "/app/reports", icon: BarChart3, isMock: true },
     ]
   }

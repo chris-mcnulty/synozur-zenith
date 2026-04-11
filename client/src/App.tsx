@@ -28,6 +28,7 @@ import LifecycleReviewHub from "./pages/app/lifecycle-review";
 import ApprovalsQueue from "./pages/app/approvals";
 import DiscoverDashboard from "./pages/app/discover";
 import AICopilotIntegration from "./pages/app/ai-copilot";
+import CopilotReadinessPage from "./pages/app/copilot-readiness";
 import ServicePlansPage from "./pages/app/admin/service-plans";
 import UserManagementPage from "./pages/app/admin/users";
 import OrganizationSettingsPage from "./pages/app/admin/organization";
@@ -143,6 +144,7 @@ function AppRoutes() {
         <Route path="/app/lifecycle" component={LifecycleReviewHub} />
         <Route path="/app/approvals" component={ApprovalsQueue} />
         <Route path="/app/ai-copilot" component={AICopilotIntegration} />
+        <Route path="/app/copilot-readiness" component={CopilotReadinessPage} />
         <Route path="/app/discover" component={DiscoverDashboard} />
         <Route path="/app/admin/plans">
           <RoleGuard minRole="tenant_admin"><ServicePlansPage /></RoleGuard>

@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { z } from "zod";
 import { storage } from "../storage";
 import { insertWorkspaceSchema, insertProvisioningRequestSchema, type ServicePlanTier, ZENITH_ROLES } from "@shared/schema";
 import { fetchSharePointSites, fetchSiteUsageReport, fetchSiteDriveOwner, fetchSiteAnalytics, fetchSiteGroupOwners, fetchSiteCollectionAdmins, getAppToken, writeSitePropertyBag, requestSiteReindex, fetchSitePropertyBag, fetchSensitivityLabels, fetchRetentionLabels, fetchHubSites, fetchSiteHubAssociation, fetchHubSitesViaSearch, applySensitivityLabelToSite, removeSensitivityLabelFromSite, joinHubSite, leaveHubSite, fetchSiteLockState, fetchSiteArchiveStatus, batchToggleNoScript, fetchSiteDocumentLibraries, enumerateSiteDocumentLibraries, fetchLibraryDetails, fetchSiteTelemetry, fetchContentTypes, createSharePointSite, createM365Group, createTeam, assignSensitivityLabelToGroup, resolveOwnerIds, archiveSite, unarchiveSite } from "../services/graph";
@@ -8,6 +9,7 @@ import { requireAuth, requireRole, requirePermission, type AuthenticatedRequest 
 import { computeWritebackHash, computeSpoSyncHash } from "../services/writeback-hash";
 import { decryptToken } from "../utils/encryption";
 import { evaluatePolicy, evaluationResultsToCopilotRules, formatPolicyBagValue, DEFAULT_COPILOT_READINESS_RULES, type EvaluationContext } from "../services/policy-engine";
+import { BUILT_IN_TEMPLATES, getTemplateById, deriveRetentionPolicy, validateProvisioningPayload, validateGovernedName } from "../services/provisioning-templates";
 import type { Workspace, PolicyOutcome, GovernancePolicy } from "@shared/schema";
 import { getActiveOrgId, getOrgTenantConnectionIds, isWorkspaceInScope } from "./scope-helpers";
 
@@ -275,18 +277,61 @@ router.patch("/api/workspaces/:id", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, Z
   const existing = await storage.getWorkspace(req.params.id);
   if (!existing) return res.status(404).json({ message: "Workspace not found" });
 
-  const effectiveSensitivity = 'sensitivity' in req.body ? req.body.sensitivity : existing.sensitivity;
-  const effectiveExternalSharing = 'externalSharing' in req.body ? req.body.externalSharing : existing.externalSharing;
-  const effectiveCopilotReady = 'copilotReady' in req.body ? req.body.copilotReady : existing.copilotReady;
+  const patchBodySchema = insertWorkspaceSchema.partial().extend({
+    sensitivity: z.enum(["PUBLIC", "INTERNAL", "CONFIDENTIAL", "HIGHLY_CONFIDENTIAL"]).optional(),
+    externalSharing: z.boolean().optional(),
+    copilotReady: z.boolean().optional(),
+  });
+  const bodyParsed = patchBodySchema.safeParse(req.body);
+  if (!bodyParsed.success) {
+    return res.status(400).json({ message: bodyParsed.error.message });
+  }
+  const body = bodyParsed.data;
+
+  const effectiveSensitivity = 'sensitivity' in body ? body.sensitivity : existing.sensitivity;
+  const effectiveExternalSharing = 'externalSharing' in body ? body.externalSharing : existing.externalSharing;
+  const effectiveCopilotReady = 'copilotReady' in body ? body.copilotReady : existing.copilotReady;
 
   if (effectiveSensitivity === 'HIGHLY_CONFIDENTIAL') {
     if (effectiveExternalSharing === true) {
+      await storage.createAuditEntry({
+        userId: req.user?.id || null,
+        userEmail: req.user?.email || null,
+        action: 'SENSITIVITY_POLICY_VIOLATION',
+        resource: 'workspace',
+        resourceId: req.params.id,
+        organizationId: req.user?.organizationId || null,
+        tenantConnectionId: existing.tenantConnectionId || null,
+        details: {
+          workspaceName: existing.displayName,
+          violation: 'external_sharing_on_highly_confidential',
+          attemptedValue: true,
+        },
+        result: 'DENIED',
+        ipAddress: req.ip || null,
+      });
       return res.status(400).json({
         error: 'SENSITIVITY_POLICY_VIOLATION',
         message: 'External sharing cannot be enabled on Highly Confidential workspaces. Disable external sharing or change the sensitivity label first.',
       });
     }
     if (effectiveCopilotReady === true) {
+      await storage.createAuditEntry({
+        userId: req.user?.id || null,
+        userEmail: req.user?.email || null,
+        action: 'SENSITIVITY_POLICY_VIOLATION',
+        resource: 'workspace',
+        resourceId: req.params.id,
+        organizationId: req.user?.organizationId || null,
+        tenantConnectionId: existing.tenantConnectionId || null,
+        details: {
+          workspaceName: existing.displayName,
+          violation: 'copilot_ready_on_highly_confidential',
+          attemptedValue: true,
+        },
+        result: 'DENIED',
+        ipAddress: req.ip || null,
+      });
       return res.status(400).json({
         error: 'SENSITIVITY_POLICY_VIOLATION',
         message: 'Copilot Ready cannot be enabled on Highly Confidential workspaces. Change the sensitivity label first.',
@@ -294,8 +339,8 @@ router.patch("/api/workspaces/:id", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, Z
     }
   }
 
-  const sensitivityLabelChanged = 'sensitivityLabelId' in req.body &&
-    req.body.sensitivityLabelId !== existing.sensitivityLabelId;
+  const sensitivityLabelChanged = 'sensitivityLabelId' in body &&
+    body.sensitivityLabelId !== existing.sensitivityLabelId;
 
   let labelSyncResult: { pushed: boolean; error?: string } | undefined;
   let labelWritebackSkipped = false;
@@ -311,9 +356,9 @@ router.patch("/api/workspaces/:id", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, Z
       labelWritebackSkipped = true;
       console.log(`[label-push] Skipping sensitivity label CSOM for ${existing.displayName} — plan ${plan} does not include m365WriteBack`);
     } else {
-      if (req.body.sensitivityLabelId && labelConn) {
+      if (body.sensitivityLabelId && labelConn) {
         const labels = await storage.getSensitivityLabelsByTenantId(labelConn.tenantId);
-        const targetLabel = labels.find(l => l.labelId === req.body.sensitivityLabelId);
+        const targetLabel = labels.find(l => l.labelId === body.sensitivityLabelId);
         if (!targetLabel) {
           return res.status(400).json({ message: "Sensitivity label not found in synced labels." });
         }
@@ -329,11 +374,11 @@ router.patch("/api/workspaces/:id", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, Z
           if (!spoToken) {
             labelSyncResult = { pushed: false, error: "Could not acquire a SharePoint token for your account. Please sign out and sign back in with SSO. You must be a SharePoint administrator in the tenant to apply labels." };
             console.warn(`[label-push] No delegated SPO token for user ${req.user!.email} on ${existing.displayName}. Label saved locally.`);
-          } else if (req.body.sensitivityLabelId) {
-            const result = await applySensitivityLabelToSite(spoToken, existing.siteUrl, req.body.sensitivityLabelId, req.user!.id);
+          } else if (body.sensitivityLabelId) {
+            const result = await applySensitivityLabelToSite(spoToken, existing.siteUrl, body.sensitivityLabelId, req.user!.id);
             labelSyncResult = { pushed: result.success, error: result.error };
             if (result.success) {
-              console.log(`[label-push] Applied sensitivity label ${req.body.sensitivityLabelId} to ${existing.siteUrl} via CSOM for workspace ${existing.displayName}`);
+              console.log(`[label-push] Applied sensitivity label ${body.sensitivityLabelId} to ${existing.siteUrl} via CSOM for workspace ${existing.displayName}`);
             } else {
               console.error(`[label-push] Failed to apply label to ${existing.siteUrl}: ${result.error}`);
               return res.status(502).json({ message: `Failed to apply label to site: ${result.error}`, labelSyncResult });
@@ -364,11 +409,11 @@ router.patch("/api/workspaces/:id", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, Z
   }
 
   const writebackFields = ['sensitivityLabelId', 'department', 'costCenter', 'projectCode'];
-  const hasWritebackChange = writebackFields.some(f => f in req.body);
+  const hasWritebackChange = writebackFields.some(f => f in body);
 
-  const updates = { ...req.body };
+  const updates = { ...body };
   if (hasWritebackChange) {
-    const merged = { ...existing, ...req.body };
+    const merged = { ...existing, ...body };
     updates.localHash = computeWritebackHash({
       sensitivityLabelId: merged.sensitivityLabelId,
       department: merged.department,
@@ -380,10 +425,10 @@ router.patch("/api/workspaces/:id", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, Z
 
   if (labelSyncResult?.pushed) {
     const propertyBagFields = ['department', 'costCenter', 'projectCode'];
-    const hasPropertyBagChange = propertyBagFields.some(f => f in req.body && req.body[f] !== existing[f as keyof typeof existing]);
+    const hasPropertyBagChange = propertyBagFields.some(f => f in body && body[f] !== existing[f as keyof typeof existing]);
     if (hasPropertyBagChange) {
       updates.spoSyncHash = computeWritebackHash({
-        sensitivityLabelId: req.body.sensitivityLabelId ?? existing.sensitivityLabelId,
+        sensitivityLabelId: body.sensitivityLabelId ?? existing.sensitivityLabelId,
         department: existing.department,
         costCenter: existing.costCenter,
         projectCode: existing.projectCode,
@@ -461,9 +506,9 @@ router.patch("/api/workspaces/:id", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, Z
   const finalWorkspace = await storage.getWorkspace(req.params.id);
 
   const metadataFields = ['department', 'costCenter', 'projectCode', 'description'];
-  const hasMetadataChange = metadataFields.some(f => f in req.body && req.body[f] !== (existing as any)[f]);
-  const hasSharingChange = 'externalSharing' in req.body && req.body.externalSharing !== existing.externalSharing;
-  const hasArchiveChange = 'isArchived' in req.body && req.body.isArchived === true && !existing.isArchived;
+  const hasMetadataChange = metadataFields.some(f => f in body && body[f] !== (existing as any)[f]);
+  const hasSharingChange = 'externalSharing' in body && body.externalSharing !== existing.externalSharing;
+  const hasArchiveChange = 'isArchived' in body && body.isArchived === true && !existing.isArchived;
 
   if (sensitivityLabelChanged) {
     await storage.createAuditEntry({
@@ -477,7 +522,7 @@ router.patch("/api/workspaces/:id", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, Z
       details: {
         workspaceName: existing.displayName,
         previousLabelId: existing.sensitivityLabelId,
-        newLabelId: req.body.sensitivityLabelId,
+        newLabelId: body.sensitivityLabelId,
         pushed: labelSyncResult?.pushed,
       },
       result: labelSyncResult?.pushed === false && labelSyncResult?.error ? 'FAILURE' : 'SUCCESS',
@@ -488,8 +533,8 @@ router.patch("/api/workspaces/:id", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, Z
   if (hasMetadataChange) {
     const changedFields: Record<string, { from: any; to: any }> = {};
     for (const f of metadataFields) {
-      if (f in req.body && req.body[f] !== (existing as any)[f]) {
-        changedFields[f] = { from: (existing as any)[f], to: req.body[f] };
+      if (f in body && body[f] !== (existing as any)[f]) {
+        changedFields[f] = { from: (existing as any)[f], to: body[f] };
       }
     }
     await storage.createAuditEntry({
@@ -518,7 +563,7 @@ router.patch("/api/workspaces/:id", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, Z
       details: {
         workspaceName: existing.displayName,
         previousValue: existing.externalSharing,
-        newValue: req.body.externalSharing,
+        newValue: body.externalSharing,
       },
       result: 'SUCCESS',
       ipAddress: req.ip || null,
@@ -537,6 +582,26 @@ router.patch("/api/workspaces/:id", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, Z
       details: {
         workspaceName: existing.displayName,
         siteUrl: existing.siteUrl,
+      },
+      result: 'SUCCESS',
+      ipAddress: req.ip || null,
+    });
+  }
+
+  const hasSensitivityChange = 'sensitivity' in body && body.sensitivity !== existing.sensitivity;
+  if (hasSensitivityChange) {
+    await storage.createAuditEntry({
+      userId: req.user?.id || null,
+      userEmail: req.user?.email || null,
+      action: 'SENSITIVITY_CHANGED',
+      resource: 'workspace',
+      resourceId: req.params.id,
+      organizationId: req.user?.organizationId || null,
+      tenantConnectionId: existing.tenantConnectionId || null,
+      details: {
+        workspaceName: existing.displayName,
+        previousValue: existing.sensitivity,
+        newValue: body.sensitivity,
       },
       result: 'SUCCESS',
       ipAddress: req.ip || null,
@@ -1238,9 +1303,44 @@ router.get("/api/provisioning-requests/:id", requireAuth(), requireFeature("self
   res.json(request);
 });
 
+// ── Provisioning Templates (BL-005) ──
+router.get("/api/provisioning-templates", requireRole(ZENITH_ROLES.OPERATOR, ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN), requireFeature("selfServicePortal"), async (_req: AuthenticatedRequest, res) => {
+  res.json(BUILT_IN_TEMPLATES);
+});
+
+router.get("/api/provisioning-templates/:id", requireRole(ZENITH_ROLES.OPERATOR, ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN), requireFeature("selfServicePortal"), async (req: AuthenticatedRequest, res) => {
+  const template = getTemplateById(req.params.id);
+  if (!template) return res.status(404).json({ message: "Template not found" });
+  res.json(template);
+});
+
 router.post("/api/provisioning-requests", requireRole(ZENITH_ROLES.OPERATOR, ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN), requireFeature("selfServicePortal"), async (req: AuthenticatedRequest, res) => {
   const parsed = insertProvisioningRequestSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ message: parsed.error.message });
+
+  // Optional template resolution — when a templateId is supplied, validate the
+  // payload against the template's invariants so mismatches are caught early
+  // rather than at Graph write time.
+  const templateId = typeof req.body.templateId === "string" ? req.body.templateId : null;
+  const template = templateId ? getTemplateById(templateId) : undefined;
+  if (templateId && !template) {
+    return res.status(400).json({ message: `Unknown provisioning template "${templateId}".` });
+  }
+
+  const templateViolation = validateProvisioningPayload({
+    sensitivity: parsed.data.sensitivity,
+    externalSharing: parsed.data.externalSharing,
+    siteOwners: parsed.data.siteOwners,
+  }, template);
+  if (templateViolation) {
+    return res.status(400).json({ message: templateViolation });
+  }
+
+  if (template) {
+    const nameErr = validateGovernedName(parsed.data.governedName, template);
+    if (nameErr) return res.status(400).json({ message: nameErr });
+  }
+
   const orgId = req.activeOrganizationId || req.user?.organizationId || null;
   const request = await storage.createProvisioningRequest({ ...parsed.data, organizationId: orgId });
   await storage.createAuditEntry({
@@ -1251,7 +1351,14 @@ router.post("/api/provisioning-requests", requireRole(ZENITH_ROLES.OPERATOR, ZEN
     resourceId: request.id,
     organizationId: orgId,
     tenantConnectionId: request.tenantConnectionId || null,
-    details: { workspaceName: request.workspaceName, workspaceType: request.workspaceType, sensitivity: request.sensitivity },
+    details: {
+      workspaceName: request.workspaceName,
+      workspaceType: request.workspaceType,
+      sensitivity: request.sensitivity,
+      templateId: template?.id,
+      templateName: template?.name,
+      derivedRetention: deriveRetentionPolicy(request.projectType, request.sensitivity),
+    },
     result: 'SUCCESS',
     ipAddress: req.ip || null,
   });
@@ -1448,13 +1555,14 @@ router.patch("/api/provisioning-requests/:id/status", requireRole(ZENITH_ROLES.T
       try {
         const existingByUrl = (await storage.getWorkspaces()).find(w => w.siteUrl === siteUrl);
         if (!existingByUrl) {
+          const derivedRetention = deriveRetentionPolicy(existing.projectType, existing.sensitivity);
           await storage.createWorkspace({
             displayName: existing.governedName,
             type: existing.workspaceType === "COMMUNICATION_SITE" ? "COMMUNICATION_SITE" : "TEAM_SITE",
             teamsConnected: existing.workspaceType === "TEAM_SITE",
             projectType: existing.projectType as any,
             sensitivity: existing.sensitivity as any,
-            retentionPolicy: "Default 7 Year",
+            retentionPolicy: derivedRetention,
             metadataStatus: "COMPLETE",
             copilotReady: false,
             owners: siteOwners.length,
@@ -1464,7 +1572,7 @@ router.patch("/api/provisioning-requests/:id/status", requireRole(ZENITH_ROLES.T
             tenantConnectionId,
             externalSharing: existing.externalSharing,
           });
-          console.log(`[provisioning] Created workspace inventory entry for ${siteUrl}`);
+          console.log(`[provisioning] Created workspace inventory entry for ${siteUrl} with retention "${derivedRetention}"`);
         }
       } catch (invErr: any) {
         console.warn(`[provisioning] Could not upsert workspace inventory: ${invErr.message}`);

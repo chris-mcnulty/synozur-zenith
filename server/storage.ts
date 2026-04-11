@@ -224,6 +224,7 @@ export interface IStorage {
   getAuditLog(filters?: {
     orgId?: string;
     action?: string;
+    resource?: string;
     userId?: string;
     userEmail?: string;
     result?: string;
@@ -1257,6 +1258,7 @@ export class DatabaseStorage implements IStorage {
   async getAuditLog(filters: {
     orgId?: string;
     action?: string;
+    resource?: string;
     userId?: string;
     userEmail?: string;
     result?: string;
@@ -1265,11 +1267,12 @@ export class DatabaseStorage implements IStorage {
     limit?: number;
     offset?: number;
   } = {}): Promise<{ rows: AuditLog[]; total: number }> {
-    const { orgId, action, userId, userEmail, result, startDate, endDate, limit = 100, offset = 0 } = filters;
+    const { orgId, action, resource, userId, userEmail, result, startDate, endDate, limit = 100, offset = 0 } = filters;
     const conditions: any[] = [];
 
     if (orgId) conditions.push(eq(auditLog.organizationId, orgId));
     if (action) conditions.push(eq(auditLog.action, action));
+    if (resource) conditions.push(eq(auditLog.resource, resource));
     if (userId) conditions.push(eq(auditLog.userId, userId));
     if (userEmail) conditions.push(ilike(auditLog.userEmail, `%${userEmail}%`));
     if (result) conditions.push(eq(auditLog.result, result));
