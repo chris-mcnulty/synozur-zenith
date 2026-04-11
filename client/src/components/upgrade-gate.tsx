@@ -1,10 +1,9 @@
-import { Link } from "wouter";
 import { useServicePlan } from "@/hooks/use-service-plan";
 import { PLAN_FEATURES, type ServicePlanTier } from "@shared/schema";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Lock, ArrowUpRight } from "lucide-react";
+import { Lock, Mail } from "lucide-react";
 
 interface UpgradeGateProps {
   feature: keyof typeof PLAN_FEATURES.TRIAL;
@@ -43,11 +42,11 @@ export function UpgradeGate({ feature, children, fallback, inline }: UpgradeGate
       <div className="flex items-center gap-2 text-sm text-muted-foreground">
         <Lock className="w-3.5 h-3.5" />
         <span>{info.label} requires {info.minPlan} plan or higher</span>
-        <Link href="/app/admin/service-plans">
-          <Button variant="link" size="sm" className="h-auto p-0 text-primary gap-1">
-            Upgrade <ArrowUpRight className="w-3 h-3" />
-          </Button>
-        </Link>
+        <Button asChild variant="link" size="sm" className="h-auto p-0 text-primary gap-1">
+          <a href="https://www.synozur.com/contact" target="_blank" rel="noopener noreferrer">
+            Contact us <Mail className="w-3 h-3" />
+          </a>
+        </Button>
       </div>
     );
   }
@@ -67,11 +66,11 @@ export function UpgradeGate({ feature, children, fallback, inline }: UpgradeGate
             </p>
           </div>
         </div>
-        <Link href="/app/admin/service-plans">
-          <Button size="sm" className="gap-1.5 shadow-sm">
-            Upgrade Plan <ArrowUpRight className="w-3.5 h-3.5" />
-          </Button>
-        </Link>
+        <Button asChild size="sm" className="gap-1.5 shadow-sm">
+          <a href="https://www.synozur.com/contact" target="_blank" rel="noopener noreferrer">
+            Contact Us <Mail className="w-3.5 h-3.5" />
+          </a>
+        </Button>
       </CardContent>
     </Card>
   );

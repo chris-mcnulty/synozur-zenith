@@ -221,7 +221,6 @@ export default function AppShell({ children }: AppShellProps) {
     { name: "Tenant Connections", href: "/app/admin/tenants", icon: Cloud, minRole: "tenant_admin" },
     { name: "Data Dictionaries", href: "/app/admin/data-dictionaries", icon: BookMarked, minRole: "tenant_admin" },
     { name: "Custom Fields", href: "/app/admin/custom-fields", icon: Settings, minRole: "tenant_admin" },
-    { name: "Service Plans", href: "/app/admin/plans", icon: CreditCard, minRole: "tenant_admin" },
   ];
 
   const platformAdminItems: Array<{ name: string; href: string; icon: any; minRole: string }> = [

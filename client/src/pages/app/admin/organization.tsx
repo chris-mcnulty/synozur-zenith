@@ -37,7 +37,7 @@ import {
   EyeOff,
   CheckCircle2,
 } from "lucide-react";
-import { Link, useLocation } from "wouter";
+import { useLocation } from "wouter";
 import { useServicePlan } from "@/hooks/use-service-plan";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient } from "@/lib/queryClient";
@@ -609,9 +609,9 @@ export default function OrganizationSettingsPage() {
                   {plan === 'TRIAL' ? 'Trial (No M365 Write-Back)' : 'Active Subscription'}
                 </div>
               </div>
-              <Link href="/app/admin/service-plans">
-                <Button variant="outline" className="w-full mt-4">{plan === 'TRIAL' ? 'Upgrade Plan' : 'Manage Plan'}</Button>
-              </Link>
+              <Button asChild variant="outline" className="w-full mt-4">
+                <a href="https://www.synozur.com/contact" target="_blank" rel="noopener noreferrer">{plan === 'TRIAL' ? 'Contact Us to Upgrade' : 'Contact Us to Manage Plan'}</a>
+              </Button>
             </CardContent>
           </Card>
           

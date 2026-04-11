@@ -756,7 +756,7 @@ function AboutPanel() {
         </h3>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <a
-            href="mailto:support@synozur.com"
+            href="mailto:contactus@synozur.com"
             className="flex items-center gap-3 p-4 rounded-xl border border-border/50 bg-card/40 hover:bg-card/70 hover:border-primary/30 transition-all group"
           >
             <div className="w-9 h-9 rounded-lg bg-primary/10 flex items-center justify-center">
@@ -764,7 +764,7 @@ function AboutPanel() {
             </div>
             <div>
               <div className="font-medium text-sm group-hover:text-primary transition-colors">Email Support</div>
-              <div className="text-xs text-muted-foreground">support@synozur.com</div>
+              <div className="text-xs text-muted-foreground">contactus@synozur.com</div>
             </div>
             <ExternalLink className="w-3.5 h-3.5 text-muted-foreground/40 ml-auto" />
           </a>
