@@ -1038,21 +1038,43 @@ router.patch("/api/workspaces/bulk/update", requireRole(ZENITH_ROLES.GOVERNANCE_
   if (!Array.isArray(ids) || ids.length === 0) {
     return res.status(400).json({ message: "ids array is required" });
   }
+  if (!updates || typeof updates !== 'object' || Array.isArray(updates)) {
+    return res.status(400).json({ message: "updates must be an object" });
+  }
 
-  // Validate sensitivity policy for each target workspace's post-update state.
-  // Skip the per-workspace check when the update cannot possibly trigger a violation.
-  const updatesObj = (updates || {}) as Record<string, any>;
+  // Fetch all target workspaces in parallel once; reuse for scope + policy checks
+  // to avoid repeated per-workspace DB round-trips.
+  const workspaceResults = await Promise.all(ids.map(id => storage.getWorkspace(id)));
+  const workspaceMap = new Map<string, typeof workspaceResults[number]>();
+  for (let i = 0; i < ids.length; i++) {
+    const ws = workspaceResults[i];
+    if (ws) workspaceMap.set(ids[i], ws);
+  }
+
+  // Scope validation first so we never leak workspace names for out-of-scope IDs.
+  const allowedIds = await getOrgTenantConnectionIds(req);
+  if (allowedIds !== null) {
+    for (const wsId of ids) {
+      const ws = workspaceMap.get(wsId);
+      if (!ws?.tenantConnectionId || !allowedIds.includes(ws.tenantConnectionId)) {
+        return res.status(403).json({ message: "One or more workspaces are outside your organization scope" });
+      }
+    }
+  }
+
+  // Sensitivity policy validation using pre-fetched workspaces.
+  // Skip when the update cannot possibly trigger a violation.
   const couldViolatePolicy =
-    updatesObj.sensitivity === 'HIGHLY_CONFIDENTIAL' ||
-    updatesObj.externalSharing === true ||
-    updatesObj.copilotReady === true;
+    updates.sensitivity === 'HIGHLY_CONFIDENTIAL' ||
+    updates.externalSharing === true ||
+    updates.copilotReady === true;
   if (couldViolatePolicy) {
     for (const wsId of ids) {
-      const existing = await storage.getWorkspace(wsId);
+      const existing = workspaceMap.get(wsId);
       if (!existing) continue;
-      const effectiveSensitivity = 'sensitivity' in updatesObj ? updatesObj.sensitivity : existing.sensitivity;
-      const effectiveExternalSharing = 'externalSharing' in updatesObj ? updatesObj.externalSharing : existing.externalSharing;
-      const effectiveCopilotReady = 'copilotReady' in updatesObj ? updatesObj.copilotReady : existing.copilotReady;
+      const effectiveSensitivity = 'sensitivity' in updates ? updates.sensitivity : existing.sensitivity;
+      const effectiveExternalSharing = 'externalSharing' in updates ? updates.externalSharing : existing.externalSharing;
+      const effectiveCopilotReady = 'copilotReady' in updates ? updates.copilotReady : existing.copilotReady;
       const policyError = validateSensitivityPolicy(effectiveSensitivity, effectiveExternalSharing, effectiveCopilotReady);
       if (policyError) {
         return res.status(400).json({
@@ -1064,13 +1086,8 @@ router.patch("/api/workspaces/bulk/update", requireRole(ZENITH_ROLES.GOVERNANCE_
     }
   }
 
-  const allowedIds = await getOrgTenantConnectionIds(req);
+  // Perform the DB update; use the scoped variant when the caller has restricted access.
   if (allowedIds !== null) {
-    for (const wsId of ids) {
-      if (!(await isWorkspaceInScope(req, wsId))) {
-        return res.status(403).json({ message: "One or more workspaces are outside your organization scope" });
-      }
-    }
     await storage.bulkUpdateWorkspacesScoped(ids, updates, allowedIds);
   } else {
     await storage.bulkUpdateWorkspaces(ids, updates);
