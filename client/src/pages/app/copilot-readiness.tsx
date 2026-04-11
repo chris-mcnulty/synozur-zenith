@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import type { ElementType } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient } from "@/lib/queryClient";
@@ -35,6 +35,10 @@ import {
   AlertTriangle,
   Loader2,
   ChevronDown,
+  Download,
+  Play,
+  Clock,
+  MessageSquare,
 } from "lucide-react";
 import { UpgradeGate } from "@/components/upgrade-gate";
 
@@ -82,6 +86,21 @@ type ReadinessResponse = {
   summary: OrgReadinessSummary;
   workspaces: WorkspaceReadiness[];
   remediationQueue: WorkspaceReadiness[];
+};
+
+type AssessmentRun = {
+  id: string;
+  orgId: string;
+  feature: string;
+  status: "PENDING" | "RUNNING" | "COMPLETED" | "FAILED";
+  resultMarkdown: string | null;
+  resultStructured: Record<string, unknown> | null;
+  modelUsed: string | null;
+  providerUsed: string | null;
+  tokensUsed: number | null;
+  triggeredBy: string | null;
+  createdAt: string;
+  completedAt: string | null;
 };
 
 const TIER_META: Record<WorkspaceReadiness["tier"], { label: string; className: string; icon: ElementType }> = {
@@ -161,6 +180,322 @@ function TierBadge({ tier }: { tier: WorkspaceReadiness["tier"] }) {
     <Badge variant="outline" className={`gap-1 ${meta.className}`}>
       <Icon className="w-3 h-3" /> {meta.label}
     </Badge>
+  );
+}
+
+function MarkdownRenderer({ content }: { content: string }) {
+  const lines = content.split('\n');
+  const elements: React.ReactNode[] = [];
+  let key = 0;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.startsWith('### ')) {
+      elements.push(<h3 key={key++} className="text-base font-semibold mt-4 mb-1 text-foreground">{line.slice(4)}</h3>);
+    } else if (line.startsWith('## ')) {
+      elements.push(<h2 key={key++} className="text-lg font-bold mt-5 mb-2 text-foreground">{line.slice(3)}</h2>);
+    } else if (line.startsWith('#### ')) {
+      elements.push(<h4 key={key++} className="text-sm font-semibold mt-3 mb-1 text-foreground">{line.slice(5)}</h4>);
+    } else if (line.startsWith('- ') || line.startsWith('* ')) {
+      const text = line.slice(2).replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+      elements.push(
+        <li key={key++} className="text-sm text-muted-foreground ml-4 mb-1 list-disc" dangerouslySetInnerHTML={{ __html: text }} />
+      );
+    } else if (line.trim() === '') {
+      elements.push(<div key={key++} className="h-1" />);
+    } else {
+      const text = line.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+      elements.push(
+        <p key={key++} className="text-sm text-muted-foreground mb-2" dangerouslySetInnerHTML={{ __html: text }} />
+      );
+    }
+  }
+
+  return <div className="space-y-0.5">{elements}</div>;
+}
+
+function formatRelativeTime(dateStr: string): string {
+  const date = new Date(dateStr);
+  const diffMs = Date.now() - date.getTime();
+  const diffMin = Math.floor(diffMs / 60000);
+  if (diffMin < 1) return 'just now';
+  if (diffMin < 60) return `${diffMin}m ago`;
+  const diffHr = Math.floor(diffMin / 60);
+  if (diffHr < 24) return `${diffHr}h ago`;
+  return date.toLocaleDateString();
+}
+
+function AIAssessmentPanel({
+  readinessData,
+}: {
+  readinessData: ReadinessResponse | undefined;
+}) {
+  const [activeRunId, setActiveRunId] = useState<string | null>(null);
+  const [toastMsg, setToastMsg] = useState<string | null>(null);
+  const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const { data: latestRun, refetch: refetchLatest } = useQuery<AssessmentRun | null>({
+    queryKey: ["copilot-assessment-latest"],
+    queryFn: async () => {
+      const res = await fetch("/api/copilot-readiness/assessment/latest", { credentials: "include" });
+      if (!res.ok) return null;
+      return res.json();
+    },
+    staleTime: 30_000,
+  });
+
+  const { data: activeRun, refetch: refetchActive } = useQuery<AssessmentRun | null>({
+    queryKey: ["copilot-assessment-run", activeRunId],
+    queryFn: async () => {
+      if (!activeRunId) return null;
+      const res = await fetch(`/api/copilot-readiness/assessment/${activeRunId}`, { credentials: "include" });
+      if (!res.ok) return null;
+      return res.json();
+    },
+    enabled: !!activeRunId,
+    staleTime: 0,
+  });
+
+  useEffect(() => {
+    if (activeRunId && activeRun) {
+      if (activeRun.status === 'COMPLETED' || activeRun.status === 'FAILED') {
+        if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
+        pollIntervalRef.current = null;
+        if (activeRun.status === 'COMPLETED') {
+          setToastMsg("AI Assessment complete!");
+          refetchLatest();
+        } else {
+          setToastMsg("Assessment failed. Please try again.");
+        }
+        setActiveRunId(null);
+      }
+    }
+  }, [activeRun, activeRunId, refetchLatest]);
+
+  useEffect(() => {
+    if (activeRunId) {
+      pollIntervalRef.current = setInterval(() => {
+        refetchActive();
+      }, 3000);
+    }
+    return () => {
+      if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
+    };
+  }, [activeRunId, refetchActive]);
+
+  useEffect(() => {
+    if (toastMsg) {
+      const t = setTimeout(() => setToastMsg(null), 4000);
+      return () => clearTimeout(t);
+    }
+  }, [toastMsg]);
+
+  const triggerMutation = useMutation({
+    mutationFn: async () => {
+      const res = await fetch("/api/copilot-readiness/assessment", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.message || "Failed to start assessment");
+      }
+      return res.json() as Promise<{ runId: string }>;
+    },
+    onSuccess: (data) => {
+      setActiveRunId(data.runId);
+      setToastMsg("Assessment started — this may take a minute…");
+    },
+    onError: (err: Error) => {
+      setToastMsg(`Error: ${err.message}`);
+    },
+  });
+
+  const isRunning = !!activeRunId || activeRun?.status === 'RUNNING' || activeRun?.status === 'PENDING';
+  const displayRun = latestRun;
+
+  const handleDownload = useCallback(() => {
+    if (!displayRun?.resultMarkdown || !readinessData) return;
+    const { summary, remediationQueue } = readinessData;
+    const topItems = remediationQueue.slice(0, 20);
+
+    const lines = [
+      `# Copilot Readiness Assessment Report`,
+      `Generated: ${new Date().toLocaleDateString()}`,
+      `Model: ${displayRun.modelUsed ?? 'AI'}`,
+      ``,
+      `## Organisation Summary`,
+      `- Total workspaces: ${summary.totalWorkspaces}`,
+      `- Evaluated: ${summary.evaluated}`,
+      `- Copilot Ready: ${summary.ready} (${summary.readinessPercent}%)`,
+      `- Nearly Ready: ${summary.nearlyReady}`,
+      `- At Risk: ${summary.atRisk}`,
+      `- Blocked: ${summary.blocked}`,
+      `- Average Score: ${summary.averageScore}/100`,
+      ``,
+      `## AI Executive Assessment`,
+      ``,
+      displayRun.resultMarkdown,
+      ``,
+      `## Top Remediation Items`,
+      ``,
+      ...topItems.map((ws, i) => {
+        const blockerList = ws.blockers.map(b => `  - ${b.label}: ${b.remediation}`).join('\n');
+        return `### ${i + 1}. ${ws.displayName} (Score: ${ws.score}/100 — ${ws.tier})\n${blockerList || '  (No active blockers)'}`;
+      }),
+    ];
+
+    const blob = new Blob([lines.join('\n')], { type: 'text/markdown' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `copilot-readiness-assessment-${new Date().toISOString().slice(0, 10)}.md`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [displayRun, readinessData]);
+
+  return (
+    <Card className="glass-panel border-primary/20" data-testid="card-ai-assessment">
+      <CardHeader>
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <BrainCircuit className="w-4 h-4 text-primary" /> AI Assessment
+              <Badge variant="outline" className="bg-primary/10 text-primary border-primary/20 text-[10px]">GPT-4o</Badge>
+            </CardTitle>
+            <CardDescription className="mt-1">
+              AI-generated executive summary, prioritised remediation roadmap, and governance recommendations.
+            </CardDescription>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            {displayRun && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-2 text-xs"
+                onClick={handleDownload}
+                data-testid="button-download-report"
+              >
+                <Download className="w-3 h-3" /> Download Report
+              </Button>
+            )}
+            <Button
+              size="sm"
+              className="gap-2"
+              disabled={isRunning || triggerMutation.isPending}
+              onClick={() => triggerMutation.mutate()}
+              data-testid="button-run-assessment"
+            >
+              {isRunning ? (
+                <><Loader2 className="w-3 h-3 animate-spin" /> Running…</>
+              ) : (
+                <><Play className="w-3 h-3" /> Run Assessment</>
+              )}
+            </Button>
+          </div>
+        </div>
+
+        {displayRun?.completedAt && (
+          <div className="flex items-center gap-1.5 text-xs text-muted-foreground mt-2" data-testid="text-assessment-timestamp">
+            <Clock className="w-3 h-3" />
+            Last run {formatRelativeTime(displayRun.completedAt)}
+            {displayRun.modelUsed && <> · {displayRun.modelUsed}</>}
+            {displayRun.tokensUsed && <> · {displayRun.tokensUsed.toLocaleString()} tokens</>}
+          </div>
+        )}
+      </CardHeader>
+
+      {toastMsg && (
+        <div className="mx-6 mb-4 p-3 rounded-lg bg-primary/10 border border-primary/20 text-sm text-primary flex items-center gap-2" data-testid="text-assessment-toast">
+          <Sparkles className="w-3 h-3 shrink-0" />
+          {toastMsg}
+        </div>
+      )}
+
+      {isRunning && !displayRun && (
+        <CardContent>
+          <div className="flex items-center gap-3 text-muted-foreground py-4">
+            <Loader2 className="w-4 h-4 animate-spin" />
+            <span className="text-sm">Generating AI assessment — analysing {readinessData?.summary.evaluated ?? 0} workspaces…</span>
+          </div>
+        </CardContent>
+      )}
+
+      {!isRunning && !displayRun && (
+        <CardContent>
+          <div className="text-center py-8 text-muted-foreground">
+            <BrainCircuit className="w-8 h-8 mx-auto mb-3 opacity-40" />
+            <p className="text-sm">No assessment has been run yet.</p>
+            <p className="text-xs mt-1">Click "Run Assessment" to generate an AI-powered executive summary and remediation roadmap.</p>
+          </div>
+        </CardContent>
+      )}
+
+      {displayRun?.resultMarkdown && (
+        <CardContent>
+          <div className="prose prose-sm max-w-none" data-testid="text-assessment-result">
+            <MarkdownRenderer content={displayRun.resultMarkdown} />
+          </div>
+        </CardContent>
+      )}
+    </Card>
+  );
+}
+
+function WorkspaceAIGuidance({ workspaceId, orgId }: { workspaceId: string; orgId?: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const { data, isLoading, refetch, isFetching } = useQuery<{ narrative: string }>({
+    queryKey: ["workspace-narrative", workspaceId],
+    queryFn: async () => {
+      const url = `/api/workspaces/${workspaceId}/copilot-readiness/narrative${orgId ? `?orgId=${orgId}` : ''}`;
+      const res = await fetch(url, { credentials: "include" });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.message || "Failed to fetch narrative");
+      }
+      return res.json();
+    },
+    enabled: false,
+    staleTime: 60 * 60 * 1000,
+  });
+
+  const handleToggle = () => {
+    setExpanded(prev => !prev);
+    if (!data && !isLoading) {
+      refetch();
+    }
+  };
+
+  return (
+    <div className="mt-4 border-t border-border/40 pt-4">
+      <button
+        type="button"
+        onClick={handleToggle}
+        className="flex items-center gap-2 text-xs font-medium text-primary hover:text-primary/80 transition-colors"
+        data-testid={`button-ai-guidance-${workspaceId}`}
+      >
+        <MessageSquare className="w-3 h-3" />
+        AI Guidance
+        <ChevronDown className={`w-3 h-3 transition-transform ${expanded ? "rotate-180" : ""}`} />
+      </button>
+
+      {expanded && (
+        <div className="mt-3" data-testid={`text-ai-guidance-${workspaceId}`}>
+          {(isLoading || isFetching) && !data && (
+            <div className="flex items-center gap-2 text-muted-foreground text-xs py-2">
+              <Loader2 className="w-3 h-3 animate-spin" /> Generating AI guidance…
+            </div>
+          )}
+          {data?.narrative && (
+            <div className="p-3 rounded-lg bg-primary/5 border border-primary/10">
+              <MarkdownRenderer content={data.narrative} />
+            </div>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -265,6 +600,9 @@ export default function CopilotReadinessPage() {
 
         {!isLoading && summary && (
           <>
+            {/* AI Assessment Panel */}
+            <AIAssessmentPanel readinessData={data} />
+
             {/* Summary cards */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
               <Card className="glass-panel" data-testid="card-summary-score">
@@ -442,6 +780,9 @@ export default function CopilotReadinessPage() {
                                   </div>
                                 </div>
                               )}
+
+                              {/* AI Guidance expandable section */}
+                              <WorkspaceAIGuidance workspaceId={ws.workspaceId} />
 
                               <div className="flex items-center justify-between pt-2 border-t border-border/40">
                                 {ws.siteUrl && (

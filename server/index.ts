@@ -699,6 +699,29 @@ async function ensureTenantConnectionsSchema() {
       CREATE INDEX IF NOT EXISTS idx_ai_grounding_scope ON ai_grounding_documents(scope, org_id);
     `);
 
+    // ── AI Assessment Runs table (Task #52) ───────────────────────────────────
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS ai_assessment_runs (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        org_id varchar NOT NULL,
+        feature text NOT NULL DEFAULT 'copilot_readiness',
+        status text NOT NULL DEFAULT 'PENDING',
+        result_markdown text,
+        result_structured jsonb,
+        model_used text,
+        provider_used text,
+        tokens_used integer,
+        triggered_by varchar,
+        created_at timestamp NOT NULL DEFAULT now(),
+        completed_at timestamp
+      )
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_ai_assessment_runs_org ON ai_assessment_runs(org_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_ai_assessment_runs_feature ON ai_assessment_runs(org_id, feature, created_at DESC);
+    `);
+
     log('Schema migration ensureTenantConnectionsSchema completed');
   } catch (err) {
     console.error('[Migration] Failed to ensure tenant_connections schema:', err);

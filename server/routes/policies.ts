@@ -6,6 +6,12 @@ import { evaluatePolicy, evaluationResultsToCopilotRules, formatPolicyBagValue, 
 import { getOrgTenantConnectionIds, isWorkspaceInScope } from "./scope-helpers";
 import { requireFeature } from "../services/feature-gate";
 import { scoreWorkspaces, scoreWorkspace } from "../services/copilot-scoring";
+import {
+  runCopilotReadinessAssessment,
+  getAssessmentRun,
+  getLatestAssessmentRun,
+  getWorkspaceNarrative,
+} from "../services/copilot-assessment-service";
 
 const router = Router();
 
@@ -620,6 +626,106 @@ router.patch("/api/workspaces/:id/copilot-exclusion", requireRole(ZENITH_ROLES.G
   });
 
   res.json(updated ? scoreWorkspace(updated) : null);
+});
+
+// ── AI Copilot Readiness Assessment Routes (Task #52) ──
+
+/**
+ * Trigger a background AI assessment for the org.
+ * Returns a runId that can be polled via GET /api/copilot-readiness/assessment/:runId
+ */
+router.post("/api/copilot-readiness/assessment", requireAuth(), requireFeature("copilotReadiness"), async (req: AuthenticatedRequest, res) => {
+  try {
+    const isPlatformOwner = req.user?.role === ZENITH_ROLES.PLATFORM_OWNER;
+    const orgId = isPlatformOwner
+      ? ((req.body.orgId as string | undefined) || req.activeOrganizationId || req.user?.organizationId)
+      : (req.activeOrganizationId || req.user?.organizationId);
+
+    if (!orgId) {
+      return res.status(400).json({ message: "Organization context required" });
+    }
+
+    const triggeredBy = req.user?.id || req.user?.email || null;
+    const runId = await runCopilotReadinessAssessment(orgId, triggeredBy);
+    res.status(202).json({ runId, status: "PENDING" });
+  } catch (err: any) {
+    console.error("[AI Assessment] Error triggering assessment:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * Get the latest completed assessment for the org.
+ */
+router.get("/api/copilot-readiness/assessment/latest", requireAuth(), requireFeature("copilotReadiness"), async (req: AuthenticatedRequest, res) => {
+  try {
+    const isPlatformOwner = req.user?.role === ZENITH_ROLES.PLATFORM_OWNER;
+    const orgId = isPlatformOwner
+      ? ((req.query.orgId as string | undefined) || req.activeOrganizationId || req.user?.organizationId)
+      : (req.activeOrganizationId || req.user?.organizationId);
+
+    if (!orgId) {
+      return res.json(null);
+    }
+
+    const run = await getLatestAssessmentRun(orgId, 'copilot_readiness');
+    res.json(run);
+  } catch (err: any) {
+    console.error("[AI Assessment] Error fetching latest:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * Poll the status and result of a specific assessment run.
+ */
+router.get("/api/copilot-readiness/assessment/:runId", requireAuth(), requireFeature("copilotReadiness"), async (req: AuthenticatedRequest, res) => {
+  try {
+    const run = await getAssessmentRun(req.params.runId);
+    if (!run) {
+      return res.status(404).json({ message: "Assessment run not found" });
+    }
+
+    const isPlatformOwner = req.user?.role === ZENITH_ROLES.PLATFORM_OWNER;
+    const orgId = isPlatformOwner
+      ? run.orgId
+      : (req.activeOrganizationId || req.user?.organizationId);
+
+    if (!isPlatformOwner && run.orgId !== orgId) {
+      return res.status(404).json({ message: "Assessment run not found" });
+    }
+
+    res.json(run);
+  } catch (err: any) {
+    console.error("[AI Assessment] Error fetching run:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * Per-workspace AI remediation narrative — fetched on demand, cached 1 hour.
+ */
+router.get("/api/workspaces/:id/copilot-readiness/narrative", requireAuth(), requireFeature("copilotReadiness"), async (req: AuthenticatedRequest, res) => {
+  try {
+    if (!(await isWorkspaceInScope(req, req.params.id))) {
+      return res.status(404).json({ message: "Workspace not found" });
+    }
+
+    const isPlatformOwner = req.user?.role === ZENITH_ROLES.PLATFORM_OWNER;
+    const orgId = isPlatformOwner
+      ? ((req.query.orgId as string | undefined) || req.activeOrganizationId || req.user?.organizationId)
+      : (req.activeOrganizationId || req.user?.organizationId);
+
+    if (!orgId) {
+      return res.status(400).json({ message: "Organization context required" });
+    }
+
+    const narrative = await getWorkspaceNarrative(req.params.id, orgId);
+    res.json({ narrative });
+  } catch (err: any) {
+    console.error("[AI Assessment] Error fetching workspace narrative:", err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 export default router;
