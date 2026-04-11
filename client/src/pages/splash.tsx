@@ -54,16 +54,14 @@ export default function SplashPage() {
         <p className="text-xl md:text-2xl text-muted-foreground max-w-3xl mx-auto mb-10 font-light">One authoritative view of every SharePoint site, Teams workspace, OneDrive, and SharePoint Embedded container — with the policy enforcement, sensitivity label governance, and Copilot readiness tooling to manage them confidently at scale.</p>
 
         <div className="flex flex-col sm:flex-row gap-4 items-center justify-center">
-          <Link href="/auth/entra/callback">
-            <Button size="lg" className="h-14 px-8 text-base rounded-full shadow-xl shadow-primary/25 gap-2">
+          <Button asChild size="lg" className="h-14 px-8 text-base rounded-full shadow-xl shadow-primary/25 gap-2">
+            <Link href="/auth/entra/callback">
               Start your free trial <ArrowRight className="w-4 h-4" />
-            </Button>
-          </Link>
-          <a href="#product">
-            <Button size="lg" variant="outline" className="h-14 px-8 text-base rounded-full border-border/50 bg-background/50 backdrop-blur-sm hover:bg-muted">
-              Explore capabilities
-            </Button>
-          </a>
+            </Link>
+          </Button>
+          <Button asChild size="lg" variant="outline" className="h-14 px-8 text-base rounded-full border-border/50 bg-background/50 backdrop-blur-sm hover:bg-muted">
+            <a href="#product">Explore capabilities</a>
+          </Button>
         </div>
 
         <p className="text-xs text-muted-foreground/70 mt-6 max-w-xl">Zenith is currently in Beta. Features and service plans are evolving — your feedback shapes the platform.</p>
