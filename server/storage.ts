@@ -130,6 +130,9 @@ import {
   governanceReviewFindings,
   type GovernanceReviewFinding,
   type InsertGovernanceReviewFinding,
+  aiGroundingDocuments,
+  type AiGroundingDocument,
+  type InsertAiGroundingDocument,
 } from "@shared/schema";
 import {
   decryptRecord,
@@ -470,6 +473,13 @@ export interface IStorage {
     limit?: number,
   ): Promise<EmailStorageReport[]>;
   getLatestEmailStorageReport(tenantConnectionId: string): Promise<EmailStorageReport | undefined>;
+
+  // ── AI Grounding Documents ────────────────────────────────────────────────
+  getGroundingDocuments(scope: 'system' | 'org', orgId?: string): Promise<AiGroundingDocument[]>;
+  getGroundingDocument(id: string): Promise<AiGroundingDocument | undefined>;
+  createGroundingDocument(data: InsertAiGroundingDocument): Promise<AiGroundingDocument>;
+  updateGroundingDocument(id: string, updates: Partial<InsertAiGroundingDocument>): Promise<AiGroundingDocument | undefined>;
+  deleteGroundingDocument(id: string): Promise<void>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -3286,6 +3296,44 @@ export class DatabaseStorage implements IStorage {
       if (!key || !row.summary) return row;
       return { ...row, summary: unmaskEmailReportSummary(row.summary as any, key) };
     });
+  }
+
+  // ── AI Grounding Documents ────────────────────────────────────────────────
+  async getGroundingDocuments(scope: 'system' | 'org', orgId?: string): Promise<AiGroundingDocument[]> {
+    const conditions = [eq(aiGroundingDocuments.scope, scope)];
+    if (scope === 'org' && orgId) {
+      conditions.push(eq(aiGroundingDocuments.orgId, orgId));
+    } else if (scope === 'system') {
+      conditions.push(isNull(aiGroundingDocuments.orgId));
+    }
+    return db
+      .select()
+      .from(aiGroundingDocuments)
+      .where(and(...conditions))
+      .orderBy(desc(aiGroundingDocuments.createdAt));
+  }
+
+  async getGroundingDocument(id: string): Promise<AiGroundingDocument | undefined> {
+    const [row] = await db.select().from(aiGroundingDocuments).where(eq(aiGroundingDocuments.id, id));
+    return row;
+  }
+
+  async createGroundingDocument(data: InsertAiGroundingDocument): Promise<AiGroundingDocument> {
+    const [row] = await db.insert(aiGroundingDocuments).values(data).returning();
+    return row;
+  }
+
+  async updateGroundingDocument(id: string, updates: Partial<InsertAiGroundingDocument>): Promise<AiGroundingDocument | undefined> {
+    const [row] = await db
+      .update(aiGroundingDocuments)
+      .set(updates)
+      .where(eq(aiGroundingDocuments.id, id))
+      .returning();
+    return row;
+  }
+
+  async deleteGroundingDocument(id: string): Promise<void> {
+    await db.delete(aiGroundingDocuments).where(eq(aiGroundingDocuments.id, id));
   }
 }
 

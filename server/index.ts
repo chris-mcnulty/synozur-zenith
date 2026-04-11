@@ -679,6 +679,26 @@ async function ensureTenantConnectionsSchema() {
       CREATE INDEX IF NOT EXISTS idx_ai_agent_skills_org ON ai_agent_skills(organization_id);
     `);
 
+    // ── AI Grounding Documents ──────────────────────────────────────────────
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS ai_grounding_documents (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        scope text NOT NULL,
+        org_id varchar,
+        name text NOT NULL,
+        description text,
+        content_text text NOT NULL,
+        file_type text NOT NULL,
+        file_size_bytes integer NOT NULL DEFAULT 0,
+        is_active boolean NOT NULL DEFAULT true,
+        uploaded_by varchar,
+        created_at timestamp DEFAULT now()
+      )
+    `);
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_ai_grounding_scope ON ai_grounding_documents(scope, org_id);
+    `);
+
     log('Schema migration ensureTenantConnectionsSchema completed');
   } catch (err) {
     console.error('[Migration] Failed to ensure tenant_connections schema:', err);

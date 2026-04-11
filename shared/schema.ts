@@ -1645,3 +1645,25 @@ export type AiAgentSkill = typeof aiAgentSkills.$inferSelect;
 
 export const AI_SKILL_KEYS = ["provision", "validate", "explain", "report_and_recommend"] as const;
 export type AiSkillKey = typeof AI_SKILL_KEYS[number];
+
+// ── AI Grounding Documents ────────────────────────────────────────────────────
+export const aiGroundingDocuments = pgTable("ai_grounding_documents", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  scope: text("scope").notNull(), // 'system' | 'org'
+  orgId: varchar("org_id"), // nullable — only set for org-scoped docs
+  name: text("name").notNull(),
+  description: text("description"),
+  contentText: text("content_text").notNull(),
+  fileType: text("file_type").notNull(), // 'pdf' | 'docx' | 'txt' | 'md'
+  fileSizeBytes: integer("file_size_bytes").notNull().default(0),
+  isActive: boolean("is_active").notNull().default(true),
+  uploadedBy: varchar("uploaded_by"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertAiGroundingDocumentSchema = createInsertSchema(aiGroundingDocuments).omit({
+  id: true,
+  createdAt: true,
+});
+export type InsertAiGroundingDocument = z.infer<typeof insertAiGroundingDocumentSchema>;
+export type AiGroundingDocument = typeof aiGroundingDocuments.$inferSelect;

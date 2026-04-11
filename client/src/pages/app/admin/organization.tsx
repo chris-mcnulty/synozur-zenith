@@ -1,10 +1,11 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Dialog,
   DialogContent,
@@ -12,6 +13,7 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
+  DialogTrigger,
 } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import { 
@@ -26,12 +28,302 @@ import {
   UserPlus,
   Lock,
   AlertTriangle,
-  Trash2
+  Trash2,
+  Brain,
+  FileText,
+  Upload,
+  File,
+  Eye,
+  EyeOff,
+  CheckCircle2,
 } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { useServicePlan } from "@/hooks/use-service-plan";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient } from "@/lib/queryClient";
+
+type GroundingDoc = {
+  id: string;
+  scope: string;
+  orgId: string | null;
+  name: string;
+  description: string | null;
+  contentText: string;
+  fileType: string;
+  fileSizeBytes: number;
+  isActive: boolean;
+  uploadedBy: string | null;
+  createdAt: string;
+};
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function OrgGroundingDocCard({
+  doc,
+  onDelete,
+  onToggle,
+}: {
+  doc: GroundingDoc;
+  onDelete: (id: string) => void;
+  onToggle: (id: string, isActive: boolean) => void;
+}) {
+  const [showPreview, setShowPreview] = useState(false);
+  return (
+    <div className="flex items-start justify-between gap-3 p-3 rounded-lg border border-border/40 bg-muted/20" data-testid={`card-org-grounding-doc-${doc.id}`}>
+      <div className="flex items-start gap-2 min-w-0 flex-1">
+        <FileText className="w-4 h-4 text-muted-foreground shrink-0 mt-0.5" />
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-sm font-medium truncate" data-testid={`text-org-doc-name-${doc.id}`}>{doc.name}</span>
+            <Badge variant="outline" className="text-[10px]">{doc.fileType.toUpperCase()}</Badge>
+            <Badge
+              variant={doc.isActive ? "default" : "secondary"}
+              className={doc.isActive ? "text-[10px] bg-green-500/10 text-green-500 border-green-500/20" : "text-[10px]"}
+            >
+              {doc.isActive ? "Active" : "Inactive"}
+            </Badge>
+          </div>
+          {doc.description && <p className="text-xs text-muted-foreground mt-0.5">{doc.description}</p>}
+          <p className="text-xs text-muted-foreground mt-0.5">{formatBytes(doc.fileSizeBytes)} · {new Date(doc.createdAt).toLocaleDateString()}</p>
+          {showPreview && (
+            <div className="mt-2 p-2 rounded bg-muted/40 text-xs font-mono whitespace-pre-wrap max-h-32 overflow-y-auto border border-border/40">
+              {doc.contentText.slice(0, 500)}{doc.contentText.length > 500 && "\n…"}
+            </div>
+          )}
+        </div>
+      </div>
+      <div className="flex items-center gap-1 shrink-0">
+        <Switch
+          checked={doc.isActive}
+          onCheckedChange={v => onToggle(doc.id, v)}
+          data-testid={`switch-org-doc-active-${doc.id}`}
+        />
+        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setShowPreview(v => !v)} title="Preview">
+          {showPreview ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-7 w-7 text-destructive hover:bg-destructive/10"
+          onClick={() => onDelete(doc.id)}
+          data-testid={`button-delete-org-doc-${doc.id}`}
+        >
+          <Trash2 className="w-3 h-3" />
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function OrgGroundingUploadDialog({
+  orgId,
+  currentCount,
+  onSuccess,
+}: {
+  orgId: string;
+  currentCount: number;
+  onSuccess: () => void;
+}) {
+  const { toast } = useToast();
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
+  const [file, setFile] = useState<File | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const ORG_DOC_LIMIT = 20;
+  const atLimit = currentCount >= ORG_DOC_LIMIT;
+
+  const uploadMutation = useMutation({
+    mutationFn: async () => {
+      if (!file) throw new Error("No file selected");
+      const formData = new FormData();
+      formData.append("file", file);
+      if (name) formData.append("name", name);
+      if (description) formData.append("description", description);
+      const res = await fetch(`/api/admin/tenants/${orgId}/ai/grounding`, { method: "POST", body: formData });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        throw new Error(d.error || "Upload failed");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Document uploaded" });
+      setOpen(false);
+      setFile(null);
+      setName("");
+      setDescription("");
+      onSuccess();
+    },
+    onError: (err: Error) => {
+      toast({ title: "Upload failed", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+    const f = e.dataTransfer.files[0];
+    if (f) { setFile(f); if (!name) setName(f.name.replace(/\.[^.]+$/, "")); }
+  }, [name]);
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>
+        <Button size="sm" variant="outline" className="gap-1.5" disabled={atLimit} data-testid="button-upload-org-grounding-doc">
+          <Plus className="w-3.5 h-3.5" /> Add Document
+        </Button>
+      </DialogTrigger>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Upload Knowledge Base Document</DialogTitle>
+          <DialogDescription>Upload a PDF, DOCX, TXT, or Markdown file. Max 500 KB.</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-4">
+          <div
+            className={`border-2 border-dashed rounded-lg p-6 text-center cursor-pointer transition-colors ${isDragging ? "border-primary bg-primary/5" : "border-border/60 hover:border-primary/50"}`}
+            onDragOver={e => { e.preventDefault(); setIsDragging(true); }}
+            onDragLeave={() => setIsDragging(false)}
+            onDrop={handleDrop}
+            onClick={() => fileInputRef.current?.click()}
+            data-testid="dropzone-org-grounding-doc"
+          >
+            <input ref={fileInputRef} type="file" accept=".pdf,.docx,.txt,.md" className="hidden" data-testid="input-file-org-grounding"
+              onChange={e => { const f = e.target.files?.[0]; if (f) { setFile(f); if (!name) setName(f.name.replace(/\.[^.]+$/, "")); } }} />
+            {file ? (
+              <div className="flex items-center justify-center gap-2">
+                <File className="w-4 h-4 text-primary" />
+                <span className="text-sm">{file.name}</span>
+                <span className="text-xs text-muted-foreground">({formatBytes(file.size)})</span>
+              </div>
+            ) : (
+              <>
+                <Upload className="w-6 h-6 mx-auto mb-1.5 text-muted-foreground" />
+                <p className="text-sm text-muted-foreground">Drag & drop or click to select</p>
+                <p className="text-xs text-muted-foreground">PDF, DOCX, TXT, MD · Max 500 KB</p>
+              </>
+            )}
+          </div>
+          <div className="space-y-2">
+            <Label>Document Name</Label>
+            <Input data-testid="input-org-doc-name" value={name} onChange={e => setName(e.target.value)} placeholder="e.g., SharePoint Naming Standards" />
+          </div>
+          <div className="space-y-2">
+            <Label>Description (optional)</Label>
+            <Textarea data-testid="input-org-doc-description" value={description} onChange={e => setDescription(e.target.value)} rows={2} placeholder="Brief description…" />
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
+          <Button onClick={() => uploadMutation.mutate()} disabled={!file || uploadMutation.isPending} className="gap-2" data-testid="button-confirm-org-upload">
+            {uploadMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
+            Upload
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function OrgKnowledgeBase({ orgId }: { orgId: string }) {
+  const { toast } = useToast();
+  const ORG_DOC_LIMIT = 20;
+
+  const groundingDocs = useQuery<GroundingDoc[]>({
+    queryKey: [`/api/admin/tenants/${orgId}/ai/grounding`],
+    queryFn: async () => {
+      const res = await fetch(`/api/admin/tenants/${orgId}/ai/grounding`);
+      if (!res.ok) throw new Error("Failed to load knowledge base");
+      return res.json();
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const res = await fetch(`/api/admin/tenants/${orgId}/ai/grounding/${id}`, { method: "DELETE" });
+      if (!res.ok) throw new Error("Delete failed");
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [`/api/admin/tenants/${orgId}/ai/grounding`] });
+      toast({ title: "Document deleted" });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Delete failed", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const toggleMutation = useMutation({
+    mutationFn: async ({ id, isActive }: { id: string; isActive: boolean }) => {
+      const res = await fetch(`/api/admin/tenants/${orgId}/ai/grounding/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ isActive }),
+      });
+      if (!res.ok) throw new Error("Update failed");
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [`/api/admin/tenants/${orgId}/ai/grounding`] });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Update failed", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const docList = groundingDocs.data ?? [];
+
+  return (
+    <Card className="glass-panel border-border/50 shadow-xl" data-testid="card-knowledge-base">
+      <CardHeader className="border-b border-border/40 bg-muted/10 pb-4">
+        <div className="flex items-center justify-between">
+          <div>
+            <CardTitle className="flex items-center gap-2">
+              <Brain className="w-5 h-5 text-primary" />
+              Knowledge Base
+            </CardTitle>
+            <CardDescription>
+              Organization-specific documents injected into AI assessments for this org only.
+              Max {ORG_DOC_LIMIT} documents · 500 KB per file.
+            </CardDescription>
+          </div>
+          <OrgGroundingUploadDialog
+            orgId={orgId}
+            currentCount={docList.length}
+            onSuccess={() => queryClient.invalidateQueries({ queryKey: [`/api/admin/tenants/${orgId}/ai/grounding`] })}
+          />
+        </div>
+      </CardHeader>
+      <CardContent className="pt-4">
+        {groundingDocs.isLoading ? (
+          <div className="flex items-center gap-2 py-6 text-muted-foreground text-sm">
+            <Loader2 className="w-4 h-4 animate-spin" /> Loading…
+          </div>
+        ) : docList.length === 0 ? (
+          <div className="text-center py-10 text-muted-foreground" data-testid="text-no-org-docs">
+            <FileText className="w-8 h-8 mx-auto mb-2 opacity-40" />
+            <p className="text-sm">No knowledge base documents yet.</p>
+            <p className="text-xs mt-1">Upload organization-specific policies or standards.</p>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {docList.map(doc => (
+              <OrgGroundingDocCard
+                key={doc.id}
+                doc={doc}
+                onDelete={id => deleteMutation.mutate(id)}
+                onToggle={(id, isActive) => toggleMutation.mutate({ id, isActive })}
+              />
+            ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
 
 export default function OrganizationSettingsPage() {
   const { plan, features, org } = useServicePlan();
@@ -344,6 +636,10 @@ export default function OrganizationSettingsPage() {
           </Card>
         </div>
       </div>
+
+      {isTenantAdmin && activeOrg && (
+        <OrgKnowledgeBase orgId={activeOrg.id} />
+      )}
 
       {isTenantAdmin && activeOrg && (
         <Card className="border-destructive/30 shadow-xl bg-destructive/5">

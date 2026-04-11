@@ -47,6 +47,7 @@ import OneDriveInventoryPage from "./pages/app/onedrive-inventory";
 import RecordingsPage from "./pages/app/recordings";
 import EmailStorageReportPage from "./pages/app/email-storage-report";
 import LicensingPage from "./pages/app/licensing";
+import AiSettingsPage from "./pages/app/admin/ai-settings";
 import AppShell from "./components/layout/app-shell";
 
 const ROLE_LEVELS: Record<string, number> = {
@@ -182,6 +183,9 @@ function AppRoutes() {
         </Route>
         <Route path="/app/admin/entra">
           <RoleGuard minRole="tenant_admin"><EntraSetupPage /></RoleGuard>
+        </Route>
+        <Route path="/app/admin/ai-settings">
+          <RoleGuard minRole="platform_owner"><AiSettingsPage /></RoleGuard>
         </Route>
         <Route path="/app/admin">
           <RoleGuard minRole="tenant_admin"><AdminTemplatesPage /></RoleGuard>

@@ -1,5 +1,6 @@
 import { Router } from 'express';
-import { requireRole, type AuthenticatedRequest } from '../middleware/rbac';
+import multer from 'multer';
+import { requireAuth, requireRole, type AuthenticatedRequest } from '../middleware/rbac';
 import { ZENITH_ROLES } from '@shared/schema';
 import { pool } from '../db';
 import {
@@ -11,8 +12,13 @@ import {
 } from '@shared/ai-schema';
 import { getProviderStatus, invalidateConfigCache } from '../services/ai-provider';
 import { getAIUsageSummary, getMonthlyTokenBurn } from '../services/ai-usage';
+import { storage } from '../storage';
+import { extractTextFromBuffer, mimeToFileType } from '../services/ai-document-extraction';
+import { assembleGroundingContext } from '../services/ai-grounding';
 
 const router = Router();
+
+// ── Helpers ─────────────────────────────────────────────────────────────────
 
 function formatConfig(cfg: Record<string, unknown>) {
   return {
@@ -24,6 +30,31 @@ function formatConfig(cfg: Record<string, unknown>) {
     updatedAt: cfg.updated_at,
   };
 }
+
+const MAX_FILE_SIZE = 500 * 1024; // 500 KB
+const SYSTEM_DOC_LIMIT = 10;
+const ORG_DOC_LIMIT = 20;
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: MAX_FILE_SIZE },
+  fileFilter: (_req, file, cb) => {
+    const allowed = [
+      'application/pdf',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      'text/plain',
+      'text/markdown',
+      'text/x-markdown',
+    ];
+    if (allowed.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error('Unsupported file type. Allowed: PDF, DOCX, TXT, Markdown'));
+    }
+  },
+});
+
+// ── AI Provider Configuration (platform_owner) ───────────────────────────────
 
 router.get(
   '/api/admin/ai/configuration',
@@ -199,6 +230,231 @@ router.get(
     } catch (err: unknown) {
       const error = err instanceof Error ? err : new Error(String(err));
       res.status(500).json({ error: error.message });
+    }
+  }
+);
+
+// ── System-level grounding docs (platform_owner only) ────────────────────────
+
+router.get(
+  '/api/admin/ai/grounding',
+  requireAuth(),
+  requireRole(ZENITH_ROLES.PLATFORM_OWNER),
+  async (_req, res) => {
+    try {
+      const docs = await storage.getGroundingDocuments('system');
+      res.json(docs);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+);
+
+router.post(
+  '/api/admin/ai/grounding',
+  requireAuth(),
+  requireRole(ZENITH_ROLES.PLATFORM_OWNER),
+  upload.single('file'),
+  async (req: AuthenticatedRequest, res) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ error: 'No file uploaded' });
+      }
+
+      const existingDocs = await storage.getGroundingDocuments('system');
+      if (existingDocs.length >= SYSTEM_DOC_LIMIT) {
+        return res.status(400).json({ error: `System document limit reached (max ${SYSTEM_DOC_LIMIT})` });
+      }
+
+      const fileType = mimeToFileType(req.file.mimetype);
+      if (!fileType) {
+        return res.status(400).json({ error: 'Unsupported file type' });
+      }
+
+      const contentText = await extractTextFromBuffer(req.file.buffer, req.file.mimetype);
+      const name = (req.body.name as string) || req.file.originalname;
+      const description = (req.body.description as string) || undefined;
+
+      const doc = await storage.createGroundingDocument({
+        scope: 'system',
+        orgId: null,
+        name,
+        description,
+        contentText,
+        fileType,
+        fileSizeBytes: req.file.size,
+        isActive: true,
+        uploadedBy: req.user?.id || null,
+      });
+
+      res.json(doc);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+);
+
+router.patch(
+  '/api/admin/ai/grounding/:id',
+  requireAuth(),
+  requireRole(ZENITH_ROLES.PLATFORM_OWNER),
+  async (req: AuthenticatedRequest, res) => {
+    try {
+      const { id } = req.params;
+      const { isActive } = req.body;
+      const doc = await storage.updateGroundingDocument(id, { isActive: Boolean(isActive) });
+      if (!doc) return res.status(404).json({ error: 'Document not found' });
+      res.json(doc);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+);
+
+router.delete(
+  '/api/admin/ai/grounding/:id',
+  requireAuth(),
+  requireRole(ZENITH_ROLES.PLATFORM_OWNER),
+  async (_req, res) => {
+    try {
+      const { id } = _req.params;
+      const existing = await storage.getGroundingDocument(id);
+      if (!existing || existing.scope !== 'system') {
+        return res.status(404).json({ error: 'Document not found' });
+      }
+      await storage.deleteGroundingDocument(id);
+      res.json({ success: true });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+);
+
+router.get(
+  '/api/admin/ai/grounding/preview',
+  requireAuth(),
+  requireRole(ZENITH_ROLES.PLATFORM_OWNER),
+  async (req: AuthenticatedRequest, res) => {
+    try {
+      const orgId = (req.query.orgId as string) || req.activeOrganizationId;
+      const context = await assembleGroundingContext(orgId || undefined);
+      res.json({ context, charCount: context.length });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+);
+
+// ── Org-level grounding docs (tenant_admin or higher) ────────────────────────
+
+router.get(
+  '/api/admin/tenants/:orgId/ai/grounding',
+  requireAuth(),
+  requireRole(ZENITH_ROLES.TENANT_ADMIN),
+  async (req, res) => {
+    try {
+      const { orgId } = req.params;
+      const docs = await storage.getGroundingDocuments('org', orgId);
+      res.json(docs);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+);
+
+router.post(
+  '/api/admin/tenants/:orgId/ai/grounding',
+  requireAuth(),
+  requireRole(ZENITH_ROLES.TENANT_ADMIN),
+  upload.single('file'),
+  async (req: AuthenticatedRequest, res) => {
+    try {
+      const { orgId } = req.params;
+
+      if (!req.file) {
+        return res.status(400).json({ error: 'No file uploaded' });
+      }
+
+      const existingDocs = await storage.getGroundingDocuments('org', orgId);
+      if (existingDocs.length >= ORG_DOC_LIMIT) {
+        return res.status(400).json({ error: `Organization document limit reached (max ${ORG_DOC_LIMIT})` });
+      }
+
+      const fileType = mimeToFileType(req.file.mimetype);
+      if (!fileType) {
+        return res.status(400).json({ error: 'Unsupported file type' });
+      }
+
+      const contentText = await extractTextFromBuffer(req.file.buffer, req.file.mimetype);
+      const name = (req.body.name as string) || req.file.originalname;
+      const description = (req.body.description as string) || undefined;
+
+      const doc = await storage.createGroundingDocument({
+        scope: 'org',
+        orgId,
+        name,
+        description,
+        contentText,
+        fileType,
+        fileSizeBytes: req.file.size,
+        isActive: true,
+        uploadedBy: req.user?.id || null,
+      });
+
+      res.json(doc);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+);
+
+router.patch(
+  '/api/admin/tenants/:orgId/ai/grounding/:id',
+  requireAuth(),
+  requireRole(ZENITH_ROLES.TENANT_ADMIN),
+  async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { isActive } = req.body;
+      const doc = await storage.updateGroundingDocument(id, { isActive: Boolean(isActive) });
+      if (!doc) return res.status(404).json({ error: 'Document not found' });
+      res.json(doc);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+);
+
+router.delete(
+  '/api/admin/tenants/:orgId/ai/grounding/:id',
+  requireAuth(),
+  requireRole(ZENITH_ROLES.TENANT_ADMIN),
+  async (req, res) => {
+    try {
+      const { id, orgId } = req.params;
+      const existing = await storage.getGroundingDocument(id);
+      if (!existing || existing.scope !== 'org' || existing.orgId !== orgId) {
+        return res.status(404).json({ error: 'Document not found' });
+      }
+      await storage.deleteGroundingDocument(id);
+      res.json({ success: true });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+);
+
+router.get(
+  '/api/admin/tenants/:orgId/ai/grounding/preview',
+  requireAuth(),
+  requireRole(ZENITH_ROLES.TENANT_ADMIN),
+  async (req, res) => {
+    try {
+      const { orgId } = req.params;
+      const context = await assembleGroundingContext(orgId);
+      res.json({ context, charCount: context.length });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
     }
   }
 );
