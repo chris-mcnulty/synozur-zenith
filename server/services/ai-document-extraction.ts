@@ -1,6 +1,7 @@
-import { createRequire } from "module";
-
-const require = createRequire(import.meta.url);
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore — lib sub-path has no declarations; types provided by @types/pdf-parse
+import pdfParseLib from "pdf-parse/lib/pdf-parse.js";
+import mammothLib from "mammoth";
 
 const MAX_CHARS = 50_000;
 
@@ -30,12 +31,10 @@ export async function extractTextFromBuffer(buffer: Buffer, mimeType: string): P
   let text: string;
 
   if (fileType === "pdf") {
-    const pdfParse = require("pdf-parse/lib/pdf-parse.js");
-    const result = await pdfParse(buffer);
+    const result = await pdfParseLib(buffer);
     text = result.text;
   } else if (fileType === "docx") {
-    const mammoth = require("mammoth");
-    const result = await mammoth.extractRawText({ buffer });
+    const result = await mammothLib.extractRawText({ buffer });
     text = result.value;
   } else {
     text = buffer.toString("utf-8");
