@@ -145,7 +145,7 @@ function OrgGroundingUploadDialog({
       formData.append("file", file);
       if (name) formData.append("name", name);
       if (description) formData.append("description", description);
-      const res = await fetch(`/api/admin/tenants/${orgId}/ai/grounding`, { method: "POST", body: formData });
+      const res = await fetch(`/api/admin/tenants/${orgId}/ai/grounding`, { method: "POST", body: formData, credentials: "include" });
       if (!res.ok) {
         const d = await res.json().catch(() => ({}));
         throw new Error(d.error || "Upload failed");
@@ -237,7 +237,7 @@ function OrgKnowledgeBase({ orgId }: { orgId: string }) {
   const groundingDocs = useQuery<GroundingDoc[]>({
     queryKey: [`/api/admin/tenants/${orgId}/ai/grounding`],
     queryFn: async () => {
-      const res = await fetch(`/api/admin/tenants/${orgId}/ai/grounding`);
+      const res = await fetch(`/api/admin/tenants/${orgId}/ai/grounding`, { credentials: "include" });
       if (!res.ok) throw new Error("Failed to load knowledge base");
       return res.json();
     },
@@ -245,7 +245,7 @@ function OrgKnowledgeBase({ orgId }: { orgId: string }) {
 
   const deleteMutation = useMutation({
     mutationFn: async (id: string) => {
-      const res = await fetch(`/api/admin/tenants/${orgId}/ai/grounding/${id}`, { method: "DELETE" });
+      const res = await fetch(`/api/admin/tenants/${orgId}/ai/grounding/${id}`, { method: "DELETE", credentials: "include" });
       if (!res.ok) throw new Error("Delete failed");
     },
     onSuccess: () => {
@@ -263,6 +263,7 @@ function OrgKnowledgeBase({ orgId }: { orgId: string }) {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ isActive }),
+        credentials: "include",
       });
       if (!res.ok) throw new Error("Update failed");
     },

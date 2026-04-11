@@ -211,7 +211,7 @@ function UploadDialog({
       if (name) formData.append("name", name);
       if (description) formData.append("description", description);
 
-      const res = await fetch(endpoint, { method: "POST", body: formData });
+      const res = await fetch(endpoint, { method: "POST", body: formData, credentials: "include" });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
         throw new Error(data.error || "Upload failed");

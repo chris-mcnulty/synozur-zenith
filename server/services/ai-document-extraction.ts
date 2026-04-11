@@ -1,3 +1,7 @@
+import { createRequire } from "module";
+
+const require = createRequire(import.meta.url);
+
 const MAX_CHARS = 50_000;
 
 export type SupportedMimeType =
@@ -26,11 +30,11 @@ export async function extractTextFromBuffer(buffer: Buffer, mimeType: string): P
   let text: string;
 
   if (fileType === "pdf") {
-    const pdfParse = (await import("pdf-parse")).default;
+    const pdfParse = require("pdf-parse/lib/pdf-parse.js");
     const result = await pdfParse(buffer);
     text = result.text;
   } else if (fileType === "docx") {
-    const mammoth = await import("mammoth");
+    const mammoth = require("mammoth");
     const result = await mammoth.extractRawText({ buffer });
     text = result.value;
   } else {
