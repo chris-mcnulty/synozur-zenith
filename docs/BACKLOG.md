@@ -527,10 +527,53 @@ Gap analysis performed against the authoritative Zenith Engineering Product Spec
 ## Completed
 
 ### ✅ BL-100: Support & Documentation System
-**Completed:** February 2026
-- In-app Support & About section
-- Markdown-based docs with API endpoint
-- Sidebar navigation
+**Completed:** February 2026 (Tasks #16, #17 — commits `b52eb6f`, `48b321f`)
+
+**Purpose:** Give users an in-app help desk with threaded ticket communication and a structured markdown documentation library, matching feature parity with Orbit.
+
+**Schema — `shared/schema.ts`**
+- `support_tickets` table: `id`, `ticketNumber` (org-scoped integer), `organizationId`, `userId`, `category` (bug | feature_request | question | feedback), `subject`, `description`, `priority` (low | medium | high), `status` (open | in_progress | resolved | closed), `assignedTo`, `applicationSource`, `resolvedAt`, `resolvedBy`, `createdAt`, `updatedAt`
+- `support_ticket_replies` table: `id`, `ticketId`, `userId`, `message`, `isInternal` (boolean — staff-only notes), `createdAt`
+- Insert schemas and inferred types exported for both tables
+
+**Storage — `server/storage.ts`**
+- `getNextTicketNumber(orgId)` — org-scoped incrementing integer
+- `createSupportTicket(data)` — insert and return
+- `getSupportTickets(orgId, userId, isAdmin)` — scoped to org+user; Platform Owner sees all
+- `getSupportTicket(id, orgId, userId?)` — enforces org and user scoping
+- `getTicketReplies(ticketId, includeInternal)` — excludes internal notes for non-admins
+- `addTicketReply(ticketId, userId, message, isInternal)` — also sets `updatedAt` and advances `status` to `in_progress` if currently `open`
+- `closeTicket(id, userId)` — sets `status=closed`, `resolvedAt`, `resolvedBy`
+- `updateTicketStatus(id, status)` — Platform Owner only; full lifecycle control
+
+**Ticket API — `server/routes/support.ts`**
+- `GET /api/support/tickets` — list scoped by org/role
+- `POST /api/support/tickets` — create; triggers SendGrid emails
+- `GET /api/support/tickets/:id` — detail + replies; enriches author name/email from users table
+- `POST /api/support/tickets/:id/replies` — add reply; `isInternal` only honoured for Platform Owners
+- `PATCH /api/support/tickets/:id/close` — close
+- `PATCH /api/support/tickets/:id/status` — Platform Owner only status management
+
+**Documentation API — `server/routes/docs.ts`**
+- `GET /api/docs` — list available docs (filename, slug, exists, lastModified)
+- `GET /api/docs/:filename` — return raw markdown; allow-list: `USER_GUIDE.md`, `ROADMAP.md`, `CHANGELOG.md`, `BACKLOG.md`
+- Files served from root `docs/` directory
+
+**Email Notifications — `server/email-support.ts`**
+- On ticket creation: `sendSupportTicketNotification(ticket, user, org)` → `support@synozur.com`
+- On ticket creation: `sendTicketConfirmationToSubmitter(ticket, user)` → submitter's email
+- Both send async (non-blocking) so ticket creation response is fast
+
+**Frontend — `client/src/pages/app/support.tsx`**
+- Sidebar nav tabs: Tickets, Roadmap, What's New, User Guide, Backlog, About Zenith
+- Ticket list with status/priority badges and "New Ticket" button
+- New ticket form: category (select), priority (select), subject (input), description (textarea)
+- Ticket detail: original description, threaded reply list, reply composer
+- Platform Owner extras: internal-note checkbox on replies, status management dropdown
+- Markdown docs: rendered with `react-markdown` + `remark-gfm`
+- About panel: platform version badge, capability list, support email + website links
+- Registered at `/app/support` and `/app/support/:tab` in `client/src/App.tsx`
+- Navigation link added to `client/src/components/layout/app-shell.tsx`
 
 ### ✅ BL-101: Hub Site Hierarchy Detection
 **Completed:** February 2026
