@@ -460,7 +460,6 @@ export default function SplashPage() {
                 <li><a href="#product" className="text-sm text-muted-foreground hover:text-foreground transition-colors">Features</a></li>
                 <li><a href="#plans" className="text-sm text-muted-foreground hover:text-foreground transition-colors">Pricing</a></li>
                 <li><a href="#security" className="text-sm text-muted-foreground hover:text-foreground transition-colors">Security</a></li>
-                <li><a href="#docs" className="text-sm text-muted-foreground hover:text-foreground transition-colors">Documentation</a></li>
                 <li><Link href="/login" className="text-sm text-muted-foreground hover:text-foreground transition-colors">Sign In</Link></li>
               </ul>
             </div>
