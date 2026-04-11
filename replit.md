@@ -66,6 +66,23 @@ openid, profile, email, User.Read, offline_access, RecordsManagement.Read.All, G
 | AllSites.FullControl | Delegated | SPE container management |
 | Sites.FullControl.All | Application | SPE container management |
 
+## AI Provider Environment Variables
+
+The following environment variables are required for the AI Provider Foundation (Task 50):
+
+| Variable | Required | Description |
+|---|---|---|
+| `AZURE_CLIENT_ID` | Yes (Azure Foundry) | Azure Entra App Registration client ID for managed identity auth |
+| `AZURE_CLIENT_SECRET` | Yes (Azure Foundry) | Azure Entra App Registration client secret for managed identity auth |
+| `AZURE_TENANT_ID` | Yes (Azure Foundry) | Azure tenant ID for Entra token acquisition |
+| `AZURE_FOUNDRY_OPENAI_ENDPOINT` | Yes (Azure Foundry) | Base URL of the Azure OpenAI endpoint, e.g. `https://<resource>.openai.azure.com` |
+| `AZURE_FOUNDRY_API_KEY` | Optional | Fallback API key if Entra credentials are not configured |
+| `AZURE_FOUNDRY_PROJECT_ENDPOINT` | Optional | For Inference endpoint models (non-AOAI Azure Foundry deployments) |
+| `OPENAI_API_KEY` | Optional (fallback) | OpenAI key for fallback provider |
+| `ANTHROPIC_API_KEY` | Optional (fallback) | Anthropic key for fallback provider |
+
+Azure AI Foundry is the primary/default provider, using managed identity (client credentials flow to Entra) as the preferred auth method. If `AZURE_CLIENT_ID / AZURE_CLIENT_SECRET / AZURE_TENANT_ID` are set, a Bearer token is acquired from `https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token` with the `https://cognitiveservices.azure.com/.default` scope and cached with a 60-second refresh buffer. If Entra creds are absent, `AZURE_FOUNDRY_API_KEY` is used as a fallback auth method. Calls via Azure Foundry incur $0 estimated cost in the usage log (billed to the org's own Azure subscription). Replit OpenAI and Anthropic are available as fallback providers.
+
 ## External Dependencies
 - **Microsoft 365 / SharePoint**: Core platform for M365 governance.
 - **Microsoft Entra ID**: For SSO authentication and identity management.

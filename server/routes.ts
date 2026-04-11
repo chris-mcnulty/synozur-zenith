@@ -17,6 +17,7 @@ import analyticsRouter from "./routes/analytics";
 import contentGovernanceRouter from "./routes/content-governance";
 import licensingRouter from "./routes/licensing";
 import emailStorageReportRouter from "./routes/email-storage-report";
+import adminAiRouter from "./routes/admin-ai";
 
 export async function registerRoutes(
   httpServer: Server,
@@ -46,6 +47,7 @@ export async function registerRoutes(
   app.use(contentGovernanceRouter);
   app.use(licensingRouter);
   app.use(emailStorageReportRouter);
+  app.use(adminAiRouter);
 
   return httpServer;
 }

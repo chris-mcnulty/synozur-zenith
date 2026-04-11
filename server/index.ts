@@ -591,6 +591,77 @@ async function ensureTenantConnectionsSchema() {
       CREATE INDEX IF NOT EXISTS idx_lib_col_tenant ON library_columns(tenant_connection_id);
     `);
 
+    // ── AI Provider Foundation tables ─────────────────────────────────────────
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS ai_configuration (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        singleton_key text NOT NULL DEFAULT 'default',
+        default_provider text NOT NULL DEFAULT 'azure_foundry',
+        monthly_token_budget bigint,
+        alert_threshold_percent integer NOT NULL DEFAULT 80,
+        alert_email text,
+        updated_at timestamp DEFAULT now(),
+        CONSTRAINT uq_ai_configuration_singleton UNIQUE (singleton_key)
+      )
+    `);
+
+    await client.query(`
+      ALTER TABLE ai_configuration ADD COLUMN IF NOT EXISTS singleton_key text NOT NULL DEFAULT 'default';
+      DO $$ BEGIN
+        IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'uq_ai_configuration_singleton') THEN
+          ALTER TABLE ai_configuration ADD CONSTRAINT uq_ai_configuration_singleton UNIQUE (singleton_key);
+        END IF;
+      END $$;
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS ai_feature_model_assignments (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        feature text NOT NULL,
+        provider text NOT NULL,
+        model text NOT NULL,
+        is_active boolean NOT NULL DEFAULT true,
+        updated_at timestamp DEFAULT now(),
+        CONSTRAINT uq_ai_feature UNIQUE (feature)
+      )
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS ai_usage (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        org_id text,
+        feature text NOT NULL,
+        provider text NOT NULL,
+        model text NOT NULL,
+        input_tokens integer NOT NULL DEFAULT 0,
+        output_tokens integer NOT NULL DEFAULT 0,
+        estimated_cost_usd numeric(12,6) NOT NULL DEFAULT 0,
+        duration_ms integer NOT NULL DEFAULT 0,
+        success boolean NOT NULL DEFAULT true,
+        error_message text,
+        created_at timestamp NOT NULL DEFAULT now()
+      )
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS ai_usage_alerts (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        org_id text,
+        alert_type text NOT NULL,
+        threshold_percent integer,
+        tokens_at_alert bigint,
+        budget_tokens bigint,
+        notified_at timestamp NOT NULL DEFAULT now(),
+        acknowledged_at timestamp
+      )
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_ai_usage_created_at ON ai_usage(created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_ai_usage_org ON ai_usage(org_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_ai_usage_feature ON ai_usage(feature, created_at DESC);
+    `);
+
     log('Schema migration ensureTenantConnectionsSchema completed');
   } catch (err) {
     console.error('[Migration] Failed to ensure tenant_connections schema:', err);

@@ -40,6 +40,7 @@ import EntraSetupPage from "./pages/app/admin/entra-setup";
 import DataDictionariesPage from "./pages/app/admin/data-dictionaries";
 import CustomFieldsPage from "./pages/app/admin/custom-fields";
 import AuditLogPage from "./pages/app/admin/audit-log";
+import AISettingsPage from "./pages/app/admin/ai-settings";
 import SupportPage from "./pages/app/support";
 import TeamsChannelsPage from "./pages/app/teams-channels";
 import OneDriveInventoryPage from "./pages/app/onedrive-inventory";
@@ -157,6 +158,9 @@ function AppRoutes() {
         </Route>
         <Route path="/app/admin/system">
           <RoleGuard minRole="platform_owner"><SystemAdminPage /></RoleGuard>
+        </Route>
+        <Route path="/app/admin/ai-settings">
+          <RoleGuard minRole="platform_owner"><AISettingsPage /></RoleGuard>
         </Route>
         <Route path="/app/admin/tenants">
           <RoleGuard minRole="tenant_admin"><TenantConnectionsPage /></RoleGuard>
