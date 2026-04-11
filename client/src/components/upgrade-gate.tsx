@@ -43,7 +43,7 @@ export function UpgradeGate({ feature, children, fallback, inline }: UpgradeGate
         <Lock className="w-3.5 h-3.5" />
         <span>{info.label} requires {info.minPlan} plan or higher</span>
         <Button asChild variant="link" size="sm" className="h-auto p-0 text-primary gap-1">
-          <a href="mailto:support@synozur.com">
+          <a href="https://www.synozur.com/contact" target="_blank" rel="noopener noreferrer">
             Contact us <Mail className="w-3 h-3" />
           </a>
         </Button>
@@ -67,7 +67,7 @@ export function UpgradeGate({ feature, children, fallback, inline }: UpgradeGate
           </div>
         </div>
         <Button asChild size="sm" className="gap-1.5 shadow-sm">
-          <a href="mailto:support@synozur.com">
+          <a href="https://www.synozur.com/contact" target="_blank" rel="noopener noreferrer">
             Contact Us <Mail className="w-3.5 h-3.5" />
           </a>
         </Button>

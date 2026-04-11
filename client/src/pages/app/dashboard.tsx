@@ -154,7 +154,7 @@ export default function DashboardPage() {
             </div>
           </div>
           <Button asChild size="sm" className="gap-1.5 shrink-0 shadow-sm">
-            <a href="mailto:support@synozur.com">
+            <a href="https://www.synozur.com/contact" target="_blank" rel="noopener noreferrer">
               Contact Us <ArrowUpRight className="w-3.5 h-3.5" />
             </a>
           </Button>

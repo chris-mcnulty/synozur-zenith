@@ -262,7 +262,7 @@ export default function PlansPage() {
             </p>
             <div className="flex flex-col sm:flex-row gap-4 items-center justify-center">
               <Button asChild size="lg" className="h-12 px-8 text-base rounded-full shadow-xl shadow-primary/25 gap-2">
-                <a href="mailto:support@synozur.com" data-testid="link-contact-sales">
+                <a href="https://www.synozur.com/contact" target="_blank" rel="noopener noreferrer" data-testid="link-contact-sales">
                   Contact Us <ArrowRight className="w-4 h-4" />
                 </a>
               </Button>

@@ -610,7 +610,7 @@ export default function OrganizationSettingsPage() {
                 </div>
               </div>
               <Button asChild variant="outline" className="w-full mt-4">
-                <a href="mailto:support@synozur.com">{plan === 'TRIAL' ? 'Contact Us to Upgrade' : 'Contact Us to Manage Plan'}</a>
+                <a href="https://www.synozur.com/contact" target="_blank" rel="noopener noreferrer">{plan === 'TRIAL' ? 'Contact Us to Upgrade' : 'Contact Us to Manage Plan'}</a>
               </Button>
             </CardContent>
           </Card>
