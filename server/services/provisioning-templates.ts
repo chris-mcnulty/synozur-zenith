@@ -42,8 +42,9 @@ export interface ProvisioningTemplate {
  * This replaces the previously hardcoded "Default 7 Year" value.
  *
  * Mapping rules (spec §3.2):
- *   - Highly Confidential → mandatory 7-year retention regardless of type
- *   - Deal rooms           → 10 years (regulatory hold for M&A records)
+ *   - Deal rooms           → 10 years (regulatory hold for M&A records; takes
+ *                            precedence over the Highly Confidential default)
+ *   - Highly Confidential → mandatory 7-year retention (for non-Deal workspaces)
  *   - Portfolio Company    → 7 years (operational records)
  *   - General/Internal     → 5 years (default corporate records)
  *   - Public               → 2 years (marketing/external content)
@@ -52,8 +53,8 @@ export function deriveRetentionPolicy(
   projectType: ProjectType | string,
   sensitivity: SensitivityTier | string,
 ): string {
-  if (sensitivity === "HIGHLY_CONFIDENTIAL") return "Highly Confidential — 7 Year Hold";
   if (projectType === "DEAL") return "Deal Room — 10 Year Hold";
+  if (sensitivity === "HIGHLY_CONFIDENTIAL") return "Highly Confidential — 7 Year Hold";
   if (projectType === "PORTCO") return "Portfolio Company — 7 Year Hold";
   if (sensitivity === "PUBLIC") return "Public Content — 2 Year";
   return "Corporate Default — 5 Year";
@@ -70,7 +71,7 @@ export const BUILT_IN_TEMPLATES: ProvisioningTemplate[] = [
     sensitivity: "HIGHLY_CONFIDENTIAL",
     externalSharing: false,
     teamsConnected: true,
-    retentionPolicy: "Deal Room — 10 Year Hold",
+    retentionPolicy: deriveRetentionPolicy("DEAL", "HIGHLY_CONFIDENTIAL"),
     minOwners: 2,
     intent: "Use for confidential transactions where content must never leak and regulatory retention applies.",
   },
@@ -84,7 +85,7 @@ export const BUILT_IN_TEMPLATES: ProvisioningTemplate[] = [
     sensitivity: "CONFIDENTIAL",
     externalSharing: true,
     teamsConnected: true,
-    retentionPolicy: "Portfolio Company — 7 Year Hold",
+    retentionPolicy: deriveRetentionPolicy("PORTCO", "CONFIDENTIAL"),
     minOwners: 2,
     intent: "Use for portfolio company board materials, operating reports, and working team collaboration.",
   },
@@ -98,7 +99,7 @@ export const BUILT_IN_TEMPLATES: ProvisioningTemplate[] = [
     sensitivity: "CONFIDENTIAL",
     externalSharing: false,
     teamsConnected: true,
-    retentionPolicy: "Corporate Default — 5 Year",
+    retentionPolicy: deriveRetentionPolicy("GENERAL", "CONFIDENTIAL"),
     minOwners: 2,
     intent: "Use for normal cross-functional team collaboration that should not leave the organization.",
   },
@@ -112,7 +113,7 @@ export const BUILT_IN_TEMPLATES: ProvisioningTemplate[] = [
     sensitivity: "HIGHLY_CONFIDENTIAL",
     externalSharing: false,
     teamsConnected: false,
-    retentionPolicy: "Highly Confidential — 7 Year Hold",
+    retentionPolicy: deriveRetentionPolicy("GENERAL", "HIGHLY_CONFIDENTIAL"),
     minOwners: 2,
     intent: "Use for executive communications, board-adjacent content, and strategic announcements.",
   },
@@ -126,7 +127,7 @@ export const BUILT_IN_TEMPLATES: ProvisioningTemplate[] = [
     sensitivity: "PUBLIC",
     externalSharing: true,
     teamsConnected: false,
-    retentionPolicy: "Public Content — 2 Year",
+    retentionPolicy: deriveRetentionPolicy("GENERAL", "PUBLIC"),
     minOwners: 2,
     intent: "Use for marketing, investor relations, and public-facing announcements.",
   },

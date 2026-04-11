@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { z } from "zod";
 import { storage } from "../storage";
 import { insertWorkspaceSchema, insertProvisioningRequestSchema, type ServicePlanTier, ZENITH_ROLES } from "@shared/schema";
 import { fetchSharePointSites, fetchSiteUsageReport, fetchSiteDriveOwner, fetchSiteAnalytics, fetchSiteGroupOwners, fetchSiteCollectionAdmins, getAppToken, writeSitePropertyBag, requestSiteReindex, fetchSitePropertyBag, fetchSensitivityLabels, fetchRetentionLabels, fetchHubSites, fetchSiteHubAssociation, fetchHubSitesViaSearch, applySensitivityLabelToSite, removeSensitivityLabelFromSite, joinHubSite, leaveHubSite, fetchSiteLockState, fetchSiteArchiveStatus, batchToggleNoScript, fetchSiteDocumentLibraries, enumerateSiteDocumentLibraries, fetchLibraryDetails, fetchSiteTelemetry, fetchContentTypes, createSharePointSite, createM365Group, createTeam, assignSensitivityLabelToGroup, resolveOwnerIds, archiveSite, unarchiveSite } from "../services/graph";
@@ -276,9 +277,20 @@ router.patch("/api/workspaces/:id", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, Z
   const existing = await storage.getWorkspace(req.params.id);
   if (!existing) return res.status(404).json({ message: "Workspace not found" });
 
-  const effectiveSensitivity = 'sensitivity' in req.body ? req.body.sensitivity : existing.sensitivity;
-  const effectiveExternalSharing = 'externalSharing' in req.body ? req.body.externalSharing : existing.externalSharing;
-  const effectiveCopilotReady = 'copilotReady' in req.body ? req.body.copilotReady : existing.copilotReady;
+  const patchBodySchema = z.object({
+    sensitivity: z.enum(["PUBLIC", "INTERNAL", "CONFIDENTIAL", "HIGHLY_CONFIDENTIAL"]).optional(),
+    externalSharing: z.boolean().optional(),
+    copilotReady: z.boolean().optional(),
+  }).passthrough();
+  const bodyParsed = patchBodySchema.safeParse(req.body);
+  if (!bodyParsed.success) {
+    return res.status(400).json({ message: bodyParsed.error.message });
+  }
+  const body = bodyParsed.data;
+
+  const effectiveSensitivity = 'sensitivity' in body ? body.sensitivity : existing.sensitivity;
+  const effectiveExternalSharing = 'externalSharing' in body ? body.externalSharing : existing.externalSharing;
+  const effectiveCopilotReady = 'copilotReady' in body ? body.copilotReady : existing.copilotReady;
 
   if (effectiveSensitivity === 'HIGHLY_CONFIDENTIAL') {
     if (effectiveExternalSharing === true) {
@@ -327,8 +339,8 @@ router.patch("/api/workspaces/:id", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, Z
     }
   }
 
-  const sensitivityLabelChanged = 'sensitivityLabelId' in req.body &&
-    req.body.sensitivityLabelId !== existing.sensitivityLabelId;
+  const sensitivityLabelChanged = 'sensitivityLabelId' in body &&
+    body.sensitivityLabelId !== existing.sensitivityLabelId;
 
   let labelSyncResult: { pushed: boolean; error?: string } | undefined;
   let labelWritebackSkipped = false;
@@ -344,9 +356,9 @@ router.patch("/api/workspaces/:id", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, Z
       labelWritebackSkipped = true;
       console.log(`[label-push] Skipping sensitivity label CSOM for ${existing.displayName} — plan ${plan} does not include m365WriteBack`);
     } else {
-      if (req.body.sensitivityLabelId && labelConn) {
+      if (body.sensitivityLabelId && labelConn) {
         const labels = await storage.getSensitivityLabelsByTenantId(labelConn.tenantId);
-        const targetLabel = labels.find(l => l.labelId === req.body.sensitivityLabelId);
+        const targetLabel = labels.find(l => l.labelId === body.sensitivityLabelId);
         if (!targetLabel) {
           return res.status(400).json({ message: "Sensitivity label not found in synced labels." });
         }
@@ -362,11 +374,11 @@ router.patch("/api/workspaces/:id", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, Z
           if (!spoToken) {
             labelSyncResult = { pushed: false, error: "Could not acquire a SharePoint token for your account. Please sign out and sign back in with SSO. You must be a SharePoint administrator in the tenant to apply labels." };
             console.warn(`[label-push] No delegated SPO token for user ${req.user!.email} on ${existing.displayName}. Label saved locally.`);
-          } else if (req.body.sensitivityLabelId) {
-            const result = await applySensitivityLabelToSite(spoToken, existing.siteUrl, req.body.sensitivityLabelId, req.user!.id);
+          } else if (body.sensitivityLabelId) {
+            const result = await applySensitivityLabelToSite(spoToken, existing.siteUrl, body.sensitivityLabelId, req.user!.id);
             labelSyncResult = { pushed: result.success, error: result.error };
             if (result.success) {
-              console.log(`[label-push] Applied sensitivity label ${req.body.sensitivityLabelId} to ${existing.siteUrl} via CSOM for workspace ${existing.displayName}`);
+              console.log(`[label-push] Applied sensitivity label ${body.sensitivityLabelId} to ${existing.siteUrl} via CSOM for workspace ${existing.displayName}`);
             } else {
               console.error(`[label-push] Failed to apply label to ${existing.siteUrl}: ${result.error}`);
               return res.status(502).json({ message: `Failed to apply label to site: ${result.error}`, labelSyncResult });
@@ -397,11 +409,11 @@ router.patch("/api/workspaces/:id", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, Z
   }
 
   const writebackFields = ['sensitivityLabelId', 'department', 'costCenter', 'projectCode'];
-  const hasWritebackChange = writebackFields.some(f => f in req.body);
+  const hasWritebackChange = writebackFields.some(f => f in body);
 
-  const updates = { ...req.body };
+  const updates = { ...body };
   if (hasWritebackChange) {
-    const merged = { ...existing, ...req.body };
+    const merged = { ...existing, ...body };
     updates.localHash = computeWritebackHash({
       sensitivityLabelId: merged.sensitivityLabelId,
       department: merged.department,
@@ -413,10 +425,10 @@ router.patch("/api/workspaces/:id", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, Z
 
   if (labelSyncResult?.pushed) {
     const propertyBagFields = ['department', 'costCenter', 'projectCode'];
-    const hasPropertyBagChange = propertyBagFields.some(f => f in req.body && req.body[f] !== existing[f as keyof typeof existing]);
+    const hasPropertyBagChange = propertyBagFields.some(f => f in body && body[f] !== existing[f as keyof typeof existing]);
     if (hasPropertyBagChange) {
       updates.spoSyncHash = computeWritebackHash({
-        sensitivityLabelId: req.body.sensitivityLabelId ?? existing.sensitivityLabelId,
+        sensitivityLabelId: body.sensitivityLabelId ?? existing.sensitivityLabelId,
         department: existing.department,
         costCenter: existing.costCenter,
         projectCode: existing.projectCode,
@@ -494,9 +506,9 @@ router.patch("/api/workspaces/:id", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, Z
   const finalWorkspace = await storage.getWorkspace(req.params.id);
 
   const metadataFields = ['department', 'costCenter', 'projectCode', 'description'];
-  const hasMetadataChange = metadataFields.some(f => f in req.body && req.body[f] !== (existing as any)[f]);
-  const hasSharingChange = 'externalSharing' in req.body && req.body.externalSharing !== existing.externalSharing;
-  const hasArchiveChange = 'isArchived' in req.body && req.body.isArchived === true && !existing.isArchived;
+  const hasMetadataChange = metadataFields.some(f => f in body && body[f] !== (existing as any)[f]);
+  const hasSharingChange = 'externalSharing' in body && body.externalSharing !== existing.externalSharing;
+  const hasArchiveChange = 'isArchived' in body && body.isArchived === true && !existing.isArchived;
 
   if (sensitivityLabelChanged) {
     await storage.createAuditEntry({
@@ -510,7 +522,7 @@ router.patch("/api/workspaces/:id", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, Z
       details: {
         workspaceName: existing.displayName,
         previousLabelId: existing.sensitivityLabelId,
-        newLabelId: req.body.sensitivityLabelId,
+        newLabelId: body.sensitivityLabelId,
         pushed: labelSyncResult?.pushed,
       },
       result: labelSyncResult?.pushed === false && labelSyncResult?.error ? 'FAILURE' : 'SUCCESS',
@@ -521,8 +533,8 @@ router.patch("/api/workspaces/:id", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, Z
   if (hasMetadataChange) {
     const changedFields: Record<string, { from: any; to: any }> = {};
     for (const f of metadataFields) {
-      if (f in req.body && req.body[f] !== (existing as any)[f]) {
-        changedFields[f] = { from: (existing as any)[f], to: req.body[f] };
+      if (f in body && body[f] !== (existing as any)[f]) {
+        changedFields[f] = { from: (existing as any)[f], to: body[f] };
       }
     }
     await storage.createAuditEntry({
@@ -551,7 +563,7 @@ router.patch("/api/workspaces/:id", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, Z
       details: {
         workspaceName: existing.displayName,
         previousValue: existing.externalSharing,
-        newValue: req.body.externalSharing,
+        newValue: body.externalSharing,
       },
       result: 'SUCCESS',
       ipAddress: req.ip || null,
@@ -576,7 +588,7 @@ router.patch("/api/workspaces/:id", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, Z
     });
   }
 
-  const hasSensitivityChange = 'sensitivity' in req.body && req.body.sensitivity !== existing.sensitivity;
+  const hasSensitivityChange = 'sensitivity' in body && body.sensitivity !== existing.sensitivity;
   if (hasSensitivityChange) {
     await storage.createAuditEntry({
       userId: req.user?.id || null,
@@ -589,7 +601,7 @@ router.patch("/api/workspaces/:id", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, Z
       details: {
         workspaceName: existing.displayName,
         previousValue: existing.sensitivity,
-        newValue: req.body.sensitivity,
+        newValue: body.sensitivity,
       },
       result: 'SUCCESS',
       ipAddress: req.ip || null,
@@ -1292,11 +1304,11 @@ router.get("/api/provisioning-requests/:id", requireAuth(), requireFeature("self
 });
 
 // ── Provisioning Templates (BL-005) ──
-router.get("/api/provisioning-templates", requireAuth(), async (_req: AuthenticatedRequest, res) => {
+router.get("/api/provisioning-templates", requireRole(ZENITH_ROLES.OPERATOR, ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN), requireFeature("selfServicePortal"), async (_req: AuthenticatedRequest, res) => {
   res.json(BUILT_IN_TEMPLATES);
 });
 
-router.get("/api/provisioning-templates/:id", requireAuth(), async (req: AuthenticatedRequest, res) => {
+router.get("/api/provisioning-templates/:id", requireRole(ZENITH_ROLES.OPERATOR, ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN), requireFeature("selfServicePortal"), async (req: AuthenticatedRequest, res) => {
   const template = getTemplateById(req.params.id);
   if (!template) return res.status(404).json({ message: "Template not found" });
   res.json(template);

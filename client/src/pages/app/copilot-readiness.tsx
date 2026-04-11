@@ -1,4 +1,5 @@
 import { useState, useMemo } from "react";
+import type { ElementType } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient } from "@/lib/queryClient";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -83,7 +84,7 @@ type ReadinessResponse = {
   remediationQueue: WorkspaceReadiness[];
 };
 
-const TIER_META: Record<WorkspaceReadiness["tier"], { label: string; className: string; icon: React.ElementType }> = {
+const TIER_META: Record<WorkspaceReadiness["tier"], { label: string; className: string; icon: ElementType }> = {
   READY: {
     label: "Ready",
     className: "bg-emerald-500/10 text-emerald-500 border-emerald-500/20",
