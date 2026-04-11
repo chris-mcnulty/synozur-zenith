@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 import { pool } from '../db';
 import {
   AI_PROVIDERS,

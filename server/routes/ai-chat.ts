@@ -93,7 +93,7 @@ router.post("/api/ai/chat", requireAuth(), async (req: AuthenticatedRequest, res
       }
 
       case "COPILOT": {
-        const copilotPolicy = policies.find(p => p.isActive && p.name.toLowerCase().includes("copilot"));
+        const copilotPolicy = policies.find(p => p.status === "ACTIVE" && p.name.toLowerCase().includes("copilot"));
         const highlyConfidential = workspaces.filter(w => w.sensitivity === "HIGHLY_CONFIDENTIAL");
         const withExternalSharing = workspaces.filter(w => w.externalSharing);
         const orphaned = workspaces.filter(w => {
@@ -200,7 +200,7 @@ router.post("/api/ai/chat", requireAuth(), async (req: AuthenticatedRequest, res
         }).length;
         const external = workspaces.filter(w => w.externalSharing).length;
         const highlyConf = workspaces.filter(w => w.sensitivity === "HIGHLY_CONFIDENTIAL").length;
-        const activePolicies = policies.filter(p => p.isActive).length;
+        const activePolicies = policies.filter(p => p.status === "ACTIVE").length;
 
         content = `Here's a live governance summary for your ${tenants.length > 1 ? `${tenants.length} connected tenants` : "connected tenant"}:
 
@@ -217,8 +217,8 @@ Is there a specific area you'd like to explore further?`;
       }
 
       case "POLICIES": {
-        const active = policies.filter(p => p.isActive);
-        const inactive = policies.filter(p => !p.isActive);
+        const active = policies.filter(p => p.status === "ACTIVE");
+        const inactive = policies.filter(p => p.status !== "ACTIVE");
         const names = active.slice(0, 5).map(p => `• **${p.name}**`).join("\n");
         content = `Zenith has **${activePolicies(policies)}** active governance ${activePolicies(policies) === 1 ? "policy" : "policies"} configured for your organization:
 
@@ -235,7 +235,26 @@ Each policy evaluates workspaces against configurable rules and writes the outco
       }
 
       default: {
-        content = `I can help you with governance questions about your ${workspaces.length} managed workspaces. Try asking:\n\n• "Which sites are overdue for review?"\n• "How many orphaned workspaces do I have?"\n• "Which sites are Copilot-eligible?"\n• "What's our external sharing posture?"\n• "Give me a governance summary"\n\nType **help** to see all supported questions.`;
+        const orphaned = workspaces.filter(w => { const o = Array.isArray(w.siteOwners) ? w.siteOwners : []; return o.length === 0; }).length;
+        const overdueCount = workspaces.filter(w => daysSince(w.lastActivityDate) >= 180).length;
+        const externalCount = workspaces.filter(w => w.externalSharing).length;
+        const activePolicies = policies.filter(p => (p as any).status === "ACTIVE" || (p as any).isActive).length;
+
+        let gptResponse: string | null = null;
+        try {
+          const { completeForFeature } = await import("../services/ai-provider");
+          const workspaceSummary = `Organization has ${workspaces.length} managed workspaces across ${tenants.length} connected tenant(s). ${overdueCount} are overdue for lifecycle review, ${orphaned} are orphaned (no owner), ${externalCount} have external sharing enabled. ${activePolicies} active governance policies are configured.`;
+          const systemMsg = `You are the Zenith AI Governance Assistant — a concise, accurate assistant that answers Microsoft 365 governance questions based strictly on the provided workspace data. Never hallucinate or make up information. Keep responses under 150 words.\n\nWorkspace context:\n${workspaceSummary}`;
+          const result = await completeForFeature('workspace_insight', [
+            { role: 'system', content: systemMsg },
+            { role: 'user', content: message },
+          ]);
+          gptResponse = result.content || null;
+        } catch {
+          // AI provider not available, use static fallback
+        }
+
+        content = gptResponse ?? `I can help you with governance questions about your ${workspaces.length} managed workspaces. Try asking:\n\n• "Which sites are overdue for review?"\n• "How many orphaned workspaces do I have?"\n• "Which sites are Copilot-eligible?"\n• "What's our external sharing posture?"\n• "Give me a governance summary"\n\nType **help** to see all supported questions.`;
         break;
       }
     }
@@ -247,8 +266,8 @@ Each policy evaluates workspaces against configurable rules and writes the outco
   }
 });
 
-function activePolicies(policies: { isActive: boolean }[]): number {
-  return policies.filter(p => p.isActive).length;
+function activePolicies(policies: { status: string }[]): number {
+  return policies.filter(p => p.status === "ACTIVE").length;
 }
 
 export default router;

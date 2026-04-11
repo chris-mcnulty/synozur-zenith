@@ -662,6 +662,23 @@ async function ensureTenantConnectionsSchema() {
       CREATE INDEX IF NOT EXISTS idx_ai_usage_feature ON ai_usage(feature, created_at DESC);
     `);
 
+    // ── AI Agent Skills table (Task #54) ──────────────────────────────────────
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS ai_agent_skills (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        organization_id varchar NOT NULL,
+        skill_key text NOT NULL,
+        is_enabled boolean NOT NULL DEFAULT true,
+        updated_by varchar,
+        updated_at timestamp DEFAULT now(),
+        CONSTRAINT uq_org_skill UNIQUE (organization_id, skill_key)
+      )
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_ai_agent_skills_org ON ai_agent_skills(organization_id);
+    `);
+
     log('Schema migration ensureTenantConnectionsSchema completed');
   } catch (err) {
     console.error('[Migration] Failed to ensure tenant_connections schema:', err);

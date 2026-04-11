@@ -12,6 +12,7 @@ import speRouter from "./routes/spe";
 import recordingsRouter from "./routes/recordings";
 import supportRouter from "./routes/support";
 import aiChatRouter from "./routes/ai-chat";
+import aiAgentSkillsRouter from "./routes/ai-agent-skills";
 import featureTogglesRouter from "./routes/feature-toggles";
 import analyticsRouter from "./routes/analytics";
 import contentGovernanceRouter from "./routes/content-governance";
@@ -42,6 +43,7 @@ export async function registerRoutes(
   app.use(recordingsRouter);
   app.use(supportRouter);
   app.use(aiChatRouter);
+  app.use(aiAgentSkillsRouter);
   app.use(featureTogglesRouter);
   app.use(analyticsRouter);
   app.use(contentGovernanceRouter);

@@ -16,6 +16,8 @@ import {
   tenantDataDictionaries,
   sensitivityLabels,
   retentionLabels,
+  aiAgentSkills,
+  AI_SKILL_KEYS,
   type Workspace,
   type InsertWorkspace,
   type ProvisioningRequest,
@@ -46,6 +48,7 @@ import {
   type InsertSensitivityLabel,
   type RetentionLabel,
   type InsertRetentionLabel,
+  type AiAgentSkill,
   customFieldDefinitions,
   type CustomFieldDefinition,
   type InsertCustomFieldDefinition,
@@ -448,6 +451,11 @@ export interface IStorage {
   getLatestUserInventoryRun(tenantConnectionId: string): Promise<UserInventoryRun | undefined>;
   getUserInventoryRuns(tenantConnectionId: string, limit?: number): Promise<UserInventoryRun[]>;
   purgeUserInventory(tenantConnectionId: string): Promise<number>;
+
+  // ── AI Agent Skills ───────────────────────────────────────────────────────
+  getAiAgentSkills(organizationId: string): Promise<AiAgentSkill[]>;
+  upsertAiAgentSkill(organizationId: string, skillKey: string, isEnabled: boolean, updatedBy?: string): Promise<AiAgentSkill>;
+  isAiSkillEnabled(organizationId: string, skillKey: string): Promise<boolean>;
 
   // ── Email Content Storage Report ─────────────────────────────────────────
   createEmailStorageReport(data: InsertEmailStorageReport): Promise<EmailStorageReport>;
@@ -3200,6 +3208,47 @@ export class DatabaseStorage implements IStorage {
     if (!row) return undefined;
     const [out] = await this.unmaskEmailReportRows([row as EmailStorageReport]);
     return out;
+  }
+
+  // ── AI Agent Skills ───────────────────────────────────────────────────────
+
+  async getAiAgentSkills(organizationId: string): Promise<AiAgentSkill[]> {
+    const existing = await db.select().from(aiAgentSkills)
+      .where(eq(aiAgentSkills.organizationId, organizationId));
+
+    const existingKeys = new Set(existing.map(s => s.skillKey));
+    const toSeed = AI_SKILL_KEYS.filter(k => !existingKeys.has(k));
+
+    if (toSeed.length > 0) {
+      const inserts = toSeed.map(k => ({
+        organizationId,
+        skillKey: k,
+        isEnabled: true,
+        updatedBy: null as string | null,
+      }));
+      await db.insert(aiAgentSkills).values(inserts).onConflictDoNothing();
+      return db.select().from(aiAgentSkills).where(eq(aiAgentSkills.organizationId, organizationId));
+    }
+
+    return existing;
+  }
+
+  async upsertAiAgentSkill(organizationId: string, skillKey: string, isEnabled: boolean, updatedBy?: string): Promise<AiAgentSkill> {
+    const [row] = await db.insert(aiAgentSkills)
+      .values({ organizationId, skillKey, isEnabled, updatedBy: updatedBy ?? null })
+      .onConflictDoUpdate({
+        target: [aiAgentSkills.organizationId, aiAgentSkills.skillKey],
+        set: { isEnabled, updatedBy: updatedBy ?? null, updatedAt: new Date() },
+      })
+      .returning();
+    return row;
+  }
+
+  async isAiSkillEnabled(organizationId: string, skillKey: string): Promise<boolean> {
+    const [row] = await db.select({ isEnabled: aiAgentSkills.isEnabled })
+      .from(aiAgentSkills)
+      .where(and(eq(aiAgentSkills.organizationId, organizationId), eq(aiAgentSkills.skillKey, skillKey)));
+    return row?.isEnabled ?? true;
   }
 
   private async maskEmailReportForWrite<T extends Record<string, any>>(

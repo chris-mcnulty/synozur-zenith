@@ -39,6 +39,10 @@ The frontend utilizes React, Vite, TanStack Query, shadcn/ui, and wouter to deli
 - **System Design Choices**: Custom field definitions are tenant-owned. Document libraries are first-class inventory entities. A multi-policy engine evaluates workspaces. All significant actions are logged. Comprehensive RESTful APIs are provided.
 - **CSV Export/Import**: Allows exporting workspace data to CSV (including custom fields) and importing updates for editable fields based on Site URL.
 - **Document Library Detail View**: Provides detailed views of content types, custom columns, and Syntex/AI models for document libraries, fetched live from Graph API.
+- **AI Agent Skills**: Per-org agent skill toggles (Provision, Validate, Explain, Report & Recommend) persisted in `ai_agent_skills` table. Governance Admins+ can toggle via `PATCH /api/ai/agent-skills/:skillKey`. Defaults all skills to enabled on first access.
+- **AI Connection Status**: `GET /api/ai/connection-status` returns live signals: Entra App Registration configured, last sync time, workspace count, active policy count, sensitivity label count. Powers the Governance Context Sources display.
+- **AI Chat GPT Fallback**: GENERAL intent in the chat route optionally calls `completeForFeature('WORKSPACE_INSIGHT', ...)` from `server/services/ai-provider.ts` with workspace summary context. Falls back gracefully to static help text if OpenAI is not configured.
+- **AI Assistant Nav**: Removed `isMock: true` flag from the "AI Assistant" nav item — the feature is now backed by real APIs.
 
 ## Entra App Registration — Required Permissions (v4)
 

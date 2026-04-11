@@ -1624,3 +1624,24 @@ export const insertEmailStorageReportSchema = createInsertSchema(emailStorageRep
 });
 export type InsertEmailStorageReport = z.infer<typeof insertEmailStorageReportSchema>;
 export type EmailStorageReport = typeof emailStorageReports.$inferSelect;
+
+export const aiAgentSkills = pgTable("ai_agent_skills", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  organizationId: varchar("organization_id").notNull(),
+  skillKey: text("skill_key").notNull(),
+  isEnabled: boolean("is_enabled").notNull().default(true),
+  updatedBy: varchar("updated_by"),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (t) => ({
+  uqOrgSkill: unique("uq_org_skill").on(t.organizationId, t.skillKey),
+}));
+
+export const insertAiAgentSkillSchema = createInsertSchema(aiAgentSkills).omit({
+  id: true,
+  updatedAt: true,
+});
+export type InsertAiAgentSkill = z.infer<typeof insertAiAgentSkillSchema>;
+export type AiAgentSkill = typeof aiAgentSkills.$inferSelect;
+
+export const AI_SKILL_KEYS = ["provision", "validate", "explain", "report_and_recommend"] as const;
+export type AiSkillKey = typeof AI_SKILL_KEYS[number];
