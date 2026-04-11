@@ -153,11 +153,11 @@ export default function DashboardPage() {
               <p className="text-xs text-amber-600/80 dark:text-amber-400/70">Read-only mode: inventory sync and governance views are available. Microsoft 365 write-back (provisioning, site creation) requires a Standard plan or higher.</p>
             </div>
           </div>
-          <Link href="/app/admin/service-plans">
-            <Button size="sm" className="gap-1.5 shrink-0 shadow-sm">
-              View Plans <ArrowUpRight className="w-3.5 h-3.5" />
-            </Button>
-          </Link>
+          <Button asChild size="sm" className="gap-1.5 shrink-0 shadow-sm">
+            <a href="mailto:support@synozur.com">
+              Contact Us <ArrowUpRight className="w-3.5 h-3.5" />
+            </a>
+          </Button>
         </div>
       )}
 

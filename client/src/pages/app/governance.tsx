@@ -1146,7 +1146,7 @@ export default function GovernancePage() {
             <p className="text-sm font-semibold text-amber-700 dark:text-amber-400">Trial Plan Site Limit Reached</p>
             <p className="text-xs text-amber-600/80 dark:text-amber-400/70">
               Showing {maxSites.toLocaleString()} of {lastSyncDiscovered.toLocaleString()} sites — your Trial plan limits inventory to {maxSites.toLocaleString()} sites.{" "}
-              <Link href="/app/admin/service-plans" className="underline font-medium hover:no-underline">Upgrade your plan</Link> to see all sites.
+              <a href="mailto:support@synozur.com" className="underline font-medium hover:no-underline">Contact us to upgrade</a> and see all sites.
             </p>
           </div>
         </div>

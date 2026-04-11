@@ -9,6 +9,7 @@ import { TenantProvider } from "@/lib/tenant-context";
 import NotFound from "@/pages/not-found";
 
 import SplashPage from "./pages/splash";
+import PlansPage from "./pages/plans";
 import LoginPage from "./pages/auth/login";
 import EntraCallbackPage from "./pages/auth/callback";
 import SelectTenantPage from "./pages/app/select-tenant";
@@ -30,7 +31,6 @@ import DiscoverDashboard from "./pages/app/discover";
 import AICopilotIntegration from "./pages/app/ai-copilot";
 import CopilotReadinessPage from "./pages/app/copilot-readiness";
 import IAAssessmentPage from "./pages/app/ia-assessment";
-import ServicePlansPage from "./pages/app/admin/service-plans";
 import UserManagementPage from "./pages/app/admin/users";
 import OrganizationSettingsPage from "./pages/app/admin/organization";
 import SystemAdminPage from "./pages/app/admin/system";
@@ -108,7 +108,7 @@ const EmptyPage = ({ title }: { title: string }) => (
   </div>
 );
 
-const NO_SHELL_ROUTES = ["/", "/login", "/auth/entra/callback", "/app/select-tenant", "/app/add-tenant"];
+const NO_SHELL_ROUTES = ["/", "/plans", "/login", "/auth/entra/callback", "/app/select-tenant", "/app/add-tenant", "/app/admin/plans"];
 
 function AppShellWrapper({ children }: { children: React.ReactNode }) {
   const [location] = useLocation();
@@ -125,6 +125,7 @@ function AppRoutes() {
     <AppShellWrapper>
       <Switch>
         <Route path="/" component={SplashPage} />
+        <Route path="/plans" component={PlansPage} />
         <Route path="/login" component={LoginPage} />
         <Route path="/auth/entra/callback" component={EntraCallbackPage} />
         <Route path="/app/select-tenant" component={SelectTenantPage} />
@@ -150,9 +151,7 @@ function AppRoutes() {
         <Route path="/app/copilot-readiness" component={CopilotReadinessPage} />
         <Route path="/app/ia-assessment" component={IAAssessmentPage} />
         <Route path="/app/discover" component={DiscoverDashboard} />
-        <Route path="/app/admin/plans">
-          <RoleGuard minRole="tenant_admin"><ServicePlansPage /></RoleGuard>
-        </Route>
+        <Route path="/app/admin/plans"><Redirect to="/plans" /></Route>
         <Route path="/app/admin/users">
           <RoleGuard minRole="tenant_admin"><UserManagementPage /></RoleGuard>
         </Route>
