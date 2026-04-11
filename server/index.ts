@@ -699,27 +699,57 @@ async function ensureTenantConnectionsSchema() {
       CREATE INDEX IF NOT EXISTS idx_ai_grounding_scope ON ai_grounding_documents(scope, org_id);
     `);
 
-    // ── AI Assessment Runs table (Task #52) ───────────────────────────────────
+    // ── AI Assessment Runs table (Tasks #52 + #53 — unified superset) ───────
     await client.query(`
       CREATE TABLE IF NOT EXISTS ai_assessment_runs (
         id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
         org_id varchar NOT NULL,
         feature text NOT NULL DEFAULT 'copilot_readiness',
         status text NOT NULL DEFAULT 'PENDING',
+        triggered_by varchar,
         result_markdown text,
         result_structured jsonb,
         model_used text,
         provider_used text,
         tokens_used integer,
-        triggered_by varchar,
-        created_at timestamp NOT NULL DEFAULT now(),
-        completed_at timestamp
+        tenant_connection_id varchar,
+        overall_score integer,
+        executive_summary text,
+        dimensions jsonb,
+        roadmap jsonb,
+        raw_ai_response text,
+        total_sites integer,
+        evaluated_sites integer,
+        input_tokens integer NOT NULL DEFAULT 0,
+        output_tokens integer NOT NULL DEFAULT 0,
+        duration_ms integer NOT NULL DEFAULT 0,
+        error_message text,
+        completed_at timestamp,
+        created_at timestamp NOT NULL DEFAULT now()
       )
     `);
-
+    const iaAssessmentAlterStatements = [
+      "ALTER TABLE ai_assessment_runs ADD COLUMN IF NOT EXISTS tenant_connection_id varchar",
+      "ALTER TABLE ai_assessment_runs ADD COLUMN IF NOT EXISTS overall_score integer",
+      "ALTER TABLE ai_assessment_runs ADD COLUMN IF NOT EXISTS executive_summary text",
+      "ALTER TABLE ai_assessment_runs ADD COLUMN IF NOT EXISTS dimensions jsonb",
+      "ALTER TABLE ai_assessment_runs ADD COLUMN IF NOT EXISTS roadmap jsonb",
+      "ALTER TABLE ai_assessment_runs ADD COLUMN IF NOT EXISTS raw_ai_response text",
+      "ALTER TABLE ai_assessment_runs ADD COLUMN IF NOT EXISTS total_sites integer",
+      "ALTER TABLE ai_assessment_runs ADD COLUMN IF NOT EXISTS evaluated_sites integer",
+      "ALTER TABLE ai_assessment_runs ADD COLUMN IF NOT EXISTS input_tokens integer NOT NULL DEFAULT 0",
+      "ALTER TABLE ai_assessment_runs ADD COLUMN IF NOT EXISTS output_tokens integer NOT NULL DEFAULT 0",
+      "ALTER TABLE ai_assessment_runs ADD COLUMN IF NOT EXISTS duration_ms integer NOT NULL DEFAULT 0",
+      "ALTER TABLE ai_assessment_runs ADD COLUMN IF NOT EXISTS error_message text",
+    ];
+    for (const stmt of iaAssessmentAlterStatements) {
+      await client.query(stmt);
+    }
     await client.query(`
       CREATE INDEX IF NOT EXISTS idx_ai_assessment_runs_org ON ai_assessment_runs(org_id, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_ai_assessment_runs_feature ON ai_assessment_runs(org_id, feature, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_ia_assessment_runs_tenant ON ai_assessment_runs(tenant_connection_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_ia_assessment_runs_org ON ai_assessment_runs(org_id, created_at DESC);
     `);
 
     log('Schema migration ensureTenantConnectionsSchema completed');

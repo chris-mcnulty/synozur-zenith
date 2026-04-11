@@ -141,6 +141,7 @@ const navGroups: NavGroup[] = [
     label: "Insights & Intelligence",
     items: [
       { name: "Copilot Readiness", href: "/app/copilot-readiness", icon: Sparkles, badge: "Pro+" },
+      { name: "IA Assessment", href: "/app/ia-assessment", icon: BarChart3, badge: "Ent+" },
       { name: "AI Assistant", href: "/app/ai-copilot", icon: BrainCircuit },
       { name: "Reports", href: "/app/reports", icon: BarChart3, isMock: true },
     ]

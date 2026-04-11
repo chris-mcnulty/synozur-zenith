@@ -22,6 +22,7 @@ const FEATURE_LABELS: Record<string, { label: string; minPlan: string }> = {
   mspAccess: { label: "MSP Access Code Management", minPlan: "Professional" },
   dataMasking: { label: "Tenant Database Masking", minPlan: "Professional" },
   csvExport: { label: "CSV Export", minPlan: "Standard" },
+  iaAssessment: { label: "IA Assessment", minPlan: "Enterprise" },
 };
 
 export function UpgradeGate({ feature, children, fallback, inline }: UpgradeGateProps) {

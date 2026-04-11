@@ -43,6 +43,7 @@ import {
   Users,
   Home,
   LogIn,
+  Network,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useQuery as useAuthQuery } from "@tanstack/react-query";
@@ -84,6 +85,74 @@ const SERVICE_PLANS = ["TRIAL", "STANDARD", "PROFESSIONAL", "ENTERPRISE"] as con
 
 function planLabel(plan: string) {
   return plan.charAt(0) + plan.slice(1).toLowerCase();
+}
+
+interface IAAdminSummary {
+  totalRuns: number;
+  tenantsWithCompletedRun: number;
+  totalTenants: number;
+  averageScore: number | null;
+}
+
+function IAAssessmentAdminWidget() {
+  const { data, isLoading } = useQuery<IAAdminSummary>({
+    queryKey: ["/api/ia-assessment/admin-summary"],
+    queryFn: async () => {
+      const res = await fetch("/api/ia-assessment/admin-summary", { credentials: "include" });
+      if (!res.ok) return null;
+      return res.json();
+    },
+  });
+
+  const coveragePct = data && data.totalTenants > 0
+    ? Math.round((data.tenantsWithCompletedRun / data.totalTenants) * 100)
+    : 0;
+
+  return (
+    <Card className="glass-panel" data-testid="card-ia-admin-summary">
+      <CardHeader className="pb-3">
+        <CardTitle className="text-base flex items-center gap-2">
+          <Network className="w-4 h-4 text-primary" /> IA Assessment Coverage (last 30 days)
+        </CardTitle>
+        <CardDescription>
+          Platform-wide view of IA assessment completion and average IA health scores.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        {isLoading ? (
+          <div className="flex items-center gap-2 text-muted-foreground text-sm">
+            <Loader2 className="w-4 h-4 animate-spin" /> Loading…
+          </div>
+        ) : !data ? (
+          <p className="text-sm text-muted-foreground">Could not load IA assessment data.</p>
+        ) : (
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div>
+              <p className="text-xs text-muted-foreground mb-1">Runs (30d)</p>
+              <p className="text-2xl font-bold" data-testid="text-ia-total-runs">{data.totalRuns}</p>
+            </div>
+            <div>
+              <p className="text-xs text-muted-foreground mb-1">Tenants with Assessment</p>
+              <p className="text-2xl font-bold" data-testid="text-ia-tenants-with-run">
+                {data.tenantsWithCompletedRun}
+                <span className="text-sm text-muted-foreground font-normal ml-1">/ {data.totalTenants}</span>
+              </p>
+            </div>
+            <div>
+              <p className="text-xs text-muted-foreground mb-1">Coverage</p>
+              <p className="text-2xl font-bold text-primary" data-testid="text-ia-coverage">{coveragePct}%</p>
+            </div>
+            <div>
+              <p className="text-xs text-muted-foreground mb-1">Avg IA Health Score</p>
+              <p className="text-2xl font-bold" data-testid="text-ia-avg-score">
+                {data.averageScore != null ? `${data.averageScore}` : "—"}
+              </p>
+            </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
 }
 
 export default function SystemAdminPage() {
@@ -386,6 +455,8 @@ export default function SystemAdminPage() {
           </CardContent>
         </Card>
       </div>
+
+      <IAAssessmentAdminWidget />
 
       <Tabs defaultValue="organizations" className="space-y-4">
         <TabsList data-testid="tabs-admin">
