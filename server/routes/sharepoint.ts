@@ -277,11 +277,11 @@ router.patch("/api/workspaces/:id", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, Z
   const existing = await storage.getWorkspace(req.params.id);
   if (!existing) return res.status(404).json({ message: "Workspace not found" });
 
-  const patchBodySchema = z.object({
+  const patchBodySchema = insertWorkspaceSchema.partial().extend({
     sensitivity: z.enum(["PUBLIC", "INTERNAL", "CONFIDENTIAL", "HIGHLY_CONFIDENTIAL"]).optional(),
     externalSharing: z.boolean().optional(),
     copilotReady: z.boolean().optional(),
-  }).passthrough();
+  });
   const bodyParsed = patchBodySchema.safeParse(req.body);
   if (!bodyParsed.success) {
     return res.status(400).json({ message: bodyParsed.error.message });
