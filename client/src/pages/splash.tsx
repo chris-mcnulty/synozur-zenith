@@ -1,6 +1,6 @@
 import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
-import { Shield, Zap, ArrowRight, CheckCircle2, Cloud, BrainCircuit, Users, Database, KeyRound, EyeOff, Trash2, Building2, Sparkles, Gauge, Tag, Share2, Mail, Network, FileText, Bot, LayoutGrid, BookOpen } from "lucide-react";
+import { Shield, Zap, ArrowRight, CheckCircle2, Cloud, BrainCircuit, Users, Database, KeyRound, Trash2, Building2, Sparkles, Gauge, Tag, Share2, Mail, Network, FileText, Bot, LayoutGrid, BookOpen } from "lucide-react";
 import { usePageTracking } from "@/hooks/use-page-tracking";
 
 export default function SplashPage() {
@@ -283,11 +283,32 @@ export default function SplashPage() {
       {/* Security Highlights Section */}
       <section id="security" className="relative z-10 py-24 px-4 border-t border-border/30">
         <div className="max-w-7xl mx-auto">
-          <div className="text-center mb-16">
+          <div className="text-center mb-12">
             <p className="text-sm font-semibold text-primary uppercase tracking-widest mb-3">Data Protection</p>
             <h2 className="text-3xl md:text-5xl font-bold tracking-tight mb-4">Privacy & Security by Design</h2>
             <p className="text-lg text-muted-foreground max-w-2xl mx-auto">Your M365 inventory data belongs to your organization. Zenith enforces strict isolation, consent-controlled access, and encryption at every layer.</p>
           </div>
+
+          {/* Compliance credential strip */}
+          <div className="flex flex-wrap items-center justify-center gap-4 mb-14">
+            <div className="flex items-center gap-2.5 px-5 py-3 rounded-xl border border-emerald-500/25 bg-emerald-500/5 text-emerald-600 dark:text-emerald-400">
+              <CheckCircle2 className="w-4 h-4 shrink-0" />
+              <span className="text-sm font-semibold">ISO 27001 Certified Data Center</span>
+            </div>
+            <div className="flex items-center gap-2.5 px-5 py-3 rounded-xl border border-emerald-500/25 bg-emerald-500/5 text-emerald-600 dark:text-emerald-400">
+              <CheckCircle2 className="w-4 h-4 shrink-0" />
+              <span className="text-sm font-semibold">SOC 2 Type II Compliant Hosting</span>
+            </div>
+            <div className="flex items-center gap-2.5 px-5 py-3 rounded-xl border border-blue-500/25 bg-blue-500/5 text-blue-600 dark:text-blue-400">
+              <CheckCircle2 className="w-4 h-4 shrink-0" />
+              <span className="text-sm font-semibold">Microsoft Entra ID SSO & MFA</span>
+            </div>
+            <div className="flex items-center gap-2.5 px-5 py-3 rounded-xl border border-primary/25 bg-primary/5 text-primary">
+              <CheckCircle2 className="w-4 h-4 shrink-0" />
+              <span className="text-sm font-semibold">Six-Tier Role-Based Access Control</span>
+            </div>
+          </div>
+
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             <div className="glass-panel p-8 rounded-2xl border border-border/50 transition-all hover:-translate-y-1 duration-300">
               <div className="w-12 h-12 rounded-xl bg-blue-500/10 flex items-center justify-center text-blue-500 mb-6 border border-blue-500/20">
@@ -310,15 +331,15 @@ export default function SplashPage() {
                 <Database className="w-6 h-6" />
               </div>
               <h3 className="text-lg font-semibold mb-3">Encryption at Rest</h3>
-              <p className="text-sm text-muted-foreground leading-relaxed">Enable Tenant Database Masking to apply field-level encryption to your site inventory, tenant credentials, and metadata values. Sensitive fields are stored ciphertext — unreadable even at the database layer.</p>
+              <p className="text-sm text-muted-foreground leading-relaxed">Enable Tenant Database Masking to apply field-level AES-256-GCM encryption to your site inventory, tenant credentials, and metadata. Sensitive fields are stored as ciphertext — unreadable even at the database layer.</p>
             </div>
 
             <div className="glass-panel p-8 rounded-2xl border border-border/50 transition-all hover:-translate-y-1 duration-300">
               <div className="w-12 h-12 rounded-xl bg-amber-500/10 flex items-center justify-center text-amber-500 mb-6 border border-amber-500/20">
-                <EyeOff className="w-6 h-6" />
+                <Users className="w-6 h-6" />
               </div>
-              <h3 className="text-lg font-semibold mb-3">Field-Level Visibility Controls</h3>
-              <p className="text-sm text-muted-foreground leading-relaxed">Control which governance columns are visible and filterable per role. Restrict sensitive policy results to Governance Admins while keeping operational views clean for Operators and Viewers.</p>
+              <h3 className="text-lg font-semibold mb-3">Multi-Level RBAC</h3>
+              <p className="text-sm text-muted-foreground leading-relaxed">Six purpose-built roles — Platform Owner, Tenant Admin, Governance Admin, Operator, Viewer, and Read-Only Auditor — enforce least-privilege access at every API route and UI surface. Role assignments are per-organization, fully audited, and never inherited across tenants.</p>
             </div>
 
             <div className="glass-panel p-8 rounded-2xl border border-border/50 transition-all hover:-translate-y-1 duration-300">
@@ -333,8 +354,8 @@ export default function SplashPage() {
               <div className="w-12 h-12 rounded-xl bg-primary/10 flex items-center justify-center text-primary mb-6 border border-primary/20">
                 <Shield className="w-6 h-6" />
               </div>
-              <h3 className="text-lg font-semibold mb-3">Operator Transparency</h3>
-              <p className="text-sm text-muted-foreground leading-relaxed">Synozur only retains operational metadata (billing, usage telemetry, error diagnostics). Your SharePoint inventory data, site metadata, and governance configurations are never accessed without your explicit consent.</p>
+              <h3 className="text-lg font-semibold mb-3">Entra SSO & MFA Enforcement</h3>
+              <p className="text-sm text-muted-foreground leading-relaxed">Authenticate using your organization's Microsoft Entra ID via PKCE OpenID Connect — no passwords stored in Zenith. Administrators can enforce SSO-only mode, ensuring all access inherits your existing Conditional Access policies and MFA requirements from Entra ID.</p>
             </div>
           </div>
         </div>
