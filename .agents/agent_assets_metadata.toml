@@ -1,0 +1,8 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "IQYij62VWWGBX1s8Dt2y5"
+uri = "file://public/zenith-platform-overview.md"
+type = "text"
+title = "Zenith Platform Overview — M365 Administrators"
