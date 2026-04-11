@@ -59,6 +59,15 @@ const FEATURE_LIST: { key: keyof typeof PLAN_FEATURES.TRIAL; label: string; prem
   { key: "advancedReporting", label: "Advanced Reporting", premium: true },
 ];
 
+function formatRetention(days: number): string {
+  if (days === -1) return "Unlimited";
+  if (days >= 365) {
+    const y = Math.floor(days / 365);
+    return `${y} ${y === 1 ? "year" : "years"}`;
+  }
+  return `${days} ${days === 1 ? "day" : "days"}`;
+}
+
 export default function PlansPage() {
   usePageTracking("/plans");
 
@@ -172,11 +181,7 @@ export default function PlansPage() {
                         <div className="flex items-center gap-2 text-sm">
                           <HardDrive className="w-3.5 h-3.5 text-muted-foreground" />
                           <span>
-                            {features.auditRetentionDays === -1
-                              ? "Unlimited"
-                              : features.auditRetentionDays >= 365
-                              ? `${Math.round(features.auditRetentionDays / 365)} year`
-                              : `${features.auditRetentionDays} day`}{" "}
+                            {formatRetention(features.auditRetentionDays)}{" "}
                             audit retention
                           </span>
                         </div>
@@ -198,7 +203,7 @@ export default function PlansPage() {
                               }`}
                             >
                               <div
-                                className={`flex items-center justify-center w-4.5 h-4.5 rounded-full shrink-0 ${
+                                className={`flex items-center justify-center w-5 h-5 rounded-full shrink-0 ${
                                   enabled ? "text-emerald-500" : "text-muted-foreground"
                                 }`}
                               >
