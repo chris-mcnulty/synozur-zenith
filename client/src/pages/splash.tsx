@@ -46,9 +46,9 @@ export default function SplashPage() {
           Now in Beta for Microsoft 365
         </div>
 
-        <h1 className="text-5xl md:text-7xl font-bold tracking-tight max-w-5xl mx-auto leading-tight mb-6 text-transparent bg-clip-text bg-gradient-to-b from-foreground to-foreground/70">
-          The Governed Control Plane<br className="hidden md:block"/>
-          for <span className="text-transparent bg-clip-text bg-gradient-to-r from-secondary to-primary">Microsoft 365</span>
+        <h1 className="text-5xl md:text-7xl font-bold tracking-tight max-w-4xl mx-auto leading-tight mb-6 text-transparent bg-clip-text bg-gradient-to-b from-foreground to-foreground/70">
+          Enterprise Governance for <br className="hidden md:block"/>
+          <span className="text-transparent bg-clip-text bg-gradient-to-r from-secondary to-primary">Microsoft 365</span>
         </h1>
 
         <p className="text-xl md:text-2xl text-muted-foreground max-w-3xl mx-auto mb-10 font-light">One authoritative view of every SharePoint site, Teams workspace, OneDrive, and SharePoint Embedded container — with the policy enforcement, sensitivity label governance, and Copilot readiness tooling to manage them confidently at scale.</p>
