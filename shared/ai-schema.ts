@@ -23,6 +23,8 @@ export const AI_FEATURE_LABELS: Record<AIFeature, string> = {
 };
 
 export const AI_MODELS = {
+  GPT_5_2: 'gpt-5.2',
+  GPT_5_MINI: 'gpt-5-mini',
   GPT_4O: 'gpt-4o',
   GPT_4O_MINI: 'gpt-4o-mini',
   GPT_4_TURBO: 'gpt-4-turbo',
@@ -41,6 +43,20 @@ export type AIModelInfo = {
 };
 
 export const AI_MODEL_INFO: Record<AIModel, AIModelInfo> = {
+  [AI_MODELS.GPT_5_2]: {
+    label: 'GPT-5.2',
+    provider: AI_PROVIDERS.REPLIT_OPENAI,
+    inputPricePer1k: 0.0,
+    outputPricePer1k: 0.0,
+    contextWindow: 128000,
+  },
+  [AI_MODELS.GPT_5_MINI]: {
+    label: 'GPT-5 Mini',
+    provider: AI_PROVIDERS.REPLIT_OPENAI,
+    inputPricePer1k: 0.0,
+    outputPricePer1k: 0.0,
+    contextWindow: 128000,
+  },
   [AI_MODELS.GPT_4O]: {
     label: 'GPT-4o',
     provider: AI_PROVIDERS.REPLIT_OPENAI,

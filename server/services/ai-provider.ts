@@ -107,18 +107,26 @@ export class ReplitOpenAIProvider implements IAIProvider {
   name: AIProvider = AI_PROVIDERS.REPLIT_OPENAI;
 
   isAvailable(): boolean {
-    return !!(process.env.OPENAI_API_KEY);
+    return !!(process.env.AI_INTEGRATIONS_OPENAI_API_KEY || process.env.OPENAI_API_KEY);
+  }
+
+  private getBaseUrl(): string {
+    return process.env.AI_INTEGRATIONS_OPENAI_BASE_URL || 'https://api.openai.com/v1';
+  }
+
+  private getApiKey(): string {
+    return (process.env.AI_INTEGRATIONS_OPENAI_API_KEY || process.env.OPENAI_API_KEY)!;
   }
 
   async complete(messages: AIMessage[], model: string, maxTokens = 1024): Promise<AICompletionResult> {
     if (!this.isAvailable()) throw new Error('OpenAI provider not configured');
 
     const start = Date.now();
-    const res = await fetch('https://api.openai.com/v1/chat/completions', {
+    const res = await fetch(`${this.getBaseUrl()}/chat/completions`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+        'Authorization': `Bearer ${this.getApiKey()}`,
       },
       body: JSON.stringify({ model, messages, max_tokens: maxTokens }),
     });
@@ -443,7 +451,7 @@ export async function completeForFeature(
     if (!fallback.isAvailable()) continue;
     try {
       const fallbackModel =
-        fallback.name === AI_PROVIDERS.REPLIT_OPENAI ? 'gpt-4o' :
+        fallback.name === AI_PROVIDERS.REPLIT_OPENAI ? 'gpt-5.2' :
         fallback.name === AI_PROVIDERS.REPLIT_ANTHROPIC ? 'claude-3-5-sonnet-20241022' :
         model;
       return await fallback.complete(messages, fallbackModel, maxTokens);

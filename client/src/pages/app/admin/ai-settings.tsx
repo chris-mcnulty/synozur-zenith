@@ -646,7 +646,7 @@ export default function AISettingsPage() {
                 <CardContent>
                   <p className="text-xs text-muted-foreground">
                     {ps.name === AI_PROVIDERS.AZURE_FOUNDRY && "Uses AZURE_FOUNDRY_API_KEY + AZURE_FOUNDRY_OPENAI_ENDPOINT"}
-                    {ps.name === AI_PROVIDERS.REPLIT_OPENAI && "Uses OPENAI_API_KEY (Replit-managed)"}
+                    {ps.name === AI_PROVIDERS.REPLIT_OPENAI && "Uses Replit AI Integrations (gpt-5.2 default) or OPENAI_API_KEY"}
                     {ps.name === AI_PROVIDERS.REPLIT_ANTHROPIC && "Uses ANTHROPIC_API_KEY (Replit-managed)"}
                   </p>
                 </CardContent>
