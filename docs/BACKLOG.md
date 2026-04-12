@@ -5,6 +5,7 @@
 Prioritized backlog of features, enhancements, and technical improvements. Items are organized by priority and status. Items graduate from the backlog to the [Roadmap](/app/support/roadmap) when delivery is committed.
 
 **Last analyzed against specification:** February 2026
+**Last UX review:** April 2026
 
 ---
 
@@ -15,9 +16,10 @@ Prioritized backlog of features, enhancements, and technical improvements. Items
 3. [Critical Priority](#critical-priority)
 4. [High Priority](#high-priority)
 5. [Medium Priority](#medium-priority)
-6. [Low Priority](#low-priority)
-7. [Technical Debt](#technical-debt)
-8. [Completed](#completed)
+6. [UX & Experience Enhancements](#ux--experience-enhancements)
+7. [Low Priority](#low-priority)
+8. [Technical Debt](#technical-debt)
+9. [Completed](#completed)
 
 ---
 
@@ -412,6 +414,413 @@ Gap analysis performed against the authoritative Zenith Engineering Product Spec
 - Replace all mock data in existing UI with live data
 - Graph API permissions needed: `FileStorageContainer.Selected` or `FileStorageContainer.ReadWrite.All`
 - Enterprise tier only (SPE requires separate Microsoft licensing)
+
+---
+
+## UX & Experience Enhancements
+
+> Items in this section are non-functional-requirement improvements focused on navigation clarity, capability discovery, and user journey efficiency. They do not alter the Aurora design language, color palette (Purple `#810FFB` / Pink `#E60CB3`), glassmorphism (`glass-panel`) utility classes, or Avenir Next LT Pro typography. All changes are structural and informational — the visual aesthetic is preserved exactly.
+>
+> **Audit rationale (April 2026):** A full review of the app shell, routing tree, and navigation structure identified six friction points that impair new-user onboarding, capability discovery, and daily operational efficiency. These items address those gaps systematically.
+
+---
+
+### 🟠 BL-031: Sidebar Tenant Context Card
+**Status:** Backlog | **Priority:** High | **Effort:** Small (1–2 hours) | **Files:** `client/src/components/layout/app-shell.tsx`
+
+**Problem**
+
+Zenith is a multi-tenant governance platform. The active M365 tenant is the single most important operational context for every action a user takes — syncing data, running policy evaluations, assessing Copilot readiness, and managing workspaces all operate against the selected tenant. Despite this, the desktop sidebar provides no visual confirmation of which tenant is currently active. The tenant name appears only in the mobile slide-out sheet header, and is otherwise invisible.
+
+This creates a meaningful risk: a user may perform governance actions, trigger a sync, or run an AI assessment while unknowingly operating against the wrong tenant — particularly users managing multiple tenant connections on behalf of different portfolio companies.
+
+**Current Behaviour**
+
+- Desktop sidebar: logo → nav links. No tenant signal anywhere.
+- Mobile sheet: tenant name shown in a small `bg-primary/5` pill near the top of the sheet body.
+- The global tenant selector (`useTenant()` context) is available but not surfaced in the desktop sidebar.
+
+**Proposed Solution**
+
+Add a compact tenant context card to the desktop sidebar, positioned immediately below the logo bar and above the first nav group. The card shows:
+
+1. **Tenant display name** — the `selectedTenant.displayName` or domain suffix derived from `selectedTenant.tenantId`.
+2. **Sync status indicator** — a colored dot reflecting whether the last sync was recent (green), stale (amber), or failed (red), derived from `selectedTenant.lastSyncAt`.
+3. **"Manage" affordance** — clicking the card navigates to `/app/admin/tenants` (Tenant Connections admin page).
+4. **No-tenant state** — if no tenant is selected, show a subtle "No tenant selected" prompt with a link to `/app/admin/tenants`.
+5. **Multi-tenant hint** — if `tenants.length > 1`, show a small "Switch" affordance (or tenant count pill) indicating multiple tenants are available.
+
+The card should use the existing `bg-primary/5 rounded-xl` styling consistent with the mobile sheet's current tenant widget. It must not introduce new colors or break the glass-panel aesthetic.
+
+**Acceptance Criteria**
+- Desktop sidebar shows the active tenant name at all times below the Zenith logo.
+- Sync status is communicated via a color dot: green (synced within 24h), amber (24–72h), red (>72h or sync error), grey (never synced).
+- Card is interactive: click navigates to Tenant Connections.
+- "No tenant" state shows a clear CTA prompt rather than an empty gap.
+- If `tenants.length > 1`, the card shows a pill badge with the count and a "Switch" label.
+- Mobile sidebar sheet already shows tenant context — no change needed there.
+- Implementation uses only `useTenant()` hook data already available in `app-shell.tsx`. No new API calls.
+- Card is visually distinct from nav items but does not overpower them. Max height: 56px.
+
+**Design Notes**
+- Use `bg-primary/5 border border-primary/10 rounded-xl` for the card container (matches existing mobile pattern).
+- Sync dot: `w-2 h-2 rounded-full` with `bg-emerald-500` / `bg-amber-500` / `bg-red-500` / `bg-muted`.
+- Tenant name: `text-sm font-semibold` truncated with ellipsis.
+- Subdomain or domain: `text-xs text-muted-foreground` below the tenant name.
+
+---
+
+### 🟠 BL-032: Auto-Expand Nav Section to Active Route
+**Status:** Backlog | **Priority:** High | **Effort:** Small (1–2 hours) | **Files:** `client/src/components/layout/app-shell.tsx`
+
+**Problem**
+
+The sidebar's collapsible section state is persisted to `localStorage` under the key `zenith_sidebar_collapsed`. This is a good pattern for users who intentionally collapse sections to reduce visual noise. However, it creates a navigation reliability problem: if a user collapses the "Management" section (or any of its sub-groups such as "Inventory" or "Governance") and then navigates to a page within that section — via the dashboard, a bookmark, a direct URL, or a link from another page — the sidebar shows no active route indicator. The user cannot see where they are in the navigation hierarchy.
+
+This is particularly problematic for:
+- New users exploring the product who collapse sections and navigate away.
+- Existing users with all sections collapsed who receive a shared URL.
+- Deep-link navigation from dashboard quick-action cards.
+
+**Current Behaviour**
+
+- `collapsedSections` is loaded from `localStorage` on mount via `loadCollapsedState()`.
+- There is no `useEffect` watching `location` to re-open a section when the active route falls within it.
+- A user who has collapsed "Management → Inventory" and navigates to `/app/governance` sees no active highlight in the sidebar.
+
+**Proposed Solution**
+
+Add a `useEffect` that runs whenever `location` changes. It inspects the current route against the full nav tree (both `navGroups` and `adminSubGroups`) and:
+
+1. Identifies the top-level nav group containing the active route.
+2. Identifies the sub-group containing the active route (if applicable).
+3. Clears the `collapsed` flag for those specific keys in `collapsedSections`, writing the updated state back to `localStorage`.
+
+The effect only **opens** sections — it does not collapse currently-open sections. This ensures the user always sees their active location without having their manually-expanded sections unexpectedly collapsed.
+
+**Acceptance Criteria**
+- Navigating to any page (via URL, link, or dashboard card) automatically expands the nav group and sub-group containing that page.
+- The expansion does not collapse any other currently-open sections.
+- The expanded state is persisted back to `localStorage` so a page refresh retains the correct state.
+- Works for all three nav layers: top-level `navGroups`, `subGroups` within Management, and `adminSubGroups` within Administration.
+- Works for the Administration section (currently toggled by `nav_admin` key).
+- No visual jump or flash — the section opens before the nav renders (use the same `useState` initializer pattern as `loadCollapsedState`).
+
+**Implementation Notes**
+
+The route-to-section mapping is already implicit in the `navGroups` and `adminSubGroups` data structures. The `useEffect` can walk the tree to find a match:
+
+```typescript
+useEffect(() => {
+  const keysToOpen: string[] = [];
+  for (const group of navGroups) {
+    const groupKey = `nav_${group.label}`;
+    if (group.items?.some(i => location.startsWith(i.href))) {
+      keysToOpen.push(groupKey);
+    }
+    if (group.subGroups) {
+      for (const sg of group.subGroups) {
+        if (sg.items.some(i => location.startsWith(i.href))) {
+          keysToOpen.push(groupKey);
+          keysToOpen.push(`nav_${group.label}_${sg.subLabel}`);
+        }
+      }
+    }
+  }
+  // adminSubGroups check...
+  if (keysToOpen.length > 0) {
+    setCollapsedSections(prev => {
+      const updated = { ...prev };
+      keysToOpen.forEach(k => { updated[k] = false; });
+      saveCollapsedState(updated);
+      return updated;
+    });
+  }
+}, [location]);
+```
+
+---
+
+### 🟡 BL-033: Feature-Gate Badge Tooltips
+**Status:** Backlog | **Priority:** Medium | **Effort:** Small (1–2 hours) | **Files:** `client/src/components/layout/app-shell.tsx`
+
+**Problem**
+
+The sidebar nav currently displays three types of badges on nav items:
+
+1. **Plan badges** — `Pro+` and `Ent+` indicating the minimum service plan required to access the feature.
+2. **Mock badges** — `MOCK` indicating the feature is a UI prototype not yet backed by a real implementation.
+3. **Count badges** — e.g., `3` on "Approvals" indicating pending items.
+
+The plan badges and mock badges are entirely silent — hovering them does nothing. A user who encounters a `Pro+` badge on "Copilot Readiness" or an `Ent+` badge on "IA Assessment" has no way to understand:
+- What "Pro+" means (Professional tier).
+- What tier their organization is currently on.
+- How to upgrade.
+
+Similarly, a user who sees `MOCK` has no way to know if the feature is in development, planned, or simply a demonstration placeholder.
+
+This is a significant capability discovery gap. Features exist in the nav but are effectively hidden behind unexplained badges.
+
+**Proposed Solution**
+
+Wrap each badge type in a shadcn/ui `<Tooltip>` component within the `renderNavItem()` function. Tooltip content is badge-specific:
+
+| Badge | Tooltip Content |
+|---|---|
+| `Pro+` | "Available on the Professional plan and above. Contact Synozur to upgrade." |
+| `Ent+` | "Available on the Enterprise plan. Contact Synozur to upgrade." |
+| `MOCK` | "This feature is in active development and will be available in a future release." |
+| Numeric (e.g., `3`) | No tooltip needed — count is self-explanatory. |
+
+Tooltips should appear on hover with a 300ms delay to avoid noise during fast navigation. The tooltip style should match the existing shadcn/ui `<Tooltip>` styling already used elsewhere in the app (e.g., workspace detail panels).
+
+**Acceptance Criteria**
+- Hovering a `Pro+` badge shows a tooltip explaining the Professional plan requirement.
+- Hovering an `Ent+` badge shows a tooltip explaining the Enterprise plan requirement.
+- Hovering a `MOCK` badge shows a tooltip explaining the feature is in development.
+- Numeric count badges do not show a tooltip.
+- Tooltips use the existing shadcn/ui `Tooltip`, `TooltipContent`, `TooltipTrigger` components — no new UI library imports.
+- Tooltip delay is 300ms to avoid flashing during normal sidebar navigation.
+- Tooltips do not obstruct nav items below them (correct placement: `side="right"` on a sidebar).
+- The badge visual appearance is unchanged — only the hover behaviour is added.
+
+**Design Notes**
+- `TooltipProvider` is already mounted in `App.tsx` (`<TooltipProvider>`), so no wrapper changes are needed.
+- Import `Tooltip`, `TooltipContent`, `TooltipTrigger` from `@/components/ui/tooltip`.
+- Use `delayDuration={300}` on the `<Tooltip>` component.
+- Tooltip placement: `side="right"` to appear to the right of the sidebar, not over other nav items.
+
+---
+
+### 🟡 BL-034: Contextual Page Breadcrumb in Header
+**Status:** Backlog | **Priority:** Medium | **Effort:** Medium (2–4 hours) | **Files:** `client/src/components/layout/app-shell.tsx`
+
+**Problem**
+
+The top application header currently contains: App Switcher → Separator → Mobile Menu trigger → Search bar → Notification bell → User avatar dropdown. There is no indication of where the user currently is within the navigation hierarchy.
+
+For a platform with 25+ distinct pages organized across multiple levels of nesting (e.g., Management → Governance → Policy Builder → What-If Planner), location clarity is essential. Users lose orientation when:
+- Navigating via dashboard quick-action cards.
+- Following a deep link shared by a colleague.
+- Returning to the app after a break with a complex URL in the browser.
+- Using the browser back button across multiple sections.
+
+The header has available horizontal space on the left side (between the app switcher separator and the search bar) that is currently unused on desktop. This is the natural location for a breadcrumb.
+
+**Proposed Solution**
+
+Add a breadcrumb component to the header that maps the current `location` to a human-readable section path. The breadcrumb displays:
+
+- **Top-level group** — e.g., "Management" or "Insights & Licensing"
+- **Sub-group** (if applicable) — e.g., "Governance" or "Inventory"
+- **Current page** — e.g., "Policy Builder"
+
+The full example: `Management › Governance › Policy Builder`
+
+The route-to-breadcrumb mapping is derived from the same `navGroups` and `adminSubGroups` data structures already defined in `app-shell.tsx`. A `buildBreadcrumb(location, navGroups, adminSubGroups)` helper function walks the tree to find the matching item and returns an ordered array of `{ label, href? }` segments.
+
+**Special cases:**
+- Dashboard: no breadcrumb (the landing page needs no orientation signal).
+- Admin pages: show "Administration › {Sub-Group} › {Page Name}".
+- Workspace detail pages (`/app/governance/workspaces/:id`): show "Management › Inventory › SharePoint Sites › Workspace".
+- Unknown/unmatched routes: show nothing (graceful fallback).
+
+The breadcrumb is hidden on mobile (where the hamburger menu is shown instead) and on screens smaller than `lg` breakpoint.
+
+**Acceptance Criteria**
+- Breadcrumb appears in the header between the app switcher separator and the search bar on `lg` screens and above.
+- Correctly maps all nav items from `navGroups` and `adminSubGroups` to their breadcrumb segments.
+- Workspace detail pages show an appropriate breadcrumb ending in "Workspace".
+- Dashboard shows no breadcrumb (not needed — the page title is sufficient context).
+- Administration pages show the correct sub-group label.
+- Breadcrumb is hidden on mobile (`hidden lg:flex`).
+- Separator between segments uses `›` (or a `ChevronRight` icon at `w-3 h-3 text-muted-foreground/40`).
+- Current page segment is rendered in `text-foreground font-medium`; ancestor segments in `text-muted-foreground hover:text-foreground` as links.
+- Breadcrumb does not wrap to a second line — truncate with ellipsis on very long paths.
+- No additional API calls required — all data is derived from the route and the static nav config.
+
+**Implementation Notes**
+
+```typescript
+type BreadcrumbSegment = { label: string; href?: string };
+
+function buildBreadcrumb(location: string, navGroups: NavGroup[], adminSubGroups: AdminSubGroup[]): BreadcrumbSegment[] {
+  // Walk navGroups first
+  for (const group of navGroups) {
+    if (group.items) {
+      const match = group.items.find(i => location.startsWith(i.href));
+      if (match) return [{ label: group.label }, { label: match.name }];
+    }
+    if (group.subGroups) {
+      for (const sg of group.subGroups) {
+        const match = sg.items.find(i => location.startsWith(i.href));
+        if (match) return [{ label: group.label }, { label: sg.subLabel }, { label: match.name, href: match.href }];
+      }
+    }
+  }
+  // Walk adminSubGroups
+  for (const sg of adminSubGroups) {
+    const match = sg.items.find(i => location.startsWith(i.href));
+    if (match) return [{ label: "Administration" }, { label: sg.subLabel }, { label: match.name, href: match.href }];
+  }
+  return [];
+}
+```
+
+---
+
+### 🟡 BL-035: Improved Empty and Mock States
+**Status:** Backlog | **Priority:** Medium | **Effort:** Small (1–2 hours) | **Files:** `client/src/App.tsx`
+
+**Problem**
+
+Several pages in the app are UI prototypes not yet backed by real data or business logic. These pages route to the generic `EmptyPage` component defined in `App.tsx`:
+
+```tsx
+const EmptyPage = ({ title }: { title: string }) => (
+  <div className="flex h-[50vh] items-center justify-center">
+    <div className="text-center space-y-4">
+      <h2 className="text-2xl font-bold">{title}</h2>
+      <p className="text-muted-foreground">This feature is part of the Zenith MVP mockup.</p>
+    </div>
+  </div>
+);
+```
+
+This component is used for: `Provision`, `Approvals`, `Lifecycle`, `Reports`, and `Discover & Migrate`.
+
+The current implementation has three problems:
+
+1. **No icon** — the page is visually barren and indistinguishable at a glance from a broken page.
+2. **Generic description** — "This feature is part of the Zenith MVP mockup" tells users nothing about what the feature is for or when it will be ready. It creates doubt about whether the page is intentionally empty or accidentally broken.
+3. **No call to action** — there is nothing for the user to do. They land on the page, read a vague sentence, and must navigate away. No context, no roadmap signal, no link to related live functionality.
+
+**Proposed Solution**
+
+Replace the `EmptyPage` component with a richer `ComingSoonPage` component that accepts per-page configuration:
+
+```tsx
+type ComingSoonConfig = {
+  title: string;
+  description: string;
+  icon: React.ElementType;
+  relatedHref?: string;
+  relatedLabel?: string;
+  phase?: string;
+};
+```
+
+Each mock route passes a tailored config:
+
+| Route | Icon | Description | Related Link |
+|---|---|---|---|
+| `/app/provision` | `FolderPlus` | "Governed site provisioning with approval workflows, naming conventions, and sensitivity label assignment — coming in a future release." | Link to Governance page |
+| `/app/approvals` | `CheckCircle2` | "Approval queue for pending provisioning requests, metadata change requests, and sensitivity label escalations." | Link to Dashboard |
+| `/app/lifecycle` | `Clock` | "Automated lifecycle review hub for stale, orphaned, and non-compliant sites — with remediation queue and owner notifications." | Link to SharePoint Sites |
+| `/app/reports` | `BarChart3` | "Executive governance reporting with trend analysis, compliance KPIs, and scheduled PDF delivery." | Link to Dashboard |
+| `/app/discover` | `Search` | "Discover migration candidates across on-premises file shares and cloud storage — with AI-powered classification readiness scoring." | None |
+
+The component should use the existing `glass-panel` card aesthetic and the `cosmic-gradient` or `bg-primary/5` background style, with an icon rendered in the primary color and a "Planned Feature" badge in amber. A secondary button (if `relatedHref` is provided) links to the closest live equivalent to keep users productive.
+
+**Acceptance Criteria**
+- All five mock routes (`/app/provision`, `/app/approvals`, `/app/lifecycle`, `/app/reports`, `/app/discover`) show a rich empty state with a feature-specific icon, title, and description.
+- Each empty state includes a "Planned Feature" pill badge (amber) to communicate intentionality.
+- Each empty state where `relatedHref` is defined includes a secondary action button linking to the related live feature.
+- The empty state is visually consistent with the Aurora / glass-panel design language — no new colors or fonts.
+- The component gracefully handles cases where no `relatedHref` is provided (renders without the action button).
+- The generic `EmptyPage` component is removed from `App.tsx` and replaced with the new component.
+- No changes to routing, RBAC, or feature toggle logic.
+
+**Design Notes**
+- Container: `glass-panel p-12 rounded-2xl max-w-lg mx-auto mt-16 text-center`
+- Icon: `w-12 h-12 text-primary mx-auto mb-4 opacity-70`
+- "Planned Feature" badge: `bg-amber-100/80 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 text-xs font-semibold px-2.5 py-0.5 rounded-full`
+- Title: `text-2xl font-bold mt-4`
+- Description: `text-muted-foreground mt-2 leading-relaxed`
+- Related link button: `variant="outline"` with the related page icon
+
+---
+
+### 🟡 BL-036: ⌘K Command Palette (Global Navigation Search)
+**Status:** Backlog | **Priority:** Medium | **Effort:** Medium (3–5 hours) | **Files:** New `client/src/components/command-palette.tsx` + `client/src/components/layout/app-shell.tsx`
+
+**Problem**
+
+With 25+ distinct routes organized across multiple levels of nav hierarchy, capability discovery via the sidebar alone is slow and requires knowing where features are located. New users face a steep learning curve: they must understand the navigation structure (Management → Governance → Policy Builder) before they can find specific tools. Experienced users who know what they want to do are slowed down by having to visually scan and click through nested sections.
+
+The existing search bar in the header is visually present but non-functional for navigation purposes — it does not search across features or pages.
+
+There is no keyboard-first navigation path in the application. Every interaction requires mouse or touch navigation through the sidebar.
+
+This is the highest-impact capability discovery improvement available without changing any page content or data.
+
+**Proposed Solution**
+
+Implement a global `⌘K` / `Ctrl+K` command palette — a modal dialog with a search input that indexes all navigation items and allows instant keyboard-driven navigation to any page in the app.
+
+**Component: `CommandPalette`**
+
+- **Trigger:** Global `keydown` listener for `Meta+K` (Mac) or `Ctrl+K` (Windows/Linux). Also triggered by clicking the existing search bar in the header (replace or augment the non-functional search bar UI).
+- **Dialog:** Uses shadcn/ui `<Dialog>` with a full-width search input at the top.
+- **Index:** All items from `navGroups`, `adminSubGroups`, and `platformAdminItems` — filtered by user's `effectiveRole` and enabled feature toggles (matching existing sidebar filtering logic).
+- **Each result item shows:**
+  - Feature icon (same icon used in the sidebar nav item)
+  - Feature name
+  - Section path (e.g., "Management › Governance" or "Administration › Access & Audit")
+  - Plan badge if applicable (`Pro+`, `Ent+`)
+  - Muted `MOCK` tag if applicable
+- **Search behaviour:** Case-insensitive substring match on both feature name and section path. Results are filtered in real time as the user types. No external search library needed — the index is small (< 30 items).
+- **Keyboard navigation within the palette:**
+  - `↑` / `↓` arrows to move selection
+  - `Enter` to navigate to the selected item (closes palette, routes via `useLocation`)
+  - `Escape` to close without navigating
+- **Empty state:** "No features match your search." with a hint to try broader terms.
+- **Recent items (stretch goal):** Show the last 3 visited pages as "Recent" suggestions before the user starts typing, stored in `localStorage`.
+
+**Integration in `app-shell.tsx`**
+
+- Mount `<CommandPalette />` once inside `AppShell` so it is always available when the shell is rendered.
+- Pass it the filtered nav items (already computed by `NavLinks` filtering logic) and a `useLocation` setter.
+- The existing search bar `<Input>` in the header becomes the visual trigger for the palette (clicking it opens the dialog instead of typing inline).
+
+**Acceptance Criteria**
+- `⌘K` (Mac) and `Ctrl+K` (Windows/Linux) open the command palette from any page within the app shell.
+- Clicking the search bar in the header also opens the command palette.
+- All nav items visible to the current user's role and feature toggles are searchable.
+- Items not accessible to the user's role or disabled by feature toggle do not appear.
+- Search is case-insensitive and matches on both item name and section path.
+- Keyboard navigation (`↑`, `↓`, `Enter`, `Escape`) is fully functional.
+- Navigating to a selected item closes the palette and routes immediately.
+- The palette renders within the existing Aurora / glass-panel design language: `bg-card/95 backdrop-blur-xl border border-border/40 rounded-2xl`.
+- No new npm packages required — uses only shadcn/ui `Dialog`, `Command`, or equivalent components already available in the project, plus native DOM APIs.
+- The palette is accessible: `role="dialog"`, `aria-label="Command palette"`, focus trapped within the dialog while open.
+- On mobile, the palette is not triggered by `⌘K` (no keyboard) but remains accessible via the search bar tap.
+
+**Implementation Notes**
+
+The shadcn/ui library already includes a `Command` primitive (`cmdk` under the hood) which provides the filtered list, keyboard navigation, and empty state out of the box. Check `client/src/components/ui/` for an existing `command.tsx`. If present, the implementation reduces to:
+
+```tsx
+<CommandDialog open={open} onOpenChange={setOpen}>
+  <CommandInput placeholder="Search features..." />
+  <CommandList>
+    <CommandEmpty>No features match your search.</CommandEmpty>
+    {groupedItems.map(group => (
+      <CommandGroup key={group.label} heading={group.label}>
+        {group.items.map(item => (
+          <CommandItem key={item.href} onSelect={() => { navigate(item.href); setOpen(false); }}>
+            <item.icon className="w-4 h-4 mr-2 text-muted-foreground" />
+            {item.name}
+            {item.badge && <Badge>{item.badge}</Badge>}
+          </CommandItem>
+        ))}
+      </CommandGroup>
+    ))}
+  </CommandList>
+</CommandDialog>
+```
+
+**Dependency check before implementation:** Confirm `cmdk` is already included via shadcn/ui. If not, install it as it is a zero-config peer dependency of the shadcn Command component.
 
 ---
 
