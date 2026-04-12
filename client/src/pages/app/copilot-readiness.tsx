@@ -326,7 +326,7 @@ function AIAssessmentPanel({
       `Generated: ${new Date().toLocaleDateString()}`,
       `Model: ${displayRun.modelUsed ?? 'AI'}`,
       ``,
-      `## Organisation Summary`,
+      `## Organization Summary`,
       `- Total workspaces: ${summary.totalWorkspaces}`,
       `- Evaluated: ${summary.evaluated}`,
       `- Copilot Ready: ${summary.ready} (${summary.readinessPercent}%)`,
@@ -366,7 +366,7 @@ function AIAssessmentPanel({
               <Badge variant="outline" className="bg-primary/10 text-primary border-primary/20 text-[10px]">GPT-4o</Badge>
             </CardTitle>
             <CardDescription className="mt-1">
-              AI-generated executive summary, prioritised remediation roadmap, and governance recommendations.
+              AI-generated executive summary, prioritized remediation roadmap, and governance recommendations.
             </CardDescription>
           </div>
           <div className="flex items-center gap-2 shrink-0">
@@ -418,7 +418,7 @@ function AIAssessmentPanel({
         <CardContent>
           <div className="flex items-center gap-3 text-muted-foreground py-4">
             <Loader2 className="w-4 h-4 animate-spin" />
-            <span className="text-sm">Generating AI assessment — analysing {readinessData?.summary.evaluated ?? 0} workspaces…</span>
+            <span className="text-sm">Generating AI assessment — analyzing {readinessData?.summary.evaluated ?? 0} workspaces…</span>
           </div>
         </CardContent>
       )}

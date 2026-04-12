@@ -101,7 +101,7 @@ function scoreNamingConsistency(workspaces: Workspace[]): IADimensionScore {
       siteUrl: w.siteUrl ?? null,
       tenantConnectionId: w.tenantConnectionId ?? null,
       reason: !hasKnownPrefix(w.displayName)
-        ? "No recognised naming prefix"
+        ? "No recognized naming prefix"
         : "Problematic naming pattern detected",
     }));
 
@@ -365,7 +365,7 @@ function scoreLifecycleManagement(workspaces: Workspace[]): IADimensionScore {
 /**
  * Scores how well libraries are structured across the tenant.
  * Factors: multi-library adoption, default-lib overload, folder depth,
- *          view customisation, and size imbalance (flagged large items).
+ *          view customization, and size imbalance (flagged large items).
  *
  * Returns score=100 with a "not synced" summary when no library data is
  * available, so the overall IA score is never penalised for missing data.
@@ -416,7 +416,7 @@ function scoreLibraryStructure(
   }
   const deepLibs = libsWithDepth.filter(l => (l.maxFolderDepth ?? 0) > 5);
 
-  // ── View customisation ────────────────────────────────────────────────────
+  // ── View customization ────────────────────────────────────────────────────
   // Libraries that have at least one custom view show user adoption.
   const libsWithViewData = visibleLibs.filter(l => l.totalViewCount != null && l.totalViewCount > 0);
   let viewCustomScore = 1.0; // default: full score when no data

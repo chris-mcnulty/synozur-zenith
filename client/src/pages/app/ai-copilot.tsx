@@ -468,7 +468,7 @@ export default function AICopilotIntegration() {
                   {msg.isLoading ? (
                     <div className="p-3 rounded-2xl bg-background border border-border/50 rounded-bl-none shadow-sm flex items-center gap-2 text-muted-foreground text-sm">
                       <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                      Analysing governance data...
+                      Analyzing governance data...
                     </div>
                   ) : (
                     <div className={`p-3 rounded-2xl text-sm shadow-sm ${

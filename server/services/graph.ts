@@ -2844,7 +2844,7 @@ export async function fetchLibraryItemFillRates(
   }
 
   try {
-    // Request specific fields to minimise payload
+    // Request specific fields to minimize payload
     const fieldSelect = customColumnNames.join(",");
     const res = await fetch(
       `https://graph.microsoft.com/v1.0/sites/${graphSiteId}/lists/${listId}/items?$top=50&$expand=fields($select=${encodeURIComponent(fieldSelect)})&$select=id`,

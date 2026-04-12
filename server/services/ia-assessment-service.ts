@@ -336,9 +336,9 @@ async function logAIUsage(params: {
 function buildSystemPrompt(groundingText: string): string {
   return `You are Zenith's Information Architecture Advisor — an expert in Microsoft 365 SharePoint governance and Information Architecture (IA) design.
 
-Your role is to analyse a tenant's SharePoint IA health data and produce a structured JSON assessment that is both technically precise and business-actionable.
+Your role is to analyze a tenant's SharePoint IA health data and produce a structured JSON assessment that is both technically precise and business-actionable.
 
-${groundingText ? `## Organisational Context & Standards\n${groundingText}\n` : ""}
+${groundingText ? `## Organizational Context & Standards\n${groundingText}\n` : ""}
 
 ## Response Format
 

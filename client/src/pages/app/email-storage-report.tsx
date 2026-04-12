@@ -173,7 +173,7 @@ function RunResults({ report }: { report: EmailStorageReport }) {
     <div className="space-y-4 mt-2" data-testid="section-run-results">
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <StatCard
-          label="Messages Analysed"
+          label="Messages Analyzed"
           value={(report.messagesAnalyzed ?? 0).toLocaleString()}
           icon={<Mail className="h-4 w-4 text-blue-500" />}
         />

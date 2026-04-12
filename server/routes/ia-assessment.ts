@@ -82,7 +82,7 @@ router.post(
       req.activeOrganizationId || req.user?.organizationId || access.conn.organizationId || "";
 
     if (!orgId) {
-      return res.status(400).json({ message: "No active organisation context" });
+      return res.status(400).json({ message: "No active organization context" });
     }
 
     const runId = await runIAAssessment(
@@ -107,7 +107,7 @@ router.get(
   async (req: AuthenticatedRequest, res) => {
     const orgId = req.activeOrganizationId || req.user?.organizationId;
     if (!orgId) {
-      return res.status(400).json({ message: "No active organisation" });
+      return res.status(400).json({ message: "No active organization" });
     }
 
     const limit = Math.min(parseInt(String(req.query.limit ?? "20"), 10), 100);

@@ -258,7 +258,7 @@ export default function DashboardPage() {
   const copilotReadiness = totalWorkspaces > 0 ? Math.round((stats!.copilotReady / totalWorkspaces) * 100) : 0;
   const pendingApprovals = stats?.pendingRequests ?? 0;
 
-  const orgName = org?.name ?? "your organisation";
+  const orgName = org?.name ?? "your organization";
   const activeTenantsCount = dashData?.activeTenantsCount ?? 0;
 
   return (
@@ -409,7 +409,7 @@ export default function DashboardPage() {
           <Card className="glass-panel">
             <CardHeader>
               <CardTitle>Recent Activity</CardTitle>
-              <CardDescription>Latest audit log entries for your organisation.</CardDescription>
+              <CardDescription>Latest audit log entries for your organization.</CardDescription>
             </CardHeader>
             <CardContent>
               <div className="space-y-6">

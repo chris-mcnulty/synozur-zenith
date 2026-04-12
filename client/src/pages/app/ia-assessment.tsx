@@ -15,13 +15,6 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import {
   RadarChart,
   PolarGrid,
   PolarAngleAxis,
@@ -41,7 +34,6 @@ import {
   Clock,
   Download,
   BarChart3,
-  Building2,
   Sparkles,
 } from "lucide-react";
 import { UpgradeGate } from "@/components/upgrade-gate";
@@ -295,18 +287,11 @@ function downloadMarkdown(run: IAAssessmentRun) {
 // ---------------------------------------------------------------------------
 
 export default function IAAssessmentPage() {
-  const { tenants, selectedTenant } = useTenant();
-  const [selectedTenantId, setSelectedTenantId] = useState<string>("");
+  const { selectedTenant } = useTenant();
+  const selectedTenantId = selectedTenant?.id ?? "";
   const [pollingRunId, setPollingRunId] = useState<string | null>(null);
   const [expandedDimension, setExpandedDimension] = useState<string | null>(null);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
-
-  // Default to selected tenant
-  useEffect(() => {
-    if (selectedTenant && !selectedTenantId) {
-      setSelectedTenantId(selectedTenant.id);
-    }
-  }, [selectedTenant, selectedTenantId]);
 
   // Poll active run
   const { data: polledRun, isLoading: pollingLoading } = useQuery<IAAssessmentRun>({
@@ -419,39 +404,11 @@ export default function IAAssessmentPage() {
           <CardHeader className="pb-3">
             <CardTitle className="text-base">Run New Assessment</CardTitle>
             <CardDescription>
-              Select a tenant, then click Run Assessment. Analysis takes 15–60 seconds.
+              Click Run Assessment to analyze the selected tenant. Analysis takes 15–60 seconds.
             </CardDescription>
           </CardHeader>
           <CardContent>
             <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3">
-              {tenants.length > 1 ? (
-                <Select
-                  value={selectedTenantId}
-                  onValueChange={setSelectedTenantId}
-                >
-                  <SelectTrigger className="w-72" data-testid="select-tenant">
-                    <SelectValue placeholder="Select a tenant…" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {tenants.map(t => (
-                      <SelectItem key={t.id} value={t.id} data-testid={`option-tenant-${t.id}`}>
-                        <div className="flex flex-col">
-                          <span className="font-medium">{t.domain}</span>
-                          <span className="text-xs text-muted-foreground">{t.tenantName}</span>
-                        </div>
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              ) : (
-                <div className="flex items-center gap-2 px-3 py-2 rounded-lg border border-border/50 bg-muted/10">
-                  <Building2 className="w-4 h-4 text-muted-foreground" />
-                  <span className="text-sm text-muted-foreground">
-                    {selectedTenant?.domain || "No tenant selected"}
-                  </span>
-                </div>
-              )}
-
               <Button
                 onClick={() => {
                   if (selectedTenantId) triggerMutation.mutate(selectedTenantId);
@@ -461,7 +418,7 @@ export default function IAAssessmentPage() {
                 data-testid="button-run-assessment"
               >
                 {isPolling || triggerMutation.isPending ? (
-                  <><Loader2 className="w-4 h-4 animate-spin" /> Analysing…</>
+                  <><Loader2 className="w-4 h-4 animate-spin" /> Analyzing…</>
                 ) : (
                   <><Play className="w-4 h-4" /> Run Assessment</>
                 )}
@@ -479,7 +436,7 @@ export default function IAAssessmentPage() {
             {isPolling && (
               <div className="mt-4 flex items-center gap-3 text-sm text-muted-foreground animate-pulse">
                 <Loader2 className="w-4 h-4 animate-spin text-primary" />
-                AI is analysing your workspace inventory… this may take up to a minute.
+                AI is analyzing your workspace inventory… this may take up to a minute.
               </div>
             )}
           </CardContent>

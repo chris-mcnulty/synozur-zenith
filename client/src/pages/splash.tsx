@@ -74,7 +74,7 @@ export default function SplashPage() {
             </div>
             <h3 className="text-xl font-semibold mb-3">Unified M365 Inventory</h3>
             <p className="text-muted-foreground leading-relaxed">
-              Continuously synchronised inventory of every SharePoint site, Teams workspace, OneDrive, and SharePoint Embedded container — with sensitivity, sharing, and lifecycle detail in one place.
+              Continuously synchronized inventory of every SharePoint site, Teams workspace, OneDrive, and SharePoint Embedded container — with sensitivity, sharing, and lifecycle detail in one place.
             </p>
           </div>
 
@@ -128,7 +128,7 @@ export default function SplashPage() {
                 <Gauge className="w-5 h-5" />
               </div>
               <h3 className="text-lg font-semibold mb-2">Copilot Readiness</h3>
-              <p className="text-sm text-muted-foreground leading-relaxed">Weighted 0–100 readiness score per workspace. Org-wide dashboard segments workspaces into Ready, Nearly Ready, At Risk, and Blocked tiers — with a ranked remediation queue prioritising the sites closest to eligibility.</p>
+              <p className="text-sm text-muted-foreground leading-relaxed">Weighted 0–100 readiness score per workspace. Org-wide dashboard segments workspaces into Ready, Nearly Ready, At Risk, and Blocked tiers — with a ranked remediation queue prioritizing the sites closest to eligibility.</p>
             </div>
             <div className="glass-panel p-6 rounded-2xl border border-border/50 transition-all hover:-translate-y-1 duration-300">
               <div className="w-10 h-10 rounded-lg bg-rose-500/10 flex items-center justify-center text-rose-500 mb-4 border border-rose-500/20">
@@ -149,7 +149,7 @@ export default function SplashPage() {
                 <Mail className="w-5 h-5" />
               </div>
               <h3 className="text-lg font-semibold mb-2">Email Content Storage Report</h3>
-              <p className="text-sm text-muted-foreground leading-relaxed">Analyse Exchange Online mailboxes to classify attachments as classic files, modern reference links, or inline images. Surface the heaviest mailbox consumers with per-user CSV export and actionable status guidance.</p>
+              <p className="text-sm text-muted-foreground leading-relaxed">Analyze Exchange Online mailboxes to classify attachments as classic files, modern reference links, or inline images. Surface the heaviest mailbox consumers with per-user CSV export and actionable status guidance.</p>
             </div>
             <div className="glass-panel p-6 rounded-2xl border border-border/50 transition-all hover:-translate-y-1 duration-300">
               <div className="w-10 h-10 rounded-lg bg-indigo-500/10 flex items-center justify-center text-indigo-500 mb-4 border border-indigo-500/20">

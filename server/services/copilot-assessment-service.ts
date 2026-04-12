@@ -4,7 +4,7 @@
  * Wraps the deterministic scoring engine with GPT-4o narrative analysis:
  *   - Org-wide executive summary
  *   - Per-workspace remediation narratives (on demand, cached 1 hour)
- *   - Prioritised 30/60/90-day remediation roadmap
+ *   - Prioritized 30/60/90-day remediation roadmap
  *
  * All AI calls use the `copilot_assessment` feature assignment.
  */
@@ -161,14 +161,14 @@ function buildOrgAssessmentPrompt(
     })
     .join('\n');
 
-  const systemPrompt = `You are an expert Microsoft 365 governance consultant specialising in Copilot readiness and SharePoint governance.
+  const systemPrompt = `You are an expert Microsoft 365 governance consultant specializing in Copilot readiness and SharePoint governance.
 Your output must be structured Markdown that an executive can read and a governance team can action.
 Grounding standards:
 - Microsoft 365 Copilot requires: sensitivity label, dual ownership (≥2 owners), complete governance metadata, external sharing disabled on Highly Confidential sites, no encryption that blocks indexing.
 - NEARLY_READY = score ≥ 80, AT_RISK = 50–79, BLOCKED = <50, READY = all criteria pass.
 - Focus on actionable, specific remediation over generic advice.`;
 
-  const userPrompt = `Organisation ID: ${orgId}
+  const userPrompt = `Organization ID: ${orgId}
 Assessment date: ${new Date().toISOString().slice(0, 10)}
 
 ## Org-wide Copilot Readiness Metrics
