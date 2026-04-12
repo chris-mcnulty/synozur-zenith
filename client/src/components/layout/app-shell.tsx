@@ -112,10 +112,26 @@ type NavGroup = {
 // ── Sidebar collapse persistence ──────────────────────────────────────
 const SIDEBAR_COLLAPSED_KEY = "zenith_sidebar_collapsed";
 
+function isCollapsedState(value: unknown): value is Record<string, boolean> {
+  if (
+    value === null ||
+    typeof value !== "object" ||
+    Array.isArray(value) ||
+    Object.getPrototypeOf(value) !== Object.prototype
+  ) {
+    return false;
+  }
+
+  return Object.values(value).every((entry) => typeof entry === "boolean");
+}
+
 function loadCollapsedState(): Record<string, boolean> {
   try {
     const raw = localStorage.getItem(SIDEBAR_COLLAPSED_KEY);
-    return raw ? JSON.parse(raw) : {};
+    if (!raw) return {};
+
+    const parsed: unknown = JSON.parse(raw);
+    return isCollapsedState(parsed) ? parsed : {};
   } catch {
     return {};
   }
