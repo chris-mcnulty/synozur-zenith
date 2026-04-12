@@ -7,6 +7,8 @@ import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { TenantProvider } from "@/lib/tenant-context";
 import NotFound from "@/pages/not-found";
+import { ComingSoonPage } from "@/components/coming-soon-page";
+import { FolderPlus, CheckCircle2, Clock, BarChart3, Search, ShieldCheck, LayoutDashboard } from "lucide-react";
 
 import SplashPage from "./pages/splash";
 import PlansPage from "./pages/plans";
@@ -99,14 +101,51 @@ function RoleGuard({ minRole, children }: { minRole: string; children: React.Rea
   return <>{children}</>;
 }
 
-const EmptyPage = ({ title }: { title: string }) => (
-  <div className="flex h-[50vh] items-center justify-center">
-    <div className="text-center space-y-4">
-      <h2 className="text-2xl font-bold">{title}</h2>
-      <p className="text-muted-foreground">This feature is part of the Zenith MVP mockup.</p>
-    </div>
-  </div>
-);
+// BL-035: Tailored "Coming Soon" configurations for mock/planned routes.
+const COMING_SOON_CONFIGS = {
+  provision: {
+    title: "Governed Site Provisioning",
+    description: "Governed site provisioning with approval workflows, naming conventions, and sensitivity label assignment — coming in a future release.",
+    icon: FolderPlus,
+    relatedHref: "/app/governance",
+    relatedLabel: "Go to SharePoint Sites",
+    relatedIcon: ShieldCheck,
+    phase: "Roadmap",
+  },
+  approvals: {
+    title: "Approvals Queue",
+    description: "Approval queue for pending provisioning requests, metadata change requests, and sensitivity label escalations.",
+    icon: CheckCircle2,
+    relatedHref: "/app/dashboard",
+    relatedLabel: "Back to Dashboard",
+    relatedIcon: LayoutDashboard,
+    phase: "Roadmap",
+  },
+  lifecycle: {
+    title: "Lifecycle Review Hub",
+    description: "Automated lifecycle review hub for stale, orphaned, and non-compliant sites — with remediation queue and owner notifications.",
+    icon: Clock,
+    relatedHref: "/app/governance",
+    relatedLabel: "Go to SharePoint Sites",
+    relatedIcon: ShieldCheck,
+    phase: "Roadmap",
+  },
+  reports: {
+    title: "Executive Reports",
+    description: "Executive governance reporting with trend analysis, compliance KPIs, and scheduled PDF delivery.",
+    icon: BarChart3,
+    relatedHref: "/app/dashboard",
+    relatedLabel: "Back to Dashboard",
+    relatedIcon: LayoutDashboard,
+    phase: "Roadmap",
+  },
+  discover: {
+    title: "Discover & Migrate",
+    description: "Discover migration candidates across on-premises file shares and cloud storage — with AI-powered classification readiness scoring.",
+    icon: Search,
+    phase: "Roadmap",
+  },
+} as const;
 
 const NO_SHELL_ROUTES = ["/", "/plans", "/login", "/auth/entra/callback", "/app/select-tenant", "/app/add-tenant", "/app/admin/plans"];
 
@@ -132,7 +171,7 @@ function AppRoutes() {
         <Route path="/app/add-tenant" component={AddTenantPage} />
         <Route path="/app/dashboard" component={DashboardPage} />
         <Route path="/app/provision/new" component={ProvisionNewPage} />
-        <Route path="/app/provision" component={() => <EmptyPage title="Provisioning Requests" />} />
+        <Route path="/app/provision" component={() => <ComingSoonPage config={COMING_SOON_CONFIGS.provision} />} />
         <Route path="/app/governance/workspaces/:id" component={WorkspaceDetailsPage} />
         <Route path="/app/governance" component={GovernancePage} />
         <Route path="/app/information-architecture" component={InformationArchitecturePage} />
