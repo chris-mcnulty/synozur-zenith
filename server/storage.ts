@@ -1558,6 +1558,11 @@ export class DatabaseStorage implements IStorage {
           hidden: data.hidden,
           lastModifiedAt: data.lastModifiedAt,
           lastSyncAt: data.lastSyncAt,
+          m365DriveId: data.m365DriveId,
+          maxFolderDepth: data.maxFolderDepth,
+          totalFolderCount: data.totalFolderCount,
+          customViewCount: data.customViewCount,
+          totalViewCount: data.totalViewCount,
         },
       })
       .returning();
@@ -2562,6 +2567,8 @@ export class DatabaseStorage implements IStorage {
           isReadOnly: data.isReadOnly,
           isIndexed: data.isIndexed,
           isRequired: data.isRequired,
+          fillRatePct: data.fillRatePct,
+          fillRateSampleSize: data.fillRateSampleSize,
           lastSyncAt: new Date(),
         },
       })

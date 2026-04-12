@@ -92,6 +92,8 @@ type LibraryColumn = {
   columnGroup: string | null;
   isSyntexManaged: boolean;
   isCustom: boolean;
+  fillRatePct?: number | null;
+  fillRateSampleSize?: number | null;
 };
 
 type LibraryDetails = {
@@ -240,6 +242,28 @@ function LibraryDetailPanel({ libraryId, onClose }: { libraryId: string; onClose
         ))}
       </div>
 
+      {/* IA extended metrics (shown when IA sync has been run) */}
+      {(details.library.maxFolderDepth != null || details.library.totalViewCount != null) && (
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          {details.library.maxFolderDepth != null && (
+            <div className={`p-3 rounded-lg border ${(details.library.maxFolderDepth ?? 0) > 5 ? "bg-amber-500/5 border-amber-500/30" : "bg-muted/30 border-border/30"}`}>
+              <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Max Folder Depth</p>
+              <p className={`text-lg font-bold ${(details.library.maxFolderDepth ?? 0) > 5 ? "text-amber-500" : ""}`}>{details.library.maxFolderDepth}</p>
+              {details.library.totalFolderCount != null && (
+                <p className="text-[10px] text-muted-foreground">{details.library.totalFolderCount} folders total</p>
+              )}
+            </div>
+          )}
+          {details.library.totalViewCount != null && (
+            <div className="p-3 rounded-lg bg-muted/30 border border-border/30">
+              <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Custom Views</p>
+              <p className="text-lg font-bold">{details.library.customViewCount ?? 0}</p>
+              <p className="text-[10px] text-muted-foreground">of {details.library.totalViewCount} total</p>
+            </div>
+          )}
+        </div>
+      )}
+
       <Tabs defaultValue="content-types" className="w-full">
         <TabsList className="w-full justify-start border-b rounded-none bg-transparent p-0 h-auto">
           <TabsTrigger value="content-types" className="gap-1.5 rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent">
@@ -295,6 +319,7 @@ function LibraryDetailPanel({ libraryId, onClose }: { libraryId: string; onClose
                   <TableHead>Group</TableHead>
                   <TableHead className="text-center">Indexed</TableHead>
                   <TableHead className="text-center">Required</TableHead>
+                  <TableHead className="text-center">Fill Rate</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -313,6 +338,13 @@ function LibraryDetailPanel({ libraryId, onClose }: { libraryId: string; onClose
                     <TableCell className="text-xs text-muted-foreground">{col.columnGroup || "—"}</TableCell>
                     <TableCell className="text-center">{col.indexed ? <Badge variant="outline" className="text-[10px]">Yes</Badge> : "—"}</TableCell>
                     <TableCell className="text-center">{col.required ? <Badge className="text-[10px] bg-amber-500/20 text-amber-600 border-amber-500/30">Required</Badge> : "—"}</TableCell>
+                    <TableCell className="text-center">
+                      {col.fillRatePct != null ? (
+                        <span className={`text-xs font-mono font-medium ${col.fillRatePct < 30 ? "text-red-500" : col.fillRatePct < 70 ? "text-amber-500" : "text-emerald-500"}`}>
+                          {col.fillRatePct}%
+                        </span>
+                      ) : <span className="text-xs text-muted-foreground">—</span>}
+                    </TableCell>
                   </TableRow>
                 ))}
               </TableBody>
@@ -552,6 +584,8 @@ function LibrariesTab({ tenantConnectionId }: { tenantConnectionId: string }) {
                   <TableHead>Parent Site</TableHead>
                   <TableHead className="text-right">Items</TableHead>
                   <TableHead className="text-right">Storage</TableHead>
+                  <TableHead className="text-center">Depth</TableHead>
+                  <TableHead className="text-center">Views</TableHead>
                   <TableHead>Label</TableHead>
                   <TableHead>Last Modified</TableHead>
                   <TableHead className="w-8"></TableHead>
@@ -585,6 +619,20 @@ function LibrariesTab({ tenantConnectionId }: { tenantConnectionId: string }) {
                     </TableCell>
                     <TableCell className="text-sm text-right">{(lib.itemCount || 0).toLocaleString()}</TableCell>
                     <TableCell className="text-sm text-right text-muted-foreground">{formatBytes(lib.storageUsedBytes)}</TableCell>
+                    <TableCell className="text-center">
+                      {lib.maxFolderDepth != null ? (
+                        <span className={`text-xs font-mono ${lib.maxFolderDepth > 5 ? "text-amber-500 font-semibold" : "text-muted-foreground"}`}>
+                          {lib.maxFolderDepth}
+                        </span>
+                      ) : <span className="text-xs text-muted-foreground">—</span>}
+                    </TableCell>
+                    <TableCell className="text-center">
+                      {lib.totalViewCount != null ? (
+                        <span className="text-xs text-muted-foreground">
+                          {lib.customViewCount ?? 0}/{lib.totalViewCount}
+                        </span>
+                      ) : <span className="text-xs text-muted-foreground">—</span>}
+                    </TableCell>
                     <TableCell>{lib.sensitivityLabelId ? <Badge variant="secondary" className="text-[10px]">Labeled</Badge> : <span className="text-xs text-muted-foreground">—</span>}</TableCell>
                     <TableCell className="text-xs text-muted-foreground">{lib.lastModifiedAt ? new Date(lib.lastModifiedAt).toLocaleDateString() : "—"}</TableCell>
                     <TableCell><ChevronRight className="w-4 h-4 text-muted-foreground" /></TableCell>

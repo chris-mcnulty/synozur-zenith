@@ -636,6 +636,11 @@ export const documentLibraries = pgTable("document_libraries", {
   lastSyncAt: timestamp("last_sync_at"),
   flaggedLargeItems: boolean("flagged_large_items").default(false),
   flaggedVersionSprawl: boolean("flagged_version_sprawl").default(false),
+  m365DriveId: text("m365_drive_id"),
+  maxFolderDepth: integer("max_folder_depth"),
+  totalFolderCount: integer("total_folder_count"),
+  customViewCount: integer("custom_view_count"),
+  totalViewCount: integer("total_view_count"),
   createdAt: timestamp("created_at").defaultNow(),
 }, (table) => [
   unique("uq_workspace_list").on(table.workspaceId, table.m365ListId),
@@ -1152,6 +1157,8 @@ export const libraryColumns = pgTable("library_columns", {
   isReadOnly: boolean("is_read_only").notNull().default(false),
   isIndexed: boolean("is_indexed").notNull().default(false),
   isRequired: boolean("is_required").notNull().default(false),
+  fillRatePct: integer("fill_rate_pct"),
+  fillRateSampleSize: integer("fill_rate_sample_size"),
   lastSyncAt: timestamp("last_sync_at").defaultNow(),
 }, (table) => [
   unique("uq_library_column").on(table.documentLibraryId, table.columnInternalName),
