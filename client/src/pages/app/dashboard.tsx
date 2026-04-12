@@ -150,8 +150,8 @@ const onboardingSteps: OnboardingStep[] = [
   },
   {
     id: "template",
-    label: "Create a provisioning template",
-    description: "Define a reusable template so new workspaces are created with consistent governance.",
+    label: "Set up advanced workspace governance",
+    description: "As your environment grows, configure governance features like provisioning templates and approval workflows.",
     href: "/app/admin",
     check: (ctx) => ctx.pendingRequests > 0 || ctx.totalWorkspaces > 5,
   },
