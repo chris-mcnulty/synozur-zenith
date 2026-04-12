@@ -358,6 +358,11 @@ export default function AppShell({ children }: AppShellProps) {
     : currentUser?.email?.[0]?.toUpperCase() || "?";
 
   const effectiveRole = currentUser?.effectiveRole || currentUser?.role || "viewer";
+  const isMac = typeof navigator !== "undefined" && (
+    // userAgentData is available in modern Chromium-based browsers
+    (navigator as any).userAgentData?.platform?.toLowerCase().startsWith("mac") ??
+    /Mac|iPhone|iPad|iPod/.test(navigator.platform)
+  );
 
   // Enhancement 3: Grouped admin sub-sections
   type AdminSubGroup = { subLabel: string; items: Array<{ name: string; href: string; icon: any; matchExact?: boolean; minRole: string }> };
@@ -759,9 +764,15 @@ export default function AppShell({ children }: AppShellProps) {
               const { color: dotColor, label: dotLabel } = syncStatusFromTenant(selectedTenant);
               const displayName = selectedTenant.tenantName || selectedTenant.domain || "Active tenant";
               const secondary = selectedTenant.domain && selectedTenant.domain !== displayName ? selectedTenant.domain : selectedTenant.isDemo ? "Demo tenant" : "";
+              // Route the Switch pill to the tenant-switcher flow (all users); only deep-link to
+              // Manage Connections for tenant_admin+ who can actually manage that page.
+              const isTenantAdmin = hasMinRole(effectiveRole, "tenant_admin");
+              const tenantCardHref = tenants.length > 1
+                ? "/app/select-tenant"
+                : isTenantAdmin ? "/app/admin/tenants" : "/app/select-tenant";
               return (
                 <Link
-                  href="/app/admin/tenants"
+                  href={tenantCardHref}
                   className="flex items-center gap-2.5 px-3 py-2 rounded-xl bg-primary/5 border border-primary/10 hover:bg-primary/10 transition-colors group"
                   data-testid="sidebar-tenant-card"
                 >
@@ -792,7 +803,7 @@ export default function AppShell({ children }: AppShellProps) {
             })()
           ) : (
             <Link
-              href="/app/admin/tenants"
+              href={hasMinRole(effectiveRole, "tenant_admin") ? "/app/admin/tenants" : "/app/select-tenant"}
               className="flex items-center gap-2.5 px-3 py-2 rounded-xl bg-muted/30 border border-dashed border-border/60 hover:bg-muted/50 transition-colors"
               data-testid="sidebar-tenant-card-empty"
             >
@@ -1050,9 +1061,16 @@ export default function AppShell({ children }: AppShellProps) {
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
               <span className="text-sm text-muted-foreground truncate">Search features, pages...</span>
               <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-1">
-                <kbd className="inline-flex h-5 items-center gap-1 rounded border border-border bg-background px-1.5 font-mono text-[10px] font-medium text-muted-foreground">
-                  <span className="text-xs">⌘</span>K
-                </kbd>
+                {isMac ? (
+                  <kbd className="inline-flex h-5 items-center gap-1 rounded border border-border bg-background px-1.5 font-mono text-[10px] font-medium text-muted-foreground">
+                    <kbd className="text-xs not-italic">⌘</kbd>K
+                  </kbd>
+                ) : (
+                  <span className="inline-flex h-5 items-center gap-0.5">
+                    <kbd className="inline-flex h-5 items-center rounded border border-border bg-background px-1.5 font-mono text-[10px] font-medium text-muted-foreground">Ctrl</kbd>
+                    <kbd className="inline-flex h-5 items-center rounded border border-border bg-background px-1.5 font-mono text-[10px] font-medium text-muted-foreground">K</kbd>
+                  </span>
+                )}
               </div>
             </button>
             <Button
