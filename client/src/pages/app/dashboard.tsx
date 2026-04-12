@@ -160,7 +160,7 @@ const onboardingSteps: OnboardingStep[] = [
     label: "Explore the AI Assistant",
     description: "Ask Zenith's AI about your tenant health, compliance gaps, or next steps.",
     href: "/app/ai-copilot",
-    check: () => false, // always available as a suggested next step
+    check: (ctx) => ctx.activeTenantsCount > 0, // becomes actionable once a tenant is connected
   },
 ];
 
