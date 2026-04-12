@@ -567,16 +567,20 @@ function scoreContentTypeDeployment(
     const libCustomCTs = customCTs.filter(ct => ct.documentLibraryId === libId);
     return libCustomCTs.length > 0 && libCustomCTs.every(ct => ct.scope === "LIBRARY");
   });
-  const offenders: IAOffender[] = localOnlyLibIds.slice(0, 10).map(libId => {
+  const offenders: IAOffender[] = localOnlyLibIds.slice(0, 10).flatMap(libId => {
     const lib = visibleLibs.find(l => l.id === libId);
-    const ws = workspaces.find(w => w.id === lib?.workspaceId);
-    return {
-      workspaceId: lib?.workspaceId ?? libId,
-      displayName: lib?.displayName ?? libId,
+    if (!lib?.workspaceId) {
+      return [];
+    }
+
+    const ws = workspaces.find(w => w.id === lib.workspaceId);
+    return [{
+      workspaceId: lib.workspaceId,
+      displayName: lib.displayName ?? libId,
       siteUrl: ws?.siteUrl ?? null,
-      tenantConnectionId: lib?.tenantConnectionId ?? null,
+      tenantConnectionId: lib.tenantConnectionId ?? null,
       reason: "All custom content types are library-local — consider promoting to hub or site scope",
-    };
+    }];
   });
 
   return {
