@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useTheme } from "next-themes";
 import { Aurora } from "@/components/aurora";
 import { Link, useLocation, Redirect } from "wouter";
@@ -18,6 +18,7 @@ import {
   Building2,
   Menu,
   ChevronRight,
+  ChevronUp,
   LogOut,
   User,
   SunMoon,
@@ -95,12 +96,38 @@ type NavItem = {
   featureToggle?: "onedriveInventory" | "recordingsDiscovery" | "teamsDiscovery" | "telemetry" | "speDiscovery" | "contentGovernance" | "licensing";
 };
 
-type NavGroup = {
-  label: string;
-  minRole?: string;
+type NavSubGroup = {
+  subLabel: string;
   items: NavItem[];
 };
 
+type NavGroup = {
+  label: string;
+  minRole?: string;
+  collapsible?: boolean;
+  items?: NavItem[];
+  subGroups?: NavSubGroup[];
+};
+
+// ── Sidebar collapse persistence ──────────────────────────────────────
+const SIDEBAR_COLLAPSED_KEY = "zenith_sidebar_collapsed";
+
+function loadCollapsedState(): Record<string, boolean> {
+  try {
+    const raw = localStorage.getItem(SIDEBAR_COLLAPSED_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveCollapsedState(state: Record<string, boolean>) {
+  try {
+    localStorage.setItem(SIDEBAR_COLLAPSED_KEY, JSON.stringify(state));
+  } catch { /* quota exceeded – ignore */ }
+}
+
+// ── Navigation structure (Enhancement 1, 2, 3) ───────────────────────
 const navGroups: NavGroup[] = [
   {
     label: "Overview",
@@ -113,36 +140,46 @@ const navGroups: NavGroup[] = [
   {
     label: "Management",
     minRole: "operator",
-    items: [
-      { name: "SharePoint Sites", href: "/app/governance", icon: ShieldCheck },
-      { name: "Policy Builder", href: "/app/admin/policies", icon: ShieldCheck, badge: "Ent+", minRole: "governance_admin" },
-      { name: "What-If Planner", href: "/app/admin/policy-whatif", icon: FlaskConical, badge: "Ent+", minRole: "governance_admin" },
-      { name: "Teams & Channels", href: "/app/teams-channels", icon: MessagesSquare, featureToggle: "teamsDiscovery" },
-      { name: "OneDrive Inventory", href: "/app/onedrive-inventory", icon: HardDrive, featureToggle: "onedriveInventory" },
-      { name: "Recordings Discovery", href: "/app/recordings", icon: MonitorPlay, featureToggle: "recordingsDiscovery" },
-      { name: "Email Content Report", href: "/app/email-storage-report", icon: Mail, badge: "Ent+" },
-      { name: "Structures", href: "/app/structures", icon: Layers },
-      { name: "Information Architecture", href: "/app/information-architecture", icon: Network },
-      { name: "Embedded Containers", href: "/app/embedded-containers", icon: Box, featureToggle: "speDiscovery" },
-      { name: "Discover & Migrate", href: "/app/discover", icon: Search, badge: "Ent+", isMock: true },
-      { name: "Archive & Backup", href: "/app/archive-backup", icon: Archive },
-      { name: "Lifecycle", href: "/app/lifecycle", icon: Clock, isMock: true },
-      { name: "Purview", href: "/app/purview", icon: Fingerprint },
+    collapsible: true,
+    subGroups: [
+      {
+        subLabel: "Inventory",
+        items: [
+          { name: "SharePoint Sites", href: "/app/governance", icon: ShieldCheck },
+          { name: "Teams & Channels", href: "/app/teams-channels", icon: MessagesSquare, featureToggle: "teamsDiscovery" },
+          { name: "OneDrive Inventory", href: "/app/onedrive-inventory", icon: HardDrive, featureToggle: "onedriveInventory" },
+          { name: "Recordings Discovery", href: "/app/recordings", icon: MonitorPlay, featureToggle: "recordingsDiscovery" },
+          { name: "Email Content Report", href: "/app/email-storage-report", icon: Mail, badge: "Ent+" },
+          { name: "Embedded Containers", href: "/app/embedded-containers", icon: Box, featureToggle: "speDiscovery" },
+        ]
+      },
+      {
+        subLabel: "Governance",
+        items: [
+          { name: "Policy Builder", href: "/app/admin/policies", icon: ShieldCheck, badge: "Ent+", minRole: "governance_admin" },
+          { name: "What-If Planner", href: "/app/admin/policy-whatif", icon: FlaskConical, badge: "Ent+", minRole: "governance_admin" },
+          { name: "Structures", href: "/app/structures", icon: Layers },
+          { name: "Information Architecture", href: "/app/information-architecture", icon: Network },
+          { name: "Purview", href: "/app/purview", icon: Fingerprint },
+        ]
+      },
+      {
+        subLabel: "Operations",
+        items: [
+          { name: "Discover & Migrate", href: "/app/discover", icon: Search, badge: "Ent+", isMock: true },
+          { name: "Archive & Backup", href: "/app/archive-backup", icon: Archive },
+          { name: "Lifecycle", href: "/app/lifecycle", icon: Clock, isMock: true },
+        ]
+      },
     ]
   },
   {
-    label: "Cost & Licensing",
-    minRole: "operator",
-    items: [
-      { name: "License Overview", href: "/app/licensing", icon: CreditCard, featureToggle: "licensing" },
-    ]
-  },
-  {
-    label: "Insights & Intelligence",
+    label: "Insights & Licensing",
     items: [
       { name: "Copilot Readiness", href: "/app/copilot-readiness", icon: Sparkles, badge: "Pro+" },
       { name: "IA Assessment", href: "/app/ia-assessment", icon: BarChart3, badge: "Ent+" },
       { name: "AI Assistant", href: "/app/ai-copilot", icon: BrainCircuit },
+      { name: "License Overview", href: "/app/licensing", icon: CreditCard, featureToggle: "licensing", minRole: "operator" },
       { name: "Reports", href: "/app/reports", icon: BarChart3, isMock: true },
     ]
   }
@@ -214,124 +251,223 @@ export default function AppShell({ children }: AppShellProps) {
 
   const effectiveRole = currentUser?.effectiveRole || currentUser?.role || "viewer";
 
-  const adminItems: Array<{ name: string; href: string; icon: any; matchExact?: boolean; minRole: string }> = [
-    { name: "Provisioning Templates", href: "/app/admin", icon: LayoutTemplate, matchExact: true, minRole: "tenant_admin" },
-    { name: "User Management", href: "/app/admin/users", icon: UsersIcon, minRole: "tenant_admin" },
-    { name: "Organization Settings", href: "/app/admin/organization", icon: Building2, minRole: "tenant_admin" },
-    { name: "Tenant Connections", href: "/app/admin/tenants", icon: Cloud, minRole: "tenant_admin" },
-    { name: "Data Dictionaries", href: "/app/admin/data-dictionaries", icon: BookMarked, minRole: "tenant_admin" },
-    { name: "Custom Fields", href: "/app/admin/custom-fields", icon: Settings, minRole: "tenant_admin" },
+  // Enhancement 3: Grouped admin sub-sections
+  type AdminSubGroup = { subLabel: string; items: Array<{ name: string; href: string; icon: any; matchExact?: boolean; minRole: string }> };
+
+  const adminSubGroups: AdminSubGroup[] = [
+    {
+      subLabel: "Configuration",
+      items: [
+        { name: "Organization Settings", href: "/app/admin/organization", icon: Building2, minRole: "tenant_admin" },
+        { name: "Tenant Connections", href: "/app/admin/tenants", icon: Cloud, minRole: "tenant_admin" },
+        { name: "Entra ID Setup", href: "/app/admin/entra", icon: KeyRound, minRole: "tenant_admin" },
+      ]
+    },
+    {
+      subLabel: "Content & Metadata",
+      items: [
+        { name: "Provisioning Templates", href: "/app/admin", icon: LayoutTemplate, matchExact: true, minRole: "tenant_admin" },
+        { name: "Data Dictionaries", href: "/app/admin/data-dictionaries", icon: BookMarked, minRole: "tenant_admin" },
+        { name: "Custom Fields", href: "/app/admin/custom-fields", icon: Settings, minRole: "tenant_admin" },
+      ]
+    },
+    {
+      subLabel: "Access & Audit",
+      items: [
+        { name: "User Management", href: "/app/admin/users", icon: UsersIcon, minRole: "tenant_admin" },
+        { name: "Audit Log", href: "/app/admin/audit-log", icon: ClipboardList, minRole: "read_only_auditor" },
+      ]
+    },
   ];
 
   const platformAdminItems: Array<{ name: string; href: string; icon: any; minRole: string }> = [
     { name: "System Administration", href: "/app/admin/system", icon: Server, minRole: "platform_owner" },
     { name: "Plan Management", href: "/app/admin/plan-management", icon: CreditCard, minRole: "platform_owner" },
     { name: "AI Settings", href: "/app/admin/ai-settings", icon: BrainCircuit, minRole: "platform_owner" },
-    { name: "Entra ID Setup", href: "/app/admin/entra", icon: KeyRound, minRole: "tenant_admin" },
-    { name: "Audit Log", href: "/app/admin/audit-log", icon: ClipboardList, minRole: "read_only_auditor" },
   ];
 
+  // Enhancement 5: collapsible sidebar state with localStorage persistence
+  const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>(loadCollapsedState);
+
+  const toggleSection = useCallback((key: string) => {
+    setCollapsedSections(prev => {
+      const next = { ...prev, [key]: !prev[key] };
+      saveCollapsedState(next);
+      return next;
+    });
+  }, []);
+
+  // Shared nav-item renderer
+  const renderNavItem = (item: NavItem, opts?: { matchExact?: boolean }) => {
+    const isActive = opts?.matchExact ? location === item.href : location.startsWith(item.href);
+    return (
+      <Link key={item.name} href={item.href} className={`flex items-center justify-between px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
+        isActive
+          ? "bg-primary/10 text-primary shadow-sm shadow-primary/5"
+          : "text-muted-foreground hover:bg-muted/80 hover:text-foreground"
+      }`}>
+        <div className="flex items-center gap-3">
+          <item.icon className={`w-5 h-5 ${isActive ? "text-primary" : "text-muted-foreground/70"}`} />
+          {item.name}
+        </div>
+        <div className="flex items-center gap-1">
+          {item.isMock && (
+            <span className="flex h-4 items-center justify-center rounded px-1.5 text-[9px] font-semibold bg-amber-100/80 text-amber-600/80 dark:bg-amber-900/30 dark:text-amber-400/70 opacity-75 tracking-wide">
+              MOCK
+            </span>
+          )}
+          {item.badge && (
+            <span className={`flex h-5 items-center justify-center rounded-full px-2 text-[10px] font-bold ${isActive ? 'bg-primary text-primary-foreground' : 'bg-primary/20 text-primary'}`}>
+              {item.badge}
+            </span>
+          )}
+        </div>
+      </Link>
+    );
+  };
+
   const NavLinks = () => {
+    const filterItem = (item: NavItem) => {
+      if (item.minRole && !hasMinRole(effectiveRole, item.minRole)) return false;
+      if (item.featureToggle && !isFeatureEnabled(item.featureToggle)) return false;
+      return true;
+    };
+
+    // Filter groups, handling both flat items and subGroups
     const filteredGroups = navGroups
       .filter(group => !group.minRole || hasMinRole(effectiveRole, group.minRole))
-      .map(group => ({
-        ...group,
-        items: group.items.filter(item => {
-          if (item.minRole && !hasMinRole(effectiveRole, item.minRole)) return false;
-          if (item.featureToggle && !isFeatureEnabled(item.featureToggle)) return false;
-          return true;
-        }),
-      }))
-      .filter(group => group.items.length > 0);
+      .map(group => {
+        if (group.subGroups) {
+          const filteredSubs = group.subGroups
+            .map(sg => ({ ...sg, items: sg.items.filter(filterItem) }))
+            .filter(sg => sg.items.length > 0);
+          return { ...group, subGroups: filteredSubs };
+        }
+        return { ...group, items: (group.items || []).filter(filterItem) };
+      })
+      .filter(group => (group.items?.length ?? 0) > 0 || (group.subGroups?.length ?? 0) > 0);
 
-    const visibleAdminItems = adminItems.filter(item => hasMinRole(effectiveRole, item.minRole));
+    // Filter admin sub-groups
+    const visibleAdminSubGroups = adminSubGroups
+      .map(sg => ({ ...sg, items: sg.items.filter(item => hasMinRole(effectiveRole, item.minRole)) }))
+      .filter(sg => sg.items.length > 0);
     const visiblePlatformItems = platformAdminItems.filter(item => hasMinRole(effectiveRole, item.minRole));
-    const showAdminSection = visibleAdminItems.length > 0 || visiblePlatformItems.length > 0;
+    const showAdminSection = visibleAdminSubGroups.length > 0 || visiblePlatformItems.length > 0;
 
     return (
       <div className="space-y-6 py-4">
-        {filteredGroups.map((group, i) => (
-          <div key={i} className="space-y-2">
-            <h4 className="px-4 text-xs font-bold text-muted-foreground uppercase tracking-widest mb-2">
-              {group.label}
-            </h4>
-            <div className="space-y-1">
-              {group.items.map((item) => {
-                const isActive = location.startsWith(item.href);
-                return (
-                  <Link key={item.name} href={item.href} className={`flex items-center justify-between px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
-                    isActive 
-                      ? "bg-primary/10 text-primary shadow-sm shadow-primary/5" 
-                      : "text-muted-foreground hover:bg-muted/80 hover:text-foreground"
-                  }`}>
-                    <div className="flex items-center gap-3">
-                      <item.icon className={`w-5 h-5 ${isActive ? "text-primary" : "text-muted-foreground/70"}`} />
-                      {item.name}
-                    </div>
-                    <div className="flex items-center gap-1">
-                      {item.isMock && (
-                        <span className="flex h-4 items-center justify-center rounded px-1.5 text-[9px] font-semibold bg-amber-100/80 text-amber-600/80 dark:bg-amber-900/30 dark:text-amber-400/70 opacity-75 tracking-wide">
-                          MOCK
-                        </span>
-                      )}
-                      {item.badge && (
-                        <span className={`flex h-5 items-center justify-center rounded-full px-2 text-[10px] font-bold ${isActive ? 'bg-primary text-primary-foreground' : 'bg-primary/20 text-primary'}`}>
-                          {item.badge}
-                        </span>
-                      )}
-                    </div>
-                  </Link>
-                );
-              })}
-            </div>
-          </div>
-        ))}
+        {filteredGroups.map((group, i) => {
+          const sectionKey = `nav_${group.label}`;
+          const isCollapsed = !!collapsedSections[sectionKey];
 
-        {showAdminSection && (
-          <div className="space-y-2 pt-4 border-t border-border/50">
-            <h4 className="px-4 text-xs font-bold text-muted-foreground uppercase tracking-widest mb-2">
-              Administration
-            </h4>
-            <div className="space-y-1">
-              {visibleAdminItems.map((item) => {
-                const isActive = item.matchExact ? location === item.href : location.startsWith(item.href);
-                return (
-                  <Link key={item.name} href={item.href} className={`flex items-center justify-between px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
-                    isActive 
-                      ? "bg-primary/10 text-primary shadow-sm shadow-primary/5" 
-                      : "text-muted-foreground hover:bg-muted/80 hover:text-foreground"
-                  }`}>
-                    <div className="flex items-center gap-3">
-                      <item.icon className={`w-5 h-5 ${isActive ? "text-primary" : "text-muted-foreground/70"}`} />
-                      {item.name}
-                    </div>
-                  </Link>
-                );
-              })}
+          return (
+            <div key={i} className="space-y-2">
+              {group.collapsible ? (
+                <button
+                  onClick={() => toggleSection(sectionKey)}
+                  className="flex items-center justify-between w-full px-4 group cursor-pointer"
+                >
+                  <h4 className="text-xs font-bold text-muted-foreground uppercase tracking-widest">
+                    {group.label}
+                  </h4>
+                  {isCollapsed
+                    ? <ChevronRight className="w-3.5 h-3.5 text-muted-foreground/50 group-hover:text-muted-foreground transition-colors" />
+                    : <ChevronUp className="w-3.5 h-3.5 text-muted-foreground/50 group-hover:text-muted-foreground transition-colors" />
+                  }
+                </button>
+              ) : (
+                <h4 className="px-4 text-xs font-bold text-muted-foreground uppercase tracking-widest mb-2">
+                  {group.label}
+                </h4>
+              )}
 
-              {visiblePlatformItems.length > 0 && (
-                <div className="pt-2 mt-2 border-t border-border/50">
-                  <div className="px-3 pb-1 flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest text-primary/70">
-                    <ShieldCheck className="w-3 h-3" /> Platform Admin Only
-                  </div>
-                  {visiblePlatformItems.map((item) => {
-                    const isActive = location.startsWith(item.href);
+              {!isCollapsed && (
+                <>
+                  {/* Flat items */}
+                  {group.items && group.items.length > 0 && (
+                    <div className="space-y-1">
+                      {group.items.map(item => renderNavItem(item))}
+                    </div>
+                  )}
+
+                  {/* Sub-groups (Enhancement 1) */}
+                  {group.subGroups && group.subGroups.map((sg, j) => {
+                    const subKey = `nav_${group.label}_${sg.subLabel}`;
+                    const subCollapsed = !!collapsedSections[subKey];
                     return (
-                      <Link key={item.name} href={item.href} className={`flex items-center justify-between px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
-                        isActive 
-                          ? "bg-primary/10 text-primary shadow-sm shadow-primary/5" 
-                          : "text-muted-foreground hover:bg-muted/80 hover:text-foreground"
-                      }`}>
-                        <div className="flex items-center gap-3">
-                          <item.icon className={`w-5 h-5 ${isActive ? "text-primary" : "text-muted-foreground/70"}`} />
-                          {item.name}
-                        </div>
-                      </Link>
+                      <div key={j} className="space-y-1">
+                        <button
+                          onClick={() => toggleSection(subKey)}
+                          className="flex items-center justify-between w-full pl-5 pr-4 py-1 group cursor-pointer"
+                        >
+                          <span className="text-[10px] font-semibold text-muted-foreground/70 uppercase tracking-wider">
+                            {sg.subLabel}
+                          </span>
+                          {subCollapsed
+                            ? <ChevronRight className="w-3 h-3 text-muted-foreground/40 group-hover:text-muted-foreground transition-colors" />
+                            : <ChevronUp className="w-3 h-3 text-muted-foreground/40 group-hover:text-muted-foreground transition-colors" />
+                          }
+                        </button>
+                        {!subCollapsed && sg.items.map(item => renderNavItem(item))}
+                      </div>
                     );
                   })}
-                </div>
+                </>
               )}
             </div>
+          );
+        })}
+
+        {/* Administration (Enhancement 3: sub-grouped) */}
+        {showAdminSection && (
+          <div className="space-y-2 pt-4 border-t border-border/50">
+            <button
+              onClick={() => toggleSection("nav_admin")}
+              className="flex items-center justify-between w-full px-4 group cursor-pointer"
+            >
+              <h4 className="text-xs font-bold text-muted-foreground uppercase tracking-widest">
+                Administration
+              </h4>
+              {collapsedSections["nav_admin"]
+                ? <ChevronRight className="w-3.5 h-3.5 text-muted-foreground/50 group-hover:text-muted-foreground transition-colors" />
+                : <ChevronUp className="w-3.5 h-3.5 text-muted-foreground/50 group-hover:text-muted-foreground transition-colors" />
+              }
+            </button>
+
+            {!collapsedSections["nav_admin"] && (
+              <div className="space-y-3">
+                {visibleAdminSubGroups.map((sg, j) => {
+                  const subKey = `nav_admin_${sg.subLabel}`;
+                  const subCollapsed = !!collapsedSections[subKey];
+                  return (
+                    <div key={j} className="space-y-1">
+                      <button
+                        onClick={() => toggleSection(subKey)}
+                        className="flex items-center justify-between w-full pl-5 pr-4 py-1 group cursor-pointer"
+                      >
+                        <span className="text-[10px] font-semibold text-muted-foreground/70 uppercase tracking-wider">
+                          {sg.subLabel}
+                        </span>
+                        {subCollapsed
+                          ? <ChevronRight className="w-3 h-3 text-muted-foreground/40 group-hover:text-muted-foreground transition-colors" />
+                          : <ChevronUp className="w-3 h-3 text-muted-foreground/40 group-hover:text-muted-foreground transition-colors" />
+                        }
+                      </button>
+                      {!subCollapsed && sg.items.map(item => renderNavItem(item, { matchExact: item.matchExact }))}
+                    </div>
+                  );
+                })}
+
+                {visiblePlatformItems.length > 0 && (
+                  <div className="pt-2 mt-2 border-t border-border/50">
+                    <div className="px-3 pb-1 flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest text-primary/70">
+                      <ShieldCheck className="w-3 h-3" /> Platform Admin Only
+                    </div>
+                    {visiblePlatformItems.map(item => renderNavItem(item))}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )}
       </div>
