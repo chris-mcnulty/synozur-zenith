@@ -509,13 +509,16 @@ function scoreContentTypeDeployment(
   }
 
   const visibleLibs = libs.filter(l => !l.hidden);
+  const visibleLibIds = new Set(visibleLibs.map(l => l.id));
   const totalLibs = visibleLibs.length;
   if (totalLibs === 0) {
     return emptyDimension("content_type_deployment", "Content Type Deployment", WEIGHT);
   }
 
-  // Only look at non-built-in, non-hidden CTs
-  const customCTs = libCTs.filter(ct => !ct.isBuiltIn && !ct.hidden);
+  // Only look at CTs that belong to visible libraries, and are non-built-in/non-hidden
+  const customCTs = libCTs.filter(
+    ct => visibleLibIds.has(ct.documentLibraryId) && !ct.isBuiltIn && !ct.hidden,
+  );
 
   // ── CT adoption ───────────────────────────────────────────────────────────
   // Libraries with ≥1 custom CT (good IA practice)
