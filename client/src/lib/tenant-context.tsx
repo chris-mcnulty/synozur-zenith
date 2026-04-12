@@ -13,6 +13,8 @@ interface TenantConnection {
   status: string;
   isDemo: boolean;
   lastSyncSiteCount?: number | null;
+  lastSyncAt?: string | null;
+  lastSyncStatus?: string | null;
   mspAccessDenied?: boolean;
   isGrantedAccess?: boolean;
   onedriveInventoryEnabled?: boolean;
