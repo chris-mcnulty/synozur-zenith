@@ -767,10 +767,11 @@ export default function AppShell({ children }: AppShellProps) {
                 >
                   <Tooltip delayDuration={300}>
                     <TooltipTrigger asChild>
-                      <span className={`w-2 h-2 rounded-full shrink-0 ${dotColor}`} aria-label={dotLabel} />
+                      <span className={`w-2 h-2 rounded-full shrink-0 ${dotColor}`} aria-hidden="true" />
                     </TooltipTrigger>
                     <TooltipContent side="right" className="max-w-xs">{dotLabel}</TooltipContent>
                   </Tooltip>
+                  <span className="sr-only">Sync status: {dotLabel}</span>
                   <div className="flex flex-col min-w-0 flex-1 -space-y-0.5">
                     <span className="text-[9px] font-bold text-muted-foreground uppercase tracking-widest leading-none">Active tenant</span>
                     <span className="text-sm font-semibold truncate leading-tight" data-testid="sidebar-tenant-name">{displayName}</span>
