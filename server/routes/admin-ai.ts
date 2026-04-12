@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { Router, type Request, type Response, type NextFunction } from 'express';
 import multer from 'multer';
 import { requireAuth, requireRole, type AuthenticatedRequest } from '../middleware/rbac';
 import { ZENITH_ROLES } from '@shared/schema';
@@ -31,7 +31,7 @@ function formatConfig(cfg: Record<string, unknown>) {
   };
 }
 
-const MAX_FILE_SIZE = 500 * 1024; // 500 KB
+const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
 const SYSTEM_DOC_LIMIT = 10;
 const ORG_DOC_LIMIT = 20;
 
@@ -53,6 +53,20 @@ const upload = multer({
     }
   },
 });
+
+// Wraps upload.single so that multer errors (e.g. LIMIT_FILE_SIZE) are
+// returned as JSON responses instead of crashing the request.
+function handleUpload(req: Request, res: Response, next: NextFunction) {
+  upload.single('file')(req, res, (err: any) => {
+    if (!err) return next();
+    if (err.code === 'LIMIT_FILE_SIZE') {
+      return res.status(413).json({
+        error: `File too large. Maximum allowed size is ${MAX_FILE_SIZE / 1024 / 1024} MB.`,
+      });
+    }
+    return res.status(400).json({ error: err.message || 'File upload error' });
+  });
+}
 
 // ── AI Provider Configuration (platform_owner) ───────────────────────────────
 
@@ -254,7 +268,7 @@ router.post(
   '/api/admin/ai/grounding',
   requireAuth(),
   requireRole(ZENITH_ROLES.PLATFORM_OWNER),
-  upload.single('file'),
+  handleUpload,
   async (req: AuthenticatedRequest, res) => {
     try {
       if (!req.file) {
@@ -366,7 +380,7 @@ router.post(
   '/api/admin/tenants/:orgId/ai/grounding',
   requireAuth(),
   requireRole(ZENITH_ROLES.TENANT_ADMIN),
-  upload.single('file'),
+  handleUpload,
   async (req: AuthenticatedRequest, res) => {
     try {
       const { orgId } = req.params;
