@@ -2788,15 +2788,22 @@ export async function fetchLibraryViews(
   listId: string,
 ): Promise<{ totalViews: number; customViews: number; error?: string }> {
   try {
-    const res = await fetch(
-      `https://graph.microsoft.com/v1.0/sites/${graphSiteId}/lists/${listId}/views?$select=id,displayName,viewType&$top=100`,
-      { headers: { Authorization: `Bearer ${token}` } },
-    );
-    if (!res.ok) {
-      return { totalViews: 0, customViews: 0, error: `Views API returned ${res.status}` };
+    let nextLink: string | null =
+      `https://graph.microsoft.com/v1.0/sites/${graphSiteId}/lists/${listId}/views?$select=id,displayName,viewType&$top=100`;
+    const views: any[] = [];
+
+    while (nextLink) {
+      const res = await fetch(nextLink, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) {
+        return { totalViews: 0, customViews: 0, error: `Views API returned ${res.status}` };
+      }
+
+      const data = await res.json();
+      views.push(...(data.value || []));
+      nextLink = data["@odata.nextLink"] || null;
     }
-    const data = await res.json();
-    const views: any[] = data.value || [];
     const totalViews = views.length;
 
     // Default views typically: "All Documents", "All Items", or viewType "NONE"
