@@ -146,7 +146,7 @@ const onboardingSteps: OnboardingStep[] = [
     label: "Review workspace metadata",
     description: "Verify that required fields like department and sensitivity are populated.",
     href: "/app/governance",
-    check: (ctx) => ctx.metadataComplete > 0,
+    check: (ctx) => ctx.totalWorkspaces > 0 && ctx.metadataComplete === ctx.totalWorkspaces,
   },
   {
     id: "template",
