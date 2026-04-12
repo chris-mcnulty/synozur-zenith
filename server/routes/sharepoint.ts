@@ -2,7 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { storage } from "../storage";
 import { insertWorkspaceSchema, insertProvisioningRequestSchema, type ServicePlanTier, ZENITH_ROLES } from "@shared/schema";
-import { fetchSharePointSites, fetchSiteUsageReport, fetchSiteDriveOwner, fetchSiteAnalytics, fetchSiteGroupOwners, fetchSiteCollectionAdmins, getAppToken, writeSitePropertyBag, requestSiteReindex, fetchSitePropertyBag, fetchSensitivityLabels, fetchRetentionLabels, fetchHubSites, fetchSiteHubAssociation, fetchHubSitesViaSearch, applySensitivityLabelToSite, removeSensitivityLabelFromSite, joinHubSite, leaveHubSite, fetchSiteLockState, fetchSiteArchiveStatus, batchToggleNoScript, fetchSiteDocumentLibraries, enumerateSiteDocumentLibraries, fetchLibraryDetails, fetchSiteTelemetry, fetchContentTypes, createSharePointSite, createM365Group, createTeam, assignSensitivityLabelToGroup, resolveOwnerIds, archiveSite, unarchiveSite } from "../services/graph";
+import { fetchSharePointSites, fetchSiteUsageReport, fetchSiteDriveOwner, fetchSiteAnalytics, fetchSiteGroupOwners, fetchSiteCollectionAdmins, getAppToken, writeSitePropertyBag, requestSiteReindex, fetchSitePropertyBag, fetchSensitivityLabels, fetchRetentionLabels, fetchHubSites, fetchSiteHubAssociation, fetchHubSitesViaSearch, applySensitivityLabelToSite, removeSensitivityLabelFromSite, joinHubSite, leaveHubSite, fetchSiteLockState, fetchSiteArchiveStatus, batchToggleNoScript, fetchSiteDocumentLibraries, enumerateSiteDocumentLibraries, fetchLibraryDetails, fetchLibraryFolderDepth, fetchLibraryViews, fetchLibraryItemFillRates, fetchSiteTelemetry, fetchContentTypes, createSharePointSite, createM365Group, createTeam, assignSensitivityLabelToGroup, resolveOwnerIds, archiveSite, unarchiveSite } from "../services/graph";
 import { getPlanFeatures, requireFeature } from "../services/feature-gate";
 import { refreshDelegatedToken, getDelegatedSpoToken } from "../routes-entra";
 import { requireAuth, requireRole, requirePermission, type AuthenticatedRequest } from "../middleware/rbac";
@@ -2716,6 +2716,32 @@ router.post("/api/admin/tenants/:id/sync-ia", requireRole(ZENITH_ROLES.TENANT_AD
           console.warn(`[ia-sync] Could not fetch site columns for ${graphSiteId}: ${e.message}`);
         }
 
+        // Build a listId → driveId map so we can crawl folder structure per library.
+        const listIdToDriveId = new Map<string, string>();
+        try {
+          const drivesRes = await fetch(
+            `https://graph.microsoft.com/v1.0/sites/${graphSiteId}/drives?$select=id,name,webUrl`,
+            { headers: { Authorization: `Bearer ${token}` } },
+          );
+          if (drivesRes.ok) {
+            const drivesData = await drivesRes.json();
+            for (const drive of drivesData.value || []) {
+              try {
+                const listRes = await fetch(
+                  `https://graph.microsoft.com/v1.0/drives/${drive.id}/list?$select=id`,
+                  { headers: { Authorization: `Bearer ${token}` } },
+                );
+                if (listRes.ok) {
+                  const listData = await listRes.json();
+                  if (listData.id) listIdToDriveId.set(listData.id, drive.id);
+                }
+              } catch { /* skip individual drive lookup failures */ }
+            }
+          }
+        } catch (e: any) {
+          console.warn(`[ia-sync] Could not fetch drives for ${graphSiteId}: ${e.message}`);
+        }
+
         const libs = byWorkspace.get(wsId) || [];
         for (const lib of libs) {
           try {
@@ -2724,6 +2750,34 @@ router.post("/api/admin/tenants/:id/sync-ia", requireRole(ZENITH_ROLES.TENANT_AD
               result.errors++;
               console.warn(`[ia-sync] fetchLibraryDetails error for ${lib.displayName}: ${details.error}`);
               continue;
+            }
+
+            // Fetch extended IA metrics: folder depth, views, column fill rates.
+            const driveId = listIdToDriveId.get(lib.m365ListId) || lib.m365DriveId || '';
+            const [folderInfo, viewInfo] = await Promise.all([
+              fetchLibraryFolderDepth(token, driveId),
+              fetchLibraryViews(token, graphSiteId, lib.m365ListId),
+            ]);
+
+            // Compute per-column fill rates for custom columns.
+            const customColNames = details.columns.filter(c => c.isCustom).map(c => c.name);
+            const fillResult = customColNames.length > 0
+              ? await fetchLibraryItemFillRates(token, graphSiteId, lib.m365ListId, customColNames)
+              : { fillRates: new Map<string, number>(), sampleSize: 0 };
+
+            // Persist extended metrics on the library record.
+            if (driveId || folderInfo.maxDepth > 0 || viewInfo.totalViews > 0) {
+              await storage.upsertDocumentLibrary({
+                workspaceId: lib.workspaceId,
+                tenantConnectionId: req.params.id,
+                m365ListId: lib.m365ListId,
+                displayName: lib.displayName,
+                m365DriveId: driveId || null,
+                maxFolderDepth: folderInfo.error ? null : folderInfo.maxDepth,
+                totalFolderCount: folderInfo.error ? null : folderInfo.folderCount,
+                customViewCount: viewInfo.error ? null : viewInfo.customViews,
+                totalViewCount: viewInfo.error ? null : viewInfo.totalViews,
+              });
             }
 
             // Build the row arrays first, then persist atomically so a mid-write
@@ -2759,6 +2813,8 @@ router.post("/api/admin/tenants/:id/sync-ia", requireRole(ZENITH_ROLES.TENANT_AD
               isReadOnly: col.readOnly,
               isIndexed: col.indexed,
               isRequired: col.required,
+              fillRatePct: fillResult.fillRates.get(col.name) ?? null,
+              fillRateSampleSize: fillResult.fillRates.has(col.name) ? fillResult.sampleSize : null,
             }));
 
             const counts = await storage.replaceLibraryIaData(lib.id, ctRows, colRows);

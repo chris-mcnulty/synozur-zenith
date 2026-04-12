@@ -2720,6 +2720,152 @@ export async function fetchLibraryDetails(
   }
 }
 
+// ── Extended IA Metrics ─────────────────────────────────────────────────────────
+
+/**
+ * Recursively measures the maximum folder depth and total folder count in a
+ * document library's drive. Caps traversal at MAX_DEPTH levels and MAX_FOLDERS
+ * total to avoid runaway API calls on very large or deeply nested libraries.
+ */
+export async function fetchLibraryFolderDepth(
+  token: string,
+  driveId: string,
+): Promise<{ maxDepth: number; folderCount: number; error?: string }> {
+  if (!driveId) {
+    return { maxDepth: 0, folderCount: 0, error: "No driveId provided" };
+  }
+
+  const MAX_DEPTH = 10;
+  const MAX_FOLDERS = 500;
+  let folderCount = 0;
+  let maxDepth = 0;
+
+  async function crawl(parentPath: string, currentDepth: number): Promise<void> {
+    if (currentDepth > MAX_DEPTH || folderCount >= MAX_FOLDERS) return;
+
+    let nextLink: string | null =
+      `https://graph.microsoft.com/v1.0/drives/${driveId}/${parentPath}/children?$select=id,name,folder&$top=200&$filter=folder ne null`;
+
+    while (nextLink && folderCount < MAX_FOLDERS) {
+      try {
+        const res = await fetch(nextLink, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!res.ok) break;
+        const data = await res.json();
+        const items: any[] = data.value || [];
+
+        for (const item of items) {
+          if (!item.folder) continue;
+          folderCount++;
+          if (currentDepth > maxDepth) maxDepth = currentDepth;
+          if (folderCount >= MAX_FOLDERS) break;
+          await crawl(`items/${item.id}`, currentDepth + 1);
+        }
+
+        nextLink = data["@odata.nextLink"] || null;
+      } catch {
+        break;
+      }
+    }
+  }
+
+  try {
+    await crawl("root", 1);
+    return { maxDepth, folderCount };
+  } catch (err: any) {
+    console.error(`[graph] fetchLibraryFolderDepth error:`, err.message);
+    return { maxDepth: 0, folderCount: 0, error: err.message };
+  }
+}
+
+/**
+ * Fetches the views defined on a document library and counts custom vs total.
+ */
+export async function fetchLibraryViews(
+  token: string,
+  graphSiteId: string,
+  listId: string,
+): Promise<{ totalViews: number; customViews: number; error?: string }> {
+  try {
+    const res = await fetch(
+      `https://graph.microsoft.com/v1.0/sites/${graphSiteId}/lists/${listId}/views?$select=id,displayName,viewType&$top=100`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    if (!res.ok) {
+      return { totalViews: 0, customViews: 0, error: `Views API returned ${res.status}` };
+    }
+    const data = await res.json();
+    const views: any[] = data.value || [];
+    const totalViews = views.length;
+
+    // Default views typically: "All Documents", "All Items", or viewType "NONE"
+    const DEFAULT_VIEW_NAMES = new Set([
+      "all documents", "all items", "all events", "all links",
+    ]);
+    const customViews = views.filter(
+      (v) => !DEFAULT_VIEW_NAMES.has((v.displayName || "").toLowerCase()),
+    ).length;
+
+    return { totalViews, customViews };
+  } catch (err: any) {
+    console.error(`[graph] fetchLibraryViews error:`, err.message);
+    return { totalViews: 0, customViews: 0, error: err.message };
+  }
+}
+
+/**
+ * Samples up to 50 items from a document library and computes the fill rate
+ * (percentage of non-null/non-empty values) for each of the given custom
+ * column internal names.
+ */
+export async function fetchLibraryItemFillRates(
+  token: string,
+  graphSiteId: string,
+  listId: string,
+  customColumnNames: string[],
+): Promise<{ fillRates: Map<string, number>; sampleSize: number; error?: string }> {
+  if (customColumnNames.length === 0) {
+    return { fillRates: new Map(), sampleSize: 0 };
+  }
+
+  try {
+    // Request specific fields to minimise payload
+    const fieldSelect = customColumnNames.join(",");
+    const res = await fetch(
+      `https://graph.microsoft.com/v1.0/sites/${graphSiteId}/lists/${listId}/items?$top=50&$expand=fields($select=${encodeURIComponent(fieldSelect)})&$select=id`,
+      { headers: { Authorization: `Bearer ${token}`, ConsistencyLevel: "eventual" } },
+    );
+    if (!res.ok) {
+      return { fillRates: new Map(), sampleSize: 0, error: `Items API returned ${res.status}` };
+    }
+    const data = await res.json();
+    const items: any[] = data.value || [];
+    const sampleSize = items.length;
+
+    if (sampleSize === 0) {
+      return { fillRates: new Map(), sampleSize: 0 };
+    }
+
+    const fillRates = new Map<string, number>();
+    for (const colName of customColumnNames) {
+      let filled = 0;
+      for (const item of items) {
+        const val = item.fields?.[colName];
+        if (val !== null && val !== undefined && val !== "") {
+          filled++;
+        }
+      }
+      fillRates.set(colName, Math.round((filled / sampleSize) * 100));
+    }
+
+    return { fillRates, sampleSize };
+  } catch (err: any) {
+    console.error(`[graph] fetchLibraryItemFillRates error:`, err.message);
+    return { fillRates: new Map(), sampleSize: 0, error: err.message };
+  }
+}
+
 // ── Teams & Channels Inventory Discovery ──────────────────────────────────────
 // Rich team properties for full inventory (not just recordings).
 export interface TeamInventoryInfo {
