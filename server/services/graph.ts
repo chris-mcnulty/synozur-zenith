@@ -2744,7 +2744,7 @@ export async function fetchLibraryFolderDepth(
     if (currentDepth > MAX_DEPTH || folderCount >= MAX_FOLDERS) return;
 
     let nextLink: string | null =
-      `https://graph.microsoft.com/v1.0/drives/${driveId}/${parentPath}/children?$select=id,name,folder&$top=200&$filter=folder ne null`;
+      `https://graph.microsoft.com/v1.0/drives/${driveId}/${parentPath}/children?$select=id,name,folder&$top=200`;
 
     while (nextLink && folderCount < MAX_FOLDERS) {
       try {
