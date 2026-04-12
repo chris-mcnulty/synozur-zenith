@@ -194,8 +194,8 @@ function OnboardingChecklist({ totalWorkspaces, activeTenantsCount, pendingReque
             <Rocket className="w-5 h-5 text-primary" />
             <CardTitle className="text-lg">Get Started with Zenith</CardTitle>
           </div>
-          <Button variant="ghost" size="icon" className="h-7 w-7 rounded-full text-muted-foreground hover:text-foreground" onClick={dismiss} data-testid="dismiss-onboarding">
-            <X className="w-4 h-4" />
+          <Button variant="ghost" size="icon" className="h-7 w-7 rounded-full text-muted-foreground hover:text-foreground" onClick={dismiss} aria-label="Dismiss onboarding" data-testid="dismiss-onboarding">
+            <X className="w-4 h-4" aria-hidden="true" />
           </Button>
         </div>
         <CardDescription>Complete these steps to unlock the full power of M365 governance.</CardDescription>

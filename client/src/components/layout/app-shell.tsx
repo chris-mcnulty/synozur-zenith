@@ -147,6 +147,7 @@ function saveCollapsedState(state: Record<string, boolean>) {
 const navGroups: NavGroup[] = [
   {
     label: "Overview",
+    collapsible: true,
     items: [
       { name: "Dashboard", href: "/app/dashboard", icon: LayoutDashboard },
       { name: "Approvals", href: "/app/approvals", icon: CheckCircle2, badge: "3", minRole: "operator", isMock: true },
@@ -191,6 +192,7 @@ const navGroups: NavGroup[] = [
   },
   {
     label: "Insights & Licensing",
+    collapsible: true,
     items: [
       { name: "Copilot Readiness", href: "/app/copilot-readiness", icon: Sparkles, badge: "Pro+" },
       { name: "IA Assessment", href: "/app/ia-assessment", icon: BarChart3, badge: "Ent+" },
@@ -380,7 +382,9 @@ export default function AppShell({ children }: AppShellProps) {
             <div key={i} className="space-y-2">
               {group.collapsible ? (
                 <button
+                  type="button"
                   onClick={() => toggleSection(sectionKey)}
+                  aria-expanded={!isCollapsed}
                   className="flex items-center justify-between w-full px-4 group cursor-pointer"
                 >
                   <h4 className="text-xs font-bold text-muted-foreground uppercase tracking-widest">
@@ -413,7 +417,9 @@ export default function AppShell({ children }: AppShellProps) {
                     return (
                       <div key={j} className="space-y-1">
                         <button
+                          type="button"
                           onClick={() => toggleSection(subKey)}
+                          aria-expanded={!subCollapsed}
                           className="flex items-center justify-between w-full pl-5 pr-4 py-1 group cursor-pointer"
                         >
                           <span className="text-[10px] font-semibold text-muted-foreground/70 uppercase tracking-wider">
@@ -438,7 +444,9 @@ export default function AppShell({ children }: AppShellProps) {
         {showAdminSection && (
           <div className="space-y-2 pt-4 border-t border-border/50">
             <button
+              type="button"
               onClick={() => toggleSection("nav_admin")}
+              aria-expanded={!collapsedSections["nav_admin"]}
               className="flex items-center justify-between w-full px-4 group cursor-pointer"
             >
               <h4 className="text-xs font-bold text-muted-foreground uppercase tracking-widest">
@@ -458,7 +466,9 @@ export default function AppShell({ children }: AppShellProps) {
                   return (
                     <div key={j} className="space-y-1">
                       <button
+                        type="button"
                         onClick={() => toggleSection(subKey)}
+                        aria-expanded={!subCollapsed}
                         className="flex items-center justify-between w-full pl-5 pr-4 py-1 group cursor-pointer"
                       >
                         <span className="text-[10px] font-semibold text-muted-foreground/70 uppercase tracking-wider">
