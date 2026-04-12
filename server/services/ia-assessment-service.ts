@@ -351,7 +351,10 @@ You MUST respond with ONLY valid JSON in the following structure (no markdown, n
     "hub_governance": "string",
     "metadata_completeness": "string",
     "sensitivity_coverage": "string",
-    "lifecycle_management": "string"
+    "lifecycle_management": "string",
+    "library_structure": "string",
+    "content_type_deployment": "string",
+    "metadata_schema": "string"
   },
   "priorityRecommendations": [
     { "rank": 1, "title": "string", "rationale": "string", "impact": "HIGH|MEDIUM|LOW" }
@@ -469,11 +472,16 @@ async function _executeAssessment(
   const start = Date.now();
 
   try {
-    // 1. Load workspace inventory
-    const workspaces = await storage.getWorkspaces(undefined, tenantConnectionId);
+    // 1. Load workspace inventory + library-level IA data
+    const [workspaces, libs, columns, libCTs] = await Promise.all([
+      storage.getWorkspaces(undefined, tenantConnectionId),
+      storage.getDocumentLibrariesByTenant(tenantConnectionId),
+      storage.getLibraryColumnsByTenant(tenantConnectionId),
+      storage.getLibraryContentTypesByTenant(tenantConnectionId),
+    ]);
 
     // 2. Deterministic scoring
-    const scoreResult: IAScoreResult = scoreIAHealth(workspaces);
+    const scoreResult: IAScoreResult = scoreIAHealth(workspaces, libs, columns, libCTs);
 
     // 3. Load grounding documents
     const [systemDocs, orgDocs] = await Promise.all([

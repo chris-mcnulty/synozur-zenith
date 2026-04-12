@@ -408,7 +408,8 @@ export default function IAAssessmentPage() {
             </h1>
             <p className="text-muted-foreground mt-1 max-w-2xl">
               AI-powered Information Architecture health analysis — naming, hub governance,
-              metadata, sensitivity coverage and lifecycle scoring with a 30/60/90-day roadmap.
+              metadata completeness, sensitivity coverage, lifecycle, library structure,
+              content type deployment, and metadata schema scoring with a 30/60/90-day roadmap.
             </p>
           </div>
         </div>

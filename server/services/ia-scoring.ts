@@ -2,18 +2,25 @@
  * Information Architecture Scoring Engine (Task #53)
  *
  * Deterministic pre-pass that computes raw dimension scores from the
- * workspace inventory. Produces a structured IAScoreResult consumed by
- * the ia-assessment-service.ts AI prompt assembly.
+ * workspace inventory plus library-level IA data (collected by Part A).
+ * Produces a structured IAScoreResult consumed by the ia-assessment-service.ts
+ * AI prompt assembly.
  *
  * Dimensions (weights sum to 100):
- *   1. Naming Consistency    (20) — prefix/pattern adherence
- *   2. Hub Governance        (20) — hub coverage, orphan ratio
- *   3. Metadata Completeness (25) — owner presence, description fill, custom fields
- *   4. Sensitivity Coverage  (20) — label assignment rate by site type
- *   5. Lifecycle Management  (15) — archive ratio, stale site detection
+ *   1. Naming Consistency        (13) — prefix/pattern adherence
+ *   2. Hub Governance            (13) — hub coverage, orphan ratio
+ *   3. Metadata Completeness     (16) — owner presence, description fill, custom fields
+ *   4. Sensitivity Coverage      (13) — label assignment rate by site type
+ *   5. Lifecycle Management      (10) — archive ratio, stale site detection
+ *   6. Library Structure         (12) — multi-lib adoption, folder depth, view usage, size imbalance
+ *   7. Content Type Deployment   (13) — CT adoption rate, hub propagation, local duplication
+ *   8. Metadata Schema           (10) — custom columns, required fields, fill rates, Syntex
+ *
+ * Dimensions 6–8 degrade gracefully to score=100 when no IA data has been
+ * synced yet, so the overall score is never penalised for missing data.
  */
 
-import type { Workspace } from "@shared/schema";
+import type { Workspace, DocumentLibrary, LibraryColumn, LibraryContentType } from "@shared/schema";
 
 export interface IADimensionScore {
   key: string;
@@ -73,7 +80,7 @@ function scoreNamingConsistency(workspaces: Workspace[]): IADimensionScore {
   const total = active.length;
 
   if (total === 0) {
-    return emptyDimension("naming_consistency", "Naming Consistency", 20);
+    return emptyDimension("naming_consistency", "Naming Consistency", 13);
   }
 
   const withPrefix = active.filter(w => hasKnownPrefix(w.displayName));
@@ -101,9 +108,9 @@ function scoreNamingConsistency(workspaces: Workspace[]): IADimensionScore {
   return {
     key: "naming_consistency",
     label: "Naming Consistency",
-    weight: 20,
+    weight: 13,
     score,
-    weightedScore: Math.round(score * 0.20),
+    weightedScore: Math.round(score * 0.13),
     summary: `${withPrefix.length} of ${total} active sites (${Math.round(prefixRate * 100)}%) follow a known naming prefix. ${withProblems.length} sites have problematic patterns.`,
     worstOffenders: offenders,
     metrics: {
@@ -125,7 +132,7 @@ function scoreHubGovernance(workspaces: Workspace[]): IADimensionScore {
   const total = active.length;
 
   if (total === 0) {
-    return emptyDimension("hub_governance", "Hub Governance", 20);
+    return emptyDimension("hub_governance", "Hub Governance", 13);
   }
 
   const hubSites = active.filter(w => w.isHubSite);
@@ -152,9 +159,9 @@ function scoreHubGovernance(workspaces: Workspace[]): IADimensionScore {
   return {
     key: "hub_governance",
     label: "Hub Governance",
-    weight: 20,
+    weight: 13,
     score,
-    weightedScore: Math.round(score * 0.20),
+    weightedScore: Math.round(score * 0.13),
     summary: `${hubCount} hub site(s) registered. ${associatedToHub.length} of ${total} sites (${Math.round(associationRate * 100)}%) are associated with a hub. ${orphans.length} orphaned site(s) with no hub membership.`,
     worstOffenders: offenders,
     metrics: {
@@ -177,7 +184,7 @@ function scoreMetadataCompleteness(workspaces: Workspace[]): IADimensionScore {
   const total = active.length;
 
   if (total === 0) {
-    return emptyDimension("metadata_completeness", "Metadata Completeness", 25);
+    return emptyDimension("metadata_completeness", "Metadata Completeness", 16);
   }
 
   const withOwner = active.filter(w => !!(w.ownerDisplayName || w.ownerPrincipalName));
@@ -210,9 +217,9 @@ function scoreMetadataCompleteness(workspaces: Workspace[]): IADimensionScore {
   return {
     key: "metadata_completeness",
     label: "Metadata Completeness",
-    weight: 25,
+    weight: 16,
     score,
-    weightedScore: Math.round(score * 0.25),
+    weightedScore: Math.round(score * 0.16),
     summary: `${withOwner.length}/${total} (${Math.round(ownerRate * 100)}%) have an owner. ${withCompleteMetadata.length}/${total} (${Math.round(completeRate * 100)}%) have complete metadata. ${withDescription.length}/${total} (${Math.round(descriptionRate * 100)}%) have a description.`,
     worstOffenders: offenders,
     metrics: {
@@ -271,9 +278,9 @@ function scoreSensitivityCoverage(workspaces: Workspace[]): IADimensionScore {
   return {
     key: "sensitivity_coverage",
     label: "Sensitivity Coverage",
-    weight: 20,
+    weight: 13,
     score,
-    weightedScore: Math.round(score * 0.20),
+    weightedScore: Math.round(score * 0.13),
     summary: `${withLabel.length} of ${total} active sites (${score}%) have a Purview sensitivity label. Breakdown by type: ${typeBreakdown}.`,
     worstOffenders: offenders,
     metrics: {
@@ -294,7 +301,7 @@ function scoreLifecycleManagement(workspaces: Workspace[]): IADimensionScore {
   const total = workspaces.length;
 
   if (total === 0) {
-    return emptyDimension("lifecycle_management", "Lifecycle Management", 15);
+    return emptyDimension("lifecycle_management", "Lifecycle Management", 10);
   }
 
   const archived = workspaces.filter(w => w.isArchived);
@@ -333,9 +340,9 @@ function scoreLifecycleManagement(workspaces: Workspace[]): IADimensionScore {
   return {
     key: "lifecycle_management",
     label: "Lifecycle Management",
-    weight: 15,
+    weight: 10,
     score,
-    weightedScore: Math.round(score * 0.15),
+    weightedScore: Math.round(score * 0.10),
     summary: `${staleSites.length} active site(s) appear stale (no activity in ${STALE_THRESHOLD_DAYS}+ days). ${archived.length} archived, ${deleted.length} soft-deleted.`,
     worstOffenders: offenders,
     metrics: {
@@ -347,6 +354,378 @@ function scoreLifecycleManagement(workspaces: Workspace[]): IADimensionScore {
       staleSites: staleSites.length,
       staleRate: Math.round(staleRate * 100),
       staleThresholdDays: STALE_THRESHOLD_DAYS,
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Library Structure
+// ---------------------------------------------------------------------------
+
+/**
+ * Scores how well libraries are structured across the tenant.
+ * Factors: multi-library adoption, default-lib overload, folder depth,
+ *          view customisation, and size imbalance (flagged large items).
+ *
+ * Returns score=100 with a "not synced" summary when no library data is
+ * available, so the overall IA score is never penalised for missing data.
+ */
+function scoreLibraryStructure(
+  workspaces: Workspace[],
+  libs: DocumentLibrary[],
+): IADimensionScore {
+  const WEIGHT = 12;
+
+  if (libs.length === 0) {
+    return {
+      ...emptyDimension("library_structure", "Library Structure", WEIGHT),
+      summary: "No library data synced yet — run an IA sync to collect library structure metrics.",
+    };
+  }
+
+  const visibleLibs = libs.filter(l => !l.hidden);
+  const totalLibs = visibleLibs.length;
+
+  // ── Multi-library adoption ─────────────────────────────────────────────────
+  // Sites with ≥2 non-default, visible libraries show deliberate IA design.
+  const libsByWorkspace = new Map<string, DocumentLibrary[]>();
+  for (const l of visibleLibs) {
+    const arr = libsByWorkspace.get(l.workspaceId) ?? [];
+    arr.push(l);
+    libsByWorkspace.set(l.workspaceId, arr);
+  }
+  const totalSites = libsByWorkspace.size;
+  let sitesWithMultiLib = 0;
+  let sitesWithOnlyDefault = 0;
+  for (const siteLibs of libsByWorkspace.values()) {
+    const nonDefault = siteLibs.filter(l => !l.isDefaultDocLib);
+    if (nonDefault.length >= 2) sitesWithMultiLib++;
+    if (siteLibs.every(l => l.isDefaultDocLib)) sitesWithOnlyDefault++;
+  }
+  const multiLibRate = totalSites > 0 ? sitesWithMultiLib / totalSites : 0;
+  const defaultOverloadRate = totalSites > 0 ? sitesWithOnlyDefault / totalSites : 0;
+
+  // ── Folder depth ──────────────────────────────────────────────────────────
+  // Ideal ≤ 3 levels. Penalise linearly from 4 up to 8+ (= 0 score).
+  const libsWithDepth = visibleLibs.filter(l => l.maxFolderDepth != null);
+  let folderDepthScore = 1.0; // default: full score when no data
+  if (libsWithDepth.length > 0) {
+    const avgDepth =
+      libsWithDepth.reduce((s, l) => s + (l.maxFolderDepth ?? 0), 0) / libsWithDepth.length;
+    folderDepthScore = avgDepth <= 3 ? 1.0 : Math.max(0, 1 - (avgDepth - 3) / 5);
+  }
+  const deepLibs = libsWithDepth.filter(l => (l.maxFolderDepth ?? 0) > 5);
+
+  // ── View customisation ────────────────────────────────────────────────────
+  // Libraries that have at least one custom view show user adoption.
+  const libsWithViewData = visibleLibs.filter(l => l.totalViewCount != null && l.totalViewCount > 0);
+  let viewCustomScore = 1.0; // default: full score when no data
+  if (libsWithViewData.length > 0) {
+    const withCustomViews = libsWithViewData.filter(l => (l.customViewCount ?? 0) > 0);
+    viewCustomScore = withCustomViews.length / libsWithViewData.length;
+  }
+
+  // ── Size imbalance ────────────────────────────────────────────────────────
+  // Libraries flagged for large items indicate unmanaged growth.
+  const flaggedLargeCount = visibleLibs.filter(l => l.flaggedLargeItems).length;
+  const sizeImbalanceRate = totalLibs > 0 ? flaggedLargeCount / totalLibs : 0;
+
+  // ── Composite score ───────────────────────────────────────────────────────
+  const raw = Math.round(
+    (multiLibRate * 0.25 +
+      (1 - defaultOverloadRate) * 0.20 +
+      folderDepthScore * 0.30 +
+      viewCustomScore * 0.15 +
+      (1 - sizeImbalanceRate) * 0.10) *
+      100,
+  );
+  const score = Math.max(0, Math.min(100, raw));
+
+  // Worst offenders: deepest-folder libraries
+  const offenders: IAOffender[] = deepLibs
+    .sort((a, b) => (b.maxFolderDepth ?? 0) - (a.maxFolderDepth ?? 0))
+    .slice(0, 10)
+    .map(l => {
+      const ws = workspaces.find(w => w.id === l.workspaceId);
+      return {
+        workspaceId: l.workspaceId,
+        displayName: l.displayName,
+        siteUrl: ws?.siteUrl ?? null,
+        tenantConnectionId: l.tenantConnectionId,
+        reason: `Folder depth ${l.maxFolderDepth} levels (recommended ≤ 5)`,
+      };
+    });
+
+  const avgDepthDisplay =
+    libsWithDepth.length > 0
+      ? (libsWithDepth.reduce((s, l) => s + (l.maxFolderDepth ?? 0), 0) / libsWithDepth.length).toFixed(1)
+      : "N/A";
+
+  return {
+    key: "library_structure",
+    label: "Library Structure",
+    weight: WEIGHT,
+    score,
+    weightedScore: Math.round(score * (WEIGHT / 100)),
+    summary: `${totalLibs} visible libraries across ${totalSites} sites. ${sitesWithMultiLib} sites (${Math.round(multiLibRate * 100)}%) use ≥2 targeted libraries. Avg folder depth: ${avgDepthDisplay}. ${flaggedLargeCount} libraries flagged for large item counts.`,
+    worstOffenders: offenders,
+    metrics: {
+      totalVisibleLibraries: totalLibs,
+      totalSites,
+      sitesWithMultiLib,
+      multiLibAdoptionRate: Math.round(multiLibRate * 100),
+      sitesWithOnlyDefaultLib: sitesWithOnlyDefault,
+      defaultOverloadRate: Math.round(defaultOverloadRate * 100),
+      avgFolderDepth: avgDepthDisplay,
+      libsWithDepthData: libsWithDepth.length,
+      deepLibraries: deepLibs.length,
+      libsWithCustomViews: libsWithViewData.filter(l => (l.customViewCount ?? 0) > 0).length,
+      flaggedLargeLibraries: flaggedLargeCount,
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Content Type Deployment
+// ---------------------------------------------------------------------------
+
+/**
+ * Scores how deliberately content types are deployed across libraries.
+ * Factors: CT adoption rate, hub propagation, local duplication ratio,
+ *          breadth (avg distinct custom CTs per library).
+ */
+function scoreContentTypeDeployment(
+  workspaces: Workspace[],
+  libs: DocumentLibrary[],
+  libCTs: LibraryContentType[],
+): IADimensionScore {
+  const WEIGHT = 13;
+
+  if (libCTs.length === 0) {
+    return {
+      ...emptyDimension("content_type_deployment", "Content Type Deployment", WEIGHT),
+      summary: "No content type data synced yet — run an IA sync to collect content type metrics.",
+    };
+  }
+
+  const visibleLibs = libs.filter(l => !l.hidden);
+  const totalLibs = visibleLibs.length;
+  if (totalLibs === 0) {
+    return emptyDimension("content_type_deployment", "Content Type Deployment", WEIGHT);
+  }
+
+  // Only look at non-built-in, non-hidden CTs
+  const customCTs = libCTs.filter(ct => !ct.isBuiltIn && !ct.hidden);
+
+  // ── CT adoption ───────────────────────────────────────────────────────────
+  // Libraries with ≥1 custom CT (good IA practice)
+  const libsWithCustomCt = new Set(customCTs.map(ct => ct.documentLibraryId));
+  const ctAdoptionRate = libsWithCustomCt.size / totalLibs;
+
+  // ── Hub propagation ───────────────────────────────────────────────────────
+  // Unique custom CT names that appear with scope=HUB (promoted from hub)
+  const hubCtNames = new Set(customCTs.filter(ct => ct.scope === "HUB").map(ct => ct.name));
+  const allCtNames = new Set(customCTs.map(ct => ct.name));
+  const hubPropagationRate = allCtNames.size > 0 ? hubCtNames.size / allCtNames.size : 0;
+
+  // ── Local duplication ─────────────────────────────────────────────────────
+  // Libraries where every custom CT is scope=LIBRARY (locally defined, not
+  // promoted). These are candidates for hub CT promotion.
+  let localOnlyLibs = 0;
+  for (const libId of libsWithCustomCt) {
+    const libCustomCTs = customCTs.filter(ct => ct.documentLibraryId === libId);
+    if (libCustomCTs.length > 0 && libCustomCTs.every(ct => ct.scope === "LIBRARY")) {
+      localOnlyLibs++;
+    }
+  }
+  const localDupRate = libsWithCustomCt.size > 0 ? localOnlyLibs / libsWithCustomCt.size : 0;
+
+  // ── Breadth ───────────────────────────────────────────────────────────────
+  // Libraries with ≥2 distinct custom CTs (mature, type-rich IA)
+  let multiCtLibs = 0;
+  for (const libId of libsWithCustomCt) {
+    const count = customCTs.filter(ct => ct.documentLibraryId === libId).length;
+    if (count >= 2) multiCtLibs++;
+  }
+  const multiCtRate = libsWithCustomCt.size > 0 ? multiCtLibs / libsWithCustomCt.size : 0;
+
+  // ── Composite score ───────────────────────────────────────────────────────
+  const raw = Math.round(
+    (ctAdoptionRate * 0.40 +
+      hubPropagationRate * 0.25 +
+      (1 - localDupRate) * 0.25 +
+      multiCtRate * 0.10) *
+      100,
+  );
+  const score = Math.max(0, Math.min(100, raw));
+
+  // Worst offenders: libraries with custom CTs all defined locally
+  const localOnlyLibIds = Array.from(libsWithCustomCt).filter(libId => {
+    const libCustomCTs = customCTs.filter(ct => ct.documentLibraryId === libId);
+    return libCustomCTs.length > 0 && libCustomCTs.every(ct => ct.scope === "LIBRARY");
+  });
+  const offenders: IAOffender[] = localOnlyLibIds.slice(0, 10).map(libId => {
+    const lib = visibleLibs.find(l => l.id === libId);
+    const ws = workspaces.find(w => w.id === lib?.workspaceId);
+    return {
+      workspaceId: lib?.workspaceId ?? libId,
+      displayName: lib?.displayName ?? libId,
+      siteUrl: ws?.siteUrl ?? null,
+      tenantConnectionId: lib?.tenantConnectionId ?? null,
+      reason: "All custom content types are library-local — consider promoting to hub or site scope",
+    };
+  });
+
+  return {
+    key: "content_type_deployment",
+    label: "Content Type Deployment",
+    weight: WEIGHT,
+    score,
+    weightedScore: Math.round(score * (WEIGHT / 100)),
+    summary: `${libsWithCustomCt.size} of ${totalLibs} libraries (${Math.round(ctAdoptionRate * 100)}%) have at least one custom content type. ${hubCtNames.size} of ${allCtNames.size} distinct types (${Math.round(hubPropagationRate * 100)}%) are hub-promoted. ${localOnlyLibs} libraries rely solely on library-local types.`,
+    worstOffenders: offenders,
+    metrics: {
+      totalLibraries: totalLibs,
+      libsWithCustomCt: libsWithCustomCt.size,
+      ctAdoptionRate: Math.round(ctAdoptionRate * 100),
+      totalUniqueCustomCts: allCtNames.size,
+      hubPromotedCts: hubCtNames.size,
+      hubPropagationRate: Math.round(hubPropagationRate * 100),
+      localOnlyLibraries: localOnlyLibs,
+      localDupRate: Math.round(localDupRate * 100),
+      multiCtLibraries: multiCtLibs,
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Metadata Schema
+// ---------------------------------------------------------------------------
+
+/**
+ * Scores the quality and enforcement of column-level metadata schemas.
+ * Factors: custom column presence, required field enforcement, fill rates,
+ *          Syntex/AI-managed columns, and display-name collisions.
+ */
+function scoreMetadataSchema(
+  workspaces: Workspace[],
+  libs: DocumentLibrary[],
+  columns: LibraryColumn[],
+): IADimensionScore {
+  const WEIGHT = 10;
+
+  if (columns.length === 0) {
+    return {
+      ...emptyDimension("metadata_schema", "Metadata Schema", WEIGHT),
+      summary: "No column data synced yet — run an IA sync to collect column schema metrics.",
+    };
+  }
+
+  const visibleLibs = libs.filter(l => !l.hidden);
+  const totalLibs = visibleLibs.length;
+  if (totalLibs === 0) {
+    return emptyDimension("metadata_schema", "Metadata Schema", WEIGHT);
+  }
+
+  const customCols = columns.filter(c => c.isCustom && !c.isReadOnly && !c.isSealed);
+
+  // ── Custom column presence ─────────────────────────────────────────────────
+  // Libraries with ≥1 custom column show intent to capture metadata.
+  const libsWithCustomCols = new Set(customCols.map(c => c.documentLibraryId));
+  const customColAdoptionRate = libsWithCustomCols.size / totalLibs;
+
+  // ── Required field enforcement ────────────────────────────────────────────
+  // At least some required fields signal enforcement intent.
+  const libsWithRequiredCols = new Set(
+    customCols.filter(c => c.isRequired).map(c => c.documentLibraryId),
+  );
+  const requiredEnforcementRate =
+    libsWithCustomCols.size > 0 ? libsWithRequiredCols.size / libsWithCustomCols.size : 0;
+
+  // ── Fill rates ────────────────────────────────────────────────────────────
+  // Average fill rate across custom columns that have been sampled.
+  const colsWithFillData = customCols.filter(c => c.fillRatePct != null);
+  let avgFillRate = 1.0; // default: full score when no fill data yet
+  if (colsWithFillData.length > 0) {
+    avgFillRate =
+      colsWithFillData.reduce((s, c) => s + (c.fillRatePct ?? 0), 0) /
+      colsWithFillData.length /
+      100;
+  }
+  const lowFillCols = colsWithFillData.filter(c => (c.fillRatePct ?? 100) < 30);
+
+  // ── Syntex / AI-managed ───────────────────────────────────────────────────
+  // Presence of Syntex-managed columns signals advanced AI enrichment.
+  const libsWithSyntex = new Set(columns.filter(c => c.isSyntexManaged).map(c => c.documentLibraryId));
+  const syntexAdoptionRate = libsWithSyntex.size / totalLibs;
+  // Syntex is a bonus but not required — cap contribution at 0.2
+  const syntexBonus = Math.min(syntexAdoptionRate, 0.2) / 0.2;
+
+  // ── Display-name collisions ───────────────────────────────────────────────
+  // Same display name but different column types across libraries = confusion.
+  const nameTypeMap = new Map<string, Set<string>>();
+  for (const c of customCols) {
+    const types = nameTypeMap.get(c.displayName) ?? new Set();
+    types.add(c.columnType);
+    nameTypeMap.set(c.displayName, types);
+  }
+  const collisionCount = Array.from(nameTypeMap.values()).filter(types => types.size > 1).length;
+  const uniqueNames = nameTypeMap.size;
+  const collisionRate = uniqueNames > 0 ? collisionCount / uniqueNames : 0;
+
+  // ── Composite score ───────────────────────────────────────────────────────
+  const raw = Math.round(
+    (customColAdoptionRate * 0.25 +
+      requiredEnforcementRate * 0.20 +
+      avgFillRate * 0.30 +
+      syntexBonus * 0.10 +
+      (1 - collisionRate) * 0.15) *
+      100,
+  );
+  const score = Math.max(0, Math.min(100, raw));
+
+  // Worst offenders: custom columns with very low fill rates
+  const offenders: IAOffender[] = lowFillCols
+    .sort((a, b) => (a.fillRatePct ?? 0) - (b.fillRatePct ?? 0))
+    .slice(0, 10)
+    .map(c => {
+      const lib = visibleLibs.find(l => l.id === c.documentLibraryId);
+      const ws = workspaces.find(w => w.id === c.workspaceId);
+      return {
+        workspaceId: c.workspaceId,
+        displayName: `${lib?.displayName ?? "?"} → ${c.displayName}`,
+        siteUrl: ws?.siteUrl ?? null,
+        tenantConnectionId: c.tenantConnectionId,
+        reason: `Column "${c.displayName}" has only ${c.fillRatePct}% fill rate (sampled ${c.fillRateSampleSize ?? "?"} items)`,
+      };
+    });
+
+  const avgFillDisplay =
+    colsWithFillData.length > 0
+      ? Math.round(colsWithFillData.reduce((s, c) => s + (c.fillRatePct ?? 0), 0) / colsWithFillData.length)
+      : null;
+
+  return {
+    key: "metadata_schema",
+    label: "Metadata Schema",
+    weight: WEIGHT,
+    score,
+    weightedScore: Math.round(score * (WEIGHT / 100)),
+    summary: `${libsWithCustomCols.size} of ${totalLibs} libraries (${Math.round(customColAdoptionRate * 100)}%) have custom columns. ${libsWithRequiredCols.size} enforce required fields. ${avgFillDisplay != null ? `Avg fill rate: ${avgFillDisplay}% across ${colsWithFillData.length} sampled columns.` : "Fill rates not yet sampled."} ${collisionCount} display-name collision(s) detected. ${libsWithSyntex.size} Syntex-enabled libraries.`,
+    worstOffenders: offenders,
+    metrics: {
+      totalLibraries: totalLibs,
+      libsWithCustomCols: libsWithCustomCols.size,
+      customColAdoptionRate: Math.round(customColAdoptionRate * 100),
+      totalCustomCols: customCols.length,
+      libsWithRequiredCols: libsWithRequiredCols.size,
+      requiredEnforcementRate: Math.round(requiredEnforcementRate * 100),
+      colsWithFillData: colsWithFillData.length,
+      avgFillRate: avgFillDisplay ?? "N/A",
+      lowFillColumns: lowFillCols.length,
+      syntexLibraries: libsWithSyntex.size,
+      syntexAdoptionRate: Math.round(syntexAdoptionRate * 100),
+      displayNameCollisions: collisionCount,
     },
   };
 }
@@ -372,13 +751,21 @@ function emptyDimension(key: string, label: string, weight: number): IADimension
 // Public API
 // ---------------------------------------------------------------------------
 
-export function scoreIAHealth(workspaces: Workspace[]): IAScoreResult {
+export function scoreIAHealth(
+  workspaces: Workspace[],
+  libs: DocumentLibrary[] = [],
+  columns: LibraryColumn[] = [],
+  libCTs: LibraryContentType[] = [],
+): IAScoreResult {
   const dimensions: IADimensionScore[] = [
     scoreNamingConsistency(workspaces),
     scoreHubGovernance(workspaces),
     scoreMetadataCompleteness(workspaces),
     scoreSensitivityCoverage(workspaces),
     scoreLifecycleManagement(workspaces),
+    scoreLibraryStructure(workspaces, libs),
+    scoreContentTypeDeployment(workspaces, libs, libCTs),
+    scoreMetadataSchema(workspaces, libs, columns),
   ];
 
   const totalWeight = dimensions.reduce((sum, d) => sum + d.weight, 0);

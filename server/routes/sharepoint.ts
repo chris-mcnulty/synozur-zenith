@@ -3339,13 +3339,25 @@ router.get("/api/admin/libraries/:libraryId/details", requireRole(ZENITH_ROLES.V
     if (!graphSiteId) return res.status(400).json({ error: "Workspace has no M365 object ID" });
 
     const details = await fetchLibraryDetails(token, graphSiteId, lib.m365ListId);
+
+    // Merge fill rate data from DB into the Graph API column list.
+    // columnInternalName in the DB maps to the column `name` returned by Graph.
+    const dbColumns = await storage.getLibraryColumnsForLibrary(lib.id);
+    const fillRateByName = new Map(
+      dbColumns.map(c => [c.columnInternalName, { fillRatePct: c.fillRatePct, fillRateSampleSize: c.fillRateSampleSize }]),
+    );
+    const columnsWithFillRate = details.columns.map(col => ({
+      ...col,
+      ...fillRateByName.get(col.name),
+    }));
+
     res.json({
       library: lib,
       workspaceName: workspace.displayName,
       workspaceType: workspace.type,
       siteUrl: workspace.siteUrl,
       contentTypes: details.contentTypes,
-      columns: details.columns,
+      columns: columnsWithFillRate,
       error: details.error,
     });
   } catch (err: any) {
