@@ -2717,13 +2717,20 @@ router.post("/api/admin/tenants/:id/sync-ia", requireRole(ZENITH_ROLES.TENANT_AD
         }
 
         // Build a listId → driveId map so we can crawl folder structure per library.
+        // Paginate through all drives — sites with many drives (e.g. classic team sites
+        // with document workspaces) can have more than the default page size.
         const listIdToDriveId = new Map<string, string>();
         try {
-          const drivesRes = await fetch(
-            `https://graph.microsoft.com/v1.0/sites/${graphSiteId}/drives?$select=id,name,webUrl`,
-            { headers: { Authorization: `Bearer ${token}` } },
-          );
-          if (drivesRes.ok) {
+          let drivesNextLink: string | null =
+            `https://graph.microsoft.com/v1.0/sites/${graphSiteId}/drives?$select=id,name,webUrl&$top=100`;
+          while (drivesNextLink) {
+            const drivesRes = await fetch(drivesNextLink, {
+              headers: { Authorization: `Bearer ${token}` },
+            });
+            if (!drivesRes.ok) {
+              console.warn(`[ia-sync] drives page returned ${drivesRes.status} for ${graphSiteId}`);
+              break;
+            }
             const drivesData = await drivesRes.json();
             for (const drive of drivesData.value || []) {
               try {
@@ -2737,6 +2744,7 @@ router.post("/api/admin/tenants/:id/sync-ia", requireRole(ZENITH_ROLES.TENANT_AD
                 }
               } catch { /* skip individual drive lookup failures */ }
             }
+            drivesNextLink = drivesData['@odata.nextLink'] || null;
           }
         } catch (e: any) {
           console.warn(`[ia-sync] Could not fetch drives for ${graphSiteId}: ${e.message}`);

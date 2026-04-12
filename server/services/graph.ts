@@ -2739,6 +2739,7 @@ export async function fetchLibraryFolderDepth(
   const MAX_FOLDERS = 500;
   let folderCount = 0;
   let maxDepth = 0;
+  let traversalError: string | undefined;
 
   async function crawl(parentPath: string, currentDepth: number): Promise<void> {
     if (currentDepth > MAX_DEPTH || folderCount >= MAX_FOLDERS) return;
@@ -2751,7 +2752,13 @@ export async function fetchLibraryFolderDepth(
         const res = await fetch(nextLink, {
           headers: { Authorization: `Bearer ${token}` },
         });
-        if (!res.ok) break;
+        if (!res.ok) {
+          const body = await res.text().catch(() => "");
+          const msg = `Graph returned ${res.status} for drive=${driveId} path=${parentPath}: ${body.substring(0, 200)}`;
+          console.warn(`[graph] fetchLibraryFolderDepth ${msg}`);
+          traversalError = traversalError ?? msg;
+          break;
+        }
         const data = await res.json();
         const items: any[] = data.value || [];
 
@@ -2772,7 +2779,7 @@ export async function fetchLibraryFolderDepth(
 
   try {
     await crawl("root", 1);
-    return { maxDepth, folderCount };
+    return { maxDepth, folderCount, error: traversalError };
   } catch (err: any) {
     console.error(`[graph] fetchLibraryFolderDepth error:`, err.message);
     return { maxDepth: 0, folderCount: 0, error: err.message };

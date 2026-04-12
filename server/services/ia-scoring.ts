@@ -245,7 +245,7 @@ function scoreSensitivityCoverage(workspaces: Workspace[]): IADimensionScore {
   const total = active.length;
 
   if (total === 0) {
-    return emptyDimension("sensitivity_coverage", "Sensitivity Coverage", 20);
+    return emptyDimension("sensitivity_coverage", "Sensitivity Coverage", 13);
   }
 
   const withLabel = active.filter(w => !!w.sensitivityLabelId);
@@ -406,13 +406,13 @@ function scoreLibraryStructure(
   const defaultOverloadRate = totalSites > 0 ? sitesWithOnlyDefault / totalSites : 0;
 
   // ── Folder depth ──────────────────────────────────────────────────────────
-  // Ideal ≤ 3 levels. Penalise linearly from 4 up to 8+ (= 0 score).
+  // Ideal ≤ 5 levels. Penalise linearly from 6 up to 10+ (= 0 score).
   const libsWithDepth = visibleLibs.filter(l => l.maxFolderDepth != null);
   let folderDepthScore = 1.0; // default: full score when no data
   if (libsWithDepth.length > 0) {
     const avgDepth =
       libsWithDepth.reduce((s, l) => s + (l.maxFolderDepth ?? 0), 0) / libsWithDepth.length;
-    folderDepthScore = avgDepth <= 3 ? 1.0 : Math.max(0, 1 - (avgDepth - 3) / 5);
+    folderDepthScore = avgDepth <= 5 ? 1.0 : Math.max(0, 1 - (avgDepth - 5) / 5);
   }
   const deepLibs = libsWithDepth.filter(l => (l.maxFolderDepth ?? 0) > 5);
 
@@ -634,7 +634,11 @@ function scoreMetadataSchema(
     return emptyDimension("metadata_schema", "Metadata Schema", WEIGHT);
   }
 
-  const customCols = columns.filter(c => c.isCustom && !c.isReadOnly && !c.isSealed);
+  // Restrict all column lookups to visible libraries so the denominator
+  // (totalLibs) and numerators are always aligned.
+  const visibleLibIds = new Set(visibleLibs.map(l => l.id));
+  const visibleColumns = columns.filter(c => visibleLibIds.has(c.documentLibraryId));
+  const customCols = visibleColumns.filter(c => c.isCustom && !c.isReadOnly && !c.isSealed);
 
   // ── Custom column presence ─────────────────────────────────────────────────
   // Libraries with ≥1 custom column show intent to capture metadata.
@@ -663,7 +667,7 @@ function scoreMetadataSchema(
 
   // ── Syntex / AI-managed ───────────────────────────────────────────────────
   // Presence of Syntex-managed columns signals advanced AI enrichment.
-  const libsWithSyntex = new Set(columns.filter(c => c.isSyntexManaged).map(c => c.documentLibraryId));
+  const libsWithSyntex = new Set(visibleColumns.filter(c => c.isSyntexManaged).map(c => c.documentLibraryId));
   const syntexAdoptionRate = libsWithSyntex.size / totalLibs;
   // Syntex is a bonus but not required — cap contribution at 0.2
   const syntexBonus = Math.min(syntexAdoptionRate, 0.2) / 0.2;
