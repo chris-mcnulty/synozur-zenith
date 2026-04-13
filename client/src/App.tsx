@@ -31,6 +31,7 @@ import DiscoverDashboard from "./pages/app/discover";
 import AICopilotIntegration from "./pages/app/ai-copilot";
 import CopilotReadinessPage from "./pages/app/copilot-readiness";
 import IAAssessmentPage from "./pages/app/ia-assessment";
+import ContentIntensityHeatmapPage from "./pages/app/content-intensity-heatmap";
 import UserManagementPage from "./pages/app/admin/users";
 import OrganizationSettingsPage from "./pages/app/admin/organization";
 import SystemAdminPage from "./pages/app/admin/system";
@@ -150,6 +151,7 @@ function AppRoutes() {
         <Route path="/app/ai-copilot" component={AICopilotIntegration} />
         <Route path="/app/copilot-readiness" component={CopilotReadinessPage} />
         <Route path="/app/ia-assessment" component={IAAssessmentPage} />
+        <Route path="/app/content-intensity-heatmap" component={ContentIntensityHeatmapPage} />
         <Route path="/app/discover" component={DiscoverDashboard} />
         <Route path="/app/admin/plans"><Redirect to="/plans" /></Route>
         <Route path="/app/admin/users">
