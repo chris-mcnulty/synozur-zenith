@@ -35,7 +35,19 @@ import {
   Download,
   BarChart3,
   Sparkles,
+  Trash2,
 } from "lucide-react";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import { UpgradeGate } from "@/components/upgrade-gate";
 import { useTenant } from "@/lib/tenant-context";
 import { format } from "date-fns";
@@ -361,6 +373,23 @@ export default function IAAssessmentPage() {
     },
   });
 
+  const deleteMutation = useMutation({
+    mutationFn: async (runId: string) => {
+      const res = await fetch(`/api/ia-assessment/${runId}`, {
+        method: "DELETE",
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.message || "Failed to delete assessment");
+      }
+    },
+    onSuccess: (_data, runId) => {
+      queryClient.invalidateQueries({ queryKey: ["ia-assessment-history"] });
+      if (activeRunId === runId) setActiveRunId(null);
+    },
+  });
+
   const activeRun = polledRun ?? viewingRun ?? null;
   const isPolling = !!pollingRunId && polledRun?.status === "RUNNING";
   const isCompleted = activeRun?.status === "COMPLETED";
@@ -670,17 +699,56 @@ export default function IAAssessmentPage() {
                         {run.evaluatedSites ?? "—"}
                       </TableCell>
                       <TableCell>
-                        {run.status === "COMPLETED" && (
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="gap-1 text-xs"
-                            onClick={(e) => { e.stopPropagation(); downloadMarkdown(run); }}
-                            data-testid={`button-download-${run.id}`}
-                          >
-                            <Download className="w-3 h-3" />
-                          </Button>
-                        )}
+                        <div className="flex items-center justify-end gap-1">
+                          {run.status === "COMPLETED" && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="gap-1 text-xs"
+                              onClick={(e) => { e.stopPropagation(); downloadMarkdown(run); }}
+                              data-testid={`button-download-${run.id}`}
+                            >
+                              <Download className="w-3 h-3" />
+                            </Button>
+                          )}
+                          {run.status !== "RUNNING" && (
+                            <AlertDialog>
+                              <AlertDialogTrigger asChild>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="text-muted-foreground hover:text-destructive"
+                                  onClick={(e) => e.stopPropagation()}
+                                  disabled={deleteMutation.isPending}
+                                  data-testid={`button-delete-${run.id}`}
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </Button>
+                              </AlertDialogTrigger>
+                              <AlertDialogContent onClick={(e) => e.stopPropagation()}>
+                                <AlertDialogHeader>
+                                  <AlertDialogTitle>Delete this assessment?</AlertDialogTitle>
+                                  <AlertDialogDescription>
+                                    This will permanently delete the assessment from{" "}
+                                    <strong>{format(new Date(run.createdAt), "PPp")}</strong>
+                                    {run.overallScore != null && ` (score: ${run.overallScore}/100)`}.
+                                    This action cannot be undone.
+                                  </AlertDialogDescription>
+                                </AlertDialogHeader>
+                                <AlertDialogFooter>
+                                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+                                  <AlertDialogAction
+                                    className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                                    onClick={() => deleteMutation.mutate(run.id)}
+                                    data-testid={`button-confirm-delete-${run.id}`}
+                                  >
+                                    Delete Assessment
+                                  </AlertDialogAction>
+                                </AlertDialogFooter>
+                              </AlertDialogContent>
+                            </AlertDialog>
+                          )}
+                        </div>
                       </TableCell>
                     </TableRow>
                   ))}

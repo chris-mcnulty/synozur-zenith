@@ -20,6 +20,7 @@ import {
   getLatestRunForTenant,
   getRunHistory,
   getAdminRunSummary,
+  deleteRun,
 } from "../services/ia-assessment-service";
 
 const router = Router();
@@ -188,6 +189,39 @@ router.get(
     }
 
     return res.json(run);
+  },
+);
+
+// ---------------------------------------------------------------------------
+// DELETE /api/ia-assessment/:runId — delete a run
+// ---------------------------------------------------------------------------
+
+router.delete(
+  "/api/ia-assessment/:runId",
+  requireAuth(),
+  requireRole("governance_admin"),
+  requireFeature("iaAssessment"),
+  async (req: AuthenticatedRequest, res) => {
+    const { runId } = req.params;
+
+    const run = await getRunById(runId);
+    if (!run) return res.status(404).json({ message: "Run not found" });
+
+    const orgId = req.activeOrganizationId || req.user?.organizationId;
+    const isPlatformOwner = req.user?.role === ZENITH_ROLES.PLATFORM_OWNER;
+
+    if (!isPlatformOwner && run.orgId !== orgId) {
+      return res.status(403).json({ message: "Access denied" });
+    }
+
+    if (run.status === "RUNNING") {
+      return res.status(409).json({ message: "Cannot delete a run that is still in progress" });
+    }
+
+    const deleted = await deleteRun(runId, isPlatformOwner ? run.orgId : (orgId ?? ""));
+    if (!deleted) return res.status(404).json({ message: "Run not found or already deleted" });
+
+    return res.status(204).end();
   },
 );
 
