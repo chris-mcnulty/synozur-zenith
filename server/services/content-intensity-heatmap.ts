@@ -425,9 +425,7 @@ export async function buildHeatmapSnapshot(
   const nodes: Record<string, HeatmapNode> = {};
 
   // ── Step 1: Create workspace nodes ──────────────────────────────────────
-  const wsById: Record<string, Workspace> = {};
   for (const ws of workspaces) {
-    wsById[ws.id] = ws;
     const rawSignals = workspaceSignals(ws, iaOffenderCountByWsId, totalDimensions);
     const signals: Partial<Record<SignalKey, HeatmapSignalCell>> = {};
     for (const [k, v] of Object.entries(rawSignals) as [SignalKey, number | null][]) {
