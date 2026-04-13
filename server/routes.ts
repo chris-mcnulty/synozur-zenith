@@ -20,6 +20,7 @@ import licensingRouter from "./routes/licensing";
 import emailStorageReportRouter from "./routes/email-storage-report";
 import adminAiRouter from "./routes/admin-ai";
 import iaAssessmentRouter from "./routes/ia-assessment";
+import contentIntensityHeatmapRouter from "./routes/content-intensity-heatmap";
 
 export async function registerRoutes(
   httpServer: Server,
@@ -52,6 +53,7 @@ export async function registerRoutes(
   app.use(emailStorageReportRouter);
   app.use(adminAiRouter);
   app.use(iaAssessmentRouter);
+  app.use(contentIntensityHeatmapRouter);
 
   return httpServer;
 }

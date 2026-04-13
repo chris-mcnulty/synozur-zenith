@@ -22,6 +22,7 @@ const FEATURE_LABELS: Record<string, { label: string; minPlan: string }> = {
   dataMasking: { label: "Tenant Database Masking", minPlan: "Professional" },
   csvExport: { label: "CSV Export", minPlan: "Standard" },
   iaAssessment: { label: "IA Assessment", minPlan: "Enterprise" },
+  contentIntensityHeatmap: { label: "Content Intensity Heat Map", minPlan: "Enterprise" },
 };
 
 export function UpgradeGate({ feature, children, fallback, inline }: UpgradeGateProps) {
