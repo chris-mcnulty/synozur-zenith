@@ -269,23 +269,29 @@ function computePercentiles(
   const levelNodes = nodes.filter(n => n.level === level);
   if (levelNodes.length === 0) return;
 
-  // Collect valid raw values per signal
-  const rawMap: Partial<Record<SignalKey, number[]>> = {};
+  // Precompute descriptor lookup once (avoids O(signals) linear scan per node)
+  const descriptorByKey = new Map(SIGNAL_DESCRIPTORS.map(d => [d.key, d]));
+
+  // Collect valid raw values per signal and sort each cohort array once
+  const sortedCohortByKey = new Map<SignalKey, number[]>();
   for (const node of levelNodes) {
     for (const [key, cell] of Object.entries(node.signals) as [SignalKey, HeatmapSignalCell][]) {
       if (cell.rawValue == null) continue;
-      (rawMap[key] ||= []).push(cell.rawValue);
+      if (!sortedCohortByKey.has(key)) sortedCohortByKey.set(key, []);
+      sortedCohortByKey.get(key)!.push(cell.rawValue);
     }
+  }
+  for (const arr of sortedCohortByKey.values()) {
+    arr.sort((a, b) => a - b);
   }
 
   for (const node of levelNodes) {
     for (const key of Object.keys(node.signals) as SignalKey[]) {
       const cell = node.signals[key]!;
-      const sorted = rawMap[key];
-      if (sorted == null || cell.rawValue == null) continue;
+      const sortedAsc = sortedCohortByKey.get(key);
+      if (sortedAsc == null || cell.rawValue == null) continue;
 
-      const sortedAsc = [...sorted].sort((a, b) => a - b);
-      const descriptor = SIGNAL_DESCRIPTORS.find(d => d.key === key);
+      const descriptor = descriptorByKey.get(key);
       let pct = percentileRank(sortedAsc, cell.rawValue);
 
       // Invert if lower raw → hotter
@@ -294,7 +300,7 @@ function computePercentiles(
       }
 
       cell.percentile = pct;
-      cell.cohortSize = sorted.length;
+      cell.cohortSize = sortedAsc.length;
     }
   }
 }
@@ -310,26 +316,47 @@ function rollupHubSignals(
   const children = workspaceNodes.filter(n => hubNode.childIds.includes(n.id));
   if (children.length === 0) return;
 
-  const signalKeys: SignalKey[] = [
+  // Additive signals: sum across child workspaces
+  const additiveKeys: SignalKey[] = [
     "storageBytes",
     "fileCount",
-    "lastActivityRecency",
     "pageViewCount",
     "activeFileCount",
   ];
-
-  for (const key of signalKeys) {
+  for (const key of additiveKeys) {
     const values = children
       .map(c => c.signals[key]?.rawValue ?? null)
       .filter((v): v is number => v !== null);
+    hubNode.signals[key] = {
+      key,
+      rawValue: values.length > 0 ? values.reduce((a, b) => a + b, 0) : null,
+      percentile: null,
+      cohortSize: 0,
+    };
+  }
 
-    if (values.length === 0) {
-      hubNode.signals[key] = { key, rawValue: null, percentile: null, cohortSize: 0 };
-      continue;
-    }
+  // Recency: use min (= most recently active workspace defines hub recency)
+  const recencyValues = children
+    .map(c => c.signals.lastActivityRecency?.rawValue ?? null)
+    .filter((v): v is number => v !== null);
+  hubNode.signals.lastActivityRecency = {
+    key: "lastActivityRecency",
+    rawValue: recencyValues.length > 0 ? Math.min(...recencyValues) : null,
+    percentile: null,
+    cohortSize: 0,
+  };
 
-    const total = values.reduce((a, b) => a + b, 0);
-    hubNode.signals[key] = { key, rawValue: total, percentile: null, cohortSize: 0 };
+  // IA offender signal: average across children (workspace-level signal only)
+  const iaValues = children
+    .map(c => c.signals.iaOffenderSignal?.rawValue ?? null)
+    .filter((v): v is number => v !== null);
+  if (iaValues.length > 0) {
+    hubNode.signals.iaOffenderSignal = {
+      key: "iaOffenderSignal",
+      rawValue: Math.round(iaValues.reduce((a, b) => a + b, 0) / iaValues.length),
+      percentile: null,
+      cohortSize: 0,
+    };
   }
 }
 
@@ -476,11 +503,16 @@ export async function buildHeatmapSnapshot(
   }
 
   // ── Step 3: Create hub nodes & link workspaces ───────────────────────────
+  // Hub nodes are keyed by the M365 hub GUID (hubWs.hubSiteId) because that
+  // is the value member workspaces store in their own hubSiteId field.
+  // Falls back to the DB workspace id if the hub workspace itself has no
+  // hubSiteId populated (unusual, but defensive).
   const hubWorkspaces = workspaces.filter(ws => ws.isHubSite);
   const unhubbedIds: string[] = [];
 
   for (const hubWs of hubWorkspaces) {
-    const hubNodeId = `hub:${hubWs.id}`;
+    const hubKey = hubWs.hubSiteId ?? hubWs.id;
+    const hubNodeId = `hub:${hubKey}`;
     nodes[hubNodeId] = {
       id: hubNodeId,
       level: "hub",
@@ -489,7 +521,7 @@ export async function buildHeatmapSnapshot(
       siteUrl: hubWs.siteUrl ?? null,
       tenantConnectionId,
       workspaceId: hubWs.id,
-      hubSiteId: hubWs.id,
+      hubSiteId: hubKey,
       signals: {},
       compositeIntensity: null,
       compositePercentile: null,
@@ -514,7 +546,7 @@ export async function buildHeatmapSnapshot(
   }
 
   // Virtual unhubbed bucket (only create if there are unhubbed workspaces)
-  let roots: string[] = hubWorkspaces.map(hw => `hub:${hw.id}`);
+  let roots: string[] = hubWorkspaces.map(hw => `hub:${hw.hubSiteId ?? hw.id}`);
 
   if (unhubbedIds.length > 0) {
     nodes[VIRTUAL_UNHUBBED_ID] = {

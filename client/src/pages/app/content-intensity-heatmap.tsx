@@ -21,7 +21,6 @@ import { Button } from "@/components/ui/button";
 import {
   Tooltip,
   TooltipContent,
-  TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import {
@@ -109,30 +108,28 @@ function SignalCell({ node, descriptor }: SignalCellProps) {
   const bg = intensityBg(pct);
 
   return (
-    <TooltipProvider delayDuration={150}>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <div
-            className={`w-14 h-10 flex flex-col items-center justify-center rounded text-[10px] font-mono cursor-default select-none ${bg}`}
-          >
-            <span className="leading-none">{rawDisplay}</span>
-            {pct !== null && (
-              <span className="leading-none opacity-70 text-[8px]">p{pct}</span>
-            )}
-          </div>
-        </TooltipTrigger>
-        <TooltipContent side="top" className="max-w-xs text-xs">
-          <p className="font-semibold">{descriptor.label}</p>
-          <p className="text-muted-foreground">{descriptor.description}</p>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <div
+          className={`w-14 h-10 flex flex-col items-center justify-center rounded text-[10px] font-mono cursor-default select-none ${bg}`}
+        >
+          <span className="leading-none">{rawDisplay}</span>
           {pct !== null && (
-            <p className="mt-1">
-              Percentile <strong>{pct}</strong> — {intensityLabel(pct)} intensity
-              {cell?.cohortSize ? ` (cohort: ${cell.cohortSize})` : ""}
-            </p>
+            <span className="leading-none opacity-70 text-[8px]">p{pct}</span>
           )}
-        </TooltipContent>
-      </Tooltip>
-    </TooltipProvider>
+        </div>
+      </TooltipTrigger>
+      <TooltipContent side="top" className="max-w-xs text-xs">
+        <p className="font-semibold">{descriptor.label}</p>
+        <p className="text-muted-foreground">{descriptor.description}</p>
+        {pct !== null && (
+          <p className="mt-1">
+            Percentile <strong>{pct}</strong> — {intensityLabel(pct)} intensity
+            {cell?.cohortSize ? ` (cohort: ${cell.cohortSize})` : ""}
+          </p>
+        )}
+      </TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -232,31 +229,29 @@ function HeatmapRow({
       </span>
 
       {/* Composite */}
-      <TooltipProvider delayDuration={150}>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <div
-              className={`w-16 h-10 flex flex-col items-center justify-center rounded text-[10px] font-semibold flex-shrink-0 ${compositeBg}`}
-            >
-              {node.compositeIntensity != null ? (
-                <>
-                  <span>{node.compositeIntensity}</span>
-                  <span className="opacity-70 text-[8px]">
-                    {intensityLabel(node.compositePercentile)}
-                  </span>
-                </>
-              ) : (
-                <span>—</span>
-              )}
-            </div>
-          </TooltipTrigger>
-          <TooltipContent side="top" className="text-xs">
-            Composite intensity (mean of signal percentiles).
-            {node.compositePercentile != null &&
-              ` Ranked p${node.compositePercentile} in cohort.`}
-          </TooltipContent>
-        </Tooltip>
-      </TooltipProvider>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <div
+            className={`w-16 h-10 flex flex-col items-center justify-center rounded text-[10px] font-semibold flex-shrink-0 ${compositeBg}`}
+          >
+            {node.compositeIntensity != null ? (
+              <>
+                <span>{node.compositeIntensity}</span>
+                <span className="opacity-70 text-[8px]">
+                  {intensityLabel(node.compositePercentile)}
+                </span>
+              </>
+            ) : (
+              <span>—</span>
+            )}
+          </div>
+        </TooltipTrigger>
+        <TooltipContent side="top" className="text-xs">
+          Composite intensity (mean of signal percentiles).
+          {node.compositePercentile != null &&
+            ` Ranked p${node.compositePercentile} in cohort.`}
+        </TooltipContent>
+      </Tooltip>
 
       {/* Signal cells */}
       <div className="flex items-center gap-1 flex-shrink-0">
@@ -457,19 +452,17 @@ export default function ContentIntensityHeatmapPage() {
                   {/* signal columns */}
                   <div className="flex items-center gap-1 flex-shrink-0">
                     {descriptors.map(d => (
-                      <TooltipProvider key={d.key} delayDuration={150}>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <div className="w-14 text-center truncate cursor-help">
-                              {d.shortLabel}
-                            </div>
-                          </TooltipTrigger>
-                          <TooltipContent side="top" className="text-xs max-w-xs">
-                            <p className="font-semibold">{d.label}</p>
-                            <p className="text-muted-foreground">{d.description}</p>
-                          </TooltipContent>
-                        </Tooltip>
-                      </TooltipProvider>
+                      <Tooltip key={d.key}>
+                        <TooltipTrigger asChild>
+                          <div className="w-14 text-center truncate cursor-help">
+                            {d.shortLabel}
+                          </div>
+                        </TooltipTrigger>
+                        <TooltipContent side="top" className="text-xs max-w-xs">
+                          <p className="font-semibold">{d.label}</p>
+                          <p className="text-muted-foreground">{d.description}</p>
+                        </TooltipContent>
+                      </Tooltip>
                     ))}
                   </div>
                 </div>

@@ -11,7 +11,6 @@ import { Router } from "express";
 import { requireAuth, requireRole, type AuthenticatedRequest } from "../middleware/rbac";
 import { requireFeature } from "../services/feature-gate";
 import { storage } from "../storage";
-import { ZENITH_ROLES } from "@shared/schema";
 import { buildHeatmapSnapshot } from "../services/content-intensity-heatmap";
 import { getOrgTenantConnectionIds } from "./scope-helpers";
 
