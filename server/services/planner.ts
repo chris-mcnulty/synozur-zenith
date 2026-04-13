@@ -107,7 +107,7 @@ export async function createPlannerTaskForTicket(ticket: SupportTicket): Promise
     const creds = getCredentials();
     if (!creds) {
       console.warn(
-        `[planner] Skipping Planner task for ticket ${ticket.id}: Microsoft Graph credentials not configured (set MICROSOFT_GRAPH_TENANT_ID/CLIENT_ID/CLIENT_SECRET or AZURE_* equivalents)`
+        `[planner] Skipping Planner task for ticket ${ticket.id}: Microsoft Graph credentials not configured (set PLANNER_TENANT_ID/PLANNER_CLIENT_ID/PLANNER_CLIENT_SECRET, MICROSOFT_GRAPH_TENANT_ID/MICROSOFT_GRAPH_CLIENT_ID/MICROSOFT_GRAPH_CLIENT_SECRET, or AZURE_TENANT_ID/AZURE_CLIENT_ID/AZURE_CLIENT_SECRET)`
       );
       return null;
     }
