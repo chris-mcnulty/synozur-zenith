@@ -300,7 +300,8 @@ export interface IStorage {
   updateOrganizationSettings(id: string, updates: Partial<InsertOrganization>): Promise<Organization | undefined>;
 
   getPlatformSettings(): Promise<PlatformSettings>;
-  updatePlatformSettings(patch: { defaultSignupPlan: string; updatedBy?: string | null }): Promise<PlatformSettings>;
+  updatePlatformSettings(patch: { defaultSignupPlan?: string; plannerPlanId?: string | null; plannerBucketId?: string | null; updatedBy?: string | null }): Promise<PlatformSettings>;
+  setSupportTicketPlannerTaskId(id: string, plannerTaskId: string): Promise<void>;
 
   // Teams recordings discovery
   upsertTeamsRecording(data: InsertTeamsRecording): Promise<TeamsRecording>;
@@ -329,7 +330,7 @@ export interface IStorage {
   bulkExcludeNoDriveAccounts(tenantConnectionId: string, exclusionReason?: string): Promise<number>;
 
   // Support tickets
-  createSupportTicket(data: Omit<SupportTicket, 'id' | 'createdAt' | 'updatedAt' | 'resolvedAt' | 'resolvedBy' | 'assignedTo'>): Promise<SupportTicket>;
+  createSupportTicket(data: Omit<SupportTicket, 'id' | 'createdAt' | 'updatedAt' | 'resolvedAt' | 'resolvedBy' | 'assignedTo' | 'plannerTaskId'>): Promise<SupportTicket>;
   getSupportTickets(orgId: string | null, userId: string, isAdmin: boolean): Promise<SupportTicket[]>;
   getSupportTicket(id: string, orgId: string | null, userId?: string): Promise<SupportTicket | null>;
   getTicketReplies(ticketId: string, includeInternal: boolean): Promise<SupportTicketReply[]>;
@@ -1670,10 +1671,14 @@ export class DatabaseStorage implements IStorage {
     return created;
   }
 
-  async updatePlatformSettings(patch: { defaultSignupPlan: string; updatedBy?: string | null }): Promise<PlatformSettings> {
+  async updatePlatformSettings(patch: { defaultSignupPlan?: string; plannerPlanId?: string | null; plannerBucketId?: string | null; updatedBy?: string | null }): Promise<PlatformSettings> {
     const existing = await this.getPlatformSettings();
+    const updates: Record<string, any> = { updatedAt: new Date(), updatedBy: patch.updatedBy ?? null };
+    if (patch.defaultSignupPlan !== undefined) updates.defaultSignupPlan = patch.defaultSignupPlan;
+    if (patch.plannerPlanId !== undefined) updates.plannerPlanId = patch.plannerPlanId;
+    if (patch.plannerBucketId !== undefined) updates.plannerBucketId = patch.plannerBucketId;
     const [updated] = await db.update(platformSettings)
-      .set({ defaultSignupPlan: patch.defaultSignupPlan, updatedAt: new Date(), updatedBy: patch.updatedBy ?? null })
+      .set(updates)
       .where(eq(platformSettings.id, existing.id))
       .returning();
     return updated;
@@ -2434,7 +2439,7 @@ export class DatabaseStorage implements IStorage {
     return (result?.maxNum ?? 0) + 1;
   }
 
-  async createSupportTicket(data: Omit<SupportTicket, 'id' | 'createdAt' | 'updatedAt' | 'resolvedAt' | 'resolvedBy' | 'assignedTo'>): Promise<SupportTicket> {
+  async createSupportTicket(data: Omit<SupportTicket, 'id' | 'createdAt' | 'updatedAt' | 'resolvedAt' | 'resolvedBy' | 'assignedTo' | 'plannerTaskId'>): Promise<SupportTicket> {
     const [ticket] = await db.insert(supportTickets).values(data).returning();
     return ticket;
   }
@@ -2499,6 +2504,13 @@ export class DatabaseStorage implements IStorage {
       .where(eq(supportTickets.id, id))
       .returning();
     return ticket;
+  }
+
+  async setSupportTicketPlannerTaskId(id: string, plannerTaskId: string): Promise<void> {
+    await db
+      .update(supportTickets)
+      .set({ plannerTaskId, updatedAt: new Date() })
+      .where(eq(supportTickets.id, id));
   }
 
   // ── Content Types ──────────────────────────────────────────────────────────

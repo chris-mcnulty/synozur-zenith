@@ -361,14 +361,43 @@ router.get("/api/admin/platform/settings", requireRole(ZENITH_ROLES.TENANT_ADMIN
 
 router.patch("/api/admin/platform/settings", requireRole(ZENITH_ROLES.PLATFORM_OWNER), async (req: AuthenticatedRequest, res) => {
   try {
-    const { defaultSignupPlan } = req.body;
-    if (!defaultSignupPlan || !SERVICE_PLANS.includes(defaultSignupPlan)) {
-      return res.status(400).json({ error: `Invalid defaultSignupPlan. Must be one of: ${SERVICE_PLANS.join(", ")}` });
-    }
-    const updated = await storage.updatePlatformSettings({
-      defaultSignupPlan,
+    const { defaultSignupPlan, plannerPlanId, plannerBucketId } = req.body ?? {};
+
+    const patch: { defaultSignupPlan?: string; plannerPlanId?: string | null; plannerBucketId?: string | null; updatedBy?: string | null } = {
       updatedBy: req.user?.id ?? null,
-    });
+    };
+
+    if (defaultSignupPlan !== undefined) {
+      if (!defaultSignupPlan || !SERVICE_PLANS.includes(defaultSignupPlan)) {
+        return res.status(400).json({ error: `Invalid defaultSignupPlan. Must be one of: ${SERVICE_PLANS.join(", ")}` });
+      }
+      patch.defaultSignupPlan = defaultSignupPlan;
+    }
+
+    // Planner Plan/Bucket IDs are GUIDs from Microsoft Graph. Allow null/empty
+    // string to clear the value (which disables the integration), otherwise
+    // require a non-trivial string. We do not enforce a strict GUID regex
+    // because Planner ids are opaque tokens, not standard UUIDs.
+    if (plannerPlanId !== undefined) {
+      if (plannerPlanId === null || plannerPlanId === "") {
+        patch.plannerPlanId = null;
+      } else if (typeof plannerPlanId !== "string" || plannerPlanId.trim().length < 8) {
+        return res.status(400).json({ error: "plannerPlanId must be at least 8 characters" });
+      } else {
+        patch.plannerPlanId = plannerPlanId.trim();
+      }
+    }
+    if (plannerBucketId !== undefined) {
+      if (plannerBucketId === null || plannerBucketId === "") {
+        patch.plannerBucketId = null;
+      } else if (typeof plannerBucketId !== "string" || plannerBucketId.trim().length < 8) {
+        return res.status(400).json({ error: "plannerBucketId must be at least 8 characters" });
+      } else {
+        patch.plannerBucketId = plannerBucketId.trim();
+      }
+    }
+
+    const updated = await storage.updatePlatformSettings(patch);
     invalidateDefaultSignupPlanCache();
     res.json(updated);
   } catch (err: any) {

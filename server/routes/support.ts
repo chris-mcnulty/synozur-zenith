@@ -4,6 +4,7 @@ import { ZENITH_ROLES } from "@shared/schema";
 import { storage } from "../storage";
 import { z } from "zod";
 import { sendSupportTicketNotification, sendTicketConfirmationToSubmitter } from "../email-support";
+import { createPlannerTaskForTicket } from "../services/planner";
 
 const router = Router();
 
@@ -72,6 +73,17 @@ router.post("/api/support/tickets", requireAuth(), async (req: AuthenticatedRequ
       ),
       sendTicketConfirmationToSubmitter(ticket, user).catch(err =>
         console.error("[SUPPORT] Failed to send confirmation:", err)
+      ),
+      createPlannerTaskForTicket(ticket).then(async taskId => {
+        if (taskId) {
+          try {
+            await storage.setSupportTicketPlannerTaskId(ticket.id, taskId);
+          } catch (err) {
+            console.error(`[SUPPORT] Failed to persist plannerTaskId for ticket ${ticket.id}:`, err);
+          }
+        }
+      }).catch(err =>
+        console.error("[SUPPORT] Failed to create Planner task:", err)
       ),
     ]);
 

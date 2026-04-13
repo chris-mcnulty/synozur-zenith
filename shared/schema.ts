@@ -758,9 +758,16 @@ export type InsertSpeContainerUsage = z.infer<typeof insertSpeContainerUsageSche
 export type SpeContainerUsage = typeof speContainerUsage.$inferSelect;
 
 // ── Platform Settings ────────────────────────────────────────────────────────
+// System-level configuration shared across the entire Zenith deployment.
+// Planner integration fields (plannerPlanId/plannerBucketId) are stored here
+// rather than as environment variables so platform owners can target a
+// specific Planner bucket within a shared plan that also contains tickets
+// from other Synozur products (Constellation, Vega, etc.).
 export const platformSettings = pgTable("platform_settings", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   defaultSignupPlan: text("default_signup_plan").notNull().default("TRIAL"),
+  plannerPlanId: text("planner_plan_id"),
+  plannerBucketId: text("planner_bucket_id"),
   updatedAt: timestamp("updated_at").defaultNow(),
   updatedBy: varchar("updated_by"),
 });
@@ -1043,6 +1050,7 @@ export const supportTickets = pgTable("support_tickets", {
   status: text("status").notNull().default("open"),
   assignedTo: varchar("assigned_to").references(() => users.id, { onDelete: 'set null' }),
   applicationSource: text("application_source").notNull().default("Zenith"),
+  plannerTaskId: text("planner_task_id"),
   resolvedAt: timestamp("resolved_at"),
   resolvedBy: varchar("resolved_by").references(() => users.id, { onDelete: 'set null' }),
   createdAt: timestamp("created_at").default(sql`now()`).notNull(),
@@ -1056,6 +1064,7 @@ export const insertSupportTicketSchema = createInsertSchema(supportTickets).omit
   resolvedAt: true,
   resolvedBy: true,
   assignedTo: true,
+  plannerTaskId: true,
 });
 
 export type InsertSupportTicket = z.infer<typeof insertSupportTicketSchema>;
