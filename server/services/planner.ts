@@ -21,16 +21,10 @@
  */
 
 import { storage } from "../storage";
+import { getAppToken } from "./graph";
 import type { SupportTicket } from "@shared/schema";
 
 const APP_PUBLIC_URL = process.env.APP_PUBLIC_URL || "https://zenith.synozur.com";
-
-interface TokenCache {
-  accessToken: string;
-  expiresAt: number;
-}
-
-let tokenCache: TokenCache | null = null;
 
 function getCredentials(): { tenantId: string; clientId: string; clientSecret: string } | null {
   const tenantId =
@@ -53,36 +47,7 @@ function getCredentials(): { tenantId: string; clientId: string; clientSecret: s
 async function getPlannerAccessToken(): Promise<string | null> {
   const creds = getCredentials();
   if (!creds) return null;
-
-  if (tokenCache && tokenCache.expiresAt > Date.now() + 60_000) {
-    return tokenCache.accessToken;
-  }
-
-  const url = `https://login.microsoftonline.com/${creds.tenantId}/oauth2/v2.0/token`;
-  const body = new URLSearchParams({
-    client_id: creds.clientId,
-    client_secret: creds.clientSecret,
-    scope: "https://graph.microsoft.com/.default",
-    grant_type: "client_credentials",
-  });
-
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: body.toString(),
-  });
-
-  if (!res.ok) {
-    const errorText = await res.text();
-    throw new Error(`Planner token acquisition failed (${res.status}): ${errorText}`);
-  }
-
-  const data = await res.json();
-  tokenCache = {
-    accessToken: data.access_token,
-    expiresAt: Date.now() + data.expires_in * 1000,
-  };
-  return tokenCache.accessToken;
+  return getAppToken(creds.tenantId, creds.clientId, creds.clientSecret);
 }
 
 /**
@@ -160,7 +125,7 @@ export async function createPlannerTaskForTicket(ticket: SupportTicket): Promise
           ticketUrl,
         previewType: "description",
         references: {
-          [encodeURIComponent(ticketUrl)]: {
+          [ticketUrl]: {
             "@odata.type": "#microsoft.graph.plannerExternalReference",
             alias: `Zenith ticket #${ticket.ticketNumber}`,
             type: "Other",

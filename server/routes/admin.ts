@@ -382,7 +382,7 @@ router.patch("/api/admin/platform/settings", requireRole(ZENITH_ROLES.PLATFORM_O
       if (plannerPlanId === null || plannerPlanId === "") {
         patch.plannerPlanId = null;
       } else if (typeof plannerPlanId !== "string" || plannerPlanId.trim().length < 8) {
-        return res.status(400).json({ error: "plannerPlanId must be a non-empty string" });
+        return res.status(400).json({ error: "plannerPlanId must be at least 8 characters" });
       } else {
         patch.plannerPlanId = plannerPlanId.trim();
       }
@@ -391,7 +391,7 @@ router.patch("/api/admin/platform/settings", requireRole(ZENITH_ROLES.PLATFORM_O
       if (plannerBucketId === null || plannerBucketId === "") {
         patch.plannerBucketId = null;
       } else if (typeof plannerBucketId !== "string" || plannerBucketId.trim().length < 8) {
-        return res.status(400).json({ error: "plannerBucketId must be a non-empty string" });
+        return res.status(400).json({ error: "plannerBucketId must be at least 8 characters" });
       } else {
         patch.plannerBucketId = plannerBucketId.trim();
       }
