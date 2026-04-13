@@ -8,6 +8,7 @@
 
 import { useState, useMemo, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { Link } from "wouter";
 import {
   Card,
   CardContent,
@@ -31,6 +32,7 @@ import {
   RefreshCw,
   Info,
   Layers,
+  ArrowUpRight,
 } from "lucide-react";
 import { UpgradeGate } from "@/components/upgrade-gate";
 import { useTenant } from "@/lib/tenant-context";
@@ -201,9 +203,32 @@ function HeatmapRow({
         {node.level}
       </Badge>
 
-      {/* Display name */}
-      <span className="flex-1 truncate text-sm min-w-0" title={node.displayName}>
-        {node.displayName}
+      {/* Display name — with drill-through link for workspace and library nodes */}
+      <span className="flex-1 min-w-0 flex items-center gap-1">
+        {node.level === "workspace" && node.workspaceId ? (
+          <Link
+            href={`/app/governance/workspaces/${node.workspaceId}`}
+            className="truncate text-sm hover:text-primary hover:underline"
+            title={node.displayName}
+          >
+            {node.displayName}
+          </Link>
+        ) : node.level === "library" ? (
+          <Link
+            href="/app/information-architecture"
+            className="truncate text-sm hover:text-primary hover:underline"
+            title={node.displayName}
+          >
+            {node.displayName}
+          </Link>
+        ) : (
+          <span className="truncate text-sm" title={node.displayName}>
+            {node.displayName}
+          </span>
+        )}
+        {(node.level === "workspace" || node.level === "library") && (
+          <ArrowUpRight className="w-3 h-3 flex-shrink-0 text-muted-foreground opacity-0 group-hover:opacity-60" />
+        )}
       </span>
 
       {/* Composite */}
@@ -369,10 +394,16 @@ export default function ContentIntensityHeatmapPage() {
               </Card>
             ))}
             {!snapshot.iaAssessmentIncluded && (
-              <Card className="flex-1 min-w-[260px] border-amber-500/20 bg-amber-500/5">
+              <Card className="flex-1 min-w-[280px] border-amber-500/20 bg-amber-500/5">
                 <CardContent className="pt-4 pb-3 flex items-center gap-2 text-amber-600 text-sm">
                   <Info className="w-4 h-4 flex-shrink-0" />
-                  Run an IA Assessment to enrich library-level signals.
+                  <span>
+                    Run an{" "}
+                    <Link href="/app/ia-assessment" className="underline underline-offset-2 hover:text-amber-700">
+                      IA Assessment
+                    </Link>{" "}
+                    to populate workspace-level IA offender signals.
+                  </span>
                 </CardContent>
               </Card>
             )}
