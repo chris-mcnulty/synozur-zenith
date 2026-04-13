@@ -825,7 +825,10 @@ The shadcn/ui library already includes a `Command` primitive (`cmdk` under the h
 ---
 
 ### 🟡 BL-037: Microsoft Planner Integration for Support Tickets
-**Status:** Backlog | **Priority:** Medium | **Effort:** Small (2–4 hours) | **Parity:** Constellation ✅, Vega ✅, Zenith ❌
+**Status:** ✅ Implemented (April 2026) | **Priority:** Medium | **Effort:** Small (2–4 hours) | **Parity:** Constellation ✅, Vega ✅, Zenith ✅
+
+> **Implementation note:** Plan id and bucket id are stored in the `platform_settings` table (not as environment variables) so platform owners can re-target the integration without redeploying. This is required because the shared Synozur support Planner plan also receives tickets from Constellation and Vega — Zenith must drop into a specific bucket within that plan. Microsoft Graph credentials remain in environment variables (`MICROSOFT_GRAPH_TENANT_ID`/`CLIENT_ID`/`CLIENT_SECRET`, falling back to `AZURE_*` equivalents) since they are secrets.
+
 
 **Background**
 

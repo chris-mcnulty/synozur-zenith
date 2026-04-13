@@ -52,6 +52,8 @@ import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, Responsive
 type PlatformSettings = {
   id: string;
   defaultSignupPlan: string;
+  plannerPlanId: string | null;
+  plannerBucketId: string | null;
   updatedAt: string | null;
   updatedBy: string | null;
 };
@@ -163,6 +165,8 @@ export default function SystemAdminPage() {
   const [newBlockedReason, setNewBlockedReason] = useState("");
   const [orgSearch, setOrgSearch] = useState("");
   const [pendingSignupPlan, setPendingSignupPlan] = useState<string | null>(null);
+  const [pendingPlannerPlanId, setPendingPlannerPlanId] = useState<string | null>(null);
+  const [pendingPlannerBucketId, setPendingPlannerBucketId] = useState<string | null>(null);
   const [showCreateOrgDialog, setShowCreateOrgDialog] = useState(false);
   const [deleteOrgTarget, setDeleteOrgTarget] = useState<{ id: string; name: string } | null>(null);
   const [purgeData, setPurgeData] = useState(true);
@@ -216,6 +220,30 @@ export default function SystemAdminPage() {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/platform/settings"] });
       setPendingSignupPlan(null);
       toast({ title: "Settings saved", description: "Default signup plan has been updated." });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const savePlannerSettingsMutation = useMutation({
+    mutationFn: async (input: { plannerPlanId: string | null; plannerBucketId: string | null }) => {
+      const res = await fetch("/api/admin/platform/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(input),
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || "Failed to save Planner settings");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/platform/settings"] });
+      setPendingPlannerPlanId(null);
+      setPendingPlannerBucketId(null);
+      toast({ title: "Planner settings saved", description: "Support tickets will now be routed to the configured Planner bucket." });
     },
     onError: (err: Error) => {
       toast({ title: "Error", description: err.message, variant: "destructive" });
@@ -826,6 +854,77 @@ export default function SystemAdminPage() {
                   <p className="text-xs text-muted-foreground" data-testid="text-platform-settings-updated">
                     Last updated: {new Date(platformSettingsData.updatedAt).toLocaleString()}
                   </p>
+                )}
+              </div>
+
+              <div className="max-w-md space-y-6 mt-10 pt-6 border-t border-border/40">
+                <div>
+                  <h3 className="text-sm font-semibold mb-1">Microsoft Planner Integration (Support Tickets)</h3>
+                  <p className="text-xs text-muted-foreground">
+                    When set, every new Zenith support ticket is mirrored as a task in the configured Planner bucket. Leave both fields blank to disable the integration. The shared Synozur support plan also receives tickets from Constellation and Vega — choose the bucket that should hold Zenith tickets.
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="planner-plan-id">Planner Plan ID</Label>
+                  <Input
+                    id="planner-plan-id"
+                    placeholder="e.g. xqQg5FS2LkCp935s-FIFm5gAFkHM"
+                    value={pendingPlannerPlanId ?? platformSettingsData?.plannerPlanId ?? ""}
+                    onChange={e => setPendingPlannerPlanId(e.target.value)}
+                    disabled={!isPlatformOwner}
+                    data-testid="input-planner-plan-id"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="planner-bucket-id">Planner Bucket ID</Label>
+                  <Input
+                    id="planner-bucket-id"
+                    placeholder="e.g. hsOf-7CTokmwYRk4DLPDxJgABDqL"
+                    value={pendingPlannerBucketId ?? platformSettingsData?.plannerBucketId ?? ""}
+                    onChange={e => setPendingPlannerBucketId(e.target.value)}
+                    disabled={!isPlatformOwner}
+                    data-testid="input-planner-bucket-id"
+                  />
+                </div>
+                {isPlatformOwner && (
+                  <div className="flex gap-2">
+                    <Button
+                      onClick={() => {
+                        const planId = (pendingPlannerPlanId ?? platformSettingsData?.plannerPlanId ?? "").trim();
+                        const bucketId = (pendingPlannerBucketId ?? platformSettingsData?.plannerBucketId ?? "").trim();
+                        savePlannerSettingsMutation.mutate({
+                          plannerPlanId: planId === "" ? null : planId,
+                          plannerBucketId: bucketId === "" ? null : bucketId,
+                        });
+                      }}
+                      disabled={
+                        savePlannerSettingsMutation.isPending ||
+                        (pendingPlannerPlanId === null && pendingPlannerBucketId === null)
+                      }
+                      className="gap-2"
+                      data-testid="button-save-planner-settings"
+                    >
+                      {savePlannerSettingsMutation.isPending ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <CheckCircle2 className="w-4 h-4" />
+                      )}
+                      Save Planner Settings
+                    </Button>
+                    <Button
+                      variant="outline"
+                      onClick={() => {
+                        savePlannerSettingsMutation.mutate({ plannerPlanId: null, plannerBucketId: null });
+                      }}
+                      disabled={
+                        savePlannerSettingsMutation.isPending ||
+                        (!platformSettingsData?.plannerPlanId && !platformSettingsData?.plannerBucketId)
+                      }
+                      data-testid="button-clear-planner-settings"
+                    >
+                      Clear
+                    </Button>
+                  </div>
                 )}
               </div>
             </CardContent>
