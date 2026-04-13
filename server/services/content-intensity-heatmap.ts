@@ -585,7 +585,7 @@ export async function buildHeatmapSnapshot(
   const wsAll = allNodes.filter(n => n.level === "workspace");
   const libAll = allNodes.filter(n => n.level === "library");
 
-  // Check if any IA assessment data is present (proxy: any library has maxFolderDepth set)
+  // Check if an IA assessment run is present for the tenant.
   const iaAssessmentIncluded = iaRun != null;
 
   return {
