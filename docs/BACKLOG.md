@@ -824,6 +824,81 @@ The shadcn/ui library already includes a `Command` primitive (`cmdk` under the h
 
 ---
 
+### 🟡 BL-037: Microsoft Planner Integration for Support Tickets
+**Status:** Backlog | **Priority:** Medium | **Effort:** Small (2–4 hours) | **Parity:** Constellation ✅, Vega ✅, Zenith ❌
+
+**Background**
+
+Constellation and Vega both create a Microsoft Planner task automatically whenever a support ticket is submitted through the in-app support form. Zenith has the same support ticket system (database-backed, SendGrid email notifications) but does not push tickets to Planner. Support engineers working across all three products must check Zenith's in-app queue separately, which breaks the unified triage workflow.
+
+**Current State**
+
+- `support_tickets` table exists in `shared/schema.ts` with full schema (subject, description, category, priority, status, submitter)
+- `server/routes/support.ts` handles ticket creation and sends a SendGrid notification email to `support@synozur.com`
+- No outbound call to Microsoft Graph or Planner at ticket creation time
+- No Planner-related environment variables or configuration exist in Zenith
+
+**Proposed Solution**
+
+On ticket creation, after the ticket is persisted and the SendGrid email is sent, make a call to the Microsoft Graph API to create a task in the designated Planner plan. This mirrors the pattern used in Constellation and Vega.
+
+**Implementation Steps**
+
+1. **Environment configuration** — Add the following environment variables (match the names used in Constellation/Vega for consistency):
+   - `PLANNER_PLAN_ID` — the ID of the Planner plan to post tasks into
+   - `PLANNER_BUCKET_ID` — the bucket within that plan for new/incoming tickets
+   - `MICROSOFT_GRAPH_TENANT_ID`, `MICROSOFT_GRAPH_CLIENT_ID`, `MICROSOFT_GRAPH_CLIENT_SECRET` — app-only credentials with `Tasks.ReadWrite` scope (check whether these already exist in the environment under another name before adding new ones)
+
+2. **New service file: `server/services/planner.ts`**
+   - `getPlannerAccessToken()` — acquires a client credentials token from `https://login.microsoftonline.com/{tenantId}/oauth2/v2.0/token` with scope `https://graph.microsoft.com/.graph`
+   - `createPlannerTask(ticket: SupportTicket): Promise<string | null>` — posts to `POST https://graph.microsoft.com/v1.0/planner/tasks`, returns the created task ID or `null` on failure
+   - Task body mapping:
+     | Planner field | Zenith ticket field |
+     |---|---|
+     | `title` | `[{priority}] {subject}` |
+     | `planId` | `PLANNER_PLAN_ID` env var |
+     | `bucketId` | `PLANNER_BUCKET_ID` env var |
+     | `assignments` | empty (unassigned) |
+     | `dueDateTime` | none (leave null) |
+   - Task details (second call to `PATCH /planner/tasks/{id}/details`):
+     | Planner field | Value |
+     |---|---|
+     | `description` | ticket description |
+     | `references` | link to Zenith support page for context |
+   - Errors must be caught and logged — a Planner failure must **never** cause the ticket creation response to fail. The ticket must always be saved regardless.
+
+3. **Wire into ticket creation route** (`server/routes/support.ts`)
+   - After the ticket is inserted and the SendGrid email is dispatched, call `createPlannerTask(ticket)` in a non-blocking `try/catch`
+   - Store the returned Planner task ID on the ticket record if the schema has a spare column, or log it — do not hold up the HTTP response waiting for Planner
+   - Add a `plannerTaskId` column (`text`, nullable) to `support_tickets` schema if not already present, so the task ID is traceable
+
+4. **Graceful degradation**
+   - If any Planner env var is absent, skip the integration silently (log a warning, do not throw)
+   - If the Graph API call fails, log the error with the ticket ID for manual follow-up but return 201 to the client as normal
+
+**Schema Change (if `plannerTaskId` column is added)**
+```sql
+ALTER TABLE support_tickets ADD COLUMN planner_task_id TEXT;
+```
+
+**Acceptance Criteria**
+- Submitting a support ticket via the in-app form creates a corresponding task in the configured Planner plan within a few seconds
+- The task title includes the ticket priority and subject; the task description contains the full ticket description
+- A Planner outage or misconfiguration does not prevent ticket submission — the user always receives a success response
+- If `PLANNER_PLAN_ID` or `PLANNER_BUCKET_ID` are not set, the integration is skipped and a warning is written to the server log
+- The Planner task ID is stored on the ticket record for traceability
+- No new npm packages required — use Node.js built-in `fetch` (available in Node 18+) for the Graph API calls, consistent with the pattern in Constellation and Vega
+
+**Files to create / modify**
+| Action | File |
+|---|---|
+| Create | `server/services/planner.ts` |
+| Modify | `server/routes/support.ts` |
+| Modify | `shared/schema.ts` (add `plannerTaskId` column) |
+| Modify | `server/storage.ts` (update insert/select types) |
+
+---
+
 ## Low Priority
 
 ### 🟢 BL-021: MGDC Integration (Enterprise Tier)
