@@ -1828,3 +1828,34 @@ export const insertCopilotPromptAssessmentSchema = createInsertSchema(copilotPro
 });
 export type InsertCopilotPromptAssessment = z.infer<typeof insertCopilotPromptAssessmentSchema>;
 export type CopilotPromptAssessment = typeof copilotPromptAssessments.$inferSelect;
+
+// ── Copilot Sync Runs (BL-038 — progress tracking for interaction syncs) ──────
+//
+// Tracks each triggered Graph interaction sync so callers can poll the run
+// status via GET /api/copilot-prompt-intelligence/sync/:syncRunId, mirroring
+// the assessments polling pattern.
+
+export const copilotSyncRuns = pgTable("copilot_sync_runs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantConnectionId: varchar("tenant_connection_id").notNull(),
+  organizationId: varchar("organization_id").notNull(),
+  status: text("status").notNull().default("RUNNING"), // RUNNING | COMPLETED | FAILED
+  triggeredBy: varchar("triggered_by"),
+  usersScanned: integer("users_scanned"),
+  interactionsCaptured: integer("interactions_captured"),
+  interactionsSkipped: integer("interactions_skipped"),
+  interactionsPurged: integer("interactions_purged"),
+  errorCount: integer("error_count"),
+  errors: jsonb("errors").$type<Array<{ userId?: string; context: string; message: string }>>(),
+  startedAt: timestamp("started_at"),
+  completedAt: timestamp("completed_at"),
+  error: text("error"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertCopilotSyncRunSchema = createInsertSchema(copilotSyncRuns).omit({
+  id: true,
+  createdAt: true,
+});
+export type InsertCopilotSyncRun = z.infer<typeof insertCopilotSyncRunSchema>;
+export type CopilotSyncRun = typeof copilotSyncRuns.$inferSelect;

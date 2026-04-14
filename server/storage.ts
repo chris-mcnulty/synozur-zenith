@@ -140,6 +140,9 @@ import {
   type CopilotPromptAssessment,
   type InsertCopilotPromptAssessment,
   type CopilotPromptFlag,
+  copilotSyncRuns,
+  type CopilotSyncRun,
+  type InsertCopilotSyncRun,
 } from "@shared/schema";
 import {
   decryptRecord,
