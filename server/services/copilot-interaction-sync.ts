@@ -192,14 +192,17 @@ async function upsertInteraction(
 }
 
 /**
- * Delete interactions older than the retention window across the platform.
- * Called at the end of every sync; idempotent and cheap.
+ * Delete interactions older than the retention window for a single tenant.
+ * Called at the end of that tenant's sync to avoid cross-tenant contention.
  */
-export async function purgeExpiredInteractions(): Promise<number> {
+export async function purgeExpiredInteractions(
+  tenantConnectionId: string,
+): Promise<number> {
   const { rowCount } = await pool.query(
     `DELETE FROM copilot_interactions
-     WHERE interaction_at < now() - make_interval(days => $1)`,
-    [RETENTION_DAYS],
+     WHERE tenant_connection_id = $1
+       AND interaction_at < now() - make_interval(days => $2)`,
+    [tenantConnectionId, RETENTION_DAYS],
   );
   return rowCount ?? 0;
 }
