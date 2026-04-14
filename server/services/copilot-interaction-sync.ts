@@ -59,10 +59,14 @@ interface GraphInteraction {
   createdDateTime: string;
   appClass?: string;
   interactionType?: string;
+  body?: { contentType?: string; content?: string };
   contexts?: Array<{ contextType?: string; content?: string }>;
 }
 
 function extractPromptText(interaction: GraphInteraction): string | null {
+  if (interaction.body?.content && typeof interaction.body.content === "string" && interaction.body.content.trim().length > 0) {
+    return interaction.body.content.trim();
+  }
   if (!Array.isArray(interaction.contexts)) return null;
   for (const ctx of interaction.contexts) {
     if (ctx?.contextType === "prompt" && typeof ctx.content === "string" && ctx.content.trim().length > 0) {
@@ -123,12 +127,12 @@ async function fetchInteractionsForUser(
 ): Promise<GraphInteraction[]> {
   const interactions: GraphInteraction[] = [];
 
-  // Per BL-038 spec: $filter=createdDateTime ge {iso}&$orderby=createdDateTime desc
-  // The Graph beta endpoint does not accept $filter reliably in all tenants,
-  // so we page through and filter client-side as a defensive fallback.
+  // The Copilot interactions endpoint moved to copilot/users/{id}/interactionHistory
+  // in late 2025. Filter by createdDateTime and page with $top=100.
   let url: string | null =
-    `https://graph.microsoft.com/beta/users/${encodeURIComponent(userId)}/copilot/interactions` +
-    `?$filter=${encodeURIComponent(`createdDateTime ge ${sinceIso}`)}`;
+    `https://graph.microsoft.com/beta/copilot/users/${encodeURIComponent(userId)}` +
+    `/interactionHistory/getAllEnterpriseInteractions` +
+    `?$filter=${encodeURIComponent(`createdDateTime gt ${sinceIso}`)}&$top=100`;
 
   const sinceMs = Date.parse(sinceIso);
 
@@ -329,11 +333,15 @@ export async function syncCopilotInteractions(
       // 403/404 on a specific user → log and skip. The Copilot licensed user
       // may no longer have an active Copilot session or the beta endpoint may
       // not be exposed for this user class.
+      const errMsg = err instanceof Error ? err.message : String(err);
       summary.errors.push({
         userId: user.userId,
         context: "fetchInteractions",
-        message: err instanceof Error ? err.message : String(err),
+        message: errMsg,
       });
+      console.warn(
+        `[copilot-interaction-sync] user=${user.userId} status=${status ?? "?"} error=${errMsg.substring(0, 200)}`,
+      );
       if (status && status >= 500) {
         // A 5xx on a single user can indicate service-wide issues but we
         // still continue — per-user isolation is a spec requirement.
@@ -342,7 +350,7 @@ export async function syncCopilotInteractions(
     }
 
     for (const raw of interactions) {
-      if (raw.interactionType && raw.interactionType !== "user-initiated") {
+      if (raw.interactionType && raw.interactionType !== "userPrompt") {
         summary.interactionsSkipped++;
         continue;
       }
