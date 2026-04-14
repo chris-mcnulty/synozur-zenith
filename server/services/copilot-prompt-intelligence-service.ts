@@ -435,8 +435,7 @@ function buildUserBreakdown(
         r.riskLevel === "CRITICAL" || r.riskLevel === "HIGH"
       );
       if (highRisk) {
-        const analysis = analyzePrompt(highRisk.promptText);
-        topRecommendation = analysis.recommendation;
+        topRecommendation = highRisk.recommendation ?? null;
       }
 
       return {
