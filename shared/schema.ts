@@ -384,6 +384,7 @@ export const PLAN_FEATURES = {
     emailContentStorageReport: false,
     iaAssessment: false,
     contentIntensityHeatmap: false,
+    copilotPromptIntelligence: false,
     trendRetentionDays: 0,
     maxUsers: 25,
     maxTenants: 1,
@@ -410,6 +411,7 @@ export const PLAN_FEATURES = {
     emailContentStorageReport: false,
     iaAssessment: false,
     contentIntensityHeatmap: false,
+    copilotPromptIntelligence: false,
     trendRetentionDays: 0,
     maxUsers: 500,
     maxTenants: 2,
@@ -436,6 +438,7 @@ export const PLAN_FEATURES = {
     emailContentStorageReport: false,
     iaAssessment: false,
     contentIntensityHeatmap: false,
+    copilotPromptIntelligence: true,
     trendRetentionDays: 30,
     maxUsers: 5000,
     maxTenants: 10,
@@ -462,6 +465,7 @@ export const PLAN_FEATURES = {
     emailContentStorageReport: true,
     iaAssessment: true,
     contentIntensityHeatmap: true,
+    copilotPromptIntelligence: true,
     trendRetentionDays: -1,
     maxUsers: -1,
     maxTenants: -1,
@@ -1691,3 +1695,136 @@ export const insertAiGroundingDocumentSchema = createInsertSchema(aiGroundingDoc
 });
 export type InsertAiGroundingDocument = z.infer<typeof insertAiGroundingDocumentSchema>;
 export type AiGroundingDocument = typeof aiGroundingDocuments.$inferSelect;
+
+// ── Copilot Prompt Intelligence (BL-038) ──────────────────────────────────────
+//
+// Captures user-initiated Microsoft 365 Copilot interactions on a rolling
+// 30-day window, scores each prompt against a 5-category quality & safety
+// framework, and aggregates the results into on-demand assessment reports.
+
+export const COPILOT_QUALITY_TIERS = ["GREAT", "GOOD", "WEAK", "PROBLEMATIC"] as const;
+export type CopilotQualityTier = typeof COPILOT_QUALITY_TIERS[number];
+
+export const COPILOT_RISK_LEVELS = ["NONE", "LOW", "MEDIUM", "HIGH", "CRITICAL"] as const;
+export type CopilotRiskLevel = typeof COPILOT_RISK_LEVELS[number];
+
+export const COPILOT_FLAG_CATEGORIES = [
+  "CONTENT_SAFETY",
+  "MISUSE",
+  "SENSITIVE_DATA",
+  "QUALITY",
+  "FEASIBILITY",
+] as const;
+export type CopilotFlagCategory = typeof COPILOT_FLAG_CATEGORIES[number];
+
+export interface CopilotPromptFlag {
+  category: CopilotFlagCategory;
+  signal: string;
+  severity: CopilotRiskLevel;
+  detail?: string;
+}
+
+export const copilotInteractions = pgTable("copilot_interactions", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantConnectionId: varchar("tenant_connection_id").notNull(),
+  organizationId: varchar("organization_id").notNull(),
+  graphInteractionId: text("graph_interaction_id").notNull(),
+  userId: text("user_id").notNull(),
+  userPrincipalName: text("user_principal_name").notNull(),
+  userDisplayName: text("user_display_name"),
+  userDepartment: text("user_department"),
+  appClass: text("app_class").notNull(),
+  promptText: text("prompt_text").notNull(),
+  interactionAt: timestamp("interaction_at").notNull(),
+  qualityTier: text("quality_tier"),
+  qualityScore: integer("quality_score"),
+  riskLevel: text("risk_level"),
+  flags: jsonb("flags").$type<CopilotPromptFlag[]>().default(sql`'[]'::jsonb`),
+  recommendation: text("recommendation"),
+  analyzedAt: timestamp("analyzed_at"),
+  capturedAt: timestamp("captured_at").defaultNow(),
+}, (t) => [
+  unique("uq_copilot_interactions_tenant_graph").on(t.tenantConnectionId, t.graphInteractionId),
+]);
+
+export const insertCopilotInteractionSchema = createInsertSchema(copilotInteractions).omit({
+  id: true,
+  capturedAt: true,
+});
+export type InsertCopilotInteraction = z.infer<typeof insertCopilotInteractionSchema>;
+export type CopilotInteraction = typeof copilotInteractions.$inferSelect;
+
+export const COPILOT_ASSESSMENT_STATUSES = ["PENDING", "RUNNING", "COMPLETED", "FAILED"] as const;
+export type CopilotAssessmentStatus = typeof COPILOT_ASSESSMENT_STATUSES[number];
+
+export interface CopilotOrgSummary {
+  totalInteractions: number;
+  uniqueUsers: number;
+  dateRange: { start: string; end: string };
+  qualityDistribution: Record<CopilotQualityTier, number>;
+  averageQualityScore: number;
+  riskDistribution: Record<CopilotRiskLevel, number>;
+  appClassBreakdown: Record<string, number>;
+  topFlags: Array<{ category: CopilotFlagCategory; signal: string; count: number }>;
+}
+
+export interface CopilotDepartmentBreakdown {
+  department: string;
+  userCount: number;
+  interactionCount: number;
+  averageQualityScore: number;
+  qualityDistribution: Record<CopilotQualityTier, number>;
+  riskDistribution: Record<CopilotRiskLevel, number>;
+  topFlags: Array<{ category: CopilotFlagCategory; signal: string; count: number }>;
+}
+
+export interface CopilotUserBreakdown {
+  userId: string;
+  userPrincipalName: string;
+  displayName: string | null;
+  department: string | null;
+  interactionCount: number;
+  averageQualityScore: number;
+  qualityDistribution: Record<CopilotQualityTier, number>;
+  criticalFlags: number;
+  topRecommendation?: string | null;
+}
+
+export interface CopilotRecommendation {
+  rank: number;
+  title: string;
+  rationale: string;
+  impact: "HIGH" | "MEDIUM" | "LOW";
+  targetScope?: "ORGANIZATION" | "DEPARTMENT" | "USER";
+  targetName?: string;
+}
+
+export const copilotPromptAssessments = pgTable("copilot_prompt_assessments", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  organizationId: varchar("organization_id").notNull(),
+  tenantConnectionId: varchar("tenant_connection_id").notNull(),
+  status: text("status").notNull().default("PENDING"),
+  triggeredBy: varchar("triggered_by"),
+  interactionCount: integer("interaction_count"),
+  userCount: integer("user_count"),
+  dateRangeStart: timestamp("date_range_start"),
+  dateRangeEnd: timestamp("date_range_end"),
+  orgSummary: jsonb("org_summary").$type<CopilotOrgSummary>(),
+  departmentBreakdown: jsonb("department_breakdown").$type<CopilotDepartmentBreakdown[]>(),
+  userBreakdown: jsonb("user_breakdown").$type<CopilotUserBreakdown[]>(),
+  executiveSummary: text("executive_summary"),
+  recommendations: jsonb("recommendations").$type<CopilotRecommendation[]>(),
+  modelUsed: text("model_used"),
+  tokensUsed: integer("tokens_used"),
+  startedAt: timestamp("started_at"),
+  completedAt: timestamp("completed_at"),
+  error: text("error"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertCopilotPromptAssessmentSchema = createInsertSchema(copilotPromptAssessments).omit({
+  id: true,
+  createdAt: true,
+});
+export type InsertCopilotPromptAssessment = z.infer<typeof insertCopilotPromptAssessmentSchema>;
+export type CopilotPromptAssessment = typeof copilotPromptAssessments.$inferSelect;

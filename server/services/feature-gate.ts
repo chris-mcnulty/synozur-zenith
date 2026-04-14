@@ -32,6 +32,7 @@ export function requireFeature(feature: keyof typeof PLAN_FEATURES.TRIAL) {
         emailContentStorageReport: "Email Content Storage Report",
         iaAssessment: "IA Assessment",
         contentIntensityHeatmap: "Content Intensity Heat Map",
+        copilotPromptIntelligence: "Copilot Prompt Intelligence",
       };
       const label = featureLabels[feature] || feature;
       return res.status(403).json({
