@@ -126,15 +126,17 @@ async function fetchInteractionsForUser(
   sinceIso: string,
 ): Promise<GraphInteraction[]> {
   const interactions: GraphInteraction[] = [];
-
-  // The Copilot interactions endpoint moved to copilot/users/{id}/interactionHistory
-  // in late 2025. Filter by createdDateTime and page with $top=100.
-  let url: string | null =
-    `https://graph.microsoft.com/beta/copilot/users/${encodeURIComponent(userId)}` +
-    `/interactionHistory/getAllEnterpriseInteractions` +
-    `?$filter=${encodeURIComponent(`createdDateTime gt ${sinceIso}`)}&$top=100`;
-
   const sinceMs = Date.parse(sinceIso);
+
+  // Use the v1.0 interactionHistory endpoint (GA since late 2025).
+  // We omit $filter because Graph's filterTransformer rejects millisecond-
+  // precision timestamps and the behaviour varies across tenants. Instead we
+  // page through results (newest-first) and stop early once we fall outside
+  // the retention window — client-side enforcement is the belt-and-braces
+  // guarantee regardless.
+  let url: string | null =
+    `https://graph.microsoft.com/v1.0/copilot/users/${encodeURIComponent(userId)}` +
+    `/interactionHistory/getAllEnterpriseInteractions?$top=100`;
 
   while (url) {
     const res = await graphFetchWithRetry(url, {
@@ -158,7 +160,6 @@ async function fetchInteractionsForUser(
 
     for (const item of data.value ?? []) {
       if (!item?.id) continue;
-      // Client-side window enforcement (belt-and-braces).
       const createdMs = item.createdDateTime ? Date.parse(item.createdDateTime) : 0;
       if (!createdMs || createdMs < sinceMs) continue;
       interactions.push(item);
