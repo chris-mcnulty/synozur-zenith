@@ -25,7 +25,7 @@ import {
   licenseAssignments,
   type InsertCopilotInteraction,
 } from "@shared/schema";
-import { getAppToken, graphFetchWithRetry } from "./graph";
+import { getAppToken } from "./graph";
 import { storage } from "../storage";
 import { encryptRecord, getTenantKeyBuffer } from "./data-masking";
 import { decryptToken } from "../utils/encryption";
@@ -148,7 +148,7 @@ async function fetchInteractionsForUser(
   sinceMs: number,
 ): Promise<GraphInteraction[]> {
   const interactions: GraphInteraction[] = [];
-  const headers = { Authorization: `Bearer ${token}` };
+  const headers: Record<string, string> = { Authorization: `Bearer ${token}` };
 
   let url: string | null =
     `https://graph.microsoft.com/beta/copilot/users/${encodeURIComponent(userId)}` +
@@ -159,7 +159,25 @@ async function fetchInteractionsForUser(
     if (pages > 0) await delay(100);
     pages++;
 
-    const res = await graphFetchWithRetry(url, { headers });
+    // Plain fetch — NOT graphFetchWithRetry. This endpoint has tight per-user
+    // rate limits. Retrying 429s with exponential backoff hammers the already-
+    // throttled endpoint and blocks subsequent users. On 429, we break and let
+    // the per-user watermark handle it on the next scheduled sync.
+    const res: Response = await fetch(url, { headers });
+
+    if (res.status === 403 || res.status === 404) {
+      const errBody = await res.text().catch(() => "");
+      const errMsg = errBody.slice(0, 200);
+      if (!errMsg.includes("ResourceNotFound") && !errMsg.includes("does not have a mailbox")) {
+        console.log(`[copilot-interaction-sync] user=${userId} ${res.status}: ${errMsg}`);
+      }
+      break;
+    }
+
+    if (res.status === 429) {
+      console.warn(`[copilot-interaction-sync] user=${userId} 429 throttled on page ${pages}; will resume next sync`);
+      break;
+    }
 
     if (!res.ok) {
       const bodyText = await res.text().catch(() => "");
