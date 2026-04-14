@@ -166,19 +166,53 @@ async function fetchInteractionsForUser(
   return interactions;
 }
 
+type InteractionEncryptionContext =
+  | { shouldEncrypt: false }
+  | { shouldEncrypt: true; keyBuffer: Buffer };
+
+const interactionEncryptionContextCache = new Map<
+  string,
+  Promise<InteractionEncryptionContext>
+>();
+
+async function getInteractionEncryptionContext(
+  tenantConnectionId: string,
+): Promise<InteractionEncryptionContext> {
+  let contextPromise = interactionEncryptionContextCache.get(tenantConnectionId);
+  if (!contextPromise) {
+    contextPromise = (async () => {
+      const conn = await storage.getTenantConnection(tenantConnectionId);
+      if (!conn?.dataMaskingEnabled) return { shouldEncrypt: false } as const;
+
+      const keyRecord = await storage.getTenantEncryptionKey(tenantConnectionId);
+      if (!keyRecord) return { shouldEncrypt: false } as const;
+
+      return {
+        shouldEncrypt: true,
+        keyBuffer: getTenantKeyBuffer(keyRecord.encryptedKey),
+      } as const;
+    })();
+
+    interactionEncryptionContextCache.set(tenantConnectionId, contextPromise);
+  }
+
+  return contextPromise;
+}
+
 async function upsertInteraction(
   tenantConnectionId: string,
   record: InsertCopilotInteraction,
 ): Promise<"inserted" | "skipped"> {
   // Encryption is applied when the tenant has masking enabled.
-  const encrypted = await (async () => {
-    const conn = await storage.getTenantConnection(tenantConnectionId);
-    if (!conn?.dataMaskingEnabled) return record;
-    const keyRecord = await storage.getTenantEncryptionKey(tenantConnectionId);
-    if (!keyRecord) return record;
-    const buf = getTenantKeyBuffer(keyRecord.encryptedKey);
-    return encryptRecord(record, "copilot_interactions", buf);
-  })();
+  const encryptionContext =
+    await getInteractionEncryptionContext(tenantConnectionId);
+  const encrypted = encryptionContext.shouldEncrypt
+    ? encryptRecord(
+        record,
+        "copilot_interactions",
+        encryptionContext.keyBuffer,
+      )
+    : record;
 
   const inserted = await db
     .insert(copilotInteractions)
