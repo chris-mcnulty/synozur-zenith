@@ -27,7 +27,8 @@ import {
 } from "@shared/schema";
 import { getAppToken, graphFetchWithRetry } from "./graph";
 import { storage } from "../storage";
-import { encryptRecord } from "./data-masking";
+import { encryptRecord, getTenantKeyBuffer } from "./data-masking";
+import { decryptToken } from "../utils/encryption";
 
 /** M365 Copilot SKU part identifier — used to filter license_assignments. */
 export const COPILOT_SKU_PART_ID = "639dec6b-bb19-468b-871c-c5c441c4b0cb";
@@ -88,7 +89,9 @@ async function getCopilotLicensedUsers(
     .where(
       and(
         eq(licenseAssignments.tenantConnectionId, tenantConnectionId),
-        // Only active accounts are worth scanning.
+        // Only scan users with accountEnabled = true. Users where
+        // accountEnabled IS NULL (disabled-state unknown) are intentionally
+        // excluded — we only want confirmed-active accounts.
         eq(licenseAssignments.accountEnabled, true),
       ),
     );
@@ -173,8 +176,6 @@ async function upsertInteraction(
     if (!conn?.dataMaskingEnabled) return record;
     const keyRecord = await storage.getTenantEncryptionKey(tenantConnectionId);
     if (!keyRecord) return record;
-    // Reuse existing encryption helper
-    const { getTenantKeyBuffer } = await import("./data-masking");
     const buf = getTenantKeyBuffer(keyRecord.encryptedKey);
     return encryptRecord(record, "copilot_interactions", buf);
   })();
@@ -232,7 +233,6 @@ export async function syncCopilotInteractions(
   }
 
   // Resolve client secret (may be encrypted or provided via env)
-  const { decryptToken } = await import("../utils/encryption");
   const clientSecret = conn.clientSecret
     ? (() => { try { return decryptToken(conn.clientSecret!); } catch { return conn.clientSecret!; } })()
     : process.env.AZURE_CLIENT_SECRET ?? "";
