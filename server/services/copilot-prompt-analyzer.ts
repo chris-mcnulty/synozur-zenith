@@ -41,7 +41,7 @@ interface RiskSignal {
  */
 const CONTENT_SAFETY_SIGNALS: RiskSignal[] = [
   {
-    pattern: /\b(?:kill|murder|assault|rape|torture|harm|hurt|attack)\b.*\b(?:person|people|user|them|him|her|you)\b/i,
+    pattern: /\b(?:i(?:'ll| will| want to| am going to) (?:kill|murder|assault|rape|torture|hurt|attack))\b/i,
     signal: "HARASSMENT_OR_VIOLENCE",
     severity: "CRITICAL",
     category: "CONTENT_SAFETY",

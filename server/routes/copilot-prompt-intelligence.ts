@@ -233,7 +233,7 @@ router.get(
     // Platform owners must supply either an orgId (via active org context) or
     // an explicit tenantConnectionId to scope the listing.
     if (!orgId && isPlatformOwner && !tenantConnectionId) {
-      return res.status(400).json({ message: "tenantConnectionId query param required for platform owners without an active organization context" });
+      return res.status(400).json({ message: "Missing required parameter: tenantConnectionId" });
     }
 
     if (tenantConnectionId) {

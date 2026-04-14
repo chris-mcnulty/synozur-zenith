@@ -412,19 +412,29 @@ export async function getInteractionsForTenant(
     [tenantConnectionId],
   );
 
-  // Build the column list — prompt_text is only included when explicitly
-  // requested to prevent accidental PII leakage in list endpoints.
-  const promptCol = includePromptText ? "prompt_text," : "";
+  // Two static queries avoid string interpolation for column names.
+  const queryWithPrompt = `
+    SELECT id, tenant_connection_id, organization_id, graph_interaction_id,
+           user_id, user_principal_name, user_display_name, user_department,
+           app_class, prompt_text, interaction_at,
+           quality_tier, quality_score, risk_level, flags, recommendation,
+           analyzed_at, captured_at
+    FROM copilot_interactions
+    WHERE tenant_connection_id = $1
+    ORDER BY interaction_at DESC LIMIT $2 OFFSET $3`;
+
+  const queryWithoutPrompt = `
+    SELECT id, tenant_connection_id, organization_id, graph_interaction_id,
+           user_id, user_principal_name, user_display_name, user_department,
+           app_class, interaction_at,
+           quality_tier, quality_score, risk_level, flags, recommendation,
+           analyzed_at, captured_at
+    FROM copilot_interactions
+    WHERE tenant_connection_id = $1
+    ORDER BY interaction_at DESC LIMIT $2 OFFSET $3`;
+
   const { rows } = await pool.query(
-    `SELECT id, tenant_connection_id, organization_id, graph_interaction_id,
-            user_id, user_principal_name, user_display_name, user_department,
-            app_class, ${promptCol} interaction_at,
-            quality_tier, quality_score, risk_level, flags, recommendation,
-            analyzed_at, captured_at
-     FROM copilot_interactions
-     WHERE tenant_connection_id = $1
-     ORDER BY interaction_at DESC
-     LIMIT $2 OFFSET $3`,
+    includePromptText ? queryWithPrompt : queryWithoutPrompt,
     [tenantConnectionId, limit, offset],
   );
 
