@@ -498,6 +498,7 @@ export interface IStorage {
   getCopilotInteractionsForTenant(tenantConnectionId: string, options?: { limit?: number; offset?: number; includePromptText?: boolean }): Promise<{ rows: Array<Omit<CopilotInteraction, 'promptText'> & { promptText?: string }>; total: number }>;
   loadCopilotInteractionsForAnalysis(tenantConnectionId: string): Promise<CopilotInteraction[]>;
   purgeCopilotInteractions(tenantConnectionId: string): Promise<number>;
+  getLatestCopilotInteractionDateForUser(tenantConnectionId: string, userPrincipalName: string): Promise<Date | null>;
   getCopilotPromptAssessment(id: string): Promise<CopilotPromptAssessment | undefined>;
   getLatestCopilotPromptAssessment(tenantConnectionId: string): Promise<CopilotPromptAssessment | undefined>;
   listCopilotPromptAssessmentsForOrg(organizationId: string, opts?: { tenantConnectionId?: string; limit?: number; offset?: number }): Promise<{ rows: CopilotPromptAssessment[]; total: number }>;
@@ -3510,6 +3511,22 @@ export class DatabaseStorage implements IStorage {
         ),
       );
     return result.rowCount ?? 0;
+  }
+
+  async getLatestCopilotInteractionDateForUser(
+    tenantConnectionId: string,
+    userPrincipalName: string,
+  ): Promise<Date | null> {
+    const [result] = await db
+      .select({ maxDate: sql<Date | null>`max(${copilotInteractions.interactionAt})` })
+      .from(copilotInteractions)
+      .where(
+        and(
+          eq(copilotInteractions.tenantConnectionId, tenantConnectionId),
+          eq(copilotInteractions.userPrincipalName, userPrincipalName),
+        ),
+      );
+    return result?.maxDate ?? null;
   }
 
   async getCopilotPromptAssessment(id: string): Promise<CopilotPromptAssessment | undefined> {

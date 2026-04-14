@@ -126,33 +126,37 @@ const MAX_PAGES_PER_USER = 10; // 10 × 100 = 1 000 interactions max per user (f
 /**
  * Build the initial URL for the interactionHistory endpoint.
  *
- * Uses URLSearchParams so that $filter value is correctly percent-encoded by
- * the platform (spaces → %20, colons NOT double-encoded). The Microsoft Graph
- * OData filterTransformer requires a CLOSED date range (gt + lt), not just a
- * lower bound — using only `gt` produces "Missing 'createdDateTime' value".
+ * IMPORTANT: The Graph OData filterTransformer for this endpoint does NOT
+ * accept URL-encoded spaces in the $filter value. URLSearchParams / encodeURIComponent
+ * produce "+" or "%20" for spaces, which causes "Missing createdDateTime value" 400
+ * errors. The filter must be appended as a raw string so literal spaces are sent,
+ * which Node.js fetch encodes correctly as %20 at the transport layer.
+ *
+ * Verified working pattern from reference implementation (Sentry codebase):
+ *   /beta endpoint, $top first, then &$filter=createdDateTime gt {iso}
+ *
+ * Uses /beta — the v1.0 GA endpoint has a stricter OData parser.
  */
-function buildInteractionUrl(userId: string, sinceIso: string, nowIso: string): string {
+function buildInteractionUrl(userId: string, sinceIso: string | null): string {
   const base =
-    `https://graph.microsoft.com/v1.0/copilot/users/${encodeURIComponent(userId)}` +
+    `https://graph.microsoft.com/beta/copilot/users/${encodeURIComponent(userId)}` +
     `/interactionHistory/getAllEnterpriseInteractions`;
-  const params = new URLSearchParams();
-  params.set("$filter", `createdDateTime gt ${sinceIso} and createdDateTime lt ${nowIso}`);
-  params.set("$top", "100");
-  return `${base}?${params.toString()}`;
+  const filter = sinceIso ? `&$filter=createdDateTime gt ${sinceIso}` : "";
+  return `${base}?$top=100${filter}`;
 }
 
 async function fetchInteractionsForUser(
   token: string,
   userId: string,
-  sinceIso: string,
-  nowIso: string,
+  /** ISO 8601 lower bound; null = no server-side filter (page-capped fallback) */
+  sinceIso: string | null,
 ): Promise<GraphInteraction[]> {
   const interactions: GraphInteraction[] = [];
-  const sinceMs = Date.parse(sinceIso);
+  const sinceMs = sinceIso ? Date.parse(sinceIso) : 0;
   const headers = { Authorization: `Bearer ${token}` };
 
-  let url: string | null = buildInteractionUrl(userId, sinceIso, nowIso);
-  let useFilter = true;
+  let url: string | null = buildInteractionUrl(userId, sinceIso);
+  let useFilter = sinceIso !== null;
 
   let pages = 0;
   while (url) {
@@ -161,23 +165,19 @@ async function fetchInteractionsForUser(
 
     if (!res.ok) {
       if (res.status === 400 && useFilter) {
-        // The $filter is rejected by this tenant — fall back to unfiltered paging
-        // with a page cap and rely on client-side date windowing.
+        // $filter rejected — fall back to unfiltered paging capped at MAX_PAGES_PER_USER.
         const errText = await res.text().catch(() => "");
         console.warn(
-          `[copilot-interaction-sync] user=${userId} $filter rejected (${errText.substring(0, 120)}); ` +
+          `[copilot-interaction-sync] user=${userId} $filter rejected (${errText.substring(0, 140)}); ` +
           `falling back to unfiltered paging (max ${MAX_PAGES_PER_USER} pages)`,
         );
         useFilter = false;
         pages = 0;
-        const base =
-          `https://graph.microsoft.com/v1.0/copilot/users/${encodeURIComponent(userId)}` +
-          `/interactionHistory/getAllEnterpriseInteractions`;
-        url = `${base}?$top=100`;
+        url = buildInteractionUrl(userId, null);
         continue;
       }
 
-      // Non-400, non-recoverable error
+      // Non-400 / non-recoverable — propagate to caller
       const bodyText = await res.text().catch(() => "");
       const error: Error & { status?: number } = new Error(
         `Graph ${res.status} for user ${userId}: ${bodyText.substring(0, 300)}`,
@@ -193,13 +193,15 @@ async function fetchInteractionsForUser(
 
     for (const item of data.value ?? []) {
       if (!item?.id) continue;
-      const createdMs = item.createdDateTime ? Date.parse(item.createdDateTime) : 0;
-      if (!createdMs || createdMs < sinceMs) continue;
+      if (sinceMs) {
+        const createdMs = item.createdDateTime ? Date.parse(item.createdDateTime) : 0;
+        if (!createdMs || createdMs <= sinceMs) continue;
+      }
       interactions.push(item);
     }
 
     const next = data["@odata.nextLink"] ?? null;
-    // When falling back to unfiltered mode, cap pages to avoid runaway paging.
+    // Cap pages when in unfiltered fallback mode to prevent runaway paging.
     url = (!useFilter && pages >= MAX_PAGES_PER_USER) ? null : next;
   }
 
@@ -357,17 +359,27 @@ export async function syncCopilotInteractions(
   }
 
   const users = await getCopilotLicensedUsers(tenantConnectionId);
-  // OData filterTransformer requires a CLOSED date range (gt + lt) and rejects
-  // millisecond-precision timestamps. Truncate both timestamps to whole seconds.
-  const sinceDate = new Date(Date.now() - RETENTION_DAYS * 24 * 60 * 60 * 1000);
-  const sinceIso = sinceDate.toISOString().replace(/\.\d{3}Z$/, "Z");
-  const nowIso = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+  // Absolute lower bound — never fetch interactions older than RETENTION_DAYS.
+  const retentionCutoff = new Date(Date.now() - RETENTION_DAYS * 24 * 60 * 60 * 1000);
 
   for (const user of users) {
     summary.usersScanned++;
     let interactions: GraphInteraction[];
+
+    // Per-user incremental watermark: use the latest interaction already stored
+    // for this user, clamped to the retention window. This avoids re-fetching
+    // interactions we already have while still catching new ones efficiently.
+    const perUserLastDate = await storage.getLatestCopilotInteractionDateForUser(
+      tenantConnectionId,
+      user.userPrincipalName,
+    );
+    const effectiveSince = perUserLastDate && perUserLastDate > retentionCutoff
+      ? perUserLastDate
+      : retentionCutoff;
+    const sinceIso = effectiveSince.toISOString();
+
     try {
-      interactions = await fetchInteractionsForUser(token, user.userId, sinceIso, nowIso);
+      interactions = await fetchInteractionsForUser(token, user.userId, sinceIso);
     } catch (err: unknown) {
       const status = (err as { status?: number })?.status;
       // 403/404 on a specific user → log and skip. The Copilot licensed user
