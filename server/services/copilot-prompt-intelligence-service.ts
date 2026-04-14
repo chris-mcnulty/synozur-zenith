@@ -14,7 +14,6 @@
  * one assessment can be in RUNNING state at a time.
  */
 
-import { pool } from "../db";
 import { storage } from "../storage";
 import { analyzePrompt } from "./copilot-prompt-analyzer";
 import { completeForFeature } from "./ai-provider";
@@ -28,7 +27,7 @@ import type {
   CopilotUserBreakdown,
   CopilotRecommendation,
   CopilotPromptFlag,
-  CopilotAssessmentStatus,
+  type CopilotPromptAssessment,
 } from "@shared/schema";
 import {
   COPILOT_QUALITY_TIERS,
@@ -39,28 +38,8 @@ import {
 // Types
 // ---------------------------------------------------------------------------
 
-export interface CopilotPromptAssessmentRow {
-  id: string;
-  organizationId: string;
-  tenantConnectionId: string;
-  status: CopilotAssessmentStatus;
-  triggeredBy: string | null;
-  interactionCount: number | null;
-  userCount: number | null;
-  dateRangeStart: Date | null;
-  dateRangeEnd: Date | null;
-  orgSummary: CopilotOrgSummary | null;
-  departmentBreakdown: CopilotDepartmentBreakdown[] | null;
-  userBreakdown: CopilotUserBreakdown[] | null;
-  executiveSummary: string | null;
-  recommendations: CopilotRecommendation[] | null;
-  modelUsed: string | null;
-  tokensUsed: number | null;
-  startedAt: Date | null;
-  completedAt: Date | null;
-  error: string | null;
-  createdAt: Date;
-}
+/** Re-exported for backwards compatibility with routes that import this type. */
+export type CopilotPromptAssessmentRow = CopilotPromptAssessment;
 
 interface InteractionRow {
   id: string;
@@ -79,54 +58,17 @@ interface InteractionRow {
 }
 
 // ---------------------------------------------------------------------------
-// DB helpers
+// DB helpers — now delegated to storage layer
 // ---------------------------------------------------------------------------
 
-function rowToAssessment(row: Record<string, unknown>): CopilotPromptAssessmentRow {
-  return {
-    id: row.id as string,
-    organizationId: row.organization_id as string,
-    tenantConnectionId: row.tenant_connection_id as string,
-    status: row.status as CopilotAssessmentStatus,
-    triggeredBy: (row.triggered_by as string | null) ?? null,
-    interactionCount: (row.interaction_count as number | null) ?? null,
-    userCount: (row.user_count as number | null) ?? null,
-    dateRangeStart: row.date_range_start ? new Date(row.date_range_start as string) : null,
-    dateRangeEnd: row.date_range_end ? new Date(row.date_range_end as string) : null,
-    orgSummary: (row.org_summary as CopilotOrgSummary | null) ?? null,
-    departmentBreakdown: (row.department_breakdown as CopilotDepartmentBreakdown[] | null) ?? null,
-    userBreakdown: (row.user_breakdown as CopilotUserBreakdown[] | null) ?? null,
-    executiveSummary: (row.executive_summary as string | null) ?? null,
-    recommendations: (row.recommendations as CopilotRecommendation[] | null) ?? null,
-    modelUsed: (row.model_used as string | null) ?? null,
-    tokensUsed: (row.tokens_used as number | null) ?? null,
-    startedAt: row.started_at ? new Date(row.started_at as string) : null,
-    completedAt: row.completed_at ? new Date(row.completed_at as string) : null,
-    error: (row.error as string | null) ?? null,
-    createdAt: new Date(row.created_at as string),
-  };
-}
-
 export async function getAssessmentById(id: string): Promise<CopilotPromptAssessmentRow | null> {
-  const { rows } = await pool.query(
-    `SELECT * FROM copilot_prompt_assessments WHERE id = $1`,
-    [id],
-  );
-  if (rows.length === 0) return null;
-  return rowToAssessment(rows[0] as Record<string, unknown>);
+  return (await storage.getCopilotPromptAssessment(id)) ?? null;
 }
 
 export async function getLatestAssessmentForTenant(
   tenantConnectionId: string,
 ): Promise<CopilotPromptAssessmentRow | null> {
-  const { rows } = await pool.query(
-    `SELECT * FROM copilot_prompt_assessments
-     WHERE tenant_connection_id = $1 AND status = 'COMPLETED'
-     ORDER BY created_at DESC LIMIT 1`,
-    [tenantConnectionId],
-  );
-  if (rows.length === 0) return null;
-  return rowToAssessment(rows[0] as Record<string, unknown>);
+  return (await storage.getLatestCopilotPromptAssessment(tenantConnectionId)) ?? null;
 }
 
 export async function listAssessmentsForOrg(
@@ -135,35 +77,7 @@ export async function listAssessmentsForOrg(
   limit = 20,
   offset = 0,
 ): Promise<{ rows: CopilotPromptAssessmentRow[]; total: number }> {
-  const conditions = tenantConnectionId
-    ? `WHERE organization_id = $1 AND tenant_connection_id = $2`
-    : `WHERE organization_id = $1`;
-  const params: unknown[] = tenantConnectionId
-    ? [organizationId, tenantConnectionId, limit, offset]
-    : [organizationId, limit, offset];
-  const limitIdx = tenantConnectionId ? 3 : 2;
-  const offsetIdx = tenantConnectionId ? 4 : 3;
-
-  const countParams: unknown[] = tenantConnectionId
-    ? [organizationId, tenantConnectionId]
-    : [organizationId];
-
-  const [countRes, dataRes] = await Promise.all([
-    pool.query<{ total: string }>(
-      `SELECT COUNT(*)::text AS total FROM copilot_prompt_assessments ${conditions}`,
-      countParams,
-    ),
-    pool.query(
-      `SELECT * FROM copilot_prompt_assessments ${conditions}
-       ORDER BY created_at DESC LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
-      params,
-    ),
-  ]);
-
-  return {
-    rows: (dataRes.rows as Record<string, unknown>[]).map(rowToAssessment),
-    total: parseInt(countRes.rows[0].total, 10) || 0,
-  };
+  return storage.listCopilotPromptAssessmentsForOrg(organizationId, { tenantConnectionId, limit, offset });
 }
 
 /**
@@ -175,22 +89,7 @@ export async function listAssessmentsByTenant(
   limit = 20,
   offset = 0,
 ): Promise<{ rows: CopilotPromptAssessmentRow[]; total: number }> {
-  const [countRes, dataRes] = await Promise.all([
-    pool.query<{ total: string }>(
-      `SELECT COUNT(*)::text AS total FROM copilot_prompt_assessments WHERE tenant_connection_id = $1`,
-      [tenantConnectionId],
-    ),
-    pool.query(
-      `SELECT * FROM copilot_prompt_assessments WHERE tenant_connection_id = $1
-       ORDER BY created_at DESC LIMIT $2 OFFSET $3`,
-      [tenantConnectionId, limit, offset],
-    ),
-  ]);
-
-  return {
-    rows: (dataRes.rows as Record<string, unknown>[]).map(rowToAssessment),
-    total: parseInt(countRes.rows[0].total, 10) || 0,
-  };
+  return storage.listCopilotPromptAssessmentsByTenant(tenantConnectionId, { limit, offset });
 }
 
 async function createAssessment(
@@ -198,23 +97,22 @@ async function createAssessment(
   tenantConnectionId: string,
   triggeredBy: string | null,
 ): Promise<string> {
-  const { rows } = await pool.query<{ id: string }>(
-    `INSERT INTO copilot_prompt_assessments
-       (organization_id, tenant_connection_id, status, triggered_by, started_at)
-     VALUES ($1, $2, 'RUNNING', $3, now())
-     RETURNING id`,
-    [organizationId, tenantConnectionId, triggeredBy],
-  );
-  return rows[0].id;
+  const row = await storage.createCopilotPromptAssessment({
+    organizationId,
+    tenantConnectionId,
+    status: 'RUNNING',
+    triggeredBy,
+    startedAt: new Date(),
+  });
+  return row.id;
 }
 
 async function failAssessment(id: string, message: string): Promise<void> {
-  await pool.query(
-    `UPDATE copilot_prompt_assessments
-     SET status = 'FAILED', error = $2, completed_at = now()
-     WHERE id = $1`,
-    [id, message],
-  );
+  await storage.updateCopilotPromptAssessment(id, {
+    status: 'FAILED',
+    error: message,
+    completedAt: new Date(),
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -222,29 +120,21 @@ async function failAssessment(id: string, message: string): Promise<void> {
 // ---------------------------------------------------------------------------
 
 async function loadInteractions(tenantConnectionId: string): Promise<InteractionRow[]> {
-  const { rows } = await pool.query(
-    `SELECT id, user_id, user_principal_name, user_display_name, user_department,
-            app_class, prompt_text, interaction_at, flags, quality_tier,
-            quality_score, risk_level, analyzed_at
-     FROM copilot_interactions
-     WHERE tenant_connection_id = $1
-     ORDER BY interaction_at DESC`,
-    [tenantConnectionId],
-  );
-  return (rows as Record<string, unknown>[]).map(r => ({
-    id: r.id as string,
-    userId: r.user_id as string,
-    userPrincipalName: r.user_principal_name as string,
-    userDisplayName: (r.user_display_name as string | null) ?? null,
-    userDepartment: (r.user_department as string | null) ?? null,
-    appClass: r.app_class as string,
-    promptText: r.prompt_text as string,
-    interactionAt: new Date(r.interaction_at as string),
+  const rows = await storage.loadCopilotInteractionsForAnalysis(tenantConnectionId);
+  return rows.map(r => ({
+    id: r.id,
+    userId: r.userId,
+    userPrincipalName: r.userPrincipalName,
+    userDisplayName: r.userDisplayName ?? null,
+    userDepartment: r.userDepartment ?? null,
+    appClass: r.appClass,
+    promptText: r.promptText,
+    interactionAt: r.interactionAt,
     flags: (r.flags as CopilotPromptFlag[]) ?? [],
-    qualityTier: (r.quality_tier as string | null) ?? null,
-    qualityScore: (r.quality_score as number | null) ?? null,
-    riskLevel: (r.risk_level as string | null) ?? null,
-    analyzedAt: r.analyzed_at ? new Date(r.analyzed_at as string) : null,
+    qualityTier: r.qualityTier ?? null,
+    qualityScore: r.qualityScore ?? null,
+    riskLevel: r.riskLevel ?? null,
+    analyzedAt: r.analyzedAt ?? null,
   }));
 }
 
@@ -259,33 +149,21 @@ async function analyzeAndPersistInteractions(
   const unanalyzed = interactions.filter(i => !i.analyzedAt);
   if (unanalyzed.length === 0) return interactions;
 
-  const client = await pool.connect();
-  try {
-    for (const row of unanalyzed) {
-      const result = analyzePrompt(row.promptText);
-      await client.query(
-        `UPDATE copilot_interactions
-         SET quality_score = $2, quality_tier = $3, risk_level = $4,
-             flags = $5::jsonb, recommendation = $6, analyzed_at = now()
-         WHERE id = $1`,
-        [
-          row.id,
-          result.qualityScore,
-          result.qualityTier,
-          result.riskLevel,
-          JSON.stringify(result.flags),
-          result.recommendation,
-        ],
-      );
-      // Mutate in-place for aggregation
-      row.qualityScore = result.qualityScore;
-      row.qualityTier = result.qualityTier;
-      row.riskLevel = result.riskLevel;
-      row.flags = result.flags;
-      row.analyzedAt = new Date();
-    }
-  } finally {
-    client.release();
+  for (const row of unanalyzed) {
+    const result = analyzePrompt(row.promptText);
+    await storage.updateCopilotInteractionAnalysis(row.id, {
+      qualityScore: result.qualityScore,
+      qualityTier: result.qualityTier,
+      riskLevel: result.riskLevel,
+      flags: result.flags,
+      recommendation: result.recommendation,
+    });
+    // Mutate in-place for aggregation
+    row.qualityScore = result.qualityScore;
+    row.qualityTier = result.qualityTier;
+    row.riskLevel = result.riskLevel;
+    row.flags = result.flags;
+    row.analyzedAt = new Date();
   }
 
   return interactions;
@@ -596,24 +474,11 @@ export async function runCopilotPromptAssessment(
   // Enforce single concurrency. Any RUNNING assessment that is older than
   // 2 hours is considered stale (process likely crashed) and is marked FAILED
   // so a fresh run can proceed.
-  await pool.query(
-    `UPDATE copilot_prompt_assessments
-     SET status = 'FAILED', error = 'Assessment timed out (stale RUNNING state)',
-         completed_at = now()
-     WHERE tenant_connection_id = $1
-       AND status = 'RUNNING'
-       AND started_at < now() - interval '2 hours'`,
-    [tenantConnectionId],
-  );
+  await storage.failStaleCopilotAssessments(tenantConnectionId);
 
-  const { rows: running } = await pool.query(
-    `SELECT id FROM copilot_prompt_assessments
-     WHERE tenant_connection_id = $1 AND status = 'RUNNING'
-     LIMIT 1`,
-    [tenantConnectionId],
-  );
-  if (running.length > 0) {
-    return (running[0] as { id: string }).id;
+  const runningId = await storage.findRunningCopilotAssessment(tenantConnectionId);
+  if (runningId) {
+    return runningId;
   }
 
   const assessmentId = await createAssessment(organizationId, tenantConnectionId, triggeredBy);
@@ -624,13 +489,12 @@ export async function runCopilotPromptAssessment(
       const rawInteractions = await loadInteractions(tenantConnectionId);
 
       if (rawInteractions.length === 0) {
-        await pool.query(
-          `UPDATE copilot_prompt_assessments
-           SET status = 'COMPLETED', interaction_count = 0, user_count = 0,
-               completed_at = now()
-           WHERE id = $1`,
-          [assessmentId],
-        );
+        await storage.updateCopilotPromptAssessment(assessmentId, {
+          status: 'COMPLETED',
+          interactionCount: 0,
+          userCount: 0,
+          completedAt: new Date(),
+        });
         return;
       }
 
@@ -666,37 +530,21 @@ export async function runCopilotPromptAssessment(
       const dateRangeEnd = new Date(Math.max(...dates));
       const userIds = new Set(interactions.map(i => i.userId));
 
-      await pool.query(
-        `UPDATE copilot_prompt_assessments
-         SET status = 'COMPLETED',
-             interaction_count = $2,
-             user_count = $3,
-             date_range_start = $4,
-             date_range_end = $5,
-             org_summary = $6::jsonb,
-             department_breakdown = $7::jsonb,
-             user_breakdown = $8::jsonb,
-             executive_summary = $9,
-             recommendations = $10::jsonb,
-             model_used = $11,
-             tokens_used = $12,
-             completed_at = now()
-         WHERE id = $1`,
-        [
-          assessmentId,
-          interactions.length,
-          userIds.size,
-          dateRangeStart,
-          dateRangeEnd,
-          JSON.stringify(orgSummary),
-          JSON.stringify(departmentBreakdown),
-          JSON.stringify(userBreakdown),
-          executiveSummary,
-          JSON.stringify(recommendations),
-          modelUsed,
-          tokensUsed,
-        ],
-      );
+      await storage.updateCopilotPromptAssessment(assessmentId, {
+        status: 'COMPLETED',
+        interactionCount: interactions.length,
+        userCount: userIds.size,
+        dateRangeStart,
+        dateRangeEnd,
+        orgSummary: orgSummary as any,
+        departmentBreakdown: departmentBreakdown as any,
+        userBreakdown: userBreakdown as any,
+        executiveSummary,
+        recommendations: recommendations as any,
+        modelUsed,
+        tokensUsed,
+        completedAt: new Date(),
+      });
 
       console.log(
         `[CopilotPromptAssessment] ${assessmentId} COMPLETED ` +

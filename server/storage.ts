@@ -133,6 +133,13 @@ import {
   aiGroundingDocuments,
   type AiGroundingDocument,
   type InsertAiGroundingDocument,
+  copilotInteractions,
+  type CopilotInteraction,
+  type InsertCopilotInteraction,
+  copilotPromptAssessments,
+  type CopilotPromptAssessment,
+  type InsertCopilotPromptAssessment,
+  type CopilotPromptFlag,
 } from "@shared/schema";
 import {
   decryptRecord,
@@ -481,6 +488,21 @@ export interface IStorage {
   createGroundingDocument(data: InsertAiGroundingDocument): Promise<AiGroundingDocument>;
   updateGroundingDocument(id: string, updates: Partial<InsertAiGroundingDocument>): Promise<AiGroundingDocument | undefined>;
   deleteGroundingDocument(id: string): Promise<void>;
+
+  // Copilot Prompt Intelligence
+  getUnanalyzedCopilotInteractionIds(tenantConnectionId: string, limit?: number): Promise<string[]>;
+  updateCopilotInteractionAnalysis(id: string, analysis: { qualityScore: number; qualityTier: string; riskLevel: string; flags: CopilotPromptFlag[]; recommendation: string | null }): Promise<void>;
+  getCopilotInteractionsForTenant(tenantConnectionId: string, options?: { limit?: number; offset?: number; includePromptText?: boolean }): Promise<{ rows: Array<Omit<CopilotInteraction, 'promptText'> & { promptText?: string }>; total: number }>;
+  loadCopilotInteractionsForAnalysis(tenantConnectionId: string): Promise<CopilotInteraction[]>;
+  purgeCopilotInteractions(tenantConnectionId: string): Promise<number>;
+  getCopilotPromptAssessment(id: string): Promise<CopilotPromptAssessment | undefined>;
+  getLatestCopilotPromptAssessment(tenantConnectionId: string): Promise<CopilotPromptAssessment | undefined>;
+  listCopilotPromptAssessmentsForOrg(organizationId: string, opts?: { tenantConnectionId?: string; limit?: number; offset?: number }): Promise<{ rows: CopilotPromptAssessment[]; total: number }>;
+  listCopilotPromptAssessmentsByTenant(tenantConnectionId: string, opts?: { limit?: number; offset?: number }): Promise<{ rows: CopilotPromptAssessment[]; total: number }>;
+  createCopilotPromptAssessment(data: InsertCopilotPromptAssessment): Promise<CopilotPromptAssessment>;
+  updateCopilotPromptAssessment(id: string, updates: Partial<InsertCopilotPromptAssessment>): Promise<CopilotPromptAssessment | undefined>;
+  failStaleCopilotAssessments(tenantConnectionId: string): Promise<void>;
+  findRunningCopilotAssessment(tenantConnectionId: string): Promise<string | null>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -3353,6 +3375,251 @@ export class DatabaseStorage implements IStorage {
 
   async deleteGroundingDocument(id: string): Promise<void> {
     await db.delete(aiGroundingDocuments).where(eq(aiGroundingDocuments.id, id));
+  }
+
+  // ── Copilot Prompt Intelligence ───────────────────────────────────────────
+
+  /** Number of days a captured interaction is retained before purging. */
+  private static readonly COPILOT_RETENTION_DAYS = 30;
+
+  async getUnanalyzedCopilotInteractionIds(
+    tenantConnectionId: string,
+    limit = 1000,
+  ): Promise<string[]> {
+    const rows = await db
+      .select({ id: copilotInteractions.id })
+      .from(copilotInteractions)
+      .where(
+        and(
+          eq(copilotInteractions.tenantConnectionId, tenantConnectionId),
+          isNull(copilotInteractions.analyzedAt),
+        ),
+      )
+      .orderBy(desc(copilotInteractions.interactionAt))
+      .limit(limit);
+    return rows.map(r => r.id);
+  }
+
+  async updateCopilotInteractionAnalysis(
+    id: string,
+    analysis: {
+      qualityScore: number;
+      qualityTier: string;
+      riskLevel: string;
+      flags: CopilotPromptFlag[];
+      recommendation: string | null;
+    },
+  ): Promise<void> {
+    await db
+      .update(copilotInteractions)
+      .set({
+        qualityScore: analysis.qualityScore,
+        qualityTier: analysis.qualityTier,
+        riskLevel: analysis.riskLevel,
+        flags: analysis.flags as any,
+        recommendation: analysis.recommendation,
+        analyzedAt: new Date(),
+      })
+      .where(eq(copilotInteractions.id, id));
+  }
+
+  async getCopilotInteractionsForTenant(
+    tenantConnectionId: string,
+    options: { limit?: number; offset?: number; includePromptText?: boolean } = {},
+  ): Promise<{ rows: Array<Omit<CopilotInteraction, 'promptText'> & { promptText?: string }>; total: number }> {
+    const limit = Math.min(options.limit ?? 200, 1000);
+    const offset = options.offset ?? 0;
+    const includePromptText = options.includePromptText === true;
+    const whereClause = eq(copilotInteractions.tenantConnectionId, tenantConnectionId);
+
+    const [countResult] = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(copilotInteractions)
+      .where(whereClause);
+
+    // Conditionally include prompt_text. Explicitly enumerating columns avoids
+    // accidentally returning sensitive fields when includePromptText is false.
+    const baseColumns = {
+      id: copilotInteractions.id,
+      tenantConnectionId: copilotInteractions.tenantConnectionId,
+      organizationId: copilotInteractions.organizationId,
+      graphInteractionId: copilotInteractions.graphInteractionId,
+      userId: copilotInteractions.userId,
+      userPrincipalName: copilotInteractions.userPrincipalName,
+      userDisplayName: copilotInteractions.userDisplayName,
+      userDepartment: copilotInteractions.userDepartment,
+      appClass: copilotInteractions.appClass,
+      interactionAt: copilotInteractions.interactionAt,
+      qualityTier: copilotInteractions.qualityTier,
+      qualityScore: copilotInteractions.qualityScore,
+      riskLevel: copilotInteractions.riskLevel,
+      flags: copilotInteractions.flags,
+      recommendation: copilotInteractions.recommendation,
+      analyzedAt: copilotInteractions.analyzedAt,
+      capturedAt: copilotInteractions.capturedAt,
+    };
+
+    const rows = await db
+      .select(
+        includePromptText
+          ? { ...baseColumns, promptText: copilotInteractions.promptText }
+          : baseColumns,
+      )
+      .from(copilotInteractions)
+      .where(whereClause)
+      .orderBy(desc(copilotInteractions.interactionAt))
+      .limit(limit)
+      .offset(offset);
+
+    return {
+      rows: rows as Array<Omit<CopilotInteraction, 'promptText'> & { promptText?: string }>,
+      total: countResult?.count ?? 0,
+    };
+  }
+
+  async loadCopilotInteractionsForAnalysis(
+    tenantConnectionId: string,
+  ): Promise<CopilotInteraction[]> {
+    return db
+      .select()
+      .from(copilotInteractions)
+      .where(eq(copilotInteractions.tenantConnectionId, tenantConnectionId))
+      .orderBy(desc(copilotInteractions.interactionAt));
+  }
+
+  async purgeCopilotInteractions(tenantConnectionId: string): Promise<number> {
+    const result = await db
+      .delete(copilotInteractions)
+      .where(
+        and(
+          eq(copilotInteractions.tenantConnectionId, tenantConnectionId),
+          lt(
+            copilotInteractions.interactionAt,
+            sql`now() - make_interval(days => ${DatabaseStorage.COPILOT_RETENTION_DAYS})`,
+          ),
+        ),
+      );
+    return result.rowCount ?? 0;
+  }
+
+  async getCopilotPromptAssessment(id: string): Promise<CopilotPromptAssessment | undefined> {
+    const [row] = await db
+      .select()
+      .from(copilotPromptAssessments)
+      .where(eq(copilotPromptAssessments.id, id));
+    return row;
+  }
+
+  async getLatestCopilotPromptAssessment(
+    tenantConnectionId: string,
+  ): Promise<CopilotPromptAssessment | undefined> {
+    const [row] = await db
+      .select()
+      .from(copilotPromptAssessments)
+      .where(
+        and(
+          eq(copilotPromptAssessments.tenantConnectionId, tenantConnectionId),
+          eq(copilotPromptAssessments.status, 'COMPLETED'),
+        ),
+      )
+      .orderBy(desc(copilotPromptAssessments.createdAt))
+      .limit(1);
+    return row;
+  }
+
+  async listCopilotPromptAssessmentsForOrg(
+    organizationId: string,
+    opts: { tenantConnectionId?: string; limit?: number; offset?: number } = {},
+  ): Promise<{ rows: CopilotPromptAssessment[]; total: number }> {
+    const limit = opts.limit ?? 20;
+    const offset = opts.offset ?? 0;
+
+    const conditions = [eq(copilotPromptAssessments.organizationId, organizationId)];
+    if (opts.tenantConnectionId) {
+      conditions.push(eq(copilotPromptAssessments.tenantConnectionId, opts.tenantConnectionId));
+    }
+    const whereClause = and(...conditions);
+
+    const [[countResult], rows] = await Promise.all([
+      db.select({ count: sql<number>`count(*)::int` }).from(copilotPromptAssessments).where(whereClause),
+      db.select().from(copilotPromptAssessments)
+        .where(whereClause)
+        .orderBy(desc(copilotPromptAssessments.createdAt))
+        .limit(limit)
+        .offset(offset),
+    ]);
+
+    return { rows, total: countResult?.count ?? 0 };
+  }
+
+  async listCopilotPromptAssessmentsByTenant(
+    tenantConnectionId: string,
+    opts: { limit?: number; offset?: number } = {},
+  ): Promise<{ rows: CopilotPromptAssessment[]; total: number }> {
+    const limit = opts.limit ?? 20;
+    const offset = opts.offset ?? 0;
+    const whereClause = eq(copilotPromptAssessments.tenantConnectionId, tenantConnectionId);
+
+    const [[countResult], rows] = await Promise.all([
+      db.select({ count: sql<number>`count(*)::int` }).from(copilotPromptAssessments).where(whereClause),
+      db.select().from(copilotPromptAssessments)
+        .where(whereClause)
+        .orderBy(desc(copilotPromptAssessments.createdAt))
+        .limit(limit)
+        .offset(offset),
+    ]);
+
+    return { rows, total: countResult?.count ?? 0 };
+  }
+
+  async createCopilotPromptAssessment(
+    data: InsertCopilotPromptAssessment,
+  ): Promise<CopilotPromptAssessment> {
+    const [row] = await db.insert(copilotPromptAssessments).values(data).returning();
+    return row;
+  }
+
+  async updateCopilotPromptAssessment(
+    id: string,
+    updates: Partial<InsertCopilotPromptAssessment>,
+  ): Promise<CopilotPromptAssessment | undefined> {
+    const [row] = await db
+      .update(copilotPromptAssessments)
+      .set(updates)
+      .where(eq(copilotPromptAssessments.id, id))
+      .returning();
+    return row;
+  }
+
+  async failStaleCopilotAssessments(tenantConnectionId: string): Promise<void> {
+    await db
+      .update(copilotPromptAssessments)
+      .set({
+        status: 'FAILED',
+        error: 'Assessment timed out (stale RUNNING state)',
+        completedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(copilotPromptAssessments.tenantConnectionId, tenantConnectionId),
+          eq(copilotPromptAssessments.status, 'RUNNING'),
+          lt(copilotPromptAssessments.startedAt, sql`now() - interval '2 hours'`),
+        ),
+      );
+  }
+
+  async findRunningCopilotAssessment(tenantConnectionId: string): Promise<string | null> {
+    const [row] = await db
+      .select({ id: copilotPromptAssessments.id })
+      .from(copilotPromptAssessments)
+      .where(
+        and(
+          eq(copilotPromptAssessments.tenantConnectionId, tenantConnectionId),
+          eq(copilotPromptAssessments.status, 'RUNNING'),
+        ),
+      )
+      .limit(1);
+    return row?.id ?? null;
   }
 }
 

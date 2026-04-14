@@ -9,7 +9,7 @@
  * Graph endpoint:
  *   GET /beta/users/{userId}/copilot/interactions
  *
- * Required permission: CopilotInteraction.Read.All (application permission,
+ * Required permission: AiEnterpriseInteraction.Read.All (application permission,
  * admin consent required). This must be added to the Entra app registration
  * shared by Zenith's other Graph-consuming services.
  *
@@ -19,7 +19,7 @@
  */
 
 import { and, eq, sql } from "drizzle-orm";
-import { db, pool } from "../db";
+import { db } from "../db";
 import {
   copilotInteractions,
   licenseAssignments,
@@ -36,7 +36,7 @@ export const COPILOT_SKU_PART_ID = "639dec6b-bb19-468b-871c-c5c441c4b0cb";
 /** Hard upper bound on users per sync to avoid runaway cost. */
 const MAX_USERS_PER_SYNC = 2000;
 
-/** Days of retention for captured interactions. */
+/** Days of interactions to request from the Graph API (rolling window). */
 const RETENTION_DAYS = 30;
 
 export interface SyncSummary {
@@ -228,17 +228,12 @@ async function upsertInteraction(
 /**
  * Delete interactions older than the retention window for a single tenant.
  * Called at the end of that tenant's sync to avoid cross-tenant contention.
+ * Delegates to storage.purgeCopilotInteractions which enforces the 30-day window.
  */
 export async function purgeExpiredInteractions(
   tenantConnectionId: string,
 ): Promise<number> {
-  const { rowCount } = await pool.query(
-    `DELETE FROM copilot_interactions
-     WHERE tenant_connection_id = $1
-       AND interaction_at < now() - make_interval(days => $2)`,
-    [tenantConnectionId, RETENTION_DAYS],
-  );
-  return rowCount ?? 0;
+  return storage.purgeCopilotInteractions(tenantConnectionId);
 }
 
 /**
@@ -354,7 +349,7 @@ export async function syncCopilotInteractions(
   }
 
   try {
-    summary.interactionsPurged = await purgeExpiredInteractions();
+    summary.interactionsPurged = await purgeExpiredInteractions(tenantConnectionId);
   } catch (err: unknown) {
     summary.errors.push({
       context: "purgeExpiredInteractions",
@@ -380,16 +375,7 @@ export async function getUnanalyzedInteractionIds(
   tenantConnectionId: string,
   limit = 1000,
 ): Promise<string[]> {
-  const { rows } = await pool.query<{ id: string }>(
-    `SELECT id
-     FROM copilot_interactions
-     WHERE tenant_connection_id = $1
-       AND analyzed_at IS NULL
-     ORDER BY interaction_at DESC
-     LIMIT $2`,
-    [tenantConnectionId, limit],
-  );
-  return rows.map(r => r.id);
+  return storage.getUnanalyzedCopilotInteractionIds(tenantConnectionId, limit);
 }
 
 /** Return interactions for a tenant, optionally including raw prompt text.
@@ -401,45 +387,5 @@ export async function getInteractionsForTenant(
   tenantConnectionId: string,
   options: { limit?: number; offset?: number; includePromptText?: boolean } = {},
 ): Promise<{ rows: Array<Record<string, any>>; total: number }> {
-  const limit = Math.min(options.limit ?? 200, 1000);
-  const offset = options.offset ?? 0;
-  const includePromptText = options.includePromptText === true;
-
-  const countRes = await pool.query<{ total: string }>(
-    `SELECT COUNT(*)::text AS total
-     FROM copilot_interactions
-     WHERE tenant_connection_id = $1`,
-    [tenantConnectionId],
-  );
-
-  // Two static queries avoid string interpolation for column names.
-  const queryWithPrompt = `
-    SELECT id, tenant_connection_id, organization_id, graph_interaction_id,
-           user_id, user_principal_name, user_display_name, user_department,
-           app_class, prompt_text, interaction_at,
-           quality_tier, quality_score, risk_level, flags, recommendation,
-           analyzed_at, captured_at
-    FROM copilot_interactions
-    WHERE tenant_connection_id = $1
-    ORDER BY interaction_at DESC LIMIT $2 OFFSET $3`;
-
-  const queryWithoutPrompt = `
-    SELECT id, tenant_connection_id, organization_id, graph_interaction_id,
-           user_id, user_principal_name, user_display_name, user_department,
-           app_class, interaction_at,
-           quality_tier, quality_score, risk_level, flags, recommendation,
-           analyzed_at, captured_at
-    FROM copilot_interactions
-    WHERE tenant_connection_id = $1
-    ORDER BY interaction_at DESC LIMIT $2 OFFSET $3`;
-
-  const { rows } = await pool.query(
-    includePromptText ? queryWithPrompt : queryWithoutPrompt,
-    [tenantConnectionId, limit, offset],
-  );
-
-  return {
-    rows,
-    total: parseInt(countRes.rows[0].total, 10) || 0,
-  };
+  return storage.getCopilotInteractionsForTenant(tenantConnectionId, options);
 }
