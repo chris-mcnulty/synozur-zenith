@@ -902,6 +902,463 @@ ALTER TABLE support_tickets ADD COLUMN planner_task_id TEXT;
 
 ---
 
+### 🟠 BL-038: Copilot Prompt Intelligence — Rolling 30-Day Interaction Analysis
+**Status:** Backlog | **Priority:** High | **Effort:** Large (5–8 days) | **Service Plan:** Professional+
+
+**Background**
+
+Zenith's existing Copilot Readiness features answer "is the environment ready for Copilot?" This feature answers the next question: **"how well are people actually using Copilot?"**
+
+Organizations deploying Microsoft 365 Copilot need visibility into how employees interact with it — not just whether they have licenses, but whether their prompts are effective, safe, and aligned with organizational standards. Today, this data exists in the Microsoft Graph but is not captured or analyzed. Zenith will capture a rolling 30-day window of user-initiated Copilot interactions, filter out system-generated noise, analyze each prompt against a documented 5-category quality and safety framework, and present actionable insights grouped by individual, department, and organization.
+
+The UI should follow a pattern similar to the **Content Intensity Heatmap** — a hierarchical, color-coded visualization that surfaces hotspots and patterns at a glance, with drill-down capability to department and individual level.
+
+**Current State (what this builds on)**
+
+| Capability | Status | Location |
+|---|---|---|
+| Copilot Readiness scoring (workspace-level) | ✅ Live | `server/services/copilot-scoring.ts` |
+| License sync (knows who has Copilot licenses) | ✅ Live | `server/services/license-sync.ts` |
+| User inventory with department field | ✅ Live | `license_assignments.user_department` |
+| AI grounding documents (org-specific standards) | ✅ Live | `server/services/ai-grounding.ts` |
+| AI provider abstraction (GPT-4o, Azure, Anthropic) | ✅ Live | `server/services/ai-provider.ts` |
+| AI usage tracking and cost budgeting | ✅ Live | `server/services/ai-usage.ts` |
+| Content Intensity Heatmap (UI pattern) | ✅ Live | `client/src/pages/app/content-intensity-heatmap.tsx` |
+| IA Assessment on-demand analysis pipeline | ✅ Live | `server/services/ia-assessment-service.ts` |
+| Data masking (per-tenant field encryption) | ✅ Live | `server/services/data-masking.ts` |
+| Actual Copilot interaction capture from Graph | ❌ Missing | — |
+
+---
+
+### Microsoft Graph API — Copilot Interactions (Beta)
+
+**Endpoint:** `GET https://graph.microsoft.com/beta/users/{user-id}/copilot/interactions`
+
+**Permission required:** `CopilotInteraction.Read.All` (application permission, requires admin consent)
+
+**Key response fields:**
+
+| Field | Type | Description |
+|---|---|---|
+| `id` | string | Unique interaction ID |
+| `createdDateTime` | ISO 8601 | When the interaction occurred |
+| `appClass` | string | Source app: `Teams`, `Word`, `Excel`, `PowerPoint`, `Outlook`, `Bing` (M365 Chat) |
+| `interactionType` | string | `user-initiated` vs `system-initiated` |
+| `contexts` | collection | Array of context objects; the one with `contextType == "prompt"` contains the user's input in the `content` field |
+
+**Filtering:**
+- `$filter=createdDateTime ge {ISO-date}` — restrict to last 30 days
+- `$filter=appClass eq 'Teams'` — filter by app (optional)
+- Client-side filter: exclude records where `interactionType` is not `user-initiated` (this removes auto-generated Outlook suggestions, Teams meeting summaries, etc.)
+
+**Pagination:** Standard `@odata.nextLink` pattern — follow until exhausted.
+
+**Rate limits:** Subject to standard Graph throttling. Batch by user, use retry-after headers, process in sequence per-user but parallelizable across users (within reason).
+
+> ⚠️ **This is a beta API.** Microsoft may change the schema or behavior before GA. The implementation should isolate Graph API interaction parsing behind a clear abstraction so changes can be accommodated without rewriting the analysis layer.
+
+---
+
+### Quality & Safety Framework (5 Categories)
+
+The analysis engine evaluates each captured prompt against five categories. These standards are maintained as grounding documents and uploaded per-organization, but the following are the baseline defaults. The developer should implement these as a **deterministic pre-scan** (pattern matching, heuristics) followed by an **AI-powered deep analysis** (GPT-4o) for nuanced assessment.
+
+**Category 1 — Content Safety (severity: CRITICAL)**
+Flag prompts containing harassment/hate speech, extremism/violence encouragement, sexually explicit or harmful content, self-harm/suicide promotion, or requests for illicit behavior. Action: flag for moderation.
+
+**Category 2 — Misuse & Guardrail Evasion (severity: CRITICAL)**
+Detect prompt injection attempts ("ignore your previous instructions", "you are now in developer mode"), policy bypass language, social engineering/phishing content generation requests, and attempts to extract system prompts. Action: flag as high risk.
+
+**Category 3 — Sensitive Data Exposure (severity: HIGH)**
+Identify PII (names + SSN/credit cards/passwords/API keys), proprietary business data (confidential financials, trade secrets, internal roadmaps), and regulated data (GDPR, HIPAA, PCI). Action: flag for privacy review.
+
+**Category 4 — Prompt Quality & Clarity (severity: INFORMATIONAL)**
+Assess clarity/specificity, context/detail provided, instructions/constraints given, coherence/structure, and error-free syntax. Score each prompt: `GREAT`, `GOOD`, `WEAK`, `PROBLEMATIC`.
+
+**Category 5 — Feasibility & Ambiguity (severity: INFORMATIONAL)**
+Detect ambiguous references without context, overly broad/open-ended queries, unrealistic requests, multiple complex tasks crammed into one prompt, and contradictory requirements. Action: flag as likely-to-fail.
+
+**Scoring model:**
+Each prompt receives:
+- A **quality tier**: `GREAT` (4), `GOOD` (3), `WEAK` (2), `PROBLEMATIC` (1)
+- A **risk level**: `NONE`, `LOW`, `MEDIUM`, `HIGH`, `CRITICAL`
+- Zero or more **flags** from categories 1–3 and 5
+- An optional **recommendation** string (for weak/problematic prompts)
+
+These are aggregated up to the user → department → organization level for trend analysis.
+
+---
+
+### Schema Design
+
+#### New table: `copilot_interactions`
+Stores the raw captured interactions with analysis results. Rolling 30-day retention — records older than 30 days are deleted by a cleanup routine.
+
+```sql
+CREATE TABLE "copilot_interactions" (
+  "id"                    varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+  "tenant_connection_id"  varchar NOT NULL REFERENCES tenant_connections(id) ON DELETE CASCADE,
+  "organization_id"       varchar NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  "graph_interaction_id"  text NOT NULL,
+  "user_id"               text NOT NULL,            -- Entra object ID
+  "user_principal_name"   text NOT NULL,
+  "user_display_name"     text,
+  "user_department"       text,                     -- denormalized from license_assignments
+  "app_class"             text NOT NULL,             -- Teams, Word, Excel, etc.
+  "prompt_text"           text NOT NULL,             -- the user's actual prompt
+  "interaction_at"        timestamp NOT NULL,        -- when the user sent the prompt
+  "quality_tier"          text,                      -- GREAT | GOOD | WEAK | PROBLEMATIC
+  "quality_score"         integer,                   -- 1–4 numeric
+  "risk_level"            text,                      -- NONE | LOW | MEDIUM | HIGH | CRITICAL
+  "flags"                 jsonb DEFAULT '[]',        -- array of { category, signal, severity, detail }
+  "recommendation"        text,                      -- AI-generated improvement suggestion
+  "analyzed_at"           timestamp,                 -- when analysis was performed
+  "captured_at"           timestamp DEFAULT now(),   -- when Zenith captured this record
+  UNIQUE("tenant_connection_id", "graph_interaction_id")
+);
+
+CREATE INDEX idx_copilot_interactions_org ON copilot_interactions(organization_id);
+CREATE INDEX idx_copilot_interactions_tenant ON copilot_interactions(tenant_connection_id);
+CREATE INDEX idx_copilot_interactions_user ON copilot_interactions(user_id);
+CREATE INDEX idx_copilot_interactions_date ON copilot_interactions(interaction_at);
+```
+
+**Masking integration:** Add `copilot_interactions` to the `SENSITIVE_FIELDS` map in `server/services/data-masking.ts`:
+- Masked fields: `user_principal_name`, `user_display_name`, `prompt_text`, `recommendation`
+- When masking is enabled for a tenant, these fields are encrypted at rest using the tenant's encryption key, following the existing `MASKED:<iv>:<authTag>:<ciphertext>` format
+
+#### New table: `copilot_prompt_assessments`
+Stores the aggregated, AI-generated assessment report per org/tenant (similar to `ai_assessment_runs` for IA).
+
+```sql
+CREATE TABLE "copilot_prompt_assessments" (
+  "id"                    varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+  "organization_id"       varchar NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  "tenant_connection_id"  varchar NOT NULL REFERENCES tenant_connections(id) ON DELETE CASCADE,
+  "status"                text NOT NULL DEFAULT 'PENDING',  -- PENDING | RUNNING | COMPLETED | FAILED
+  "triggered_by"          varchar REFERENCES users(id),
+  "interaction_count"     integer,             -- how many interactions were analyzed
+  "user_count"            integer,             -- how many unique users
+  "date_range_start"      timestamp,
+  "date_range_end"        timestamp,
+  "org_summary"           jsonb,               -- aggregated org-level metrics
+  "department_breakdown"  jsonb,               -- per-department scores and trends
+  "user_breakdown"        jsonb,               -- per-user scores (masked if masking enabled)
+  "executive_summary"     text,                -- AI-generated narrative
+  "recommendations"       jsonb,               -- AI-generated action items
+  "model_used"            text,
+  "tokens_used"           integer,
+  "started_at"            timestamp,
+  "completed_at"          timestamp,
+  "error"                 text,
+  "created_at"            timestamp DEFAULT now()
+);
+```
+
+---
+
+### Implementation — Phase by Phase
+
+#### Phase 1: Data Capture Service
+
+**New file: `server/services/copilot-interaction-sync.ts`**
+
+Purpose: Sync user-initiated Copilot interactions from Microsoft Graph for all Copilot-licensed users in a given tenant connection.
+
+**Logic flow:**
+
+1. Accept `tenantConnectionId` as input
+2. Load the tenant connection + credentials (same pattern as `user-inventory.ts`)
+3. Query `license_assignments` to get all users with a Copilot for M365 license in this tenant (filter by SKU — the Copilot SKU part ID is `639dec6b-bb19-468b-871c-c5c441c4b0cb` or check `servicePlanName` contains `MICROSOFT_365_COPILOT`)
+4. For each Copilot-licensed user:
+   a. Call `GET /beta/users/{userId}/copilot/interactions?$filter=createdDateTime ge {30daysAgo}&$orderby=createdDateTime desc`
+   b. Page through all results
+   c. For each interaction:
+      - Skip if `interactionType !== 'user-initiated'`
+      - Extract prompt text from `contexts` where `contextType == 'prompt'`
+      - Skip if no prompt text found (some interactions are response-only)
+      - Upsert into `copilot_interactions` using the unique constraint on `(tenant_connection_id, graph_interaction_id)` to avoid duplicates
+      - Denormalize `user_department` from `license_assignments` at insert time
+5. After sync completes, run cleanup: `DELETE FROM copilot_interactions WHERE interaction_at < now() - interval '30 days'`
+6. Return summary: `{ usersScanned, interactionsCaptured, interactionsSkipped, errors }`
+
+**Error handling:**
+- Per-user errors (403 on a specific user, user not found) should be logged and skipped — do not abort the entire sync
+- Graph throttling: respect `Retry-After` headers, use exponential backoff (reuse existing patterns from `graph.ts`)
+- Wrap the entire operation in the same `trackJobRun` pattern used by existing sync services if the job scheduling system (BL-009) is available; otherwise, track manually
+
+**Token reuse:** Call `getAppToken(tenantId, clientId, clientSecret)` from `server/services/graph.ts` — same pattern as every other Graph service in the codebase.
+
+---
+
+#### Phase 2: Prompt Analysis Engine
+
+**New file: `server/services/copilot-prompt-analyzer.ts`**
+
+Purpose: Score and flag each captured interaction against the 5-category framework. Two-pass approach: deterministic pre-scan, then AI-powered deep analysis.
+
+**Pass 1 — Deterministic Pre-Scan (fast, no API cost)**
+
+Pattern-matching and heuristic checks applied to every prompt:
+
+| Category | Detection method |
+|---|---|
+| Content Safety | Keyword/phrase lists for slurs, threats, explicit content (configurable, not hardcoded — load from a `prompt_safety_patterns` config or grounding document) |
+| Misuse/Injection | Regex for injection phrases: `/ignore\s+(your\s+)?(previous\s+)?instructions/i`, `/you\s+are\s+now\s+in\s+developer\s+mode/i`, `/reveal\s+(the\s+)?system\s+prompt/i`, `/pretend\s+you\s+(have\s+)?no\s+restrictions/i` |
+| Sensitive Data | Regex for PII patterns: SSN (`/\b\d{3}-\d{2}-\d{4}\b/`), credit cards (Luhn-checkable 13–19 digit sequences), email+password combinations, API key patterns (`/[A-Za-z0-9_-]{32,}/` in context of "key", "token", "secret") |
+| Quality | Heuristics: character count < 10 → likely too vague; no question mark or verb → possibly incomplete; multiple unrelated questions detected by sentence segmentation |
+| Feasibility | Flag "attached file" / "see below" references with no content; contradictory length instructions |
+
+Pre-scan assigns preliminary `risk_level` and `quality_tier`. Records flagged as `CRITICAL` risk in categories 1–2 are marked immediately without waiting for AI analysis.
+
+**Pass 2 — AI-Powered Deep Analysis (batched, cost-controlled)**
+
+For prompts not definitively scored by pre-scan (and for generating improvement recommendations), batch prompts and send to the AI provider:
+
+- **Batch size:** 20–50 prompts per AI call to amortize token cost
+- **System prompt:** Define persona as an AI governance analyst; inject the organization's grounding documents (loaded via `ai-grounding.ts`); instruct the model to return structured JSON
+- **User prompt:** Provide the batch of prompts (anonymized — use prompt index numbers, not user names) with instructions to score each on quality tier, risk level, flags, and a one-sentence recommendation
+- **Response format:**
+```json
+[
+  {
+    "index": 0,
+    "qualityTier": "WEAK",
+    "qualityScore": 2,
+    "riskLevel": "LOW",
+    "flags": [{ "category": "QUALITY", "signal": "MISSING_CONTEXT", "detail": "Prompt references 'the document' without specifying which document" }],
+    "recommendation": "Specify the document name or paste the relevant section directly into the prompt"
+  }
+]
+```
+- **Cost tracking:** Log all AI calls to `ai_usage` table (existing pattern in `ai-provider.ts`)
+- **Budget guard:** Check organization's monthly token budget before proceeding; skip AI analysis if budget exceeded (still retain deterministic pre-scan results)
+
+**Output:** Update `copilot_interactions` rows with `quality_tier`, `quality_score`, `risk_level`, `flags`, `recommendation`, and `analyzed_at`.
+
+---
+
+#### Phase 3: Assessment Report Generator
+
+**New file: `server/services/copilot-prompt-assessment-service.ts`**
+
+Purpose: Generate the on-demand aggregated assessment report. Follows the same pattern as `ia-assessment-service.ts`.
+
+**Trigger:** `POST /api/copilot-prompt-assessment` (on-demand, initiated by admin from UI)
+
+**Logic flow:**
+
+1. Validate caller has Domain Admin or Global Admin role
+2. Create a `copilot_prompt_assessments` record with status `PENDING`
+3. Run the capture sync (Phase 1) to ensure data is fresh
+4. Run the analysis engine (Phase 2) on any unanalyzed interactions
+5. Aggregate metrics:
+
+**Organization-level summary (`org_summary` JSON):**
+```json
+{
+  "totalInteractions": 1247,
+  "uniqueUsers": 83,
+  "dateRange": { "start": "2026-03-15", "end": "2026-04-14" },
+  "qualityDistribution": { "GREAT": 312, "GOOD": 589, "WEAK": 278, "PROBLEMATIC": 68 },
+  "averageQualityScore": 2.9,
+  "riskDistribution": { "NONE": 1100, "LOW": 89, "MEDIUM": 38, "HIGH": 15, "CRITICAL": 5 },
+  "appClassBreakdown": { "Teams": 420, "Word": 310, "Excel": 180, "Outlook": 200, "PowerPoint": 87, "Bing": 50 },
+  "topFlags": [
+    { "category": "QUALITY", "signal": "MISSING_CONTEXT", "count": 145 },
+    { "category": "QUALITY", "signal": "TOO_VAGUE", "count": 98 },
+    { "category": "SENSITIVE_DATA", "signal": "PII_DETECTED", "count": 12 }
+  ]
+}
+```
+
+**Department breakdown (`department_breakdown` JSON):**
+```json
+[
+  {
+    "department": "Legal",
+    "userCount": 12,
+    "interactionCount": 156,
+    "averageQualityScore": 3.4,
+    "qualityDistribution": { "GREAT": 58, "GOOD": 72, "WEAK": 22, "PROBLEMATIC": 4 },
+    "riskDistribution": { "NONE": 148, "LOW": 5, "MEDIUM": 2, "HIGH": 1, "CRITICAL": 0 },
+    "topFlags": [...],
+    "trend": "IMPROVING"
+  }
+]
+```
+
+**User breakdown (`user_breakdown` JSON):**
+```json
+[
+  {
+    "userId": "abc-123",
+    "userPrincipalName": "jane.doe@contoso.com",
+    "displayName": "Jane Doe",
+    "department": "Legal",
+    "interactionCount": 34,
+    "averageQualityScore": 3.6,
+    "qualityDistribution": { "GREAT": 14, "GOOD": 15, "WEAK": 4, "PROBLEMATIC": 1 },
+    "criticalFlags": 0,
+    "topRecommendation": "Provide more context when asking Copilot to review contracts — specify the clause or section."
+  }
+]
+```
+
+6. Generate an **AI executive summary** via GPT-4o:
+   - Input: the aggregated metrics above + organization's grounding documents
+   - Output: 2–3 paragraph narrative summarizing overall prompt health, key risks, top improvement areas, and comparison across departments
+   - Also generate a **recommendations** array: 5–10 prioritized, actionable items (e.g., "Schedule prompt engineering training for the Finance department — 40% of prompts are rated WEAK or PROBLEMATIC")
+
+7. Update the `copilot_prompt_assessments` record with all results, mark status `COMPLETED`
+
+---
+
+#### Phase 4: UI Dashboard
+
+**New file: `client/src/pages/app/copilot-prompt-intelligence.tsx`**
+
+**New route:** `/app/copilot-prompt-intelligence`
+
+**Access control:** Domain Admin and Global Admin roles only (check `effectiveRole` — same pattern as other admin-gated pages).
+
+**Layout (inspired by IA Heatmap + IA Assessment):**
+
+**Section 1 — Overview Cards (top row)**
+- Total interactions (30 days)
+- Unique users
+- Average quality score (gauge visualization, 1–4 scale)
+- Risk summary (count of HIGH/CRITICAL flags)
+- App breakdown (small bar chart — Teams, Word, Excel, etc.)
+
+**Section 2 — Quality Heatmap (main visualization)**
+Similar to the Content Intensity Heatmap, but grouped by organizational structure:
+
+| Row | Quality Score | Great % | Problematic % | Risk Flags | Interaction Count |
+|---|---|---|---|---|---|
+| **Organization (root)** | 2.9 | 25% | 5% | 20 | 1,247 |
+| ↳ Legal | 3.4 | 37% | 3% | 3 | 156 |
+| ↳ Finance | 2.1 | 10% | 18% | 8 | 203 |
+| ↳↳ Jane Doe | 3.6 | 41% | 3% | 0 | 34 |
+| ↳↳ John Smith | 1.8 | 5% | 35% | 4 | 22 |
+
+- **Color scale:** Same percentile-based coloring as the IA heatmap — red (problematic concentration) → amber → emerald (healthy)
+- **Expandable rows:** Click department to expand individual users; click user to see their prompt-level detail
+- **Columns:** Quality score, quality distribution (mini bar), risk flag count, interaction count, top recommendation
+- **Sorting:** By quality score (ascending to surface worst first), by risk flag count, or by interaction count
+
+**Section 3 — Risk & Safety Panel (sidebar or tab)**
+- List of all CRITICAL and HIGH risk flags, grouped by category
+- Each flag shows: category icon, signal name, affected user (masked if masking enabled), prompt snippet (first 100 chars, masked if enabled), and timestamp
+- Click-through to full prompt detail (if user has sufficient role)
+
+**Section 4 — AI Executive Summary & Recommendations (bottom)**
+- Rendered markdown narrative (same pattern as IA Assessment)
+- Prioritized recommendations list with department/user targeting
+- Download as Markdown report button
+
+**Section 5 — Trigger Controls (header area)**
+- "Run Assessment" button — triggers the on-demand sync + analysis + report pipeline
+- Status indicator showing last assessment date and whether one is currently running
+- Progress bar during execution (poll assessment status)
+
+**Privacy controls in UI:**
+- When data masking is enabled for a tenant, all user names and prompt text in the UI render as `••••••` or `[MASKED]`
+- Individual prompt drill-down is only available to Domain Admin / Global Admin roles
+- Raw prompt text is never shown in aggregate views — only quality scores and flag summaries
+
+---
+
+### API Routes
+
+**New file: `server/routes/copilot-prompt-intelligence.ts`**
+
+| Method | Path | Description | Role |
+|---|---|---|---|
+| `POST` | `/api/copilot-prompt-assessment` | Trigger on-demand sync + analysis + report | Domain Admin, Global Admin |
+| `GET` | `/api/copilot-prompt-assessment/latest` | Get the most recent completed assessment for a tenant | Domain Admin, Global Admin |
+| `GET` | `/api/copilot-prompt-assessment/history` | List past assessment runs | Domain Admin, Global Admin |
+| `GET` | `/api/copilot-prompt-assessment/:id` | Get a specific assessment report | Domain Admin, Global Admin |
+| `GET` | `/api/copilot-interactions` | List captured interactions (paginated, filterable) | Domain Admin, Global Admin |
+| `GET` | `/api/copilot-interactions/:id` | Get a single interaction with full prompt text | Domain Admin, Global Admin |
+
+All endpoints must enforce role checks. All endpoints that return user-identifiable data must check whether data masking is enabled for the tenant and decrypt/mask accordingly.
+
+---
+
+### Graph Permission Requirements
+
+| Permission | Type | Purpose |
+|---|---|---|
+| `CopilotInteraction.Read.All` | Application | Read all users' Copilot interaction history |
+
+This must be added to the existing Entra app registration used for Graph API calls (same registration that has `Sites.Read.All`, `User.Read.All`, etc.). Requires admin consent.
+
+---
+
+### Privacy & Access Control Summary
+
+| Concern | Mitigation |
+|---|---|
+| Raw prompt visibility | Domain Admin / Global Admin only; never shown in aggregate views |
+| PII in prompts | Category 3 analysis flags it; data masking encrypts `prompt_text` at rest |
+| Data masking integration | `copilot_interactions` added to `SENSITIVE_FIELDS` in `data-masking.ts`; fields `user_principal_name`, `user_display_name`, `prompt_text`, `recommendation` are encrypted when masking is enabled |
+| Data retention | Rolling 30-day window; `interaction_at` older than 30 days is deleted after each sync |
+| Service plan gating | Professional+ (consistent with Copilot Readiness Dashboard, BL-006) |
+
+---
+
+### Files to Create / Modify
+
+| Action | File | Purpose |
+|---|---|---|
+| Create | `server/services/copilot-interaction-sync.ts` | Graph API sync of Copilot interactions |
+| Create | `server/services/copilot-prompt-analyzer.ts` | 5-category analysis engine (deterministic + AI) |
+| Create | `server/services/copilot-prompt-assessment-service.ts` | On-demand aggregated report generator |
+| Create | `server/routes/copilot-prompt-intelligence.ts` | API routes (6 endpoints) |
+| Create | `client/src/pages/app/copilot-prompt-intelligence.tsx` | Dashboard UI |
+| Create | `migrations/NNNN_copilot_prompt_intelligence.sql` | Schema migration (two new tables + indexes) |
+| Modify | `shared/schema.ts` | Add `copilotInteractions` and `copilotPromptAssessments` table definitions |
+| Modify | `server/storage.ts` | Add CRUD methods for both new tables |
+| Modify | `server/services/data-masking.ts` | Add `copilot_interactions` to `SENSITIVE_FIELDS` |
+| Modify | `client/src/App.tsx` | Register new route |
+| Modify | `client/src/components/layout/app-shell.tsx` | Add nav item under appropriate section |
+
+---
+
+### Suggested Implementation Order
+
+1. **Schema + migration** — Define tables in `shared/schema.ts`, write the SQL migration, add storage methods
+2. **Data capture** — Build `copilot-interaction-sync.ts`, test against a real tenant with Copilot licenses
+3. **Deterministic pre-scan** — Build the regex/heuristic pass in `copilot-prompt-analyzer.ts`
+4. **AI analysis pass** — Add the batched GPT-4o analysis, wire up grounding documents
+5. **Assessment report** — Build the aggregation and executive summary pipeline
+6. **API routes** — Expose all endpoints with role checks
+7. **UI dashboard** — Build the heatmap, overview cards, risk panel, and executive summary
+8. **Masking integration** — Add to `SENSITIVE_FIELDS`, test encryption/decryption cycle
+9. **Cleanup routine** — Implement 30-day retention purge
+
+---
+
+### Acceptance Criteria
+
+- Running an assessment captures all user-initiated Copilot interactions from the last 30 days for all Copilot-licensed users in the tenant
+- System-generated interactions (Outlook auto-suggestions, meeting summaries, etc.) are excluded via `interactionType` filtering
+- Every captured prompt is scored on quality (GREAT/GOOD/WEAK/PROBLEMATIC) and risk (NONE through CRITICAL)
+- Prompts containing PII, injection attempts, or unsafe content are flagged with specific category and signal identifiers
+- Assessment report provides aggregated metrics at organization, department, and individual levels
+- AI-generated executive summary and prioritized recommendations are included in the report
+- Dashboard UI shows a heatmap visualization grouped by department → individual, with color-coded quality/risk indicators
+- Individual prompt drill-down is restricted to Domain Admin and Global Admin roles
+- When data masking is enabled for a tenant, prompt text, user names, and recommendations are encrypted at rest and display as masked in the UI
+- Interactions older than 30 days are automatically deleted after each sync
+- A Graph API failure for a single user does not abort the entire sync
+- AI analysis respects the organization's monthly token budget — if exceeded, deterministic analysis still runs
+- Feature is gated to Professional+ service plan
+- No new npm packages required for the backend; UI uses existing chart/visualization libraries already in the project (recharts, shadcn/ui)
+
+---
+
 ## Low Priority
 
 ### 🟢 BL-021: MGDC Integration (Enterprise Tier)
