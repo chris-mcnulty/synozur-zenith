@@ -3416,7 +3416,7 @@ export class DatabaseStorage implements IStorage {
         qualityScore: analysis.qualityScore,
         qualityTier: analysis.qualityTier,
         riskLevel: analysis.riskLevel,
-        flags: analysis.flags as any,
+        flags: analysis.flags as CopilotPromptFlag[],
         recommendation: analysis.recommendation,
         analyzedAt: new Date(),
       })
