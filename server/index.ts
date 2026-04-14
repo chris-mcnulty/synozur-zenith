@@ -752,6 +752,98 @@ async function ensureTenantConnectionsSchema() {
       CREATE INDEX IF NOT EXISTS idx_ia_assessment_runs_org ON ai_assessment_runs(org_id, created_at DESC);
     `);
 
+    // ── BL-037: Microsoft Planner integration columns (migration 0011) ────────
+    await client.query(`
+      ALTER TABLE platform_settings ADD COLUMN IF NOT EXISTS planner_plan_id   text;
+      ALTER TABLE platform_settings ADD COLUMN IF NOT EXISTS planner_bucket_id text;
+      ALTER TABLE support_tickets   ADD COLUMN IF NOT EXISTS planner_task_id   text;
+    `);
+
+    // ── BL-038: Copilot Prompt Intelligence tables (migration 0012) ───────────
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS copilot_interactions (
+        id                    VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+        tenant_connection_id  VARCHAR NOT NULL,
+        organization_id       VARCHAR NOT NULL,
+        graph_interaction_id  TEXT NOT NULL,
+        user_id               TEXT NOT NULL,
+        user_principal_name   TEXT NOT NULL,
+        user_display_name     TEXT,
+        user_department       TEXT,
+        app_class             TEXT NOT NULL,
+        prompt_text           TEXT NOT NULL,
+        interaction_at        TIMESTAMP NOT NULL,
+        quality_tier          TEXT,
+        quality_score         INTEGER,
+        risk_level            TEXT,
+        flags                 JSONB NOT NULL DEFAULT '[]'::jsonb,
+        recommendation        TEXT,
+        analyzed_at           TIMESTAMP,
+        captured_at           TIMESTAMP DEFAULT now(),
+        UNIQUE (tenant_connection_id, graph_interaction_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_ci_tenant     ON copilot_interactions (tenant_connection_id);
+      CREATE INDEX IF NOT EXISTS idx_ci_org        ON copilot_interactions (organization_id);
+      CREATE INDEX IF NOT EXISTS idx_ci_user       ON copilot_interactions (tenant_connection_id, user_id);
+      CREATE INDEX IF NOT EXISTS idx_ci_date       ON copilot_interactions (tenant_connection_id, interaction_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_ci_quality    ON copilot_interactions (tenant_connection_id, quality_tier);
+      CREATE INDEX IF NOT EXISTS idx_ci_risk       ON copilot_interactions (tenant_connection_id, risk_level);
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS copilot_prompt_assessments (
+        id                    VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+        organization_id       VARCHAR NOT NULL,
+        tenant_connection_id  VARCHAR NOT NULL,
+        status                TEXT NOT NULL DEFAULT 'PENDING',
+        triggered_by          VARCHAR,
+        interaction_count     INTEGER,
+        user_count            INTEGER,
+        date_range_start      TIMESTAMP,
+        date_range_end        TIMESTAMP,
+        org_summary           JSONB,
+        department_breakdown  JSONB,
+        user_breakdown        JSONB,
+        executive_summary     TEXT,
+        recommendations       JSONB,
+        model_used            TEXT,
+        tokens_used           INTEGER,
+        started_at            TIMESTAMP,
+        completed_at          TIMESTAMP,
+        error                 TEXT,
+        created_at            TIMESTAMP DEFAULT now()
+      );
+      CREATE INDEX IF NOT EXISTS idx_cpa_org        ON copilot_prompt_assessments (organization_id);
+      CREATE INDEX IF NOT EXISTS idx_cpa_tenant     ON copilot_prompt_assessments (tenant_connection_id);
+      CREATE INDEX IF NOT EXISTS idx_cpa_status     ON copilot_prompt_assessments (tenant_connection_id, status);
+      CREATE INDEX IF NOT EXISTS idx_cpa_created    ON copilot_prompt_assessments (created_at DESC);
+    `);
+
+    // ── BL-038 addendum: Copilot Sync Runs (migration 0013) ──────────────────
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS copilot_sync_runs (
+        id                    VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+        tenant_connection_id  VARCHAR NOT NULL,
+        organization_id       VARCHAR NOT NULL,
+        status                TEXT NOT NULL DEFAULT 'RUNNING',
+        triggered_by          VARCHAR,
+        users_scanned         INTEGER,
+        interactions_captured INTEGER,
+        interactions_skipped  INTEGER,
+        interactions_purged   INTEGER,
+        error_count           INTEGER,
+        errors                JSONB,
+        started_at            TIMESTAMP,
+        completed_at          TIMESTAMP,
+        error                 TEXT,
+        created_at            TIMESTAMP DEFAULT now()
+      );
+      CREATE INDEX IF NOT EXISTS idx_copilot_sync_runs_tenant  ON copilot_sync_runs (tenant_connection_id);
+      CREATE INDEX IF NOT EXISTS idx_copilot_sync_runs_org     ON copilot_sync_runs (organization_id);
+      CREATE INDEX IF NOT EXISTS idx_copilot_sync_runs_status  ON copilot_sync_runs (tenant_connection_id, status);
+      CREATE INDEX IF NOT EXISTS idx_copilot_sync_runs_created ON copilot_sync_runs (created_at DESC);
+    `);
+
     log('Schema migration ensureTenantConnectionsSchema completed');
   } catch (err) {
     console.error('[Migration] Failed to ensure tenant_connections schema:', err);
