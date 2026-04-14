@@ -120,6 +120,9 @@ async function getCopilotLicensedUsers(
   return Array.from(byUser.values()).slice(0, MAX_USERS_PER_SYNC);
 }
 
+/** Maximum pages to retrieve per user to prevent runaway paging. */
+const MAX_PAGES_PER_USER = 50; // 50 × 100 = 5 000 interactions max per user
+
 async function fetchInteractionsForUser(
   token: string,
   userId: string,
@@ -128,26 +131,27 @@ async function fetchInteractionsForUser(
   const interactions: GraphInteraction[] = [];
   const sinceMs = Date.parse(sinceIso);
 
-  // Use the v1.0 interactionHistory endpoint (GA since late 2025).
-  // We omit $filter because Graph's filterTransformer rejects millisecond-
-  // precision timestamps and the behaviour varies across tenants. Instead we
-  // page through results (newest-first) and stop early once we fall outside
-  // the retention window — client-side enforcement is the belt-and-braces
-  // guarantee regardless.
+  // v1.0 GA endpoint (correct path as of late 2025). The sinceIso argument
+  // must have no sub-second precision — the OData filterTransformer on this
+  // endpoint rejects millisecond timestamps with "Missing createdDateTime value".
+  // Client-side filtering below is belt-and-braces; the server-side $filter is
+  // the critical optimisation that prevents paging through a user's entire history.
   let url: string | null =
     `https://graph.microsoft.com/v1.0/copilot/users/${encodeURIComponent(userId)}` +
-    `/interactionHistory/getAllEnterpriseInteractions?$top=100`;
+    `/interactionHistory/getAllEnterpriseInteractions` +
+    `?$filter=${encodeURIComponent(`createdDateTime gt ${sinceIso}`)}&$top=100`;
 
-  while (url) {
+  let pages = 0;
+  while (url && pages < MAX_PAGES_PER_USER) {
+    pages++;
     const res = await graphFetchWithRetry(url, {
       headers: { Authorization: `Bearer ${token}` },
     });
 
     if (!res.ok) {
-      // 403 or 404 for a specific user is logged and skipped by the caller.
       const bodyText = await res.text().catch(() => "");
       const error: Error & { status?: number } = new Error(
-        `Graph ${res.status} for user ${userId}: ${bodyText.substring(0, 200)}`,
+        `Graph ${res.status} for user ${userId}: ${bodyText.substring(0, 300)}`,
       );
       error.status = res.status;
       throw error;
@@ -160,6 +164,8 @@ async function fetchInteractionsForUser(
 
     for (const item of data.value ?? []) {
       if (!item?.id) continue;
+      // Client-side window guard — belt-and-braces in case the server-side
+      // filter returns boundary items slightly outside the window.
       const createdMs = item.createdDateTime ? Date.parse(item.createdDateTime) : 0;
       if (!createdMs || createdMs < sinceMs) continue;
       interactions.push(item);
@@ -322,7 +328,10 @@ export async function syncCopilotInteractions(
   }
 
   const users = await getCopilotLicensedUsers(tenantConnectionId);
-  const sinceIso = new Date(Date.now() - RETENTION_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  // OData filterTransformer rejects millisecond-precision timestamps — truncate
+  // to whole seconds before embedding in the $filter clause.
+  const sinceDate = new Date(Date.now() - RETENTION_DAYS * 24 * 60 * 60 * 1000);
+  const sinceIso = sinceDate.toISOString().replace(/\.\d{3}Z$/, "Z");
 
   for (const user of users) {
     summary.usersScanned++;

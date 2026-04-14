@@ -3704,7 +3704,7 @@ export class DatabaseStorage implements IStorage {
         and(
           eq(copilotSyncRuns.tenantConnectionId, tenantConnectionId),
           eq(copilotSyncRuns.status, 'RUNNING'),
-          lt(copilotSyncRuns.startedAt, sql`now() - interval '2 hours'`),
+          lt(copilotSyncRuns.startedAt, sql`now() - interval '30 minutes'`),
         ),
       );
   }
