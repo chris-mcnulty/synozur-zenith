@@ -2,7 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { storage } from "../storage";
 import { insertWorkspaceSchema, insertProvisioningRequestSchema, type ServicePlanTier, ZENITH_ROLES } from "@shared/schema";
-import { fetchSharePointSites, fetchSiteUsageReport, fetchSiteDriveOwner, fetchSiteAnalytics, fetchSiteGroupOwners, fetchSiteCollectionAdmins, getAppToken, writeSitePropertyBag, requestSiteReindex, fetchSitePropertyBag, fetchSensitivityLabels, fetchRetentionLabels, fetchHubSites, fetchSiteHubAssociation, fetchHubSitesViaSearch, applySensitivityLabelToSite, removeSensitivityLabelFromSite, joinHubSite, leaveHubSite, fetchSiteLockState, fetchSiteArchiveStatus, batchToggleNoScript, fetchSiteDocumentLibraries, enumerateSiteDocumentLibraries, fetchLibraryDetails, fetchLibraryFolderDepth, fetchLibraryViews, fetchLibraryItemFillRates, fetchSiteTelemetry, fetchContentTypes, createSharePointSite, createM365Group, createTeam, assignSensitivityLabelToGroup, resolveOwnerIds, archiveSite, unarchiveSite } from "../services/graph";
+import { fetchSharePointSites, fetchSiteUsageReport, fetchSiteDriveOwner, fetchSiteAnalytics, fetchSiteGroupOwners, fetchSiteCollectionAdmins, getAppToken, writeSitePropertyBag, requestSiteReindex, fetchSitePropertyBag, fetchSensitivityLabels, fetchRetentionLabels, fetchHubSites, fetchSiteHubAssociation, fetchHubSitesViaSearch, applySensitivityLabelToSite, removeSensitivityLabelFromSite, joinHubSite, leaveHubSite, fetchSiteLockState, fetchSiteArchiveStatus, batchToggleNoScript, fetchSiteDocumentLibraries, enumerateSiteDocumentLibraries, fetchLibraryDetails, fetchLibraryFolderDepth, fetchLibraryViews, fetchLibraryItemFillRates, fetchSiteTelemetry, fetchContentTypes, createSharePointSite, createM365Group, createTeam, assignSensitivityLabelToGroup, resolveOwnerIds, archiveSite, unarchiveSite, graphFetchWithRetry } from "../services/graph";
 import { getPlanFeatures, requireFeature } from "../services/feature-gate";
 import { refreshDelegatedToken, getDelegatedSpoToken } from "../routes-entra";
 import { requireAuth, requireRole, requirePermission, type AuthenticatedRequest } from "../middleware/rbac";
@@ -2689,7 +2689,9 @@ router.post("/api/admin/tenants/:id/sync-ia", requireRole(ZENITH_ROLES.TENANT_AD
       errors: 0,
     };
 
-    const BATCH_SIZE = 5;
+    // 3 concurrent workspaces keeps per-tenant Graph request rate well below
+    // throttling limits on large tenants (88+ sites produced heavy 429s at 5).
+    const BATCH_SIZE = 3;
     for (let i = 0; i < workspaceIds.length; i += BATCH_SIZE) {
       const batch = workspaceIds.slice(i, i + BATCH_SIZE);
       await Promise.allSettled(batch.map(async (wsId) => {
@@ -2704,7 +2706,7 @@ router.post("/api/admin/tenants/:id/sync-ia", requireRole(ZENITH_ROLES.TENANT_AD
           let pageUrl: string | null =
             `https://graph.microsoft.com/v1.0/sites/${graphSiteId}/columns?$select=id,name&$top=200`;
           while (pageUrl) {
-            const sres = await fetch(pageUrl, { headers: { Authorization: `Bearer ${token}` } });
+            const sres = await graphFetchWithRetry(pageUrl, { headers: { Authorization: `Bearer ${token}` } });
             if (!sres.ok) break;
             const sdata = await sres.json();
             for (const sc of sdata.value || []) {
@@ -2724,7 +2726,7 @@ router.post("/api/admin/tenants/:id/sync-ia", requireRole(ZENITH_ROLES.TENANT_AD
           let drivesNextLink: string | null =
             `https://graph.microsoft.com/v1.0/sites/${graphSiteId}/drives?$select=id,name,webUrl&$top=100`;
           while (drivesNextLink) {
-            const drivesRes = await fetch(drivesNextLink, {
+            const drivesRes = await graphFetchWithRetry(drivesNextLink, {
               headers: { Authorization: `Bearer ${token}` },
             });
             if (!drivesRes.ok) {
@@ -2734,7 +2736,7 @@ router.post("/api/admin/tenants/:id/sync-ia", requireRole(ZENITH_ROLES.TENANT_AD
             const drivesData = await drivesRes.json();
             for (const drive of drivesData.value || []) {
               try {
-                const listRes = await fetch(
+                const listRes = await graphFetchWithRetry(
                   `https://graph.microsoft.com/v1.0/drives/${drive.id}/list?$select=id`,
                   { headers: { Authorization: `Bearer ${token}` } },
                 );
