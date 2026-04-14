@@ -123,61 +123,45 @@ async function getCopilotLicensedUsers(
 /** Maximum pages to retrieve per user when falling back to unfiltered paging. */
 const MAX_PAGES_PER_USER = 10; // 10 × 100 = 1 000 interactions max per user (fallback only)
 
-/**
- * Build the initial URL for the interactionHistory endpoint.
- *
- * IMPORTANT: The Graph OData filterTransformer for this endpoint does NOT
- * accept URL-encoded spaces in the $filter value. URLSearchParams / encodeURIComponent
- * produce "+" or "%20" for spaces, which causes "Missing createdDateTime value" 400
- * errors. The filter must be appended as a raw string so literal spaces are sent,
- * which Node.js fetch encodes correctly as %20 at the transport layer.
- *
- * Verified working pattern from reference implementation (Sentry codebase):
- *   /beta endpoint, $top first, then &$filter=createdDateTime gt {iso}
- *
- * Uses /beta — the v1.0 GA endpoint has a stricter OData parser.
- */
-function buildInteractionUrl(userId: string, sinceIso: string | null): string {
-  const base =
-    `https://graph.microsoft.com/beta/copilot/users/${encodeURIComponent(userId)}` +
-    `/interactionHistory/getAllEnterpriseInteractions`;
-  const filter = sinceIso ? `&$filter=createdDateTime gt ${sinceIso}` : "";
-  return `${base}?$top=100${filter}`;
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/**
+ * Fetch Copilot interactions for a single user from the Graph beta endpoint.
+ *
+ * The $filter=createdDateTime OData parameter is NOT used. Despite being
+ * documented as supported, the Graph filterTransformer consistently rejects it
+ * with "Missing 'createdDateTime' value" on this tenant — tested across v1.0/
+ * beta, URLSearchParams/raw strings, with/without milliseconds, open/closed
+ * ranges. The reference implementation (Sentry) also encounters this but relies
+ * on unfiltered paging with client-side date windowing and early-stop.
+ *
+ * Strategy: page through results with $top=100, apply client-side date filter
+ * via sinceMs, and early-stop when a page returns zero new (post-watermark)
+ * interactions. Rate-limit with 100ms delay between pages.
+ */
 async function fetchInteractionsForUser(
   token: string,
   userId: string,
-  /** ISO 8601 lower bound; null = no server-side filter (page-capped fallback) */
-  sinceIso: string | null,
+  /** Epoch ms lower bound for client-side date filtering; 0 = accept all */
+  sinceMs: number,
 ): Promise<GraphInteraction[]> {
   const interactions: GraphInteraction[] = [];
-  const sinceMs = sinceIso ? Date.parse(sinceIso) : 0;
   const headers = { Authorization: `Bearer ${token}` };
 
-  let url: string | null = buildInteractionUrl(userId, sinceIso);
-  let useFilter = sinceIso !== null;
+  let url: string | null =
+    `https://graph.microsoft.com/beta/copilot/users/${encodeURIComponent(userId)}` +
+    `/interactionHistory/getAllEnterpriseInteractions?$top=100`;
 
   let pages = 0;
-  while (url) {
+  while (url && pages < MAX_PAGES_PER_USER) {
+    if (pages > 0) await delay(100);
     pages++;
+
     const res = await graphFetchWithRetry(url, { headers });
 
     if (!res.ok) {
-      if (res.status === 400 && useFilter) {
-        // $filter rejected — fall back to unfiltered paging capped at MAX_PAGES_PER_USER.
-        const errText = await res.text().catch(() => "");
-        console.warn(
-          `[copilot-interaction-sync] user=${userId} $filter rejected (${errText.substring(0, 140)}); ` +
-          `falling back to unfiltered paging (max ${MAX_PAGES_PER_USER} pages)`,
-        );
-        useFilter = false;
-        pages = 0;
-        url = buildInteractionUrl(userId, null);
-        continue;
-      }
-
-      // Non-400 / non-recoverable — propagate to caller
       const bodyText = await res.text().catch(() => "");
       const error: Error & { status?: number } = new Error(
         `Graph ${res.status} for user ${userId}: ${bodyText.substring(0, 300)}`,
@@ -191,6 +175,7 @@ async function fetchInteractionsForUser(
       "@odata.nextLink"?: string;
     };
 
+    let newOnThisPage = 0;
     for (const item of data.value ?? []) {
       if (!item?.id) continue;
       if (sinceMs) {
@@ -198,11 +183,16 @@ async function fetchInteractionsForUser(
         if (!createdMs || createdMs <= sinceMs) continue;
       }
       interactions.push(item);
+      newOnThisPage++;
     }
 
-    const next = data["@odata.nextLink"] ?? null;
-    // Cap pages when in unfiltered fallback mode to prevent runaway paging.
-    url = (!useFilter && pages >= MAX_PAGES_PER_USER) ? null : next;
+    // Early-stop: if an entire page yielded zero new interactions (all older
+    // than our watermark), there's no point paging further.
+    if (newOnThisPage === 0 && (data.value?.length ?? 0) > 0) {
+      break;
+    }
+
+    url = data["@odata.nextLink"] ?? null;
   }
 
   return interactions;
@@ -376,10 +366,10 @@ export async function syncCopilotInteractions(
     const effectiveSince = perUserLastDate && perUserLastDate > retentionCutoff
       ? perUserLastDate
       : retentionCutoff;
-    const sinceIso = effectiveSince.toISOString();
+    const sinceMs = effectiveSince.getTime();
 
     try {
-      interactions = await fetchInteractionsForUser(token, user.userId, sinceIso);
+      interactions = await fetchInteractionsForUser(token, user.userId, sinceMs);
     } catch (err: unknown) {
       const status = (err as { status?: number })?.status;
       // 403/404 on a specific user → log and skip. The Copilot licensed user
@@ -436,6 +426,9 @@ export async function syncCopilotInteractions(
         });
       }
     }
+
+    // Delay between users to avoid 429 rate limits from Graph
+    if (summary.usersScanned < users.length) await delay(300);
   }
 
   try {
