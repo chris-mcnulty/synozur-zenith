@@ -166,6 +166,33 @@ export async function listAssessmentsForOrg(
   };
 }
 
+/**
+ * List assessments scoped to a single tenant connection (no org filter).
+ * Used by platform owners who may not have an active organization context.
+ */
+export async function listAssessmentsByTenant(
+  tenantConnectionId: string,
+  limit = 20,
+  offset = 0,
+): Promise<{ rows: CopilotPromptAssessmentRow[]; total: number }> {
+  const [countRes, dataRes] = await Promise.all([
+    pool.query<{ total: string }>(
+      `SELECT COUNT(*)::text AS total FROM copilot_prompt_assessments WHERE tenant_connection_id = $1`,
+      [tenantConnectionId],
+    ),
+    pool.query(
+      `SELECT * FROM copilot_prompt_assessments WHERE tenant_connection_id = $1
+       ORDER BY created_at DESC LIMIT $2 OFFSET $3`,
+      [tenantConnectionId, limit, offset],
+    ),
+  ]);
+
+  return {
+    rows: (dataRes.rows as Record<string, unknown>[]).map(rowToAssessment),
+    total: parseInt(countRes.rows[0].total, 10) || 0,
+  };
+}
+
 async function createAssessment(
   organizationId: string,
   tenantConnectionId: string,
@@ -566,7 +593,19 @@ export async function runCopilotPromptAssessment(
   organizationId: string,
   triggeredBy: string | null,
 ): Promise<string> {
-  // Enforce single concurrency
+  // Enforce single concurrency. Any RUNNING assessment that is older than
+  // 2 hours is considered stale (process likely crashed) and is marked FAILED
+  // so a fresh run can proceed.
+  await pool.query(
+    `UPDATE copilot_prompt_assessments
+     SET status = 'FAILED', error = 'Assessment timed out (stale RUNNING state)',
+         completed_at = now()
+     WHERE tenant_connection_id = $1
+       AND status = 'RUNNING'
+       AND started_at < now() - interval '2 hours'`,
+    [tenantConnectionId],
+  );
+
   const { rows: running } = await pool.query(
     `SELECT id FROM copilot_prompt_assessments
      WHERE tenant_connection_id = $1 AND status = 'RUNNING'

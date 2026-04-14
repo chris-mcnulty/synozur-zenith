@@ -15,7 +15,7 @@
  *          — poll a specific assessment run
  *
  * Feature-gated to: copilotPromptIntelligence (Professional+)
- * Minimum role:     operator
+ * Minimum role:     governance_admin or tenant_admin
  */
 
 import { Router } from "express";
@@ -31,6 +31,7 @@ import {
   getAssessmentById,
   getLatestAssessmentForTenant,
   listAssessmentsForOrg,
+  listAssessmentsByTenant,
 } from "../services/copilot-prompt-intelligence-service";
 import { getInteractionsForTenant } from "../services/copilot-interaction-sync";
 
@@ -67,7 +68,7 @@ async function assertTenantAccess(
 router.post(
   "/api/copilot-prompt-intelligence/sync",
   requireAuth(),
-  requireRole("operator"),
+  requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN),
   requireFeature("copilotPromptIntelligence"),
   async (req: AuthenticatedRequest, res) => {
     const body = z
@@ -109,7 +110,7 @@ router.post(
 router.post(
   "/api/copilot-prompt-intelligence/assess",
   requireAuth(),
-  requireRole("operator"),
+  requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN),
   requireFeature("copilotPromptIntelligence"),
   async (req: AuthenticatedRequest, res) => {
     const body = z
@@ -150,7 +151,7 @@ router.post(
 router.get(
   "/api/copilot-prompt-intelligence/interactions",
   requireAuth(),
-  requireRole("operator"),
+  requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN),
   requireFeature("copilotPromptIntelligence"),
   async (req: AuthenticatedRequest, res) => {
     const tenantConnectionId =
@@ -185,7 +186,7 @@ router.get(
 router.get(
   "/api/copilot-prompt-intelligence/assessments/latest",
   requireAuth(),
-  requireRole("operator"),
+  requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN),
   requireFeature("copilotPromptIntelligence"),
   async (req: AuthenticatedRequest, res) => {
     const tenantConnectionId =
@@ -215,11 +216,12 @@ router.get(
 router.get(
   "/api/copilot-prompt-intelligence/assessments",
   requireAuth(),
-  requireRole("operator"),
+  requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN),
   requireFeature("copilotPromptIntelligence"),
   async (req: AuthenticatedRequest, res) => {
     const orgId = getActiveOrgId(req);
-    if (!orgId && req.user?.role !== ZENITH_ROLES.PLATFORM_OWNER) {
+    const isPlatformOwner = req.user?.role === ZENITH_ROLES.PLATFORM_OWNER;
+    if (!orgId && !isPlatformOwner) {
       return res.status(400).json({ message: "No active organization" });
     }
 
@@ -227,6 +229,12 @@ router.get(
       typeof req.query.tenantConnectionId === "string"
         ? req.query.tenantConnectionId
         : undefined;
+
+    // Platform owners must supply either an orgId (via active org context) or
+    // an explicit tenantConnectionId to scope the listing.
+    if (!orgId && isPlatformOwner && !tenantConnectionId) {
+      return res.status(400).json({ message: "tenantConnectionId query param required for platform owners without an active organization context" });
+    }
 
     if (tenantConnectionId) {
       const access = await assertTenantAccess(req, tenantConnectionId);
@@ -236,8 +244,20 @@ router.get(
     const limit = Math.min(parseInt(String(req.query.limit ?? "20"), 10), 100);
     const offset = parseInt(String(req.query.offset ?? "0"), 10);
 
+    // Platform owners without an active org scope use the tenantConnectionId
+    // as the primary filter. If neither orgId nor tenantConnectionId is
+    // supplied, the earlier guard already returned 400.
+    if (!orgId && tenantConnectionId) {
+      const { rows, total } = await listAssessmentsByTenant(
+        tenantConnectionId,
+        limit,
+        offset,
+      );
+      return res.json({ rows, total, limit, offset });
+    }
+
     const { rows, total } = await listAssessmentsForOrg(
-      orgId ?? "",
+      orgId!,
       tenantConnectionId,
       limit,
       offset,
@@ -254,7 +274,7 @@ router.get(
 router.get(
   "/api/copilot-prompt-intelligence/assessments/:assessmentId",
   requireAuth(),
-  requireRole("operator"),
+  requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN),
   requireFeature("copilotPromptIntelligence"),
   async (req: AuthenticatedRequest, res) => {
     const assessment = await getAssessmentById(req.params.assessmentId);

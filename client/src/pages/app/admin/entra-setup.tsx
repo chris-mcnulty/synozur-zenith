@@ -52,6 +52,7 @@ const GRAPH_PERMISSIONS = [
   { name: "InformationProtectionPolicy.Read.All", description: "Purview sensitivity label sync" },
   { name: "RecordsManagement.Read.All", description: "Purview retention label sync (requires M365 E5 Compliance)" },
   { name: "AuditLog.Read.All", description: "License inventory — user sign-in activity (optional)" },
+  { name: "CopilotInteraction.Read.All", description: "Copilot Prompt Intelligence (BL-038) — read M365 Copilot user interactions (Professional+ plan)" },
 ];
 
 type CheckResult = { step: string; status: "pass" | "fail" | "warn"; message: string };

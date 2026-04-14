@@ -34,41 +34,95 @@ interface RiskSignal {
   detail?: string;
 }
 
-/** Content Safety — PII, credentials, explicit content */
+/**
+ * Content Safety — harassment, hate speech, extremism, explicit content,
+ * self-harm, and illicit-behavior requests.
+ * These align with Category 1 of the 5-category quality & safety framework.
+ */
 const CONTENT_SAFETY_SIGNALS: RiskSignal[] = [
+  {
+    pattern: /\b(?:kill|murder|assault|rape|torture|harm|hurt|attack)\b.*\b(?:person|people|user|them|him|her|you)\b/i,
+    signal: "HARASSMENT_OR_VIOLENCE",
+    severity: "CRITICAL",
+    category: "CONTENT_SAFETY",
+    detail: "Prompt contains language indicative of threats or harassment.",
+  },
+  {
+    pattern: /\b(?:hate|racist|racism|nazi|white supremac|ethnic cleansing|slur|n-word)\b/i,
+    signal: "HATE_SPEECH",
+    severity: "CRITICAL",
+    category: "CONTENT_SAFETY",
+    detail: "Prompt contains hate speech or discriminatory language.",
+  },
+  {
+    pattern: /\b(?:terrorist|extremist|radicali[sz]|jihad|isis|al-qaeda|bomb-making|explosive device)\b/i,
+    signal: "EXTREMISM",
+    severity: "CRITICAL",
+    category: "CONTENT_SAFETY",
+    detail: "Prompt references extremist or terrorist content.",
+  },
+  {
+    pattern: /\b(?:suicide|self[_\s-]?harm|cut myself|overdose|end my life|kill myself)\b/i,
+    signal: "SELF_HARM",
+    severity: "CRITICAL",
+    category: "CONTENT_SAFETY",
+    detail: "Prompt contains self-harm or suicidal ideation language.",
+  },
+  {
+    pattern: /\b(?:pornograph|sexually explicit|nude|explicit (?:image|video|content)|nsfw)\b/i,
+    signal: "EXPLICIT_CONTENT",
+    severity: "HIGH",
+    category: "CONTENT_SAFETY",
+    detail: "Prompt requests or references sexually explicit material.",
+  },
+  {
+    pattern: /\b(?:drug deal|buy drugs|sell drugs|how to get (?:cocaine|heroin|meth)|illicit substance)\b/i,
+    signal: "ILLICIT_BEHAVIOR",
+    severity: "HIGH",
+    category: "CONTENT_SAFETY",
+    detail: "Prompt references illicit drug activity.",
+  },
+];
+
+/**
+ * Sensitive Data Exposure — PII, credentials, payment card data, and
+ * other information that must not be shared with AI systems.
+ * These align with Category 3 of the 5-category framework.
+ */
+const SENSITIVE_DATA_EXPOSURE_SIGNALS: RiskSignal[] = [
   {
     pattern: /\b(?:ssn|social security|tax id|sin\b)/i,
     signal: "SSN_OR_TAX_ID",
     severity: "CRITICAL",
-    category: "CONTENT_SAFETY",
+    category: "SENSITIVE_DATA",
     detail: "Prompt appears to reference a government identifier.",
   },
   {
     pattern: /\b(?:password|passwd|secret|api[_\s-]?key|access[_\s-]?token|bearer)\b/i,
     signal: "CREDENTIAL_EXPOSURE",
     severity: "HIGH",
-    category: "CONTENT_SAFETY",
+    category: "SENSITIVE_DATA",
     detail: "Prompt references credential-adjacent terms.",
   },
   {
     pattern: /\b(?:credit card|card number|cvv|expir(?:y|ation)|account number)\b/i,
     signal: "FINANCIAL_PII",
     severity: "HIGH",
-    category: "CONTENT_SAFETY",
+    category: "SENSITIVE_DATA",
     detail: "Prompt may contain payment card information.",
   },
   {
     pattern: /\b\d{3}[-.\s]?\d{2}[-.\s]?\d{4}\b/,
     signal: "SSN_PATTERN",
     severity: "CRITICAL",
-    category: "CONTENT_SAFETY",
+    category: "SENSITIVE_DATA",
     detail: "Prompt contains a string matching SSN format.",
   },
   {
     pattern: /\b(?:4[0-9]{12}(?:[0-9]{3})?|5[1-5][0-9]{14}|3[47][0-9]{13})\b/,
     signal: "CREDIT_CARD_PATTERN",
     severity: "HIGH",
-    category: "CONTENT_SAFETY",
+    category: "SENSITIVE_DATA",
     detail: "Prompt contains a string matching a credit card number pattern.",
   },
 ];
@@ -269,16 +323,19 @@ function buildRecommendation(
   const high = flags.find(f => f.severity === "HIGH");
 
   if (critical?.category === "CONTENT_SAFETY") {
-    return "Remove personally identifiable or credential information from the prompt before resubmitting.";
+    return "Prompt contains policy-violating language (harassment, hate speech, or self-harm). Escalate per your Acceptable Use Policy.";
   }
   if (critical?.category === "MISUSE") {
     return "Prompt contains policy-violation language. Retrain the user on acceptable Copilot use.";
   }
+  if (critical?.category === "SENSITIVE_DATA") {
+    return "Remove personally identifiable or credential information from the prompt before resubmitting.";
+  }
   if (high?.category === "SENSITIVE_DATA") {
-    return "Avoid including sensitive business data (compensation, health records, legal-privilege terms) in Copilot prompts.";
+    return "Avoid including sensitive business data (credentials, compensation, health records, legal-privilege terms) in Copilot prompts.";
   }
   if (high?.category === "CONTENT_SAFETY") {
-    return "Remove credential or financial information from the prompt.";
+    return "Prompt contains inappropriate content. Review user activity and reinforce Acceptable Use Policy.";
   }
 
   // Quality-only issues
@@ -313,6 +370,7 @@ export function analyzePrompt(promptText: string): PromptAnalysisResult {
   for (const sig of [
     ...CONTENT_SAFETY_SIGNALS,
     ...MISUSE_SIGNALS,
+    ...SENSITIVE_DATA_EXPOSURE_SIGNALS,
     ...SENSITIVE_DATA_SIGNALS,
     ...FEASIBILITY_SIGNALS,
   ]) {

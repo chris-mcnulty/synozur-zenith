@@ -392,13 +392,18 @@ export async function getUnanalyzedInteractionIds(
   return rows.map(r => r.id);
 }
 
-/** Return all interactions (optionally decrypted) for a tenant. */
+/** Return interactions for a tenant, optionally including raw prompt text.
+ * Prompt text is omitted by default to avoid inadvertent PII exposure in
+ * API responses. Pass `includePromptText: true` only from callers that have
+ * verified the caller's authorization to see raw prompt content.
+ */
 export async function getInteractionsForTenant(
   tenantConnectionId: string,
   options: { limit?: number; offset?: number; includePromptText?: boolean } = {},
 ): Promise<{ rows: Array<Record<string, any>>; total: number }> {
   const limit = Math.min(options.limit ?? 200, 1000);
   const offset = options.offset ?? 0;
+  const includePromptText = options.includePromptText === true;
 
   const countRes = await pool.query<{ total: string }>(
     `SELECT COUNT(*)::text AS total
@@ -407,10 +412,13 @@ export async function getInteractionsForTenant(
     [tenantConnectionId],
   );
 
+  // Build the column list — prompt_text is only included when explicitly
+  // requested to prevent accidental PII leakage in list endpoints.
+  const promptCol = includePromptText ? "prompt_text," : "";
   const { rows } = await pool.query(
     `SELECT id, tenant_connection_id, organization_id, graph_interaction_id,
             user_id, user_principal_name, user_display_name, user_department,
-            app_class, prompt_text, interaction_at,
+            app_class, ${promptCol} interaction_at,
             quality_tier, quality_score, risk_level, flags, recommendation,
             analyzed_at, captured_at
      FROM copilot_interactions
