@@ -1739,7 +1739,7 @@ export const copilotInteractions = pgTable("copilot_interactions", {
   qualityTier: text("quality_tier"),
   qualityScore: integer("quality_score"),
   riskLevel: text("risk_level"),
-  flags: jsonb("flags").$type<CopilotPromptFlag[]>().default(sql`'[]'::jsonb`),
+  flags: jsonb("flags").$type<CopilotPromptFlag[]>().notNull().default(sql`'[]'::jsonb`),
   recommendation: text("recommendation"),
   analyzedAt: timestamp("analyzed_at"),
   capturedAt: timestamp("captured_at").defaultNow(),
