@@ -716,14 +716,14 @@ export default function CopilotPromptIntelligencePage() {
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
 
   // Latest completed assessment
-  const { data: latestAssessment, isLoading: latestLoading, refetch: refetchLatest } = useQuery<Assessment>({
+  const { data: latestAssessment, isLoading: latestLoading, refetch: refetchLatest } = useQuery<Assessment | null>({
     queryKey: ["/api/copilot-prompt-intelligence/assessments/latest", tenantConnectionId],
     queryFn: async () => {
       const res = await fetch(
         `/api/copilot-prompt-intelligence/assessments/latest?tenantConnectionId=${encodeURIComponent(tenantConnectionId)}`,
         { credentials: "include" },
       );
-      if (res.status === 404) return null as unknown as Assessment;
+      if (res.status === 404) return null;
       if (!res.ok) throw new Error(await res.text());
       return res.json();
     },
