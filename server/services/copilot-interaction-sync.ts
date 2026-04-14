@@ -141,12 +141,18 @@ function delay(ms: number): Promise<void> {
  * via sinceMs, and early-stop when a page returns zero new (post-watermark)
  * interactions. Rate-limit with 100ms delay between pages.
  */
+interface FetchResult {
+  interactions: GraphInteraction[];
+  /** true when all pages were fetched; false if 429/page-cap interrupted paging */
+  complete: boolean;
+}
+
 async function fetchInteractionsForUser(
   token: string,
   userId: string,
   /** Epoch ms lower bound for client-side date filtering; 0 = accept all */
   sinceMs: number,
-): Promise<GraphInteraction[]> {
+): Promise<FetchResult> {
   const interactions: GraphInteraction[] = [];
   const headers: Record<string, string> = { Authorization: `Bearer ${token}` };
 
@@ -155,14 +161,16 @@ async function fetchInteractionsForUser(
     `/interactionHistory/getAllEnterpriseInteractions?$top=100`;
 
   let pages = 0;
+  let complete = true;
+
   while (url && pages < MAX_PAGES_PER_USER) {
     if (pages > 0) await delay(100);
     pages++;
 
     // Plain fetch — NOT graphFetchWithRetry. This endpoint has tight per-user
     // rate limits. Retrying 429s with exponential backoff hammers the already-
-    // throttled endpoint and blocks subsequent users. On 429, we break and let
-    // the per-user watermark handle it on the next scheduled sync.
+    // throttled endpoint and blocks subsequent users. On 429, we mark partial
+    // and discard results so the watermark stays unchanged for next sync.
     const res: Response = await fetch(url, { headers });
 
     if (res.status === 403 || res.status === 404) {
@@ -175,7 +183,8 @@ async function fetchInteractionsForUser(
     }
 
     if (res.status === 429) {
-      console.warn(`[copilot-interaction-sync] user=${userId} 429 throttled on page ${pages}; will resume next sync`);
+      console.warn(`[copilot-interaction-sync] user=${userId} 429 throttled on page ${pages}; will retry next sync`);
+      complete = false;
       break;
     }
 
@@ -211,9 +220,14 @@ async function fetchInteractionsForUser(
     }
 
     url = data["@odata.nextLink"] ?? null;
+
+    // If page cap reached while more pages exist, mark as partial
+    if (pages >= MAX_PAGES_PER_USER && url) {
+      complete = false;
+    }
   }
 
-  return interactions;
+  return { interactions, complete };
 }
 
 type InteractionEncryptionContext =
@@ -372,7 +386,7 @@ export async function syncCopilotInteractions(
 
   for (const user of users) {
     summary.usersScanned++;
-    let interactions: GraphInteraction[];
+    let fetchResult: FetchResult;
 
     // Per-user incremental watermark: use the latest interaction already stored
     // for this user, clamped to the retention window. This avoids re-fetching
@@ -387,12 +401,9 @@ export async function syncCopilotInteractions(
     const sinceMs = effectiveSince.getTime();
 
     try {
-      interactions = await fetchInteractionsForUser(token, user.userId, sinceMs);
+      fetchResult = await fetchInteractionsForUser(token, user.userId, sinceMs);
     } catch (err: unknown) {
       const status = (err as { status?: number })?.status;
-      // 403/404 on a specific user → log and skip. The Copilot licensed user
-      // may no longer have an active Copilot session or the beta endpoint may
-      // not be exposed for this user class.
       const errMsg = err instanceof Error ? err.message : String(err);
       summary.errors.push({
         userId: user.userId,
@@ -402,14 +413,21 @@ export async function syncCopilotInteractions(
       console.warn(
         `[copilot-interaction-sync] user=${user.userId} status=${status ?? "?"} error=${errMsg.substring(0, 200)}`,
       );
-      if (status && status >= 500) {
-        // A 5xx on a single user can indicate service-wide issues but we
-        // still continue — per-user isolation is a spec requirement.
-      }
       continue;
     }
 
-    for (const raw of interactions) {
+    // If fetch was interrupted (429 / page cap), discard results to prevent the
+    // watermark from advancing past un-fetched pages. The next sync will retry
+    // from the same watermark and cover the full history.
+    if (!fetchResult.complete) {
+      console.warn(
+        `[copilot-interaction-sync] user=${user.userId} partial fetch (${fetchResult.interactions.length} items); ` +
+        `discarding to preserve watermark`,
+      );
+      continue;
+    }
+
+    for (const raw of fetchResult.interactions) {
       if (raw.interactionType && raw.interactionType !== "userPrompt") {
         summary.interactionsSkipped++;
         continue;

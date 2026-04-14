@@ -33,6 +33,7 @@ The frontend utilizes React, Vite, TanStack Query, shadcn/ui, and wouter to deli
 - **Key Design Decisions**: SharePoint sites are primary managed workspaces, with automated naming prefixes. Enforces "Highly Confidential" sensitivity labels. Tracks site owners and detects Hub site hierarchy.
 - **Workspace Telemetry**: Captures point-in-time snapshots of site storage, content, and activity.
 - **SharePoint Embedded (SPE)**: Provides full inventory of SPE containers (e.g., Loop, Whiteboard, Copilot) including usage, labels, and owner details, synced via Graph API.
+- **Copilot Prompt Intelligence (BL-038)**: Syncs Copilot interaction history via `/beta` Graph endpoint with plain `fetch()` (not `graphFetchWithRetry`), per-user incremental watermarks, client-side date filtering (no `$filter` OData param — rejected by parser), and watermark-safe partial fetch handling (429/page-cap discards results to prevent data gaps). UX shows sync status, interaction count, and last sync time.
 - **Feature Toggle and Data Purge**: Per-tenant opt-in feature toggles for various data-gathering modules (e.g., OneDrive, Recordings, Teams, Telemetry, SPE), with options for data purging and in-memory cancellation of discovery processes.
 - **Traffic Analytics**: Tracks anonymous page views for public and login pages, providing aggregated usage statistics for platform owners.
 - **Support Ticket System**: In-app help desk with org-scoped support tickets, threaded replies (internal notes supported), and status management.

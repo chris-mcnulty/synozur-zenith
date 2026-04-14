@@ -54,6 +54,8 @@ import {
   Clock,
   BarChart3,
   ChevronDown,
+  Database,
+  Info,
 } from "lucide-react";
 import { UpgradeGate } from "@/components/upgrade-gate";
 import { useTenant } from "@/lib/tenant-context";
@@ -746,6 +748,43 @@ export default function CopilotPromptIntelligencePage() {
     staleTime: 30_000,
   });
 
+  // Latest sync run status
+  const { data: latestSyncRun } = useQuery<{
+    id: string;
+    status: string;
+    usersScanned: number | null;
+    interactionsCaptured: number | null;
+    completedAt: string | null;
+  } | null>({
+    queryKey: ["/api/copilot-prompt-intelligence/sync/latest", tenantConnectionId],
+    queryFn: async () => {
+      const res = await fetch(
+        `/api/copilot-prompt-intelligence/sync/latest?tenantConnectionId=${encodeURIComponent(tenantConnectionId)}`,
+        { credentials: "include" },
+      );
+      if (res.status === 404) return null;
+      if (!res.ok) throw new Error(await res.text());
+      return res.json();
+    },
+    enabled: !!tenantConnectionId,
+    staleTime: 30_000,
+  });
+
+  // Total interaction count (lightweight — just need the total)
+  const { data: interactionData } = useQuery<{ total: number } | null>({
+    queryKey: ["/api/copilot-prompt-intelligence/interactions/count", tenantConnectionId],
+    queryFn: async () => {
+      const res = await fetch(
+        `/api/copilot-prompt-intelligence/interactions?tenantConnectionId=${encodeURIComponent(tenantConnectionId)}&limit=0`,
+        { credentials: "include" },
+      );
+      if (!res.ok) return null;
+      return res.json();
+    },
+    enabled: !!tenantConnectionId,
+    staleTime: 30_000,
+  });
+
   // Poll running assessment
   const { data: pollingData } = useQuery<Assessment>({
     queryKey: ["/api/copilot-prompt-intelligence/assessments", pollingAssessmentId],
@@ -783,7 +822,11 @@ export default function CopilotPromptIntelligencePage() {
     },
     onSuccess: () => {
       setSyncMessage("Sync started — interactions will be captured in the background.");
-      setTimeout(() => setSyncMessage(null), 8000);
+      setTimeout(() => {
+        setSyncMessage(null);
+        queryClient.invalidateQueries({ queryKey: ["/api/copilot-prompt-intelligence/sync/latest"] });
+        queryClient.invalidateQueries({ queryKey: ["/api/copilot-prompt-intelligence/interactions/count"] });
+      }, 8000);
     },
   });
 
@@ -883,12 +926,53 @@ export default function CopilotPromptIntelligencePage() {
 
         {tenantConnectionId && !latestLoading && !activeAssessment && !isAssessing && (
           <Card>
-            <CardContent className="py-12 text-center">
-              <MessageSquareText className="w-10 h-10 text-muted-foreground mx-auto mb-3" />
-              <p className="font-medium">No assessment data yet</p>
-              <p className="text-sm text-muted-foreground mt-1 max-w-xs mx-auto">
-                Click <strong>Sync Interactions</strong> to capture Copilot prompts from Microsoft Graph, then <strong>Run Assessment</strong> to analyze them.
-              </p>
+            <CardContent className="py-8">
+              <div className="text-center mb-6">
+                <MessageSquareText className="w-10 h-10 text-muted-foreground mx-auto mb-3" />
+                <p className="font-medium">No assessment data yet</p>
+                <p className="text-sm text-muted-foreground mt-1 max-w-sm mx-auto">
+                  {(interactionData?.total ?? 0) > 0
+                    ? <>You have <strong>{interactionData!.total} interactions</strong> captured and ready. Click <strong>Run Assessment</strong> to analyze them.</>
+                    : <>Click <strong>Sync Interactions</strong> to capture Copilot prompts from Microsoft Graph, then <strong>Run Assessment</strong> to analyze them.</>
+                  }
+                </p>
+              </div>
+
+              {/* Data status bar */}
+              {(latestSyncRun || (interactionData?.total ?? 0) > 0) && (
+                <div className="rounded-md border border-border bg-muted/30 px-4 py-3 flex flex-wrap items-center gap-x-6 gap-y-2 text-sm" data-testid="sync-status-bar">
+                  {(interactionData?.total ?? 0) > 0 && (
+                    <div className="flex items-center gap-1.5" data-testid="interaction-count">
+                      <Database className="w-3.5 h-3.5 text-primary" />
+                      <span><strong>{interactionData!.total}</strong> interactions stored</span>
+                    </div>
+                  )}
+                  {latestSyncRun?.usersScanned != null && (
+                    <div className="flex items-center gap-1.5" data-testid="users-scanned">
+                      <Users className="w-3.5 h-3.5 text-muted-foreground" />
+                      <span>{latestSyncRun.usersScanned} users scanned</span>
+                    </div>
+                  )}
+                  {latestSyncRun?.completedAt && (
+                    <div className="flex items-center gap-1.5" data-testid="last-sync-time">
+                      <Clock className="w-3.5 h-3.5 text-muted-foreground" />
+                      <span>Last sync {formatDistanceToNow(new Date(latestSyncRun.completedAt), { addSuffix: true })}</span>
+                    </div>
+                  )}
+                  {latestSyncRun?.status && (
+                    <div className="flex items-center gap-1.5" data-testid="sync-status">
+                      {latestSyncRun.status === "COMPLETED" ? (
+                        <CheckCircle2 className="w-3.5 h-3.5 text-green-500" />
+                      ) : latestSyncRun.status === "RUNNING" ? (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-500" />
+                      ) : (
+                        <XCircle className="w-3.5 h-3.5 text-red-500" />
+                      )}
+                      <span className="capitalize">{latestSyncRun.status.toLowerCase()}</span>
+                    </div>
+                  )}
+                </div>
+              )}
             </CardContent>
           </Card>
         )}
