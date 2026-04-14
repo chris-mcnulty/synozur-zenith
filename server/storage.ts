@@ -143,6 +143,11 @@ import {
   copilotSyncRuns,
   type CopilotSyncRun,
   type InsertCopilotSyncRun,
+  scheduledJobRuns,
+  type ScheduledJobRun,
+  type InsertScheduledJobRun,
+  type JobType,
+  type JobStatus,
 } from "@shared/schema";
 import {
   decryptRecord,
@@ -514,6 +519,35 @@ export interface IStorage {
   getLatestCopilotSyncRun(tenantConnectionId: string): Promise<CopilotSyncRun | undefined>;
   listCopilotSyncRuns(tenantConnectionId: string, opts?: { limit?: number; offset?: number }): Promise<{ rows: CopilotSyncRun[]; total: number }>;
   failStaleCopilotSyncRuns(tenantConnectionId: string): Promise<void>;
+
+  // ── BL-039: Scheduled Job Runs (unified job audit trail) ──────────────────
+  createScheduledJobRun(data: InsertScheduledJobRun): Promise<ScheduledJobRun>;
+  updateScheduledJobRun(
+    id: string,
+    updates: Partial<InsertScheduledJobRun> & { completedAt?: Date | null; status?: JobStatus },
+  ): Promise<ScheduledJobRun | undefined>;
+  getScheduledJobRun(id: string): Promise<ScheduledJobRun | undefined>;
+  listScheduledJobRuns(filters: {
+    organizationId?: string | null;
+    tenantConnectionId?: string | null;
+    tenantConnectionIds?: string[];
+    jobType?: JobType;
+    status?: JobStatus;
+    from?: Date;
+    to?: Date;
+    limit?: number;
+    offset?: number;
+  }): Promise<{ rows: ScheduledJobRun[]; total: number }>;
+  getLatestCompletedJobRun(
+    tenantConnectionId: string,
+    jobType: JobType,
+  ): Promise<Date | null>;
+  /**
+   * Marks any scheduled_job_runs rows in `running` state with `started_at`
+   * older than `maxAgeMs` as `failed`. Used on process startup to clean up
+   * runs orphaned by a previous crash/restart.
+   */
+  reconcileOrphanedJobRuns(maxAgeMs?: number): Promise<number>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -3724,6 +3758,129 @@ export class DatabaseStorage implements IStorage {
           lt(copilotSyncRuns.startedAt, sql`now() - interval '30 minutes'`),
         ),
       );
+  }
+
+  // ── BL-039: Scheduled Job Runs ───────────────────────────────────────────
+
+  async createScheduledJobRun(data: InsertScheduledJobRun): Promise<ScheduledJobRun> {
+    const [row] = await db.insert(scheduledJobRuns).values(data).returning();
+    return row;
+  }
+
+  async updateScheduledJobRun(
+    id: string,
+    updates: Partial<InsertScheduledJobRun> & { completedAt?: Date | null; status?: JobStatus },
+  ): Promise<ScheduledJobRun | undefined> {
+    const [row] = await db
+      .update(scheduledJobRuns)
+      .set(updates as Partial<InsertScheduledJobRun>)
+      .where(eq(scheduledJobRuns.id, id))
+      .returning();
+    return row;
+  }
+
+  async getScheduledJobRun(id: string): Promise<ScheduledJobRun | undefined> {
+    const [row] = await db
+      .select()
+      .from(scheduledJobRuns)
+      .where(eq(scheduledJobRuns.id, id))
+      .limit(1);
+    return row;
+  }
+
+  async listScheduledJobRuns(filters: {
+    organizationId?: string | null;
+    tenantConnectionId?: string | null;
+    tenantConnectionIds?: string[];
+    jobType?: JobType;
+    status?: JobStatus;
+    from?: Date;
+    to?: Date;
+    limit?: number;
+    offset?: number;
+  }): Promise<{ rows: ScheduledJobRun[]; total: number }> {
+    const conds = [] as any[];
+    if (filters.organizationId) {
+      conds.push(eq(scheduledJobRuns.organizationId, filters.organizationId));
+    }
+    if (filters.tenantConnectionId) {
+      conds.push(eq(scheduledJobRuns.tenantConnectionId, filters.tenantConnectionId));
+    }
+    if (filters.tenantConnectionIds && filters.tenantConnectionIds.length > 0) {
+      conds.push(inArray(scheduledJobRuns.tenantConnectionId, filters.tenantConnectionIds));
+    }
+    if (filters.jobType) {
+      conds.push(eq(scheduledJobRuns.jobType, filters.jobType));
+    }
+    if (filters.status) {
+      conds.push(eq(scheduledJobRuns.status, filters.status));
+    }
+    if (filters.from) {
+      conds.push(gte(scheduledJobRuns.startedAt, filters.from));
+    }
+    if (filters.to) {
+      conds.push(lte(scheduledJobRuns.startedAt, filters.to));
+    }
+    const whereClause = conds.length > 0 ? and(...conds) : undefined;
+
+    const limit = Math.min(filters.limit ?? 50, 500);
+    const offset = filters.offset ?? 0;
+
+    const [[countResult], rows] = await Promise.all([
+      whereClause
+        ? db
+            .select({ count: sql<number>`count(*)::int` })
+            .from(scheduledJobRuns)
+            .where(whereClause)
+        : db.select({ count: sql<number>`count(*)::int` }).from(scheduledJobRuns),
+      (whereClause
+        ? db.select().from(scheduledJobRuns).where(whereClause)
+        : db.select().from(scheduledJobRuns)
+      )
+        .orderBy(desc(scheduledJobRuns.startedAt))
+        .limit(limit)
+        .offset(offset),
+    ]);
+
+    return { rows, total: countResult?.count ?? 0 };
+  }
+
+  async getLatestCompletedJobRun(
+    tenantConnectionId: string,
+    jobType: JobType,
+  ): Promise<Date | null> {
+    const [row] = await db
+      .select({ completedAt: scheduledJobRuns.completedAt })
+      .from(scheduledJobRuns)
+      .where(
+        and(
+          eq(scheduledJobRuns.tenantConnectionId, tenantConnectionId),
+          eq(scheduledJobRuns.jobType, jobType),
+          eq(scheduledJobRuns.status, 'completed'),
+        ),
+      )
+      .orderBy(desc(scheduledJobRuns.completedAt))
+      .limit(1);
+    return row?.completedAt ?? null;
+  }
+
+  async reconcileOrphanedJobRuns(maxAgeMs: number = 60 * 60 * 1000): Promise<number> {
+    const cutoff = new Date(Date.now() - maxAgeMs);
+    const result = await db
+      .update(scheduledJobRuns)
+      .set({
+        status: 'failed',
+        errorMessage: 'Process restarted — job orphaned',
+        completedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(scheduledJobRuns.status, 'running'),
+          lt(scheduledJobRuns.startedAt, cutoff),
+        ),
+      )
+      .returning({ id: scheduledJobRuns.id });
+    return result.length;
   }
 }
 

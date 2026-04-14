@@ -22,6 +22,7 @@ import adminAiRouter from "./routes/admin-ai";
 import iaAssessmentRouter from "./routes/ia-assessment";
 import contentIntensityHeatmapRouter from "./routes/content-intensity-heatmap";
 import copilotPromptIntelligenceRouter from "./routes/copilot-prompt-intelligence";
+import jobsRouter from "./routes/jobs";
 
 export async function registerRoutes(
   httpServer: Server,
@@ -56,6 +57,7 @@ export async function registerRoutes(
   app.use(iaAssessmentRouter);
   app.use(contentIntensityHeatmapRouter);
   app.use(copilotPromptIntelligenceRouter);
+  app.use(jobsRouter);
 
   return httpServer;
 }
