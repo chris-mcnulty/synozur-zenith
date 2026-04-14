@@ -76,6 +76,9 @@ export const SENSITIVE_FIELDS: Record<string, string[]> = {
   governance_review_findings: [
     "resourceName", "description", "recommendedAction",
   ],
+  copilot_interactions: [
+    "userPrincipalName", "userDisplayName", "promptText", "recommendation",
+  ],
 };
 
 export function encryptRecord<T extends Record<string, any>>(

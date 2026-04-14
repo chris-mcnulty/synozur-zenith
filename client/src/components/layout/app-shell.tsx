@@ -49,6 +49,7 @@ import {
   Network,
   Sparkles,
   Flame,
+  MessageSquareText,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -198,6 +199,7 @@ const navGroups: NavGroup[] = [
     collapsible: true,
     items: [
       { name: "Copilot Readiness", href: "/app/copilot-readiness", icon: Sparkles, badge: "Pro+" },
+      { name: "Copilot Prompt Intelligence", href: "/app/copilot-prompt-intelligence", icon: MessageSquareText, badge: "Pro+" },
       { name: "IA Assessment", href: "/app/ia-assessment", icon: BarChart3, badge: "Ent+" },
       { name: "Content Intensity Heat Map", href: "/app/content-intensity-heatmap", icon: Flame, badge: "Ent+" },
       { name: "AI Assistant", href: "/app/ai-copilot", icon: BrainCircuit },
