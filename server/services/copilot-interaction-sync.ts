@@ -240,9 +240,14 @@ export async function purgeExpiredInteractions(
  * Sync Copilot interactions for a single tenant connection. Returns a
  * per-user summary. Per-user Graph errors (403 on a specific user, user not
  * found, etc.) are logged and do not abort the entire sync.
+ *
+ * When `syncRunId` is supplied the function writes the completed summary back
+ * to the `copilot_sync_runs` row so callers can poll the run status via the
+ * GET /api/copilot-prompt-intelligence/sync/:syncRunId endpoint.
  */
 export async function syncCopilotInteractions(
   tenantConnectionId: string,
+  syncRunId?: string,
 ): Promise<SyncSummary> {
   const summary: SyncSummary = {
     usersScanned: 0,
@@ -252,15 +257,39 @@ export async function syncCopilotInteractions(
     errors: [],
   };
 
+  /** Persist terminal state to the sync run row (best-effort). */
+  async function finalizeSyncRun(status: "COMPLETED" | "FAILED", fatalError?: string) {
+    if (!syncRunId) return;
+    try {
+      await storage.updateCopilotSyncRun(syncRunId, {
+        status,
+        usersScanned: summary.usersScanned,
+        interactionsCaptured: summary.interactionsCaptured,
+        interactionsSkipped: summary.interactionsSkipped,
+        interactionsPurged: summary.interactionsPurged,
+        errorCount: summary.errors.length,
+        errors: summary.errors,
+        completedAt: new Date(),
+        ...(fatalError ? { error: fatalError } : {}),
+      });
+    } catch (err) {
+      console.error(`[copilot-interaction-sync] failed to finalize syncRun=${syncRunId}:`, err);
+    }
+  }
+
   const conn = await storage.getTenantConnection(tenantConnectionId);
   if (!conn) {
-    summary.errors.push({ context: "tenantConnection", message: "Tenant connection not found" });
+    const msg = "Tenant connection not found";
+    summary.errors.push({ context: "tenantConnection", message: msg });
+    await finalizeSyncRun("FAILED", msg);
     return summary;
   }
 
   const organizationId = conn.organizationId;
   if (!organizationId) {
-    summary.errors.push({ context: "tenantConnection", message: "Tenant connection is missing organizationId" });
+    const msg = "Tenant connection is missing organizationId";
+    summary.errors.push({ context: "tenantConnection", message: msg });
+    await finalizeSyncRun("FAILED", msg);
     return summary;
   }
 
@@ -271,7 +300,9 @@ export async function syncCopilotInteractions(
 
   const clientId = conn.clientId ?? process.env.AZURE_CLIENT_ID ?? "";
   if (!conn.tenantId || !clientId || !clientSecret) {
-    summary.errors.push({ context: "credentials", message: "Tenant credentials are incomplete" });
+    const msg = "Tenant credentials are incomplete";
+    summary.errors.push({ context: "credentials", message: msg });
+    await finalizeSyncRun("FAILED", msg);
     return summary;
   }
 
@@ -279,10 +310,9 @@ export async function syncCopilotInteractions(
   try {
     token = await getAppToken(conn.tenantId, clientId, clientSecret);
   } catch (err: unknown) {
-    summary.errors.push({
-      context: "getAppToken",
-      message: err instanceof Error ? err.message : String(err),
-    });
+    const msg = err instanceof Error ? err.message : String(err);
+    summary.errors.push({ context: "getAppToken", message: msg });
+    await finalizeSyncRun("FAILED", msg);
     return summary;
   }
 
@@ -364,7 +394,48 @@ export async function syncCopilotInteractions(
     `errors=${summary.errors.length}`,
   );
 
+  await finalizeSyncRun("COMPLETED");
   return summary;
+}
+
+/**
+ * Create a sync run record and execute `syncCopilotInteractions` in the
+ * background (via setImmediate). Returns the `syncRunId` immediately so the
+ * caller can return it to the HTTP client for polling.
+ *
+ * The run starts in RUNNING state. Stale runs (> 2 hours) are auto-failed
+ * before creating a new one, matching the assessment service pattern.
+ */
+export async function startTrackedSync(
+  tenantConnectionId: string,
+  organizationId: string,
+  triggeredBy: string | null,
+): Promise<string> {
+  // Clean up any stale RUNNING rows from previous crashed syncs.
+  await storage.failStaleCopilotSyncRuns(tenantConnectionId);
+
+  const run = await storage.createCopilotSyncRun({
+    tenantConnectionId,
+    organizationId,
+    status: "RUNNING",
+    triggeredBy: triggeredBy ?? undefined,
+    startedAt: new Date(),
+  });
+
+  setImmediate(async () => {
+    try {
+      await syncCopilotInteractions(tenantConnectionId, run.id);
+    } catch (err) {
+      console.error(`[copilot-interaction-sync] uncaught error syncRun=${run.id}:`, err);
+      await storage.updateCopilotSyncRun(run.id, {
+        status: "FAILED",
+        error: err instanceof Error ? err.message : String(err),
+        completedAt: new Date(),
+      }).catch(() => undefined);
+    }
+  });
+
+  return run.id;
 }
 
 /**

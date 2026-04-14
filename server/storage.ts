@@ -506,6 +506,13 @@ export interface IStorage {
   updateCopilotPromptAssessment(id: string, updates: Partial<InsertCopilotPromptAssessment>): Promise<CopilotPromptAssessment | undefined>;
   failStaleCopilotAssessments(tenantConnectionId: string): Promise<void>;
   findRunningCopilotAssessment(tenantConnectionId: string): Promise<string | null>;
+  // Copilot Sync Runs
+  createCopilotSyncRun(data: InsertCopilotSyncRun): Promise<CopilotSyncRun>;
+  updateCopilotSyncRun(id: string, updates: Partial<InsertCopilotSyncRun>): Promise<CopilotSyncRun | undefined>;
+  getCopilotSyncRun(id: string): Promise<CopilotSyncRun | undefined>;
+  getLatestCopilotSyncRun(tenantConnectionId: string): Promise<CopilotSyncRun | undefined>;
+  listCopilotSyncRuns(tenantConnectionId: string, opts?: { limit?: number; offset?: number }): Promise<{ rows: CopilotSyncRun[]; total: number }>;
+  failStaleCopilotSyncRuns(tenantConnectionId: string): Promise<void>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -3623,6 +3630,83 @@ export class DatabaseStorage implements IStorage {
       )
       .limit(1);
     return row?.id ?? null;
+  }
+
+  // ── Copilot Sync Runs ─────────────────────────────────────────────────────
+
+  async createCopilotSyncRun(data: InsertCopilotSyncRun): Promise<CopilotSyncRun> {
+    const [row] = await db.insert(copilotSyncRuns).values(data).returning();
+    return row;
+  }
+
+  async updateCopilotSyncRun(
+    id: string,
+    updates: Partial<InsertCopilotSyncRun>,
+  ): Promise<CopilotSyncRun | undefined> {
+    const [row] = await db
+      .update(copilotSyncRuns)
+      .set(updates)
+      .where(eq(copilotSyncRuns.id, id))
+      .returning();
+    return row;
+  }
+
+  async getCopilotSyncRun(id: string): Promise<CopilotSyncRun | undefined> {
+    const [row] = await db
+      .select()
+      .from(copilotSyncRuns)
+      .where(eq(copilotSyncRuns.id, id))
+      .limit(1);
+    return row;
+  }
+
+  async getLatestCopilotSyncRun(
+    tenantConnectionId: string,
+  ): Promise<CopilotSyncRun | undefined> {
+    const [row] = await db
+      .select()
+      .from(copilotSyncRuns)
+      .where(eq(copilotSyncRuns.tenantConnectionId, tenantConnectionId))
+      .orderBy(desc(copilotSyncRuns.createdAt))
+      .limit(1);
+    return row;
+  }
+
+  async listCopilotSyncRuns(
+    tenantConnectionId: string,
+    opts: { limit?: number; offset?: number } = {},
+  ): Promise<{ rows: CopilotSyncRun[]; total: number }> {
+    const limit = opts.limit ?? 20;
+    const offset = opts.offset ?? 0;
+    const whereClause = eq(copilotSyncRuns.tenantConnectionId, tenantConnectionId);
+
+    const [[countResult], rows] = await Promise.all([
+      db.select({ count: sql<number>`count(*)::int` }).from(copilotSyncRuns).where(whereClause),
+      db.select().from(copilotSyncRuns)
+        .where(whereClause)
+        .orderBy(desc(copilotSyncRuns.createdAt))
+        .limit(limit)
+        .offset(offset),
+    ]);
+
+    return { rows, total: countResult?.count ?? 0 };
+  }
+
+  async failStaleCopilotSyncRuns(tenantConnectionId: string): Promise<void> {
+    await db
+      .update(copilotSyncRuns)
+      .set({
+        status: 'FAILED',
+        error: 'Sync timed out (stale RUNNING state)',
+        completedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(copilotSyncRuns.tenantConnectionId, tenantConnectionId),
+          eq(copilotSyncRuns.status, 'RUNNING'),
+          lt(copilotSyncRuns.startedAt, sql`now() - interval '2 hours'`),
+        ),
+      );
   }
 }
 

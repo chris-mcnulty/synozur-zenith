@@ -3,6 +3,10 @@
  *
  * POST   /api/copilot-prompt-intelligence/sync
  *          — trigger a Graph interaction sync for a tenant connection
+ * GET    /api/copilot-prompt-intelligence/sync/latest
+ *          — latest sync run for a tenant connection
+ * GET    /api/copilot-prompt-intelligence/sync/:syncRunId
+ *          — poll a specific sync run
  * POST   /api/copilot-prompt-intelligence/assess
  *          — trigger an assessment run (analyze + aggregate + AI narrative)
  * GET    /api/copilot-prompt-intelligence/interactions
@@ -25,7 +29,7 @@ import { requireFeature } from "../services/feature-gate";
 import { storage } from "../storage";
 import { ZENITH_ROLES } from "@shared/schema";
 import { getOrgTenantConnectionIds, getActiveOrgId } from "./scope-helpers";
-import { syncCopilotInteractions } from "../services/copilot-interaction-sync";
+import { startTrackedSync, getInteractionsForTenant } from "../services/copilot-interaction-sync";
 import {
   runCopilotPromptAssessment,
   getAssessmentById,
@@ -33,7 +37,6 @@ import {
   listAssessmentsForOrg,
   listAssessmentsByTenant,
 } from "../services/copilot-prompt-intelligence-service";
-import { getInteractionsForTenant } from "../services/copilot-interaction-sync";
 
 const router = Router();
 
@@ -82,24 +85,71 @@ router.post(
     const access = await assertTenantAccess(req, body.data.tenantConnectionId);
     if (!access.ok) return res.status(access.status).json({ message: access.message });
 
-    // Run sync asynchronously so the request returns quickly.
-    const tenantConnectionId = body.data.tenantConnectionId;
-    setImmediate(async () => {
-      try {
-        const summary = await syncCopilotInteractions(tenantConnectionId);
-        console.log(
-          `[CopilotSync] tenant=${tenantConnectionId} summary=`,
-          JSON.stringify(summary),
-        );
-      } catch (err) {
-        console.error(`[CopilotSync] tenant=${tenantConnectionId} error:`, err);
-      }
-    });
+    const orgId = getActiveOrgId(req) || access.conn.organizationId || "";
+    if (!orgId) {
+      return res.status(400).json({ message: "No active organization context" });
+    }
+
+    const syncRunId = await startTrackedSync(
+      access.conn.id,
+      orgId,
+      req.user?.id ?? null,
+    );
 
     return res.status(202).json({
+      syncRunId,
       message: "Copilot interaction sync started",
-      tenantConnectionId,
+      tenantConnectionId: access.conn.id,
     });
+  },
+);
+
+// ---------------------------------------------------------------------------
+// GET /api/copilot-prompt-intelligence/sync/latest
+// (must be before /:syncRunId)
+// ---------------------------------------------------------------------------
+
+router.get(
+  "/api/copilot-prompt-intelligence/sync/latest",
+  requireAuth(),
+  requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN),
+  requireFeature("copilotPromptIntelligence"),
+  async (req: AuthenticatedRequest, res) => {
+    const tenantConnectionId =
+      typeof req.query.tenantConnectionId === "string"
+        ? req.query.tenantConnectionId
+        : "";
+
+    if (!tenantConnectionId) {
+      return res.status(400).json({ message: "tenantConnectionId query param required" });
+    }
+
+    const access = await assertTenantAccess(req, tenantConnectionId);
+    if (!access.ok) return res.status(access.status).json({ message: access.message });
+
+    const run = await storage.getLatestCopilotSyncRun(tenantConnectionId);
+    if (!run) return res.status(404).json({ message: "No sync run found" });
+    return res.json(run);
+  },
+);
+
+// ---------------------------------------------------------------------------
+// GET /api/copilot-prompt-intelligence/sync/:syncRunId
+// ---------------------------------------------------------------------------
+
+router.get(
+  "/api/copilot-prompt-intelligence/sync/:syncRunId",
+  requireAuth(),
+  requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN),
+  requireFeature("copilotPromptIntelligence"),
+  async (req: AuthenticatedRequest, res) => {
+    const run = await storage.getCopilotSyncRun(String(req.params.syncRunId));
+    if (!run) return res.status(404).json({ message: "Sync run not found" });
+
+    const access = await assertTenantAccess(req, run.tenantConnectionId);
+    if (!access.ok) return res.status(access.status).json({ message: access.message });
+
+    return res.json(run);
   },
 );
 
@@ -277,7 +327,7 @@ router.get(
   requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN),
   requireFeature("copilotPromptIntelligence"),
   async (req: AuthenticatedRequest, res) => {
-    const assessment = await getAssessmentById(req.params.assessmentId);
+    const assessment = await getAssessmentById(String(req.params.assessmentId));
     if (!assessment) return res.status(404).json({ message: "Assessment not found" });
 
     const orgId = getActiveOrgId(req);
