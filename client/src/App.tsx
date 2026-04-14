@@ -34,6 +34,7 @@ import AICopilotIntegration from "./pages/app/ai-copilot";
 import CopilotReadinessPage from "./pages/app/copilot-readiness";
 import IAAssessmentPage from "./pages/app/ia-assessment";
 import ContentIntensityHeatmapPage from "./pages/app/content-intensity-heatmap";
+import CopilotPromptIntelligencePage from "./pages/app/copilot-prompt-intelligence";
 import UserManagementPage from "./pages/app/admin/users";
 import OrganizationSettingsPage from "./pages/app/admin/organization";
 import SystemAdminPage from "./pages/app/admin/system";
@@ -191,6 +192,7 @@ function AppRoutes() {
         <Route path="/app/copilot-readiness" component={CopilotReadinessPage} />
         <Route path="/app/ia-assessment" component={IAAssessmentPage} />
         <Route path="/app/content-intensity-heatmap" component={ContentIntensityHeatmapPage} />
+        <Route path="/app/copilot-prompt-intelligence" component={CopilotPromptIntelligencePage} />
         <Route path="/app/discover" component={DiscoverDashboard} />
         <Route path="/app/admin/plans"><Redirect to="/plans" /></Route>
         <Route path="/app/admin/users">

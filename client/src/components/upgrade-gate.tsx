@@ -23,6 +23,7 @@ const FEATURE_LABELS: Record<string, { label: string; minPlan: string }> = {
   csvExport: { label: "CSV Export", minPlan: "Standard" },
   iaAssessment: { label: "IA Assessment", minPlan: "Enterprise" },
   contentIntensityHeatmap: { label: "Content Intensity Heat Map", minPlan: "Enterprise" },
+  copilotPromptIntelligence: { label: "Copilot Prompt Intelligence", minPlan: "Professional" },
 };
 
 export function UpgradeGate({ feature, children, fallback, inline }: UpgradeGateProps) {

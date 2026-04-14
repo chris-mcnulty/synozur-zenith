@@ -21,6 +21,7 @@ import emailStorageReportRouter from "./routes/email-storage-report";
 import adminAiRouter from "./routes/admin-ai";
 import iaAssessmentRouter from "./routes/ia-assessment";
 import contentIntensityHeatmapRouter from "./routes/content-intensity-heatmap";
+import copilotPromptIntelligenceRouter from "./routes/copilot-prompt-intelligence";
 
 export async function registerRoutes(
   httpServer: Server,
@@ -54,6 +55,7 @@ export async function registerRoutes(
   app.use(adminAiRouter);
   app.use(iaAssessmentRouter);
   app.use(contentIntensityHeatmapRouter);
+  app.use(copilotPromptIntelligenceRouter);
 
   return httpServer;
 }
