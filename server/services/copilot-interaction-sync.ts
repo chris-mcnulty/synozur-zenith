@@ -112,13 +112,12 @@ async function getCopilotLicensedUsers(
     })
     .from(licenseAssignments)
     .where(
-      and(
-        eq(licenseAssignments.tenantConnectionId, tenantConnectionId),
-        // Only scan users with accountEnabled = true. Users where
-        // accountEnabled IS NULL (disabled-state unknown) are intentionally
-        // excluded — we only want confirmed-active accounts.
-        eq(licenseAssignments.accountEnabled, true),
-      ),
+      eq(licenseAssignments.tenantConnectionId, tenantConnectionId),
+      // accountEnabled filter removed: the license sync has inconsistent
+      // defaults across code paths (one defaults to false when Graph omits
+      // the field). Filtering here silently drops valid Copilot users. The
+      // Graph API naturally rejects disabled accounts with 403/404, which
+      // fetchInteractionsForUser already handles gracefully.
     );
 
   // Deduplicate on userId and filter to Copilot SKUs.
@@ -138,7 +137,22 @@ async function getCopilotLicensedUsers(
     });
   }
 
-  return Array.from(byUser.values()).slice(0, MAX_USERS_PER_SYNC);
+  const result = Array.from(byUser.values()).slice(0, MAX_USERS_PER_SYNC);
+  const totalLicenseRows = rows.length;
+  const copilotSkuRows = rows.filter(r => {
+    const sku = (r.skuPartNumber ?? "").toUpperCase();
+    return r.skuId === COPILOT_SKU_PART_ID || sku.includes("COPILOT");
+  }).length;
+  const upnSample = result.length <= 20
+    ? result.map(u => u.userPrincipalName).join(", ")
+    : `${result.slice(0, 10).map(u => u.userPrincipalName).join(", ")} ... +${result.length - 10} more`;
+  console.log(
+    `[copilot-interaction-sync] getCopilotLicensedUsers: ` +
+    `licenseRows=${totalLicenseRows} copilotSkuRows=${copilotSkuRows} ` +
+    `uniqueUsers=${result.length} ` +
+    `users=[${upnSample}]`,
+  );
+  return result;
 }
 
 /** Maximum pages to retrieve per user when falling back to unfiltered paging. */
