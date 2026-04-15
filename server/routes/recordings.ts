@@ -31,22 +31,59 @@ function startDiscoveryJob(
     return;
   }
 
-  res.json({ message: startedMessage });
+  let responseSent = false;
+  const sendStarted = () => {
+    if (responseSent) return;
+    responseSent = true;
+    res.json({ message: startedMessage });
+  };
+  const sendStartFailure = (status: number, message: string, err?: unknown) => {
+    if (responseSent) {
+      if (!(err instanceof DuplicateJobError) && err) {
+        console.error(`${loggerPrefix} failed:`, err);
+      }
+      return;
+    }
+    responseSent = true;
+    if (!(err instanceof DuplicateJobError) && err) {
+      console.error(`${loggerPrefix} failed:`, err);
+    }
+    res.status(status).json({ message });
+  };
 
-  void trackJobRun(
-    {
-      jobType,
-      organizationId: conn.organizationId ?? null,
-      tenantConnectionId: conn.id,
-      triggeredBy: "manual",
-      triggeredByUserId,
-      targetName: conn.tenantName ?? conn.tenantId,
-    },
-    () => run(),
-  ).catch((err) => {
-    if (err instanceof DuplicateJobError) return;
-    console.error(`${loggerPrefix} failed:`, err);
-  });
+  try {
+    const jobPromise = trackJobRun(
+      {
+        jobType,
+        organizationId: conn.organizationId ?? null,
+        tenantConnectionId: conn.id,
+        triggeredBy: "manual",
+        triggeredByUserId,
+        targetName: conn.tenantName ?? conn.tenantId,
+      },
+      () => run(),
+    );
+
+    void jobPromise.catch((err) => {
+      if (err instanceof DuplicateJobError) {
+        sendStartFailure(409, `${loggerPrefix} is already running for this tenant`, err);
+        return;
+      }
+
+      sendStartFailure(500, `Failed to start ${loggerPrefix}`, err);
+    });
+
+    setImmediate(() => {
+      sendStarted();
+    });
+  } catch (err) {
+    if (err instanceof DuplicateJobError) {
+      sendStartFailure(409, `${loggerPrefix} is already running for this tenant`, err);
+      return;
+    }
+
+    sendStartFailure(500, `Failed to start ${loggerPrefix}`, err);
+  }
 }
 
 const router = Router();
