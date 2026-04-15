@@ -16,7 +16,7 @@
  * Restricted to governance_admin and tenant_admin (server-side enforced;
  * the route guard here mirrors that).
  */
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useTenant } from "@/lib/tenant-context";
@@ -27,7 +27,8 @@ import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "@/components/ui/sheet";
-import { Activity, Database, History, RefreshCw, X, ChevronLeft, ChevronRight, AlertTriangle, CheckCircle2, Clock, CircleDashed, Loader2 } from "lucide-react";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Activity, Database, History, PlayCircle, RefreshCw, X, ChevronLeft, ChevronRight, AlertTriangle, CheckCircle2, Clock, CircleDashed, Loader2 } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 
 // ── Types (mirrors server/routes/jobs.ts response shapes) ───────────────────
@@ -324,7 +325,39 @@ function ActiveJobsPanel({ tenantConnectionId }: { tenantConnectionId: string })
 
 // ── Dataset Freshness Section ───────────────────────────────────────────────
 
+/** Delay in ms between consecutive staged refresh dispatches. */
+const STAGGER_DELAY_MS = 5_000;
+
+/**
+ * Topological sort of datasets by dependency depth so parents refresh first.
+ * Returns an ordered list of dataset keys grouped into waves:
+ *   wave 0 → datasets with no dependencies
+ *   wave 1 → datasets whose dependencies are all in wave 0
+ *   … and so on.
+ * Within each wave the original array order is preserved.
+ */
+function topoSort(datasets: DatasetFreshness[]): DatasetFreshness[] {
+  const byKey = new Map(datasets.map((d) => [d.key, d]));
+  const depth = new Map<string, number>();
+
+  function getDepth(key: string): number {
+    if (depth.has(key)) return depth.get(key)!;
+    const ds = byKey.get(key);
+    if (!ds || ds.dependsOn.length === 0) {
+      depth.set(key, 0);
+      return 0;
+    }
+    const d = 1 + Math.max(...ds.dependsOn.map(getDepth));
+    depth.set(key, d);
+    return d;
+  }
+
+  datasets.forEach((ds) => getDepth(ds.key));
+  return [...datasets].sort((a, b) => (depth.get(a.key) ?? 0) - (depth.get(b.key) ?? 0));
+}
+
 function DatasetFreshnessPanel({ tenantConnectionId }: { tenantConnectionId: string }) {
+  const { toast } = useToast();
   const { data, isFetching, refetch } = useQuery<{ datasets: DatasetFreshness[] }>({
     queryKey: ["/api/datasets/freshness", tenantConnectionId],
     queryFn: async () => {
@@ -341,6 +374,121 @@ function DatasetFreshnessPanel({ tenantConnectionId }: { tenantConnectionId: str
 
   const datasets = data?.datasets ?? [];
 
+  // ── Single-dataset refresh mutation ────────────────────────────────────
+  const refreshMutation = useMutation({
+    mutationFn: async (datasetKey: string) => {
+      const res = await apiRequest(
+        "POST",
+        `/api/datasets/${encodeURIComponent(datasetKey)}/refresh`,
+        { tenantConnectionId },
+      );
+      return res.json();
+    },
+    onSuccess: (body, datasetKey) => {
+      const ds = datasets.find((d) => d.key === datasetKey);
+      const label = ds?.label ?? datasetKey;
+      if (body?.alreadyRunning) {
+        toast({
+          title: `${label} refresh already running`,
+          description: "Hang tight — the existing run will finish soon.",
+        });
+      } else {
+        toast({
+          title: `${label} refresh started`,
+          description: "Status will update as the job progresses.",
+        });
+      }
+      void queryClient.invalidateQueries({ queryKey: ["/api/datasets/freshness"] });
+      void queryClient.invalidateQueries({ queryKey: ["/api/jobs/active"] });
+    },
+    onError: (err: any, datasetKey) => {
+      const ds = datasets.find((d) => d.key === datasetKey);
+      const label = ds?.label ?? datasetKey;
+      toast({
+        variant: "destructive",
+        title: `${label} refresh failed`,
+        description: err?.message ?? String(err),
+      });
+    },
+  });
+
+  // ── Staged "Refresh All Stale" ─────────────────────────────────────────
+  // queueRef drives the actual dispatch; stagedQueue (state) is the display mirror.
+  const queueRef = useRef<string[]>([]);
+  const [stagedQueue, setStagedQueue] = useState<string[]>([]);
+  const [stagingActive, setStagingActive] = useState(false);
+  const stagingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [dispatchedKeys, setDispatchedKeys] = useState<Set<string>>(new Set());
+
+  // Mutable ref so the processNext closure always sees the latest mutation.
+  const refreshMutationRef = useRef(refreshMutation);
+  refreshMutationRef.current = refreshMutation;
+
+  // Process the next queued dataset, then schedule the one after it.
+  const processNext = useCallback(() => {
+    const queue = queueRef.current;
+    if (queue.length === 0) {
+      setStagingActive(false);
+      setDispatchedKeys(new Set());
+      toast({
+        title: "All stale refreshes dispatched",
+        description: "Jobs are running in the background.",
+      });
+      return;
+    }
+    const [nextKey, ...remaining] = queue;
+    queueRef.current = remaining;
+    setStagedQueue(remaining);
+    setDispatchedKeys((prev) => new Set(prev).add(nextKey));
+    refreshMutationRef.current.mutate(nextKey);
+
+    if (remaining.length > 0) {
+      stagingTimerRef.current = setTimeout(processNext, STAGGER_DELAY_MS);
+    }
+  }, [toast]);
+
+  // Clean up any pending timer on unmount
+  useEffect(() => {
+    return () => {
+      if (stagingTimerRef.current) clearTimeout(stagingTimerRef.current);
+    };
+  }, []);
+
+  const cancelStaged = useCallback(() => {
+    if (stagingTimerRef.current) clearTimeout(stagingTimerRef.current);
+    queueRef.current = [];
+    setStagedQueue([]);
+    setStagingActive(false);
+    setDispatchedKeys(new Set());
+    toast({ title: "Staged refresh cancelled", description: "Remaining datasets were not dispatched." });
+  }, [toast]);
+
+  const refreshAllStale = useCallback(() => {
+    const stale = datasets.filter(
+      (d) => d.status !== "fresh" && !d.isRefreshing,
+    );
+    if (stale.length === 0) {
+      toast({ title: "All datasets are fresh", description: "Nothing to refresh." });
+      return;
+    }
+    // Topologically sort so parents dispatch before children
+    const ordered = topoSort(stale).map((d) => d.key);
+    queueRef.current = ordered;
+    setDispatchedKeys(new Set());
+    setStagedQueue(ordered);
+    setStagingActive(true);
+    toast({
+      title: `Staging ${ordered.length} refresh${ordered.length === 1 ? "" : "es"}`,
+      description: `Jobs will be dispatched ~${STAGGER_DELAY_MS / 1000}s apart to avoid overload.`,
+    });
+    // Kick off the first item immediately
+    processNext();
+  }, [datasets, toast, processNext]);
+
+  const staleCount = datasets.filter(
+    (d) => d.status !== "fresh" && !d.isRefreshing,
+  ).length;
+
   return (
     <Card className="glass-panel" data-testid="card-dataset-freshness">
       <CardHeader>
@@ -355,16 +503,56 @@ function DatasetFreshnessPanel({ tenantConnectionId }: { tenantConnectionId: str
               gate on these freshness windows.
             </CardDescription>
           </div>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => refetch()}
-            disabled={isFetching}
-            data-testid="button-refresh-freshness"
-          >
-            <RefreshCw className={`w-4 h-4 mr-2 ${isFetching ? "animate-spin" : ""}`} />
-            Refresh
-          </Button>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            {stagingActive ? (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={cancelStaged}
+                data-testid="button-cancel-staged"
+              >
+                <X className="w-4 h-4 mr-2" />
+                Cancel Queue ({stagedQueue.length} left)
+              </Button>
+            ) : (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={refreshAllStale}
+                      disabled={staleCount === 0 || isFetching}
+                      data-testid="button-refresh-all-stale"
+                    >
+                      <PlayCircle className="w-4 h-4 mr-2" />
+                      Refresh All Stale
+                      {staleCount > 0 && (
+                        <Badge variant="secondary" className="ml-2">
+                          {staleCount}
+                        </Badge>
+                      )}
+                    </Button>
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent>
+                  {staleCount === 0
+                    ? "All datasets are fresh"
+                    : `Refresh ${staleCount} stale dataset${staleCount === 1 ? "" : "s"}, staged ~${STAGGER_DELAY_MS / 1000}s apart`}
+                </TooltipContent>
+              </Tooltip>
+            )}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => refetch()}
+              disabled={isFetching}
+              data-testid="button-refresh-freshness"
+            >
+              <RefreshCw className={`w-4 h-4 mr-2 ${isFetching ? "animate-spin" : ""}`} />
+              Refresh
+            </Button>
+          </div>
         </div>
       </CardHeader>
       <CardContent>
@@ -372,45 +560,81 @@ function DatasetFreshnessPanel({ tenantConnectionId }: { tenantConnectionId: str
           <div className="text-center py-8 text-muted-foreground">Loading datasets…</div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-            {datasets.map((ds) => (
-              <div
-                key={ds.key}
-                className="p-4 rounded-lg border bg-card/50 space-y-2"
-                data-testid={`dataset-${ds.key}`}
-              >
-                <div className="flex items-start justify-between gap-2">
-                  <div className="font-medium text-sm">{ds.label}</div>
-                  {freshnessBadge(ds.status)}
-                </div>
-                <div className="text-xs text-muted-foreground line-clamp-2">{ds.description}</div>
-                <div className="text-xs space-y-0.5">
-                  <div>
-                    <span className="text-muted-foreground">Last refresh: </span>
-                    {ds.lastRefreshedAt
-                      ? formatDistanceToNow(new Date(ds.lastRefreshedAt), { addSuffix: true })
-                      : "never"}
+            {datasets.map((ds) => {
+              const isQueued = stagedQueue.includes(ds.key);
+              const wasDispatched = dispatchedKeys.has(ds.key);
+              const isSingleRefreshing =
+                refreshMutation.isPending && refreshMutation.variables === ds.key;
+              const isRunning = ds.isRefreshing || isSingleRefreshing;
+
+              return (
+                <div
+                  key={ds.key}
+                  className="p-4 rounded-lg border bg-card/50 space-y-2"
+                  data-testid={`dataset-${ds.key}`}
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="font-medium text-sm">{ds.label}</div>
+                    {freshnessBadge(ds.status)}
                   </div>
-                  <div>
-                    <span className="text-muted-foreground">Age: </span>
-                    {formatAge(ds.ageHours)}{" "}
-                    <span className="opacity-60">
-                      (warn ≥ {ds.warningAfterHours}h, stale ≥ {ds.criticalAfterHours}h)
-                    </span>
+                  <div className="text-xs text-muted-foreground line-clamp-2">{ds.description}</div>
+                  <div className="text-xs space-y-0.5">
+                    <div>
+                      <span className="text-muted-foreground">Last refresh: </span>
+                      {ds.lastRefreshedAt
+                        ? formatDistanceToNow(new Date(ds.lastRefreshedAt), { addSuffix: true })
+                        : "never"}
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground">Age: </span>
+                      {formatAge(ds.ageHours)}{" "}
+                      <span className="opacity-60">
+                        (warn ≥ {ds.warningAfterHours}h, stale ≥ {ds.criticalAfterHours}h)
+                      </span>
+                    </div>
+                    {isRunning && (
+                      <div className="text-sky-500 flex items-center gap-1">
+                        <Loader2 className="w-3 h-3 animate-spin" />
+                        Refresh running now
+                      </div>
+                    )}
+                    {isQueued && !isRunning && (
+                      <div className="text-amber-500 flex items-center gap-1">
+                        <Clock className="w-3 h-3" />
+                        Queued
+                      </div>
+                    )}
+                    {ds.dependsOn.length > 0 && (
+                      <div className="opacity-60">
+                        Depends on: {ds.dependsOn.join(", ")}
+                      </div>
+                    )}
                   </div>
-                  {ds.isRefreshing && (
-                    <div className="text-sky-500 flex items-center gap-1">
-                      <Loader2 className="w-3 h-3 animate-spin" />
-                      Refresh running now
-                    </div>
-                  )}
-                  {ds.dependsOn.length > 0 && (
-                    <div className="opacity-60">
-                      Depends on: {ds.dependsOn.join(", ")}
-                    </div>
-                  )}
+                  <div className="pt-1">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 px-2 text-xs"
+                      disabled={isRunning || isQueued}
+                      onClick={() => refreshMutation.mutate(ds.key)}
+                      data-testid={`button-refresh-${ds.key}`}
+                    >
+                      {isRunning ? (
+                        <>
+                          <Loader2 className="w-3 h-3 mr-1 animate-spin" />
+                          Refreshing…
+                        </>
+                      ) : (
+                        <>
+                          <RefreshCw className="w-3 h-3 mr-1" />
+                          Refresh
+                        </>
+                      )}
+                    </Button>
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </CardContent>
