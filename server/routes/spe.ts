@@ -258,9 +258,24 @@ router.post("/api/spe/tenants/:id/sync", requireRole(ZENITH_ROLES.TENANT_ADMIN),
 
     const typeIdMap = new Map<string, string>();
 
+    // Microsoft uses 00000000-0000-0000-0000-000000000000 for all Microsoft-managed container
+    // types (Designer, Teams, Clipchamp, etc.). Multiple apps share this GUID, so we can't
+    // use it as the unique key. Store null instead (PostgreSQL allows multiple NULLs in
+    // unique columns) and match by displayName for these types.
+    const NULL_GUID = "00000000-0000-0000-0000-000000000000";
+    const isNullGuid = (id: string | null | undefined) => !id || id === NULL_GUID;
+
     for (const gct of containerTypes) {
-      const existing = (await storage.getSpeContainerTypes(conn.id))
-        .find(ct => ct.containerTypeId === gct.containerTypeId);
+      const existingList = await storage.getSpeContainerTypes(conn.id);
+      const existing = existingList.find(ct => {
+        if (isNullGuid(gct.containerTypeId)) {
+          // MS-managed types: match by display name since they share the zero GUID
+          return isNullGuid(ct.containerTypeId) && ct.displayName === gct.displayName;
+        }
+        return ct.containerTypeId === gct.containerTypeId;
+      });
+
+      const storedContainerTypeId = isNullGuid(gct.containerTypeId) ? null : gct.containerTypeId;
 
       if (existing) {
         await storage.updateSpeContainerType(existing.id, {
@@ -268,17 +283,38 @@ router.post("/api/spe/tenants/:id/sync", requireRole(ZENITH_ROLES.TENANT_ADMIN),
           description: gct.description || existing.description,
           azureAppId: gct.owningAppId || existing.azureAppId,
         });
-        typeIdMap.set(gct.containerTypeId, existing.id);
+        if (!isNullGuid(gct.containerTypeId)) {
+          typeIdMap.set(gct.containerTypeId, existing.id);
+        }
       } else {
-        const created = await storage.createSpeContainerType({
-          tenantConnectionId: conn.id,
-          containerTypeId: gct.containerTypeId,
-          displayName: gct.displayName || `Type ${gct.containerTypeId}`,
-          description: gct.description,
-          azureAppId: gct.owningAppId,
-          status: "ACTIVE",
-        });
-        typeIdMap.set(gct.containerTypeId, created.id);
+        try {
+          const created = await storage.createSpeContainerType({
+            tenantConnectionId: conn.id,
+            containerTypeId: storedContainerTypeId,
+            displayName: gct.displayName || `Type ${gct.containerTypeId}`,
+            description: gct.description,
+            azureAppId: gct.owningAppId,
+            status: "ACTIVE",
+          });
+          if (!isNullGuid(gct.containerTypeId)) {
+            typeIdMap.set(gct.containerTypeId, created.id);
+          }
+        } catch (err: any) {
+          if (err.message?.includes("duplicate key") || err.message?.includes("unique")) {
+            // Race condition or re-sync — look up the existing row and continue
+            const refreshed = await storage.getSpeContainerTypes(conn.id);
+            const found = refreshed.find(ct => isNullGuid(gct.containerTypeId)
+              ? isNullGuid(ct.containerTypeId) && ct.displayName === gct.displayName
+              : ct.containerTypeId === gct.containerTypeId
+            );
+            if (found && !isNullGuid(gct.containerTypeId)) {
+              typeIdMap.set(gct.containerTypeId, found.id);
+            }
+            console.warn(`[spe-sync] Duplicate container type skipped: ${gct.displayName} (${gct.containerTypeId})`);
+          } else {
+            throw err;
+          }
+        }
       }
     }
 
