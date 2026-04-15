@@ -570,8 +570,36 @@ export class DatabaseStorage implements IStorage {
     return buffer;
   }
 
+  /**
+   * Like getKeyBufferForTenant but used for READ (decrypt) paths only.
+   * Returns the key even when dataMaskingEnabled is currently false — because
+   * data encrypted during a prior masking-on period must still be decryptable
+   * after masking is toggled off, otherwise MASKED: values bleed through to the UI.
+   * Writes still go through getKeyBufferForTenant and respect the flag.
+   */
+  private async getKeyBufferForDecrypt(tenantConnectionId: string): Promise<Buffer | null> {
+    const cacheKey = `decrypt:${tenantConnectionId}`;
+    const cached = this.keyCache.get(cacheKey);
+    if (cached && cached.expiry > Date.now()) return cached.buffer;
+
+    const keyRecord = await this.getTenantEncryptionKey(tenantConnectionId);
+    if (!keyRecord) return null;
+
+    try {
+      const buffer = getTenantKeyBuffer(keyRecord.encryptedKey);
+      this.keyCache.set(cacheKey, { buffer, expiry: Date.now() + 60000 });
+      return buffer;
+    } catch (err: any) {
+      // Master ENCRYPTION_KEY may have changed — per-tenant key can't be unwrapped.
+      // Log so this is visible in server logs and return null (data will show as MASKED:).
+      console.error(`[data-masking] Failed to unwrap tenant key for tenantConnectionId="${tenantConnectionId}": ${err?.message ?? err}`);
+      return null;
+    }
+  }
+
   invalidateKeyCache(tenantConnectionId: string): void {
     this.keyCache.delete(tenantConnectionId);
+    this.keyCache.delete(`decrypt:${tenantConnectionId}`);
   }
 
   private async encryptForTenant<T extends Record<string, any>>(data: T, tableName: string, tenantConnectionId: string): Promise<T> {
@@ -587,7 +615,10 @@ export class DatabaseStorage implements IStorage {
     const keyMap = new Map<string, Buffer>();
 
     for (const tid of tenantIds) {
-      const buf = await this.getKeyBufferForTenant(tid);
+      // Use the decrypt-specific key fetch: decrypts MASKED: values even when
+      // dataMaskingEnabled is currently false (data encrypted during a prior on-period
+      // must still be readable after toggling masking off).
+      const buf = await this.getKeyBufferForDecrypt(tid);
       if (buf) keyMap.set(tid, buf);
     }
 
@@ -2532,7 +2563,7 @@ export class DatabaseStorage implements IStorage {
       .orderBy(desc(governanceReviewFindings.createdAt));
 
     if (!task?.tenantConnectionId || rows.length === 0) return rows;
-    const buf = await this.getKeyBufferForTenant(task.tenantConnectionId);
+    const buf = await this.getKeyBufferForDecrypt(task.tenantConnectionId);
     if (!buf) return rows;
     return rows.map((row) => decryptRecord(row as Record<string, any>, "governance_review_findings", buf) as GovernanceReviewFinding);
   }
@@ -3412,7 +3443,7 @@ export class DatabaseStorage implements IStorage {
       }
     }
     for (const tid of tenantIds) {
-      const buf = await this.getKeyBufferForTenant(tid);
+      const buf = await this.getKeyBufferForDecrypt(tid);
       if (buf) keyMap.set(tid, buf);
     }
     if (keyMap.size === 0) return rows;

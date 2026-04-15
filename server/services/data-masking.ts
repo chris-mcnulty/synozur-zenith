@@ -113,8 +113,12 @@ export function decryptRecord<T extends Record<string, any>>(
     if (typeof value === "string" && isMaskedValue(value)) {
       try {
         (result as any)[field] = decryptField(value, keyBuffer);
-      } catch {
-        // leave as-is if decryption fails
+      } catch (err: any) {
+        // Decryption failed — most common cause: the tenant encryption key was
+        // regenerated after this value was written (key mismatch). The MASKED:
+        // value is left in place so data isn't silently lost, but we log so the
+        // issue is visible in server logs.
+        console.error(`[data-masking] decryptField failed for table="${tableName}" field="${field}": ${err?.message ?? err}`);
       }
     }
   }
