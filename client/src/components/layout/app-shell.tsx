@@ -155,6 +155,7 @@ const navGroups: NavGroup[] = [
     collapsible: true,
     items: [
       { name: "Dashboard", href: "/app/dashboard", icon: LayoutDashboard },
+      { name: "Data Freshness", href: "/app/admin/job-monitor", icon: Activity, minRole: "governance_admin" },
       { name: "Approvals", href: "/app/approvals", icon: CheckCircle2, badge: "3", minRole: "operator", isMock: true },
       { name: "Provision", href: "/app/provision", icon: FolderPlus, minRole: "operator", isMock: true },
     ]
@@ -351,10 +352,6 @@ export default function AppShell({ children }: AppShellProps) {
     retry: false,
   });
 
-
-  if (!authLoading && !authData?.user) {
-    return <Redirect to="/login" />;
-  }
 
   const currentUser = authData?.user;
   const activeOrg = authData?.organization;
@@ -600,6 +597,11 @@ export default function AppShell({ children }: AppShellProps) {
 
     return list;
   }, [effectiveRole, isFeatureEnabled]);
+
+  // All hooks are above this line — early return is safe here
+  if (!authLoading && !authData?.user) {
+    return <Redirect to="/login" />;
+  }
 
   const NavLinks = () => {
     const filterItem = (item: NavItem) => {

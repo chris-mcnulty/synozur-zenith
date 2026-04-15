@@ -17,6 +17,9 @@ import {
   Circle,
   Rocket,
   X,
+  Activity,
+  RefreshCw,
+  XCircle,
 } from "lucide-react";
 import { Link } from "wouter";
 import { useQuery } from "@tanstack/react-query";
@@ -256,6 +259,22 @@ export default function DashboardPage() {
   const { isTrial } = useServicePlan();
   const { selectedTenant } = useTenant();
   const tenantConnectionId = selectedTenant?.id ?? "";
+
+  const { data: freshnessData } = useQuery<{
+    datasets: Array<{ key: string; label: string; status: string; ageHours: number | null }>
+  }>({
+    queryKey: ["/api/datasets/freshness", tenantConnectionId],
+    queryFn: async () => {
+      const url = tenantConnectionId
+        ? `/api/datasets/freshness?tenantConnectionId=${encodeURIComponent(tenantConnectionId)}`
+        : `/api/datasets/freshness`;
+      const res = await fetch(url, { credentials: "include" });
+      if (!res.ok) return { datasets: [] };
+      return res.json();
+    },
+    enabled: !!tenantConnectionId,
+    staleTime: 60_000,
+  });
 
   const totalWorkspaces = stats?.totalWorkspaces ?? 0;
   const metadataCompliance = totalWorkspaces > 0 ? Math.round((stats!.metadataComplete / totalWorkspaces) * 100) : 0;
@@ -505,6 +524,57 @@ export default function DashboardPage() {
               ))}
             </CardContent>
           </Card>
+
+          {/* Data Freshness mini-widget */}
+          {freshnessData && freshnessData.datasets.length > 0 && (() => {
+            const ds = freshnessData.datasets;
+            const fresh = ds.filter(d => d.status === "fresh").length;
+            const warning = ds.filter(d => d.status === "warning").length;
+            const stale = ds.filter(d => d.status === "stale" || d.status === "critical").length;
+            const never = ds.filter(d => d.status === "never").length;
+            const total = ds.length;
+            const hasIssues = warning + stale > 0;
+            return (
+              <Link href="/app/admin/job-monitor">
+                <Card className={`glass-panel cursor-pointer hover:border-primary/30 transition-all ${hasIssues ? "border-amber-500/30" : "border-border"}`} data-testid="card-data-freshness">
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-sm font-medium flex items-center justify-between">
+                      <span className="flex items-center gap-2">
+                        <Activity className="w-4 h-4 text-muted-foreground" />
+                        Data Freshness
+                      </span>
+                      <ArrowUpRight className="w-3.5 h-3.5 text-muted-foreground" />
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="pt-0">
+                    <div className="flex items-center gap-3 text-xs">
+                      {fresh > 0 && (
+                        <span className="flex items-center gap-1 text-emerald-500">
+                          <CheckCircle2 className="w-3 h-3" /> {fresh} fresh
+                        </span>
+                      )}
+                      {warning > 0 && (
+                        <span className="flex items-center gap-1 text-amber-500">
+                          <AlertTriangle className="w-3 h-3" /> {warning} aging
+                        </span>
+                      )}
+                      {stale > 0 && (
+                        <span className="flex items-center gap-1 text-red-500">
+                          <XCircle className="w-3 h-3" /> {stale} stale
+                        </span>
+                      )}
+                      {never > 0 && (
+                        <span className="flex items-center gap-1 text-muted-foreground">
+                          <RefreshCw className="w-3 h-3" /> {never} never
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-[11px] text-muted-foreground mt-1.5">{total} dataset{total !== 1 ? "s" : ""} tracked · click to manage</p>
+                  </CardContent>
+                </Card>
+              </Link>
+            );
+          })()}
 
           <Card className="glass-panel relative overflow-hidden group">
             <div className="absolute inset-0 bg-gradient-to-br from-blue-500/5 to-purple-500/5 opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
