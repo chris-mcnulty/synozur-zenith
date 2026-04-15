@@ -539,7 +539,16 @@ export async function startTrackedSync(
       },
       (signal) => syncCopilotInteractions(tenantConnectionId, run.id, signal),
     ).catch(async (err) => {
-      if (err instanceof DuplicateJobError) return;
+      if (err instanceof DuplicateJobError) {
+        await storage
+          .updateCopilotSyncRun(run.id, {
+            status: "FAILED",
+            error: "A Copilot sync is already running for this tenant",
+            completedAt: new Date(),
+          })
+          .catch(() => undefined);
+        return;
+      }
       console.error(`[copilot-interaction-sync] uncaught error syncRun=${run.id}:`, err);
       await storage
         .updateCopilotSyncRun(run.id, {

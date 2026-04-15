@@ -157,10 +157,11 @@ export async function trackJobRun<T>(
 
     const completedAt = new Date();
     const durationMs = completedAt.getTime() - startedAt.getTime();
+    const cancelled = active.abortController.signal.aborted;
 
     await storage
       .updateScheduledJobRun(jobId, {
-        status: "completed",
+        status: cancelled ? "cancelled" : "completed",
         completedAt,
         durationMs,
         result: serializeResult(result),

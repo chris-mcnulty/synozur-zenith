@@ -572,7 +572,13 @@ export async function runCopilotPromptAssessment(
         return { interactionCount: interactions.length, userCount: userIds.size };
       },
     ).catch(async (err: unknown) => {
-      if (err instanceof DuplicateJobError) return; // job-registry prevented a parallel run
+      if (err instanceof DuplicateJobError) {
+        await failAssessment(
+          assessmentId,
+          "A Copilot prompt assessment is already running for this tenant",
+        );
+        return;
+      }
       const message = err instanceof Error ? err.message : String(err);
       console.error(`[CopilotPromptAssessment] ${assessmentId} FAILED:`, err);
       await failAssessment(assessmentId, message);

@@ -110,11 +110,7 @@ class JobRegistry {
   isRunning(jobType: JobType, tenantConnectionId: string | null): boolean {
     const jobs = Array.from(this.activeJobs.values());
     for (const job of jobs) {
-      if (
-        job.jobType === jobType &&
-        job.tenantConnectionId === tenantConnectionId &&
-        !job.abortController.signal.aborted
-      ) {
+      if (job.jobType === jobType && job.tenantConnectionId === tenantConnectionId) {
         return true;
       }
     }

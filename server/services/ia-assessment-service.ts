@@ -488,8 +488,14 @@ export async function runIAAssessment(
         targetName: `IA assessment (${runId.slice(0, 8)})`,
       },
       () => _executeAssessment(runId, tenantConnectionId, orgId),
-    ).catch((err) => {
-      if (err instanceof DuplicateJobError) return;
+    ).catch(async (err) => {
+      if (err instanceof DuplicateJobError) {
+        await updateRun(runId, {
+          status: "FAILED",
+          errorMessage: "An IA assessment is already running for this tenant",
+        });
+        return;
+      }
       console.error("[IA Assessment] Unhandled error during assessment:", err);
     });
   });
