@@ -913,6 +913,42 @@ export default function CopilotPromptIntelligencePage() {
           </div>
         )}
 
+        {/* Persistent sync status — always visible when sync data exists */}
+        {tenantConnectionId && latestSyncRun && (
+          <div className="rounded-md border border-border bg-muted/30 px-4 py-2.5 flex flex-wrap items-center gap-x-5 gap-y-1.5 text-sm" data-testid="sync-status-bar">
+            <div className="flex items-center gap-1.5 font-medium text-foreground/80">
+              {latestSyncRun.status === "COMPLETED" ? (
+                <CheckCircle2 className="w-3.5 h-3.5 text-green-500" />
+              ) : latestSyncRun.status === "RUNNING" ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-500" />
+              ) : (
+                <XCircle className="w-3.5 h-3.5 text-red-500" />
+              )}
+              Last sync
+              {latestSyncRun.completedAt
+                ? <> {formatDistanceToNow(new Date(latestSyncRun.completedAt), { addSuffix: true })}</>
+                : " in progress"}
+            </div>
+            {latestSyncRun.usersScanned != null && (
+              <div className="flex items-center gap-1.5 text-muted-foreground" data-testid="sync-users-scanned">
+                <Users className="w-3.5 h-3.5" />
+                <span>{latestSyncRun.usersScanned} user{latestSyncRun.usersScanned !== 1 ? "s" : ""} scanned</span>
+              </div>
+            )}
+            {latestSyncRun.interactionsCaptured != null && (
+              <div className="flex items-center gap-1.5 text-muted-foreground" data-testid="sync-interactions-captured">
+                <Database className="w-3.5 h-3.5" />
+                <span>{latestSyncRun.interactionsCaptured.toLocaleString()} new interaction{latestSyncRun.interactionsCaptured !== 1 ? "s" : ""} captured</span>
+              </div>
+            )}
+            {(interactionData?.total ?? 0) > 0 && (
+              <div className="flex items-center gap-1.5 text-muted-foreground" data-testid="sync-total-stored">
+                <span className="text-xs">{interactionData!.total.toLocaleString()} total stored</span>
+              </div>
+            )}
+          </div>
+        )}
+
         {isAssessing && (
           <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-4 py-2 text-sm text-amber-400 flex items-center gap-2">
             <Loader2 className="w-4 h-4 animate-spin" />
@@ -946,41 +982,6 @@ export default function CopilotPromptIntelligencePage() {
                 </p>
               </div>
 
-              {/* Data status bar */}
-              {(latestSyncRun || (interactionData?.total ?? 0) > 0) && (
-                <div className="rounded-md border border-border bg-muted/30 px-4 py-3 flex flex-wrap items-center gap-x-6 gap-y-2 text-sm" data-testid="sync-status-bar">
-                  {(interactionData?.total ?? 0) > 0 && (
-                    <div className="flex items-center gap-1.5" data-testid="interaction-count">
-                      <Database className="w-3.5 h-3.5 text-primary" />
-                      <span><strong>{interactionData!.total}</strong> interactions stored</span>
-                    </div>
-                  )}
-                  {latestSyncRun?.usersScanned != null && (
-                    <div className="flex items-center gap-1.5" data-testid="users-scanned">
-                      <Users className="w-3.5 h-3.5 text-muted-foreground" />
-                      <span>{latestSyncRun.usersScanned} users scanned</span>
-                    </div>
-                  )}
-                  {latestSyncRun?.completedAt && (
-                    <div className="flex items-center gap-1.5" data-testid="last-sync-time">
-                      <Clock className="w-3.5 h-3.5 text-muted-foreground" />
-                      <span>Last sync {formatDistanceToNow(new Date(latestSyncRun.completedAt), { addSuffix: true })}</span>
-                    </div>
-                  )}
-                  {latestSyncRun?.status && (
-                    <div className="flex items-center gap-1.5" data-testid="sync-status">
-                      {latestSyncRun.status === "COMPLETED" ? (
-                        <CheckCircle2 className="w-3.5 h-3.5 text-green-500" />
-                      ) : latestSyncRun.status === "RUNNING" ? (
-                        <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-500" />
-                      ) : (
-                        <XCircle className="w-3.5 h-3.5 text-red-500" />
-                      )}
-                      <span className="capitalize">{latestSyncRun.status.toLowerCase()}</span>
-                    </div>
-                  )}
-                </div>
-              )}
             </CardContent>
           </Card>
         )}
