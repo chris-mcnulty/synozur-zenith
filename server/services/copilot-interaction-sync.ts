@@ -29,6 +29,7 @@ import { getAppToken } from "./graph";
 import { storage } from "../storage";
 import { encryptRecord, getTenantKeyBuffer } from "./data-masking";
 import { decryptToken } from "../utils/encryption";
+import { trackJobRun, DuplicateJobError } from "./job-tracking";
 
 /** M365 Copilot SKU part identifier — used to filter license_assignments. */
 export const COPILOT_SKU_PART_ID = "639dec6b-bb19-468b-871c-c5c441c4b0cb";
@@ -312,6 +313,7 @@ export async function purgeExpiredInteractions(
 export async function syncCopilotInteractions(
   tenantConnectionId: string,
   syncRunId?: string,
+  signal?: AbortSignal,
 ): Promise<SyncSummary> {
   const summary: SyncSummary = {
     usersScanned: 0,
@@ -385,6 +387,15 @@ export async function syncCopilotInteractions(
   const retentionCutoff = new Date(Date.now() - RETENTION_DAYS * 24 * 60 * 60 * 1000);
 
   for (const user of users) {
+    // BL-039: stop the user loop cleanly if cancelled. Already-captured
+    // interactions are kept; the run is finalised as FAILED with the cancel
+    // reason so callers can see why it stopped early.
+    if (signal?.aborted) {
+      summary.errors.push({ context: "cancelled", message: "Job cancelled by operator" });
+      await finalizeSyncRun("FAILED", "Cancelled by operator");
+      return summary;
+    }
+
     summary.usersScanned++;
     let fetchResult: FetchResult;
 
@@ -511,17 +522,33 @@ export async function startTrackedSync(
     startedAt: new Date(),
   });
 
-  setImmediate(async () => {
-    try {
-      await syncCopilotInteractions(tenantConnectionId, run.id);
-    } catch (err) {
+  // BL-039: dual-write to scheduled_job_runs and route through the unified
+  // job registry. The legacy copilot_sync_runs row is preserved so the
+  // existing /api/copilot-prompt-intelligence/sync/:syncRunId polling UI
+  // continues to work; trackJobRun's jobId is correlated via targetId.
+  setImmediate(() => {
+    void trackJobRun(
+      {
+        jobType: "copilotSync",
+        organizationId,
+        tenantConnectionId,
+        triggeredBy: "manual",
+        triggeredByUserId: triggeredBy,
+        targetId: run.id,
+        targetName: `Copilot interaction sync (${run.id.slice(0, 8)})`,
+      },
+      (signal) => syncCopilotInteractions(tenantConnectionId, run.id, signal),
+    ).catch(async (err) => {
+      if (err instanceof DuplicateJobError) return;
       console.error(`[copilot-interaction-sync] uncaught error syncRun=${run.id}:`, err);
-      await storage.updateCopilotSyncRun(run.id, {
-        status: "FAILED",
-        error: err instanceof Error ? err.message : String(err),
-        completedAt: new Date(),
-      }).catch(() => undefined);
-    }
+      await storage
+        .updateCopilotSyncRun(run.id, {
+          status: "FAILED",
+          error: err instanceof Error ? err.message : String(err),
+          completedAt: new Date(),
+        })
+        .catch(() => undefined);
+    });
   });
 
   return run.id;

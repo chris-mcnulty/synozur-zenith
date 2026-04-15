@@ -18,6 +18,7 @@ import { storage } from "../storage";
 import { scoreIAHealth, type IAScoreResult } from "./ia-scoring";
 import { completeForFeature } from "./ai-provider";
 import { AI_FEATURES } from "@shared/ai-schema";
+import { trackJobRun, DuplicateJobError } from "./job-tracking";
 
 export type IAAssessmentStatus = "RUNNING" | "COMPLETED" | "FAILED";
 
@@ -469,9 +470,28 @@ export async function runIAAssessment(
 ): Promise<string> {
   const runId = await insertRun({ tenantConnectionId, orgId, triggeredBy });
 
-  // Run asynchronously — don't await
-  _executeAssessment(runId, tenantConnectionId, orgId).catch(err => {
-    console.error("[IA Assessment] Unhandled error during assessment:", err);
+  // BL-039: dual-write to scheduled_job_runs via trackJobRun. The legacy
+  // ai_assessment_runs row remains the public handle (its id is what the UI
+  // polls); the trackJobRun jobId is correlated via targetId. The
+  // _executeAssessment function does not currently honour AbortSignal — that
+  // is a follow-up; cancellation through the job registry will simply not
+  // interrupt an in-flight AI call until the next iteration of this code.
+  setImmediate(() => {
+    void trackJobRun(
+      {
+        jobType: "iaAssessment",
+        organizationId: orgId,
+        tenantConnectionId,
+        triggeredBy: "manual",
+        triggeredByUserId: triggeredBy,
+        targetId: runId,
+        targetName: `IA assessment (${runId.slice(0, 8)})`,
+      },
+      () => _executeAssessment(runId, tenantConnectionId, orgId),
+    ).catch((err) => {
+      if (err instanceof DuplicateJobError) return;
+      console.error("[IA Assessment] Unhandled error during assessment:", err);
+    });
   });
 
   return runId;

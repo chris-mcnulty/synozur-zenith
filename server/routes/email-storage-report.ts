@@ -230,32 +230,51 @@ router.post(
     const clientSecret = getEffectiveClientSecret(access.conn);
     const body = parseResult.data;
 
+    // BL-039: pre-check the job registry so duplicate launches return 409
+    // immediately rather than queuing behind an existing run.
+    if (jobRegistry.isRunning("emailStorageReport", access.conn.id)) {
+      return res.status(409).json({ message: "An email storage report run is already in progress" });
+    }
+
+    const orgId = getActiveOrgId(req) ?? access.conn.organizationId ?? null;
+
     // Wait for the report row to be created (synchronous DB work only),
-    // then fire the execution in the background so the response returns quickly.
+    // then let the execution continue in the background. trackJobRun adds
+    // the unified scheduled_job_runs row + registry entry; the legacy
+    // email_storage_reports row remains the public handle for polling.
     const reportId = await new Promise<string>((resolveId, rejectId) => {
-      runEmailContentStorageReport(
-        access.conn.id,
-        access.conn.tenantId,
-        clientId,
-        clientSecret,
+      void trackJobRun(
         {
-          mode: body.mode,
-          triggeredByUserId: req.user?.id ?? undefined,
-          onReportCreated: resolveId,
-          limits: {
-            windowDays: body.windowDays,
-            maxUsers: body.maxUsers,
-            maxMessagesPerUser: body.maxMessagesPerUser,
-            maxTotalMessages: body.maxTotalMessages,
-            attachmentMetadataEnabled: body.attachmentMetadataEnabled,
-            maxMessagesWithMetadata: body.maxMessagesWithMetadata,
-            minMessageSizeKBForMetadata: body.minMessageSizeKBForMetadata,
-            maxAttachmentsPerMessage: body.maxAttachmentsPerMessage,
-          },
+          jobType: "emailStorageReport",
+          organizationId: orgId,
+          tenantConnectionId: access.conn.id,
+          triggeredBy: "manual",
+          triggeredByUserId: req.user?.id ?? null,
+          targetName: access.conn.tenantName ?? access.conn.tenantId,
         },
-      ).catch(err => {
-        // If execution fails before onReportCreated fires (e.g. DB error
-        // during row creation), surface the error to the caller.
+        () =>
+          runEmailContentStorageReport(
+            access.conn.id,
+            access.conn.tenantId,
+            clientId,
+            clientSecret,
+            {
+              mode: body.mode,
+              triggeredByUserId: req.user?.id ?? undefined,
+              onReportCreated: resolveId,
+              limits: {
+                windowDays: body.windowDays,
+                maxUsers: body.maxUsers,
+                maxMessagesPerUser: body.maxMessagesPerUser,
+                maxTotalMessages: body.maxTotalMessages,
+                attachmentMetadataEnabled: body.attachmentMetadataEnabled,
+                maxMessagesWithMetadata: body.maxMessagesWithMetadata,
+                minMessageSizeKBForMetadata: body.minMessageSizeKBForMetadata,
+                maxAttachmentsPerMessage: body.maxAttachmentsPerMessage,
+              },
+            },
+          ),
+      ).catch((err) => {
         if (!res.headersSent) rejectId(err);
         else console.error("[email-storage-report] run failed:", err);
       });
