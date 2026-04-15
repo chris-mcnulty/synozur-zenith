@@ -122,7 +122,7 @@ async function getCopilotLicensedUsers(
 }
 
 /** Maximum pages to retrieve per user when falling back to unfiltered paging. */
-const MAX_PAGES_PER_USER = 10; // 10 × 100 = 1 000 interactions max per user (fallback only)
+const MAX_PAGES_PER_USER = 30; // 30 × 100 = 3 000 interactions max per user (fallback only)
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -144,8 +144,17 @@ function delay(ms: number): Promise<void> {
  */
 interface FetchResult {
   interactions: GraphInteraction[];
-  /** true when all pages were fetched; false if 429/page-cap interrupted paging */
-  complete: boolean;
+  /**
+   * true  – all available pages were fetched (or early-stopped by date filter).
+   * false – fetching was interrupted by a 429 rate-limit; results must be
+   *         discarded to prevent the watermark advancing past un-fetched pages.
+   *
+   * Page-cap stops do NOT set this flag — the Graph API returns interactions
+   * newest-first, so the cap always captures the most-recent interactions.
+   * The watermark advances to the newest item we have; subsequent syncs pick
+   * up only genuinely new interactions from that point onward.
+   */
+  rateLimited: boolean;
 }
 
 async function fetchInteractionsForUser(
@@ -162,7 +171,7 @@ async function fetchInteractionsForUser(
     `/interactionHistory/getAllEnterpriseInteractions?$top=100`;
 
   let pages = 0;
-  let complete = true;
+  let rateLimited = false;
 
   while (url && pages < MAX_PAGES_PER_USER) {
     if (pages > 0) await delay(100);
@@ -170,8 +179,9 @@ async function fetchInteractionsForUser(
 
     // Plain fetch — NOT graphFetchWithRetry. This endpoint has tight per-user
     // rate limits. Retrying 429s with exponential backoff hammers the already-
-    // throttled endpoint and blocks subsequent users. On 429, we mark partial
-    // and discard results so the watermark stays unchanged for next sync.
+    // throttled endpoint and blocks subsequent users. On 429, we mark the fetch
+    // as rate-limited and discard results so the watermark stays unchanged for
+    // the next sync.
     const res: Response = await fetch(url, { headers });
 
     if (res.status === 403 || res.status === 404) {
@@ -185,7 +195,7 @@ async function fetchInteractionsForUser(
 
     if (res.status === 429) {
       console.warn(`[copilot-interaction-sync] user=${userId} 429 throttled on page ${pages}; will retry next sync`);
-      complete = false;
+      rateLimited = true;
       break;
     }
 
@@ -222,13 +232,20 @@ async function fetchInteractionsForUser(
 
     url = data["@odata.nextLink"] ?? null;
 
-    // If page cap reached while more pages exist, mark as partial
+    // Page cap reached with more pages available. The Graph API returns
+    // interactions newest-first, so we have captured the most-recent
+    // MAX_PAGES_PER_USER × 100 interactions. We save them and let the
+    // watermark advance to the newest one; the next sync will efficiently
+    // pick up only genuinely new interactions from that point.
     if (pages >= MAX_PAGES_PER_USER && url) {
-      complete = false;
+      console.log(
+        `[copilot-interaction-sync] user=${userId} page cap (${MAX_PAGES_PER_USER}) reached; ` +
+        `saving ${interactions.length} interactions and advancing watermark`,
+      );
     }
   }
 
-  return { interactions, complete };
+  return { interactions, rateLimited };
 }
 
 type InteractionEncryptionContext =
@@ -427,12 +444,14 @@ export async function syncCopilotInteractions(
       continue;
     }
 
-    // If fetch was interrupted (429 / page cap), discard results to prevent the
-    // watermark from advancing past un-fetched pages. The next sync will retry
-    // from the same watermark and cover the full history.
-    if (!fetchResult.complete) {
+    // If the fetch was rate-limited (429), discard results to prevent the
+    // watermark advancing past pages we never retrieved. The next sync retries
+    // from the same watermark. Page-cap stops are NOT discarded — the API
+    // returns interactions newest-first so we always have the most-recent data;
+    // the watermark advances normally and subsequent syncs add only new items.
+    if (fetchResult.rateLimited) {
       console.warn(
-        `[copilot-interaction-sync] user=${user.userId} partial fetch (${fetchResult.interactions.length} items); ` +
+        `[copilot-interaction-sync] user=${user.userId} rate-limited (${fetchResult.interactions.length} items buffered); ` +
         `discarding to preserve watermark`,
       );
       continue;
