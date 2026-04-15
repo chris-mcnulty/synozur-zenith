@@ -170,11 +170,15 @@ function delay(ms: number): Promise<void> {
  * with "Missing 'createdDateTime' value" on this tenant — tested across v1.0/
  * beta, URLSearchParams/raw strings, with/without milliseconds, open/closed
  * ranges. The reference implementation (Sentry) also encounters this but relies
- * on unfiltered paging with client-side date windowing and early-stop.
+ * on unfiltered paging with client-side date windowing.
  *
- * Strategy: page through results with $top=100, apply client-side date filter
- * via sinceMs, and early-stop when a page returns zero new (post-watermark)
- * interactions. Rate-limit with 100ms delay between pages.
+ * Strategy: page through ALL available results with $top=100, apply
+ * client-side date filter via sinceMs, and collect only post-watermark items.
+ * We request $orderby=createdDateTime desc (best-effort; the API may ignore
+ * it). No early-stop is used because the Graph beta endpoint does NOT
+ * guarantee newest-first ordering — production data shows oldest-first
+ * results, which caused page-1 early-stop to miss ALL recent interactions.
+ * Rate-limit with 100ms delay between pages.
  */
 interface FetchResult {
   interactions: GraphInteraction[];
@@ -194,9 +198,11 @@ async function fetchInteractionsForUser(
   const interactions: GraphInteraction[] = [];
   const headers: Record<string, string> = { Authorization: `Bearer ${token}` };
 
-  let url: string | null =
+  const baseUrl =
     `https://graph.microsoft.com/beta/copilot/users/${encodeURIComponent(userId)}` +
     `/interactionHistory/getAllEnterpriseInteractions?$top=100`;
+
+  let url: string | null = `${baseUrl}&$orderby=createdDateTime%20desc`;
 
   let pages = 0;
   let rawItemCount = 0;
@@ -212,7 +218,14 @@ async function fetchInteractionsForUser(
     // throttled endpoint and blocks subsequent users. On 429, we mark the fetch
     // as rate-limited and discard results so the watermark stays unchanged for
     // the next sync.
-    const res: Response = await fetch(url, { headers });
+    let res: Response = await fetch(url, { headers });
+
+    // If the first request fails with 400 (likely $orderby rejected), retry without it
+    if (res.status === 400 && pages === 1 && url.includes("$orderby")) {
+      console.warn(`[copilot-interaction-sync] user=${userId} $orderby rejected (400), retrying without`);
+      url = baseUrl;
+      res = await fetch(url, { headers });
+    }
 
     if (res.status === 403 || res.status === 404) {
       const errBody = await res.text().catch(() => "");
@@ -250,7 +263,6 @@ async function fetchInteractionsForUser(
 
     const pageItems = data.value ?? [];
     rawItemCount += pageItems.length;
-    let newOnThisPage = 0;
     for (const item of pageItems) {
       if (!item?.id) continue;
       if (sinceMs) {
@@ -258,22 +270,14 @@ async function fetchInteractionsForUser(
         if (!createdMs || createdMs <= sinceMs) { watermarkFiltered++; continue; }
       }
       interactions.push(item);
-      newOnThisPage++;
     }
 
-    // Early-stop: if an entire page yielded zero new interactions (all older
-    // than our watermark), there's no point paging further.
-    if (newOnThisPage === 0 && (data.value?.length ?? 0) > 0) {
-      break;
-    }
+    // No early-stop: the Graph beta API does NOT guarantee ordering.
+    // Production data shows oldest-first results, so page 1 may contain
+    // only old items while recent items are on later pages.
 
     url = data["@odata.nextLink"] ?? null;
 
-    // Page cap reached with more pages available. The Graph API returns
-    // interactions newest-first, so we have captured the most-recent
-    // MAX_PAGES_PER_USER × 100 interactions. We save them and let the
-    // watermark advance to the newest one; the next sync will efficiently
-    // pick up only genuinely new interactions from that point.
     if (pages >= MAX_PAGES_PER_USER && url) {
       console.log(
         `[copilot-interaction-sync] user=${userId} page cap (${MAX_PAGES_PER_USER}) reached; ` +
