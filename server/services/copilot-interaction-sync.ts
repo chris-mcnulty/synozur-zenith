@@ -187,6 +187,7 @@ interface FetchResult {
   rawItemCount: number;
   watermarkFiltered: number;
   accessError?: string;
+  midStreamTruncated?: boolean;
 }
 
 async function fetchInteractionsForUser(
@@ -194,20 +195,22 @@ async function fetchInteractionsForUser(
   userId: string,
   /** Epoch ms lower bound for client-side date filtering; 0 = accept all */
   sinceMs: number,
+  /** UPN for fallback if Entra Object ID returns 404 */
+  upn?: string,
 ): Promise<FetchResult> {
   const interactions: GraphInteraction[] = [];
   const headers: Record<string, string> = { Authorization: `Bearer ${token}` };
 
-  const baseUrl =
+  let url: string | null =
     `https://graph.microsoft.com/beta/copilot/users/${encodeURIComponent(userId)}` +
     `/interactionHistory/getAllEnterpriseInteractions?$top=100`;
-
-  let url: string | null = `${baseUrl}&$orderby=createdDateTime%20desc`;
 
   let pages = 0;
   let rawItemCount = 0;
   let watermarkFiltered = 0;
   let rateLimited = false;
+  let triedUpnFallback = false;
+  let midStreamTruncated = false;
 
   while (url && pages < MAX_PAGES_PER_USER) {
     if (pages > 0) await delay(100);
@@ -218,19 +221,40 @@ async function fetchInteractionsForUser(
     // throttled endpoint and blocks subsequent users. On 429, we mark the fetch
     // as rate-limited and discard results so the watermark stays unchanged for
     // the next sync.
-    let res: Response = await fetch(url, { headers });
-
-    // If the first request fails with 400 (likely $orderby rejected), retry without it
-    if (res.status === 400 && pages === 1 && url.includes("$orderby")) {
-      console.warn(`[copilot-interaction-sync] user=${userId} $orderby rejected (400), retrying without`);
-      url = baseUrl;
-      res = await fetch(url, { headers });
-    }
+    const res: Response = await fetch(url, { headers });
 
     if (res.status === 403 || res.status === 404) {
       const errBody = await res.text().catch(() => "");
       const errMsg = errBody.slice(0, 300);
-      console.log(`[copilot-interaction-sync] user=${userId} ${res.status}: ${errMsg}`);
+
+      // First-page 404 with an Entra Object ID: try UPN-based URL as fallback
+      // (one attempt only to avoid infinite retry loops).
+      if (res.status === 404 && pages === 1 && upn && !triedUpnFallback && !userId.includes("@")) {
+        triedUpnFallback = true;
+        console.warn(
+          `[copilot-interaction-sync] user=${userId} 404 on page 1; retrying with UPN=${upn}`,
+        );
+        url =
+          `https://graph.microsoft.com/beta/copilot/users/${encodeURIComponent(upn)}` +
+          `/interactionHistory/getAllEnterpriseInteractions?$top=100`;
+        pages = 0;
+        continue;
+      }
+
+      // Mid-stream 404 (pages > 1): the API pagination broke partway through.
+      // Keep items already collected but flag as truncated so the caller
+      // does NOT advance the watermark (which would permanently skip items
+      // on pages we never reached).
+      if (pages > 1) {
+        console.warn(
+          `[copilot-interaction-sync] user=${userId} ${res.status} mid-stream on page ${pages}; ` +
+          `treating as end-of-data (${interactions.length} items kept, watermark frozen)`,
+        );
+        midStreamTruncated = true;
+        break;
+      }
+
+      console.log(`[copilot-interaction-sync] user=${userId} ${res.status} on page ${pages}: ${errMsg}`);
       return {
         interactions,
         rateLimited: false,
@@ -286,7 +310,7 @@ async function fetchInteractionsForUser(
     }
   }
 
-  return { interactions, rateLimited, pagesRead: pages, rawItemCount, watermarkFiltered };
+  return { interactions, rateLimited, pagesRead: pages, rawItemCount, watermarkFiltered, midStreamTruncated };
 }
 
 type InteractionEncryptionContext =
@@ -460,9 +484,9 @@ export async function syncCopilotInteractions(
     summary.usersScanned++;
     let fetchResult: FetchResult;
 
-    const perUserLastDate = await storage.getLatestCopilotInteractionDateForUser(
+    const perUserLastDate = await storage.getLatestCopilotInteractionDateByUserId(
       tenantConnectionId,
-      user.userPrincipalName,
+      user.userId,
     );
     const effectiveSince = perUserLastDate && perUserLastDate > retentionCutoff
       ? perUserLastDate
@@ -470,7 +494,7 @@ export async function syncCopilotInteractions(
     const sinceMs = effectiveSince.getTime();
 
     try {
-      fetchResult = await fetchInteractionsForUser(token, user.userId, sinceMs);
+      fetchResult = await fetchInteractionsForUser(token, user.userId, sinceMs, user.userPrincipalName);
     } catch (err: unknown) {
       const status = (err as { status?: number })?.status;
       const errMsg = err instanceof Error ? err.message : String(err);
@@ -492,8 +516,10 @@ export async function syncCopilotInteractions(
     console.log(
       `[copilot-interaction-sync] user=${user.userPrincipalName} ` +
       `graphItems=${fetchResult.rawItemCount} watermarkFiltered=${fetchResult.watermarkFiltered} ` +
-      `newItems=${fetchResult.interactions.length} ` +
-      `watermark=${effectiveSince.toISOString()}${fetchResult.accessError ? ` ERROR=${fetchResult.accessError.slice(0, 80)}` : ""}`,
+      `newItems=${fetchResult.interactions.length} pages=${fetchResult.pagesRead} ` +
+      `watermark=${effectiveSince.toISOString()}` +
+      `${fetchResult.midStreamTruncated ? " TRUNCATED" : ""}` +
+      `${fetchResult.accessError ? ` ERROR=${fetchResult.accessError.slice(0, 80)}` : ""}`,
     );
 
     if (fetchResult.accessError) {
