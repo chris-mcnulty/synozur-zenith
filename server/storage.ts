@@ -336,6 +336,8 @@ export interface IStorage {
   upsertChannelsInventory(data: InsertChannelsInventory): Promise<ChannelsInventoryItem>;
   getChannelsInventory(tenantConnectionId: string, teamId?: string): Promise<ChannelsInventoryItem[]>;
   getTeamsInventorySummary(tenantConnectionIds?: string[]): Promise<TeamsChannelsSummary[]>;
+  markMissingTeamsInventoryAsDeleted(tenantConnectionId: string, runStartedAt: Date): Promise<number>;
+  markMissingChannelsInventoryAsDeleted(tenantConnectionId: string, runStartedAt: Date): Promise<number>;
 
   // OneDrive inventory
   upsertOnedriveInventory(data: InsertOnedriveInventory): Promise<OnedriveInventoryItem>;
@@ -2229,6 +2231,36 @@ export class DatabaseStorage implements IStorage {
     }
 
     return result;
+  }
+
+  async markMissingTeamsInventoryAsDeleted(
+    tenantConnectionId: string,
+    runStartedAt: Date,
+  ): Promise<number> {
+    const result = await db.update(teamsInventory)
+      .set({ discoveryStatus: "DELETED" })
+      .where(and(
+        eq(teamsInventory.tenantConnectionId, tenantConnectionId),
+        eq(teamsInventory.discoveryStatus, "ACTIVE"),
+        lt(teamsInventory.lastDiscoveredAt, runStartedAt),
+      ))
+      .returning({ id: teamsInventory.id });
+    return result.length;
+  }
+
+  async markMissingChannelsInventoryAsDeleted(
+    tenantConnectionId: string,
+    runStartedAt: Date,
+  ): Promise<number> {
+    const result = await db.update(channelsInventory)
+      .set({ discoveryStatus: "DELETED" })
+      .where(and(
+        eq(channelsInventory.tenantConnectionId, tenantConnectionId),
+        eq(channelsInventory.discoveryStatus, "ACTIVE"),
+        lt(channelsInventory.lastDiscoveredAt, runStartedAt),
+      ))
+      .returning({ id: channelsInventory.id });
+    return result.length;
   }
 
   // ── OneDrive Inventory ──────────────────────────────────────────────────────
