@@ -347,7 +347,7 @@ router.get("/api/recordings/discovery-runs", requireAuth(), async (req: Authenti
 router.post(
   "/api/admin/tenants/:id/recordings/sync",
   requireAuth(),
-  requireRole("tenant_admin"),
+  requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN),
   async (req: AuthenticatedRequest, res) => {
     const conn = await storage.getTenantConnection(req.params.id);
     if (!conn) return res.status(404).json({ message: "Tenant connection not found" });
@@ -380,7 +380,7 @@ router.post(
 router.post(
   "/api/admin/tenants/:id/teams-inventory/sync",
   requireAuth(),
-  requireRole("tenant_admin"),
+  requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN),
   async (req: AuthenticatedRequest, res) => {
     const conn = await storage.getTenantConnection(req.params.id);
     if (!conn) return res.status(404).json({ message: "Tenant connection not found" });
@@ -413,7 +413,7 @@ router.post(
 router.post(
   "/api/admin/tenants/:id/onedrive-inventory/sync",
   requireAuth(),
-  requireRole("tenant_admin"),
+  requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN),
   async (req: AuthenticatedRequest, res) => {
     const conn = await storage.getTenantConnection(req.params.id);
     if (!conn) return res.status(404).json({ message: "Tenant connection not found" });
@@ -446,7 +446,7 @@ router.post(
 router.post(
   "/api/admin/tenants/:id/sharing-links/sync",
   requireAuth(),
-  requireRole("tenant_admin"),
+  requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN),
   async (req: AuthenticatedRequest, res) => {
     const conn = await storage.getTenantConnection(req.params.id);
     if (!conn) return res.status(404).json({ message: "Tenant connection not found" });

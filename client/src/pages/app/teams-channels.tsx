@@ -292,7 +292,10 @@ export default function TeamsChannelsPage() {
         method: "POST",
         credentials: "include",
       });
-      if (!res.ok) throw new Error("Failed to start sync");
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.message || "Failed to start sync");
+      }
       return res.json();
     },
     onSuccess: () => {
