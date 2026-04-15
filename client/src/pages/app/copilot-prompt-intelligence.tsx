@@ -715,8 +715,9 @@ export default function CopilotPromptIntelligencePage() {
   const tenantConnectionId = selectedTenant?.id ?? "";
 
   const [pollingAssessmentId, setPollingAssessmentId] = useState<string | null>(null);
+  const [pollingSyncId, setPollingSyncId] = useState<string | null>(null);
   const [selectedAssessmentId, setSelectedAssessmentId] = useState<string | null>(null);
-  const [syncMessage, setSyncMessage] = useState<string | null>(null);
+  const [syncMessage, setSyncMessage] = useState<{ text: string; variant: "info" | "success" | "error" } | null>(null);
 
   // Latest completed assessment
   const { data: latestAssessment, isLoading: latestLoading, refetch: refetchLatest } = useQuery<Assessment | null>({
@@ -749,14 +750,18 @@ export default function CopilotPromptIntelligencePage() {
     staleTime: 30_000,
   });
 
-  // Latest sync run status
-  const { data: latestSyncRun } = useQuery<{
+  type SyncRun = {
     id: string;
     status: string;
     usersScanned: number | null;
     interactionsCaptured: number | null;
+    interactionsSkipped: number | null;
+    errorCount: number | null;
     completedAt: string | null;
-  } | null>({
+  };
+
+  // Latest sync run status
+  const { data: latestSyncRun, refetch: refetchLatestSync } = useQuery<SyncRun | null>({
     queryKey: ["/api/copilot-prompt-intelligence/sync/latest", tenantConnectionId],
     queryFn: async () => {
       const res = await fetch(
@@ -769,6 +774,21 @@ export default function CopilotPromptIntelligencePage() {
     },
     enabled: !!tenantConnectionId,
     staleTime: 30_000,
+  });
+
+  // Poll a running sync until it completes
+  const { data: pollingSyncData } = useQuery<SyncRun>({
+    queryKey: ["/api/copilot-prompt-intelligence/sync/poll", pollingSyncId],
+    queryFn: async () => {
+      const res = await fetch(
+        `/api/copilot-prompt-intelligence/sync/latest?tenantConnectionId=${encodeURIComponent(tenantConnectionId)}`,
+        { credentials: "include" },
+      );
+      if (!res.ok) throw new Error(await res.text());
+      return res.json();
+    },
+    enabled: !!pollingSyncId,
+    refetchInterval: pollingSyncId ? 3000 : false,
   });
 
   // Total interaction count (lightweight — just need the total)
@@ -809,6 +829,27 @@ export default function CopilotPromptIntelligencePage() {
     }
   }, [pollingData, refetchLatest, refetchHistory]);
 
+  useEffect(() => {
+    if (!pollingSyncData) return;
+    if (pollingSyncData.status === "COMPLETED") {
+      setPollingSyncId(null);
+      refetchLatestSync();
+      queryClient.invalidateQueries({ queryKey: ["/api/copilot-prompt-intelligence/interactions/count"] });
+      const captured = pollingSyncData.interactionsCaptured ?? 0;
+      const errors = pollingSyncData.errorCount ?? 0;
+      setSyncMessage({
+        variant: errors > 0 ? "error" : "success",
+        text: `Sync complete — ${captured} new interaction${captured !== 1 ? "s" : ""} captured across ${pollingSyncData.usersScanned ?? 0} users.${errors > 0 ? ` ${errors} user${errors !== 1 ? "s" : ""} had access errors.` : ""}`,
+      });
+      setTimeout(() => setSyncMessage(null), 20000);
+    } else if (pollingSyncData.status === "FAILED") {
+      setPollingSyncId(null);
+      refetchLatestSync();
+      setSyncMessage({ variant: "error", text: "Sync failed — see sync status bar for details." });
+      setTimeout(() => setSyncMessage(null), 15000);
+    }
+  }, [pollingSyncData, refetchLatestSync]);
+
   // Sync mutation
   const syncMutation = useMutation({
     mutationFn: async () => {
@@ -821,13 +862,9 @@ export default function CopilotPromptIntelligencePage() {
       if (!res.ok) throw new Error(await res.text());
       return res.json();
     },
-    onSuccess: () => {
-      setSyncMessage("Sync started — interactions will be captured in the background.");
-      setTimeout(() => {
-        setSyncMessage(null);
-        queryClient.invalidateQueries({ queryKey: ["/api/copilot-prompt-intelligence/sync/latest"] });
-        queryClient.invalidateQueries({ queryKey: ["/api/copilot-prompt-intelligence/interactions/count"] });
-      }, 8000);
+    onSuccess: (data: { syncRunId: string }) => {
+      setSyncMessage({ variant: "info", text: "Sync started — fetching interactions from Microsoft Graph…" });
+      setPollingSyncId(data.syncRunId);
     },
   });
 
@@ -874,15 +911,15 @@ export default function CopilotPromptIntelligencePage() {
               variant="outline"
               size="sm"
               onClick={() => syncMutation.mutate()}
-              disabled={syncMutation.isPending || !tenantConnectionId}
+              disabled={syncMutation.isPending || !!pollingSyncId || !tenantConnectionId}
               className="gap-1.5"
             >
-              {syncMutation.isPending ? (
+              {(syncMutation.isPending || !!pollingSyncId) ? (
                 <Loader2 className="w-3.5 h-3.5 animate-spin" />
               ) : (
                 <RefreshCw className="w-3.5 h-3.5" />
               )}
-              Sync Interactions
+              {pollingSyncId ? "Syncing…" : "Sync Interactions"}
             </Button>
             <Button
               size="sm"
@@ -908,8 +945,17 @@ export default function CopilotPromptIntelligencePage() {
         )}
 
         {syncMessage && (
-          <div className="rounded-md border border-blue-500/30 bg-blue-500/10 px-4 py-2 text-sm text-blue-400">
-            {syncMessage}
+          <div className={`rounded-md border px-4 py-2.5 text-sm flex items-center gap-2 ${
+            syncMessage.variant === "success"
+              ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-400"
+              : syncMessage.variant === "error"
+              ? "border-red-500/30 bg-red-500/10 text-red-400"
+              : "border-blue-500/30 bg-blue-500/10 text-blue-400"
+          }`}>
+            {syncMessage.variant === "info" && <Loader2 className="w-3.5 h-3.5 animate-spin flex-shrink-0" />}
+            {syncMessage.variant === "success" && <CheckCircle2 className="w-3.5 h-3.5 flex-shrink-0" />}
+            {syncMessage.variant === "error" && <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" />}
+            {syncMessage.text}
           </div>
         )}
 
@@ -944,6 +990,12 @@ export default function CopilotPromptIntelligencePage() {
             {(interactionData?.total ?? 0) > 0 && (
               <div className="flex items-center gap-1.5 text-muted-foreground" data-testid="sync-total-stored">
                 <span className="text-xs">{interactionData!.total.toLocaleString()} total stored</span>
+              </div>
+            )}
+            {(latestSyncRun.errorCount ?? 0) > 0 && (
+              <div className="flex items-center gap-1.5 text-red-400" data-testid="sync-error-count">
+                <AlertTriangle className="w-3.5 h-3.5" />
+                <span>{latestSyncRun.errorCount} user{latestSyncRun.errorCount !== 1 ? "s" : ""} had access errors</span>
               </div>
             )}
           </div>

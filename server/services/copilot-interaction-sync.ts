@@ -167,6 +167,7 @@ interface FetchResult {
   rateLimited: boolean;
   pagesRead: number;
   rawItemCount: number;
+  watermarkFiltered: number;
   accessError?: string;
 }
 
@@ -185,6 +186,7 @@ async function fetchInteractionsForUser(
 
   let pages = 0;
   let rawItemCount = 0;
+  let watermarkFiltered = 0;
   let rateLimited = false;
 
   while (url && pages < MAX_PAGES_PER_USER) {
@@ -207,6 +209,7 @@ async function fetchInteractionsForUser(
         rateLimited: false,
         pagesRead: pages,
         rawItemCount,
+        watermarkFiltered,
         accessError: `${res.status}: ${errMsg}`,
       };
     }
@@ -238,7 +241,7 @@ async function fetchInteractionsForUser(
       if (!item?.id) continue;
       if (sinceMs) {
         const createdMs = item.createdDateTime ? Date.parse(item.createdDateTime) : 0;
-        if (!createdMs || createdMs <= sinceMs) continue;
+        if (!createdMs || createdMs <= sinceMs) { watermarkFiltered++; continue; }
       }
       interactions.push(item);
       newOnThisPage++;
@@ -265,7 +268,7 @@ async function fetchInteractionsForUser(
     }
   }
 
-  return { interactions, rateLimited, pagesRead: pages, rawItemCount };
+  return { interactions, rateLimited, pagesRead: pages, rawItemCount, watermarkFiltered };
 }
 
 type InteractionEncryptionContext =
@@ -423,7 +426,7 @@ export async function syncCopilotInteractions(
   console.log(`[copilot-interaction-sync] tenant=${tenantConnectionId} found ${users.length} Copilot-licensed users`);
   const retentionCutoff = new Date(Date.now() - RETENTION_DAYS * 24 * 60 * 60 * 1000);
 
-  const skipReasons = { nonUserPromptType: 0, noPromptText: 0, duplicateUpsert: 0, rateLimitDiscard: 0 };
+  const skipReasons = { nonUserPromptType: 0, noPromptText: 0, duplicateUpsert: 0, rateLimitDiscard: 0, olderThanWatermark: 0 };
   const seenInteractionTypes: Record<string, number> = {};
   let graphPagesTotal = 0;
   let graphItemsTotal = 0;
@@ -466,6 +469,14 @@ export async function syncCopilotInteractions(
 
     graphPagesTotal += fetchResult.pagesRead;
     graphItemsTotal += fetchResult.rawItemCount;
+    skipReasons.olderThanWatermark += fetchResult.watermarkFiltered;
+
+    console.log(
+      `[copilot-interaction-sync] user=${user.userPrincipalName} ` +
+      `graphItems=${fetchResult.rawItemCount} watermarkFiltered=${fetchResult.watermarkFiltered} ` +
+      `newItems=${fetchResult.interactions.length} ` +
+      `watermark=${effectiveSince.toISOString()}${fetchResult.accessError ? ` ERROR=${fetchResult.accessError.slice(0, 80)}` : ""}`,
+    );
 
     if (fetchResult.accessError) {
       summary.errors.push({
@@ -567,8 +578,9 @@ export async function syncCopilotInteractions(
   );
   console.log(
     `[copilot-interaction-sync] skipReasons: ` +
-    `nonUserPromptType=${skipReasons.nonUserPromptType} noPromptText=${skipReasons.noPromptText} ` +
-    `duplicateUpsert=${skipReasons.duplicateUpsert} rateLimitDiscard=${skipReasons.rateLimitDiscard}`,
+    `olderThanWatermark=${skipReasons.olderThanWatermark} nonUserPromptType=${skipReasons.nonUserPromptType} ` +
+    `noPromptText=${skipReasons.noPromptText} duplicateUpsert=${skipReasons.duplicateUpsert} ` +
+    `rateLimitDiscard=${skipReasons.rateLimitDiscard}`,
   );
   if (Object.keys(seenInteractionTypes).length > 0) {
     console.log(
