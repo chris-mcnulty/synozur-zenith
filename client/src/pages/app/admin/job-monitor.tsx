@@ -429,7 +429,6 @@ function DatasetFreshnessPanel({ tenantConnectionId }: { tenantConnectionId: str
     const queue = queueRef.current;
     if (queue.length === 0) {
       setStagingActive(false);
-      setDispatchedKeys(new Set());
       toast({
         title: "All stale refreshes dispatched",
         description: "Jobs are running in the background.",
@@ -443,7 +442,11 @@ function DatasetFreshnessPanel({ tenantConnectionId }: { tenantConnectionId: str
     refreshMutationRef.current.mutate(nextKey);
 
     if (remaining.length > 0) {
+      // Clear any lingering timer before starting a new one
+      if (stagingTimerRef.current) clearTimeout(stagingTimerRef.current);
       stagingTimerRef.current = setTimeout(processNext, STAGGER_DELAY_MS);
+    } else {
+      setStagingActive(false);
     }
   }, [toast]);
 
@@ -464,6 +467,9 @@ function DatasetFreshnessPanel({ tenantConnectionId }: { tenantConnectionId: str
   }, [toast]);
 
   const refreshAllStale = useCallback(() => {
+    // Cancel any in-progress staging before starting fresh
+    if (stagingTimerRef.current) clearTimeout(stagingTimerRef.current);
+
     const stale = datasets.filter(
       (d) => d.status !== "fresh" && !d.isRefreshing,
     );
