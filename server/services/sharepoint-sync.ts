@@ -75,10 +75,10 @@ export interface TenantSyncResult {
 }
 
 // ---------------------------------------------------------------------------
-// Local helpers (mirrored from routes/sharepoint.ts)
+// Shared helpers — imported by routes/sharepoint.ts so there is one copy
 // ---------------------------------------------------------------------------
 
-function inferSiteType(rootWebTemplate?: string, isRootSite?: object): string {
+export function inferSiteType(rootWebTemplate?: string, isRootSite?: object): string {
   if (!rootWebTemplate) return "TEAM_SITE";
   const t = rootWebTemplate.toUpperCase();
   if (t.includes("SITEPAGEPUBLISHING") || t.includes("COMM")) return "COMMUNICATION_SITE";
@@ -88,12 +88,12 @@ function inferSiteType(rootWebTemplate?: string, isRootSite?: object): string {
   return "TEAM_SITE";
 }
 
-interface PolicyEvalResult {
+export interface PolicyEvalResult {
   bagChanged: boolean;
   changedBagKeys: Record<string, string>;
 }
 
-async function evaluateAllPoliciesForWorkspace(
+export async function evaluateAllPoliciesForWorkspace(
   ws: Workspace,
   orgId: string,
   tenantId: string,
@@ -138,7 +138,7 @@ async function evaluateAllPoliciesForWorkspace(
   return { bagChanged, changedBagKeys };
 }
 
-async function getDelegatedTokenForRetention(
+export async function getDelegatedTokenForRetention(
   currentUserId?: string,
   organizationId?: string,
 ): Promise<string | null> {
@@ -180,7 +180,7 @@ async function getDelegatedTokenForRetention(
   return null;
 }
 
-async function getDelegatedSpoTokenForOrg(
+export async function getDelegatedSpoTokenForOrg(
   spoHost: string,
   currentUserId?: string,
   organizationId?: string,
@@ -208,7 +208,7 @@ async function getDelegatedSpoTokenForOrg(
   return null;
 }
 
-function getEffectiveClientSecret(conn: { clientSecret?: string | null }): string {
+export function getEffectiveClientSecret(conn: { clientSecret?: string | null }): string {
   if (conn.clientSecret) {
     try {
       return decryptToken(conn.clientSecret);

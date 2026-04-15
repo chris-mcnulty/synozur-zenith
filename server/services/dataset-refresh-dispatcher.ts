@@ -31,6 +31,7 @@ import { runOneDriveInventoryDiscovery } from "./onedrive-inventory-discovery";
 import { runTeamsInventoryDiscovery } from "./teams-inventory-discovery";
 import { runTeamsRecordingsDiscovery } from "./recordings-discovery";
 import { runIASync } from "./ia-sync";
+import { runSharePointTenantSync } from "./sharepoint-sync";
 
 export type DispatchOutcome =
   | { ok: true; jobId: string | null; alreadyRunning?: false; legacyRunId?: string }
@@ -225,12 +226,17 @@ export async function dispatchDatasetRefresh(opts: {
           "Email Storage Report must be triggered with run options. Open the Email Storage Report page.",
       };
 
-    case "tenantSync":
-      return {
-        ok: false,
-        status: 501,
-        message: `Job type "${jobType}" has no service implementation yet.`,
-      };
+    case "tenantSync": {
+      const promise = trackJobRun(
+        { ...baseTrackOpts, jobType: "tenantSync" },
+        () => runSharePointTenantSync(tenantConnectionId, { triggeredByUserId }),
+      );
+      promise.catch((err) => {
+        if (err instanceof DuplicateJobError) return;
+        console.error("[dispatch] tenantSync failed:", err);
+      });
+      return { ok: true, jobId: null };
+    }
 
     case "iaSync": {
       const promise = trackJobRun(
