@@ -156,7 +156,8 @@ async function getCopilotLicensedUsers(
 }
 
 /** Maximum pages to retrieve per user when falling back to unfiltered paging. */
-const MAX_PAGES_PER_USER = 30; // 30 × 100 = 3 000 interactions max per user (fallback only)
+const MAX_PAGES_PER_USER = 30;
+const MAX_THROTTLE_RETRIES = 3; // retry 429s up to 3 times with Retry-After back-off
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -193,8 +194,6 @@ interface FetchResult {
 async function fetchInteractionsForUser(
   token: string,
   userId: string,
-  /** Epoch ms lower bound for client-side date filtering; 0 = accept all */
-  sinceMs: number,
   /** UPN for fallback if Entra Object ID returns 404 */
   upn?: string,
 ): Promise<FetchResult> {
@@ -207,13 +206,13 @@ async function fetchInteractionsForUser(
 
   let pages = 0;
   let rawItemCount = 0;
-  let watermarkFiltered = 0;
   let rateLimited = false;
   let triedUpnFallback = false;
   let midStreamTruncated = false;
+  let throttleRetries = 0;
 
   while (url && pages < MAX_PAGES_PER_USER) {
-    if (pages > 0) await delay(100);
+    if (pages > 0) await delay(500);
     pages++;
 
     // Plain fetch — NOT graphFetchWithRetry. This endpoint has tight per-user
@@ -260,15 +259,29 @@ async function fetchInteractionsForUser(
         rateLimited: false,
         pagesRead: pages,
         rawItemCount,
-        watermarkFiltered,
+        watermarkFiltered: 0,
         accessError: `${res.status}: ${errMsg}`,
       };
     }
 
     if (res.status === 429) {
-      console.warn(`[copilot-interaction-sync] user=${userId} 429 throttled on page ${pages}; will retry next sync`);
-      rateLimited = true;
-      break;
+      const retryAfter = parseInt(res.headers.get("Retry-After") ?? "", 10);
+      const waitSec = Number.isFinite(retryAfter) && retryAfter > 0 ? Math.min(retryAfter, 120) : 30;
+      throttleRetries++;
+      if (throttleRetries > MAX_THROTTLE_RETRIES) {
+        console.warn(
+          `[copilot-interaction-sync] user=${userId} 429 on page ${pages} after ${throttleRetries} retries; giving up`,
+        );
+        rateLimited = true;
+        break;
+      }
+      console.warn(
+        `[copilot-interaction-sync] user=${userId} 429 on page ${pages}; ` +
+        `waiting ${waitSec}s (retry ${throttleRetries}/${MAX_THROTTLE_RETRIES})`,
+      );
+      await delay(waitSec * 1000);
+      pages--; // retry the same page
+      continue;
     }
 
     if (!res.ok) {
@@ -289,10 +302,6 @@ async function fetchInteractionsForUser(
     rawItemCount += pageItems.length;
     for (const item of pageItems) {
       if (!item?.id) continue;
-      if (sinceMs) {
-        const createdMs = item.createdDateTime ? Date.parse(item.createdDateTime) : 0;
-        if (!createdMs || createdMs <= sinceMs) { watermarkFiltered++; continue; }
-      }
       interactions.push(item);
     }
 
@@ -310,7 +319,7 @@ async function fetchInteractionsForUser(
     }
   }
 
-  return { interactions, rateLimited, pagesRead: pages, rawItemCount, watermarkFiltered, midStreamTruncated };
+  return { interactions, rateLimited, pagesRead: pages, rawItemCount, watermarkFiltered: 0, midStreamTruncated };
 }
 
 type InteractionEncryptionContext =
@@ -468,11 +477,12 @@ export async function syncCopilotInteractions(
   console.log(`[copilot-interaction-sync] tenant=${tenantConnectionId} found ${users.length} Copilot-licensed users`);
   const retentionCutoff = new Date(Date.now() - RETENTION_DAYS * 24 * 60 * 60 * 1000);
 
-  const skipReasons = { nonUserPromptType: 0, noPromptText: 0, duplicateUpsert: 0, rateLimitDiscard: 0, olderThanWatermark: 0 };
+  const skipReasons = { nonUserPromptType: 0, noPromptText: 0, duplicateUpsert: 0, rateLimitDiscard: 0, olderThanRetention: 0, invalidDate: 0 };
   const seenInteractionTypes: Record<string, number> = {};
   let graphPagesTotal = 0;
   let graphItemsTotal = 0;
   let noPromptSampleLogged = false;
+  const retentionMs = retentionCutoff.getTime();
 
   for (const user of users) {
     if (signal?.aborted) {
@@ -484,17 +494,8 @@ export async function syncCopilotInteractions(
     summary.usersScanned++;
     let fetchResult: FetchResult;
 
-    const perUserLastDate = await storage.getLatestCopilotInteractionDateByUserId(
-      tenantConnectionId,
-      user.userId,
-    );
-    const effectiveSince = perUserLastDate && perUserLastDate > retentionCutoff
-      ? perUserLastDate
-      : retentionCutoff;
-    const sinceMs = effectiveSince.getTime();
-
     try {
-      fetchResult = await fetchInteractionsForUser(token, user.userId, sinceMs, user.userPrincipalName);
+      fetchResult = await fetchInteractionsForUser(token, user.userId, user.userPrincipalName);
     } catch (err: unknown) {
       const status = (err as { status?: number })?.status;
       const errMsg = err instanceof Error ? err.message : String(err);
@@ -511,14 +512,13 @@ export async function syncCopilotInteractions(
 
     graphPagesTotal += fetchResult.pagesRead;
     graphItemsTotal += fetchResult.rawItemCount;
-    skipReasons.olderThanWatermark += fetchResult.watermarkFiltered;
 
     console.log(
       `[copilot-interaction-sync] user=${user.userPrincipalName} ` +
-      `graphItems=${fetchResult.rawItemCount} watermarkFiltered=${fetchResult.watermarkFiltered} ` +
-      `newItems=${fetchResult.interactions.length} pages=${fetchResult.pagesRead} ` +
-      `watermark=${effectiveSince.toISOString()}` +
+      `graphItems=${fetchResult.rawItemCount} ` +
+      `fetched=${fetchResult.interactions.length} pages=${fetchResult.pagesRead}` +
       `${fetchResult.midStreamTruncated ? " TRUNCATED" : ""}` +
+      `${fetchResult.rateLimited ? " RATE_LIMITED" : ""}` +
       `${fetchResult.accessError ? ` ERROR=${fetchResult.accessError.slice(0, 80)}` : ""}`,
     );
 
@@ -531,11 +531,9 @@ export async function syncCopilotInteractions(
       continue;
     }
 
-    if (fetchResult.rateLimited) {
-      skipReasons.rateLimitDiscard += fetchResult.interactions.length;
+    if (fetchResult.rateLimited && fetchResult.interactions.length === 0) {
       console.warn(
-        `[copilot-interaction-sync] user=${user.userId} rate-limited (${fetchResult.interactions.length} items buffered); ` +
-        `discarding to preserve watermark`,
+        `[copilot-interaction-sync] user=${user.userId} rate-limited with 0 items; skipping`,
       );
       continue;
     }
@@ -543,6 +541,19 @@ export async function syncCopilotInteractions(
     for (const raw of fetchResult.interactions) {
       const iType = raw.interactionType ?? "(undefined)";
       seenInteractionTypes[iType] = (seenInteractionTypes[iType] || 0) + 1;
+
+      // Date validation + retention check
+      const createdMs = raw.createdDateTime ? Date.parse(raw.createdDateTime) : NaN;
+      if (!Number.isFinite(createdMs)) {
+        skipReasons.invalidDate++;
+        summary.interactionsSkipped++;
+        continue;
+      }
+      if (createdMs < retentionMs) {
+        skipReasons.olderThanRetention++;
+        summary.interactionsSkipped++;
+        continue;
+      }
 
       if (raw.interactionType && raw.interactionType !== "userPrompt") {
         skipReasons.nonUserPromptType++;
@@ -596,7 +607,7 @@ export async function syncCopilotInteractions(
       }
     }
 
-    if (summary.usersScanned < users.length) await delay(300);
+    if (summary.usersScanned < users.length) await delay(2000);
   }
 
   try {
@@ -622,9 +633,9 @@ export async function syncCopilotInteractions(
   );
   console.log(
     `[copilot-interaction-sync] skipReasons: ` +
-    `olderThanWatermark=${skipReasons.olderThanWatermark} nonUserPromptType=${skipReasons.nonUserPromptType} ` +
+    `olderThanRetention=${skipReasons.olderThanRetention} nonUserPromptType=${skipReasons.nonUserPromptType} ` +
     `noPromptText=${skipReasons.noPromptText} duplicateUpsert=${skipReasons.duplicateUpsert} ` +
-    `rateLimitDiscard=${skipReasons.rateLimitDiscard}`,
+    `rateLimitDiscard=${skipReasons.rateLimitDiscard} invalidDate=${skipReasons.invalidDate}`,
   );
   if (Object.keys(seenInteractionTypes).length > 0) {
     console.log(

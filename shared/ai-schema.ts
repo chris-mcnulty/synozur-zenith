@@ -108,9 +108,9 @@ export const AI_PROVIDER_LABELS: Record<AIProvider, string> = {
 };
 
 export const DEFAULT_FEATURE_ASSIGNMENTS: Record<AIFeature, { provider: AIProvider; model: string }> = {
-  [AI_FEATURES.COPILOT_ASSESSMENT]: { provider: AI_PROVIDERS.AZURE_FOUNDRY, model: 'gpt-4o' },
-  [AI_FEATURES.COPILOT_PROMPT_INTELLIGENCE]: { provider: AI_PROVIDERS.AZURE_FOUNDRY, model: 'gpt-4o' },
-  [AI_FEATURES.IA_ASSESSMENT]: { provider: AI_PROVIDERS.AZURE_FOUNDRY, model: 'gpt-4o' },
-  [AI_FEATURES.WORKSPACE_INSIGHT]: { provider: AI_PROVIDERS.AZURE_FOUNDRY, model: 'gpt-4o-mini' },
-  [AI_FEATURES.GOVERNANCE_NARRATIVE]: { provider: AI_PROVIDERS.AZURE_FOUNDRY, model: 'gpt-4o' },
+  [AI_FEATURES.COPILOT_ASSESSMENT]: { provider: AI_PROVIDERS.REPLIT_OPENAI, model: 'gpt-5.2' },
+  [AI_FEATURES.COPILOT_PROMPT_INTELLIGENCE]: { provider: AI_PROVIDERS.REPLIT_OPENAI, model: 'gpt-5.2' },
+  [AI_FEATURES.IA_ASSESSMENT]: { provider: AI_PROVIDERS.REPLIT_OPENAI, model: 'gpt-5.2' },
+  [AI_FEATURES.WORKSPACE_INSIGHT]: { provider: AI_PROVIDERS.REPLIT_OPENAI, model: 'gpt-5-mini' },
+  [AI_FEATURES.GOVERNANCE_NARRATIVE]: { provider: AI_PROVIDERS.REPLIT_OPENAI, model: 'gpt-5.2' },
 };
