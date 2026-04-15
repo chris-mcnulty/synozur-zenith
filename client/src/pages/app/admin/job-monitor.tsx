@@ -329,12 +329,12 @@ function ActiveJobsPanel({ tenantConnectionId }: { tenantConnectionId: string })
 const STAGGER_DELAY_MS = 5_000;
 
 /**
- * Topological sort of datasets by dependency depth so parents refresh first.
- * Returns an ordered list of dataset keys grouped into waves:
- *   wave 0 → datasets with no dependencies
- *   wave 1 → datasets whose dependencies are all in wave 0
+ * Topologically orders datasets by dependency depth so parents refresh first.
+ * Returns a flat array of datasets sorted by computed depth:
+ *   depth 0 → datasets with no dependencies
+ *   depth 1 → datasets whose dependencies are all at depth 0
  *   … and so on.
- * Within each wave the original array order is preserved.
+ * Datasets with the same depth retain their original relative order.
  */
 function topoSort(datasets: DatasetFreshness[]): DatasetFreshness[] {
   const byKey = new Map(datasets.map((d) => [d.key, d]));
@@ -374,6 +374,28 @@ function DatasetFreshnessPanel({ tenantConnectionId }: { tenantConnectionId: str
 
   const datasets = data?.datasets ?? [];
 
+  // Track datasets that have been dispatched (keeps "Refreshing…" visible
+  // until the next freshness poll confirms isRefreshing or fresh status).
+  const [dispatchedKeys, setDispatchedKeys] = useState<Set<string>>(new Set());
+
+  // Once the server confirms a dispatched dataset is refreshing (or has
+  // already finished), we can drop it from the dispatched set so the
+  // indicator is driven by live data instead of optimistic state.
+  useEffect(() => {
+    if (dispatchedKeys.size === 0 || datasets.length === 0) return;
+    const stillPending = new Set<string>();
+    dispatchedKeys.forEach((key) => {
+      const ds = datasets.find((d) => d.key === key);
+      // Keep the key if the server hasn't yet acknowledged the refresh
+      if (ds && !ds.isRefreshing && ds.status !== "fresh") {
+        stillPending.add(key);
+      }
+    });
+    if (stillPending.size !== dispatchedKeys.size) {
+      setDispatchedKeys(stillPending);
+    }
+  }, [datasets, dispatchedKeys]);
+
   // ── Single-dataset refresh mutation ────────────────────────────────────
   const refreshMutation = useMutation({
     mutationFn: async (datasetKey: string) => {
@@ -387,6 +409,9 @@ function DatasetFreshnessPanel({ tenantConnectionId }: { tenantConnectionId: str
     onSuccess: (body, datasetKey) => {
       const ds = datasets.find((d) => d.key === datasetKey);
       const label = ds?.label ?? datasetKey;
+      // Mark as dispatched so the card stays in "Refreshing…" state
+      // until the next freshness poll confirms the job is running.
+      setDispatchedKeys((prev) => new Set(prev).add(datasetKey));
       if (body?.alreadyRunning) {
         toast({
           title: `${label} refresh already running`,
@@ -418,7 +443,6 @@ function DatasetFreshnessPanel({ tenantConnectionId }: { tenantConnectionId: str
   const [stagedQueue, setStagedQueue] = useState<string[]>([]);
   const [stagingActive, setStagingActive] = useState(false);
   const stagingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [dispatchedKeys, setDispatchedKeys] = useState<Set<string>>(new Set());
 
   // Mutable ref so the processNext closure always sees the latest mutation.
   const refreshMutationRef = useRef(refreshMutation);
@@ -429,10 +453,6 @@ function DatasetFreshnessPanel({ tenantConnectionId }: { tenantConnectionId: str
     const queue = queueRef.current;
     if (queue.length === 0) {
       setStagingActive(false);
-      toast({
-        title: "All stale refreshes dispatched",
-        description: "Jobs are running in the background.",
-      });
       return;
     }
     const [nextKey, ...remaining] = queue;
@@ -447,6 +467,10 @@ function DatasetFreshnessPanel({ tenantConnectionId }: { tenantConnectionId: str
       stagingTimerRef.current = setTimeout(processNext, STAGGER_DELAY_MS);
     } else {
       setStagingActive(false);
+      toast({
+        title: "All stale refreshes dispatched",
+        description: "Jobs are running in the background.",
+      });
     }
   }, [toast]);
 
@@ -571,7 +595,9 @@ function DatasetFreshnessPanel({ tenantConnectionId }: { tenantConnectionId: str
               const wasDispatched = dispatchedKeys.has(ds.key);
               const isSingleRefreshing =
                 refreshMutation.isPending && refreshMutation.variables === ds.key;
-              const isRunning = ds.isRefreshing || isSingleRefreshing;
+              // Treat recently-dispatched keys as running until the next freshness
+              // poll confirms isRefreshing, bridging the gap after the POST returns.
+              const isRunning = ds.isRefreshing || isSingleRefreshing || wasDispatched;
 
               return (
                 <div
