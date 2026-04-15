@@ -602,6 +602,10 @@ export class DatabaseStorage implements IStorage {
   async getWorkspaces(search?: string, tenantConnectionId?: string, organizationId?: string): Promise<Workspace[]> {
     const conditions = [];
 
+    // Always exclude soft-deleted and M365-archived sites from the governance inventory
+    conditions.push(eq(workspaces.isDeleted, false));
+    conditions.push(eq(workspaces.isArchived, false));
+
     if (search) {
       conditions.push(
         or(
@@ -631,18 +635,17 @@ export class DatabaseStorage implements IStorage {
       conditions.push(sql`${workspaces.tenantConnectionId} = ANY(ARRAY[${sql.join(orgConnectionIds.map(id => sql`${id}`), sql`, `)}]::text[])`);
     }
 
-    let rows: Workspace[];
-    if (conditions.length > 0) {
-      rows = await db.select().from(workspaces).where(and(...conditions)).orderBy(desc(workspaces.createdAt));
-    } else {
-      rows = await db.select().from(workspaces).orderBy(desc(workspaces.createdAt));
-    }
+    const rows = await db.select().from(workspaces).where(and(...conditions)).orderBy(desc(workspaces.createdAt));
     return this.decryptRows(rows, "workspaces") as Promise<Workspace[]>;
   }
 
   async getWorkspacesPaginated(params: { page: number; pageSize: number; search?: string; tenantConnectionId?: string; tenantConnectionIds?: string[]; organizationId?: string }): Promise<{ items: Workspace[]; total: number }> {
     const { page, pageSize, search, tenantConnectionId, tenantConnectionIds, organizationId } = params;
     const conditions = [];
+
+    // Always exclude soft-deleted and M365-archived sites from the governance inventory
+    conditions.push(eq(workspaces.isDeleted, false));
+    conditions.push(eq(workspaces.isArchived, false));
 
     if (search) {
       conditions.push(
@@ -694,6 +697,8 @@ export class DatabaseStorage implements IStorage {
       .where(
         and(
           eq(workspaces.tenantConnectionId, tenantConnectionId),
+          eq(workspaces.isDeleted, false),
+          eq(workspaces.isArchived, false),
           or(
             isNull(workspaces.sensitivityLabelId),
             eq(workspaces.retentionPolicy, ""),
@@ -712,6 +717,8 @@ export class DatabaseStorage implements IStorage {
       .where(
         and(
           eq(workspaces.tenantConnectionId, tenantConnectionId),
+          eq(workspaces.isDeleted, false),
+          eq(workspaces.isArchived, false),
           sql`${workspaces.owners} < 2`,
         ),
       );
