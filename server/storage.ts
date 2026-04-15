@@ -3598,7 +3598,15 @@ export class DatabaseStorage implements IStorage {
     return db
       .select()
       .from(copilotInteractions)
-      .where(eq(copilotInteractions.tenantConnectionId, tenantConnectionId))
+      .where(
+        and(
+          eq(copilotInteractions.tenantConnectionId, tenantConnectionId),
+          gte(
+            copilotInteractions.interactionAt,
+            sql`now() - make_interval(days => ${DatabaseStorage.COPILOT_RETENTION_DAYS})`,
+          ),
+        ),
+      )
       .orderBy(desc(copilotInteractions.interactionAt));
   }
 
