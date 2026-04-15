@@ -50,6 +50,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { UpgradeGate } from "@/components/upgrade-gate";
 import { useTenant } from "@/lib/tenant-context";
+import { DatasetFreshnessBanner } from "@/components/datasets";
 import { format } from "date-fns";
 import ReactMarkdown from "react-markdown";
 
@@ -427,6 +428,14 @@ export default function IAAssessmentPage() {
             </p>
           </div>
         </div>
+
+        {/* BL-039: dataset freshness nudge */}
+        {selectedTenantId && (
+          <DatasetFreshnessBanner
+            tenantConnectionId={selectedTenantId}
+            datasets={["workspaces", "iaColumns"]}
+          />
+        )}
 
         {/* Controls */}
         <Card className="glass-panel">

@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import { useTenant } from "@/lib/tenant-context";
+import { DatasetFreshnessBanner } from "@/components/datasets";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import {
@@ -278,6 +279,14 @@ export default function OneDriveInventoryPage() {
             : <><RefreshCw className="mr-2 h-4 w-4" />Sync OneDrives</>}
         </Button>
       </div>
+
+      {/* BL-039: dataset freshness nudge */}
+      {tenantConnectionId && (
+        <DatasetFreshnessBanner
+          tenantConnectionId={tenantConnectionId}
+          datasets={["onedriveInventory"]}
+        />
+      )}
 
       {/* Summary Stats */}
       <div className="grid grid-cols-2 sm:grid-cols-7 gap-4">

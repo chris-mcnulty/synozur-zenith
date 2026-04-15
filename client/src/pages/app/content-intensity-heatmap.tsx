@@ -35,6 +35,7 @@ import {
 } from "lucide-react";
 import { UpgradeGate } from "@/components/upgrade-gate";
 import { useTenant } from "@/lib/tenant-context";
+import { DatasetFreshnessBanner } from "@/components/datasets";
 import type {
   HeatmapSnapshot,
   HeatmapNode,
@@ -370,6 +371,14 @@ export default function ContentIntensityHeatmapPage() {
             Refresh
           </Button>
         </div>
+
+        {/* BL-039: dataset freshness nudge */}
+        {tenantConnectionId && (
+          <DatasetFreshnessBanner
+            tenantConnectionId={tenantConnectionId}
+            datasets={["workspaces"]}
+          />
+        )}
 
         {/* Stats bar */}
         {snapshot && (
