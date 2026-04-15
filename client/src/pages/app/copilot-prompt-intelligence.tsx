@@ -61,6 +61,7 @@ import { UpgradeGate } from "@/components/upgrade-gate";
 import { useTenant } from "@/lib/tenant-context";
 import { format, formatDistanceToNow } from "date-fns";
 import ReactMarkdown from "react-markdown";
+import { DatasetFreshnessBanner } from "@/components/datasets";
 
 // ---------------------------------------------------------------------------
 // Types (mirroring server-side interfaces)
@@ -898,6 +899,13 @@ export default function CopilotPromptIntelligencePage() {
             </Button>
           </div>
         </div>
+
+        {tenantConnectionId && (
+          <DatasetFreshnessBanner
+            tenantConnectionId={tenantConnectionId}
+            datasets={["copilotInteractions"]}
+          />
+        )}
 
         {syncMessage && (
           <div className="rounded-md border border-blue-500/30 bg-blue-500/10 px-4 py-2 text-sm text-blue-400">

@@ -41,6 +41,8 @@ import {
   MessageSquare,
 } from "lucide-react";
 import { UpgradeGate } from "@/components/upgrade-gate";
+import { useTenant } from "@/lib/tenant-context";
+import { DatasetFreshnessBanner } from "@/components/datasets";
 
 type ScoringCriterion = {
   key: string;
@@ -500,6 +502,8 @@ function WorkspaceAIGuidance({ workspaceId, orgId }: { workspaceId: string; orgI
 }
 
 export default function CopilotReadinessPage() {
+  const { selectedTenant } = useTenant();
+  const tenantConnectionId = selectedTenant?.id ?? "";
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [excludeDialog, setExcludeDialog] = useState<{ workspaceId: string; displayName: string; currentlyExcluded: boolean } | null>(null);
   const [exclusionReason, setExclusionReason] = useState("");
@@ -591,6 +595,14 @@ export default function CopilotReadinessPage() {
             <RefreshCw className={`w-4 h-4 ${isFetching ? "animate-spin" : ""}`} /> Refresh
           </Button>
         </div>
+
+        {/* BL-039: dataset freshness nudge */}
+        {tenantConnectionId && (
+          <DatasetFreshnessBanner
+            tenantConnectionId={tenantConnectionId}
+            datasets={["workspaces", "copilotInteractions", "licenses"]}
+          />
+        )}
 
         {isLoading && (
           <div className="flex items-center justify-center py-24 text-muted-foreground">

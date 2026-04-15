@@ -844,6 +844,37 @@ async function ensureTenantConnectionsSchema() {
       CREATE INDEX IF NOT EXISTS idx_copilot_sync_runs_created ON copilot_sync_runs (created_at DESC);
     `);
 
+    // ── BL-039: Scheduled Job Runs (migration 0014) ──────────────────────────
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS scheduled_job_runs (
+        id                    VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+        organization_id       VARCHAR,
+        tenant_connection_id  VARCHAR,
+        job_type              TEXT NOT NULL,
+        status                TEXT NOT NULL DEFAULT 'running',
+        started_at            TIMESTAMP NOT NULL DEFAULT now(),
+        completed_at          TIMESTAMP,
+        duration_ms           INTEGER,
+        result                JSONB,
+        error_message         TEXT,
+        triggered_by          TEXT NOT NULL DEFAULT 'manual',
+        triggered_by_user_id  VARCHAR,
+        target_id             TEXT,
+        target_name           TEXT,
+        items_total           INTEGER,
+        items_processed       INTEGER,
+        progress_label        TEXT,
+        created_at            TIMESTAMP NOT NULL DEFAULT now()
+      );
+      CREATE INDEX IF NOT EXISTS idx_scheduled_job_runs_org                    ON scheduled_job_runs (organization_id);
+      CREATE INDEX IF NOT EXISTS idx_scheduled_job_runs_tenant                 ON scheduled_job_runs (tenant_connection_id);
+      CREATE INDEX IF NOT EXISTS idx_scheduled_job_runs_tenant_type            ON scheduled_job_runs (tenant_connection_id, job_type);
+      CREATE INDEX IF NOT EXISTS idx_scheduled_job_runs_tenant_type_status     ON scheduled_job_runs (tenant_connection_id, job_type, status);
+      CREATE INDEX IF NOT EXISTS idx_scheduled_job_runs_status                 ON scheduled_job_runs (status);
+      CREATE INDEX IF NOT EXISTS idx_scheduled_job_runs_started_desc           ON scheduled_job_runs (started_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_scheduled_job_runs_job_type_started_desc  ON scheduled_job_runs (job_type, started_at DESC);
+    `);
+
     log('Schema migration ensureTenantConnectionsSchema completed');
   } catch (err) {
     console.error('[Migration] Failed to ensure tenant_connections schema:', err);
@@ -977,6 +1008,17 @@ async function backfillOrgMemberships() {
   await backfillOrgMemberships();
   await seedBuiltInOutcomes();
   await migrateClientSecretsToEncrypted();
+
+  // BL-039: reconcile any scheduled_job_runs rows left in "running" by a
+  // previous process that crashed or was restarted mid-job. Marks anything
+  // older than 1 hour as failed so the concurrency guard doesn't block new
+  // runs forever.
+  try {
+    const orphaned = await storage.reconcileOrphanedJobRuns();
+    if (orphaned > 0) log(`Reconciled ${orphaned} orphaned scheduled_job_runs rows`);
+  } catch (err) {
+    console.error('[Startup] Failed to reconcile orphaned job runs:', err);
+  }
   try {
     await storage.getPlatformSettings();
     log('Platform settings initialized');

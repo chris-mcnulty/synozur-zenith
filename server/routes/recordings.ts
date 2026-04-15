@@ -7,6 +7,84 @@ import { runTeamsRecordingsDiscovery } from "../services/recordings-discovery";
 import { runTeamsInventoryDiscovery } from "../services/teams-inventory-discovery";
 import { runOneDriveInventoryDiscovery } from "../services/onedrive-inventory-discovery";
 import { runSharingLinkDiscovery } from "../services/sharing-link-discovery";
+import { trackJobRun, DuplicateJobError } from "../services/job-tracking";
+import { jobRegistry } from "../services/job-registry";
+import type { JobType } from "@shared/schema";
+
+/**
+ * BL-039: helper to wrap a fire-and-forget discovery job with trackJobRun.
+ * Cancellation already routes through discovery-cancellation, which now
+ * bridges to jobRegistry.cancelByScope, so the legacy isCancelled() checks
+ * inside each service still respond correctly.
+ */
+function startDiscoveryJob(
+  res: import("express").Response,
+  jobType: JobType,
+  conn: { id: string; tenantId: string; tenantName?: string | null; organizationId?: string | null },
+  triggeredByUserId: string | null,
+  startedMessage: string,
+  run: () => Promise<unknown>,
+  loggerPrefix: string,
+): void {
+  if (jobRegistry.isRunning(jobType, conn.id)) {
+    res.status(409).json({ message: `${loggerPrefix} is already running for this tenant` });
+    return;
+  }
+
+  let responseSent = false;
+  const sendStarted = () => {
+    if (responseSent) return;
+    responseSent = true;
+    res.json({ message: startedMessage });
+  };
+  const sendStartFailure = (status: number, message: string, err?: unknown) => {
+    if (responseSent) {
+      if (!(err instanceof DuplicateJobError) && err) {
+        console.error(`${loggerPrefix} failed:`, err);
+      }
+      return;
+    }
+    responseSent = true;
+    if (!(err instanceof DuplicateJobError) && err) {
+      console.error(`${loggerPrefix} failed:`, err);
+    }
+    res.status(status).json({ message });
+  };
+
+  try {
+    const jobPromise = trackJobRun(
+      {
+        jobType,
+        organizationId: conn.organizationId ?? null,
+        tenantConnectionId: conn.id,
+        triggeredBy: "manual",
+        triggeredByUserId,
+        targetName: conn.tenantName ?? conn.tenantId,
+      },
+      () => run(),
+    );
+
+    void jobPromise.catch((err) => {
+      if (err instanceof DuplicateJobError) {
+        sendStartFailure(409, `${loggerPrefix} is already running for this tenant`, err);
+        return;
+      }
+
+      sendStartFailure(500, `Failed to start ${loggerPrefix}`, err);
+    });
+
+    setImmediate(() => {
+      sendStarted();
+    });
+  } catch (err) {
+    if (err instanceof DuplicateJobError) {
+      sendStartFailure(409, `${loggerPrefix} is already running for this tenant`, err);
+      return;
+    }
+
+    sendStartFailure(500, `Failed to start ${loggerPrefix}`, err);
+  }
+}
 
 const router = Router();
 
@@ -286,12 +364,15 @@ router.post(
     const clientId = conn.clientId || process.env.AZURE_CLIENT_ID!;
     const clientSecret = getEffectiveClientSecret(conn);
 
-    res.json({ message: "Discovery started" });
-
-    runTeamsRecordingsDiscovery(conn.id, conn.tenantId, clientId, clientSecret)
-      .catch((err) => {
-        console.error("[recordings] discovery failed:", err);
-      });
+    startDiscoveryJob(
+      res,
+      "teamsRecordings",
+      conn,
+      req.user?.id ?? null,
+      "Discovery started",
+      () => runTeamsRecordingsDiscovery(conn.id, conn.tenantId, clientId, clientSecret),
+      "[recordings] discovery",
+    );
   },
 );
 
@@ -316,12 +397,15 @@ router.post(
     const clientId = conn.clientId || process.env.AZURE_CLIENT_ID!;
     const clientSecret = getEffectiveClientSecret(conn);
 
-    res.json({ message: "Teams inventory discovery started" });
-
-    runTeamsInventoryDiscovery(conn.id, conn.tenantId, clientId, clientSecret)
-      .catch((err) => {
-        console.error("[teams-inventory] discovery failed:", err);
-      });
+    startDiscoveryJob(
+      res,
+      "teamsInventory",
+      conn,
+      req.user?.id ?? null,
+      "Teams inventory discovery started",
+      () => runTeamsInventoryDiscovery(conn.id, conn.tenantId, clientId, clientSecret),
+      "[teams-inventory] discovery",
+    );
   },
 );
 
@@ -346,12 +430,15 @@ router.post(
     const clientId = conn.clientId || process.env.AZURE_CLIENT_ID!;
     const clientSecret = getEffectiveClientSecret(conn);
 
-    res.json({ message: "OneDrive inventory discovery started" });
-
-    runOneDriveInventoryDiscovery(conn.id, conn.tenantId, clientId, clientSecret)
-      .catch((err) => {
-        console.error("[onedrive-inventory] discovery failed:", err);
-      });
+    startDiscoveryJob(
+      res,
+      "oneDriveInventory",
+      conn,
+      req.user?.id ?? null,
+      "OneDrive inventory discovery started",
+      () => runOneDriveInventoryDiscovery(conn.id, conn.tenantId, clientId, clientSecret),
+      "[onedrive-inventory] discovery",
+    );
   },
 );
 
@@ -376,12 +463,15 @@ router.post(
     const clientId = conn.clientId || process.env.AZURE_CLIENT_ID!;
     const clientSecret = getEffectiveClientSecret(conn);
 
-    res.json({ message: "Sharing link discovery started" });
-
-    runSharingLinkDiscovery(conn.id, conn.tenantId, clientId, clientSecret)
-      .catch((err) => {
-        console.error("[sharing-links] discovery failed:", err);
-      });
+    startDiscoveryJob(
+      res,
+      "sharingLinkDiscovery",
+      conn,
+      req.user?.id ?? null,
+      "Sharing link discovery started",
+      () => runSharingLinkDiscovery(conn.id, conn.tenantId, clientId, clientSecret),
+      "[sharing-links] discovery",
+    );
   },
 );
 

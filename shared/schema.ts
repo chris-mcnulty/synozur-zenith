@@ -1859,3 +1859,63 @@ export const insertCopilotSyncRunSchema = createInsertSchema(copilotSyncRuns).om
 });
 export type InsertCopilotSyncRun = z.infer<typeof insertCopilotSyncRunSchema>;
 export type CopilotSyncRun = typeof copilotSyncRuns.$inferSelect;
+
+// ── BL-039: Scheduled Job Runs (cross-cutting job audit trail) ───────────────
+//
+// Single unified tracking table for every background data-gathering job on
+// the platform. The existing per-service "runs" tables remain for service-
+// specific detail; this table powers the Job Monitor admin page and the
+// Dataset Freshness Registry.
+
+/** Canonical job types tracked in scheduled_job_runs. */
+export const JOB_TYPES = {
+  tenantSync:           { label: "Tenant Sync",                 dataset: "workspaces" },
+  sharingLinkDiscovery: { label: "Sharing Link Discovery",      dataset: "sharingLinks" },
+  oneDriveInventory:    { label: "OneDrive Inventory",          dataset: "onedriveInventory" },
+  teamsInventory:       { label: "Teams & Channels Inventory",  dataset: "teamsInventory" },
+  teamsRecordings:      { label: "Recordings Discovery",        dataset: "recordings" },
+  userInventory:        { label: "User Inventory",              dataset: "userInventory" },
+  copilotSync:          { label: "Copilot Interaction Sync",    dataset: "copilotInteractions" },
+  copilotAssessment:    { label: "Copilot Prompt Assessment",   dataset: "copilotAssessments" },
+  iaAssessment:         { label: "IA Health Assessment",        dataset: "iaAssessment" },
+  emailStorageReport:   { label: "Email Storage Report",        dataset: "emailStorageReport" },
+  governanceSnapshot:   { label: "Governance Snapshot",         dataset: "governanceSnapshot" },
+  licenseSync:          { label: "License Sync",                dataset: "licenses" },
+  iaSync:               { label: "IA Column Sync",              dataset: "iaColumns" },
+} as const;
+
+export type JobType = keyof typeof JOB_TYPES;
+
+export const JOB_STATUSES = ["running", "completed", "failed", "cancelled"] as const;
+export type JobStatus = (typeof JOB_STATUSES)[number];
+
+export const JOB_TRIGGER_SOURCES = ["manual", "system", "scheduled"] as const;
+export type JobTriggerSource = (typeof JOB_TRIGGER_SOURCES)[number];
+
+export const scheduledJobRuns = pgTable("scheduled_job_runs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  organizationId: varchar("organization_id"),
+  tenantConnectionId: varchar("tenant_connection_id"),
+  jobType: text("job_type").notNull(),
+  status: text("status").notNull().default("running"),
+  startedAt: timestamp("started_at").notNull().defaultNow(),
+  completedAt: timestamp("completed_at"),
+  durationMs: integer("duration_ms"),
+  result: jsonb("result").$type<Record<string, unknown>>(),
+  errorMessage: text("error_message"),
+  triggeredBy: text("triggered_by").notNull().default("manual"),
+  triggeredByUserId: varchar("triggered_by_user_id"),
+  targetId: text("target_id"),
+  targetName: text("target_name"),
+  itemsTotal: integer("items_total"),
+  itemsProcessed: integer("items_processed"),
+  progressLabel: text("progress_label"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+export const insertScheduledJobRunSchema = createInsertSchema(scheduledJobRuns).omit({
+  id: true,
+  createdAt: true,
+});
+export type InsertScheduledJobRun = z.infer<typeof insertScheduledJobRunSchema>;
+export type ScheduledJobRun = typeof scheduledJobRuns.$inferSelect;

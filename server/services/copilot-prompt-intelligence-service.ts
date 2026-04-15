@@ -33,6 +33,7 @@ import {
   COPILOT_QUALITY_TIERS,
   COPILOT_RISK_LEVELS,
 } from "@shared/schema";
+import { trackJobRun, DuplicateJobError } from "./job-tracking";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -483,78 +484,105 @@ export async function runCopilotPromptAssessment(
 
   const assessmentId = await createAssessment(organizationId, tenantConnectionId, triggeredBy);
 
-  setImmediate(async () => {
-    try {
-      // 1. Load all interactions for the tenant
-      const rawInteractions = await loadInteractions(tenantConnectionId);
+  // BL-039: dual-write to scheduled_job_runs via trackJobRun. The legacy
+  // copilot_prompt_assessments row continues to be the public handle (its id
+  // is what callers poll); the trackJobRun jobId is correlated via targetId.
+  setImmediate(() => {
+    void trackJobRun(
+      {
+        jobType: "copilotAssessment",
+        organizationId,
+        tenantConnectionId,
+        triggeredBy: "manual",
+        triggeredByUserId: triggeredBy,
+        targetId: assessmentId,
+        targetName: `Copilot prompt assessment (${assessmentId.slice(0, 8)})`,
+      },
+      async (signal) => {
+        // 1. Load all interactions for the tenant
+        const rawInteractions = await loadInteractions(tenantConnectionId);
 
-      if (rawInteractions.length === 0) {
+        if (rawInteractions.length === 0) {
+          await storage.updateCopilotPromptAssessment(assessmentId, {
+            status: 'COMPLETED',
+            interactionCount: 0,
+            userCount: 0,
+            completedAt: new Date(),
+          });
+          return { interactionCount: 0, userCount: 0 };
+        }
+
+        if (signal.aborted) throw new Error("Cancelled by operator");
+
+        // 2. Batch-analyze unanalyzed interactions
+        const interactions = await analyzeAndPersistInteractions(tenantConnectionId, rawInteractions);
+
+        if (signal.aborted) throw new Error("Cancelled by operator");
+
+        // 3. Aggregate metrics
+        const orgSummary = buildOrgSummary(interactions);
+        const departmentBreakdown = buildDepartmentBreakdown(interactions);
+        const userBreakdown = buildUserBreakdown(interactions);
+
+        // 4. AI narrative
+        let executiveSummary: string | null = null;
+        let recommendations: CopilotRecommendation[] = [];
+        let modelUsed: string | null = null;
+        let tokensUsed: number | null = null;
+
+        try {
+          const messages = buildAIPrompt(orgSummary, departmentBreakdown);
+          const aiResult = await completeForFeature("copilot_assessment", messages, 2000);
+          executiveSummary = aiResult.content;
+          recommendations = parseRecommendations(aiResult.content);
+          modelUsed = aiResult.model;
+          tokensUsed = aiResult.inputTokens + aiResult.outputTokens;
+        } catch (aiErr) {
+          console.warn("[CopilotPromptAssessment] AI narrative failed (non-fatal):", aiErr);
+          executiveSummary = null;
+        }
+
+        // 5. Persist completed assessment
+        const dates = interactions.map(i => i.interactionAt.getTime());
+        const dateRangeStart = new Date(Math.min(...dates));
+        const dateRangeEnd = new Date(Math.max(...dates));
+        const userIds = new Set(interactions.map(i => i.userId));
+
         await storage.updateCopilotPromptAssessment(assessmentId, {
           status: 'COMPLETED',
-          interactionCount: 0,
-          userCount: 0,
+          interactionCount: interactions.length,
+          userCount: userIds.size,
+          dateRangeStart,
+          dateRangeEnd,
+          orgSummary: orgSummary as CopilotOrgSummary,
+          departmentBreakdown: departmentBreakdown as CopilotDepartmentBreakdown[],
+          userBreakdown: userBreakdown as CopilotUserBreakdown[],
+          executiveSummary,
+          recommendations: recommendations as CopilotRecommendation[],
+          modelUsed,
+          tokensUsed,
           completedAt: new Date(),
         });
+
+        console.log(
+          `[CopilotPromptAssessment] ${assessmentId} COMPLETED ` +
+          `interactions=${interactions.length} users=${userIds.size}`,
+        );
+
+        return { interactionCount: interactions.length, userCount: userIds.size };
+      },
+    ).catch(async (err: unknown) => {
+      if (err instanceof DuplicateJobError) {
+        await failAssessment(
+          assessmentId,
+          "A Copilot prompt assessment is already running for this tenant",
+        );
         return;
       }
-
-      // 2. Batch-analyze unanalyzed interactions
-      const interactions = await analyzeAndPersistInteractions(tenantConnectionId, rawInteractions);
-
-      // 3. Aggregate metrics
-      const orgSummary = buildOrgSummary(interactions);
-      const departmentBreakdown = buildDepartmentBreakdown(interactions);
-      const userBreakdown = buildUserBreakdown(interactions);
-
-      // 4. AI narrative
-      let executiveSummary: string | null = null;
-      let recommendations: CopilotRecommendation[] = [];
-      let modelUsed: string | null = null;
-      let tokensUsed: number | null = null;
-
-      try {
-        const messages = buildAIPrompt(orgSummary, departmentBreakdown);
-        const aiResult = await completeForFeature("copilot_assessment", messages, 2000);
-        executiveSummary = aiResult.content;
-        recommendations = parseRecommendations(aiResult.content);
-        modelUsed = aiResult.model;
-        tokensUsed = aiResult.inputTokens + aiResult.outputTokens;
-      } catch (aiErr) {
-        console.warn("[CopilotPromptAssessment] AI narrative failed (non-fatal):", aiErr);
-        executiveSummary = null;
-      }
-
-      // 5. Persist completed assessment
-      const dates = interactions.map(i => i.interactionAt.getTime());
-      const dateRangeStart = new Date(Math.min(...dates));
-      const dateRangeEnd = new Date(Math.max(...dates));
-      const userIds = new Set(interactions.map(i => i.userId));
-
-      await storage.updateCopilotPromptAssessment(assessmentId, {
-        status: 'COMPLETED',
-        interactionCount: interactions.length,
-        userCount: userIds.size,
-        dateRangeStart,
-        dateRangeEnd,
-        orgSummary: orgSummary as CopilotOrgSummary,
-        departmentBreakdown: departmentBreakdown as CopilotDepartmentBreakdown[],
-        userBreakdown: userBreakdown as CopilotUserBreakdown[],
-        executiveSummary,
-        recommendations: recommendations as CopilotRecommendation[],
-        modelUsed,
-        tokensUsed,
-        completedAt: new Date(),
-      });
-
-      console.log(
-        `[CopilotPromptAssessment] ${assessmentId} COMPLETED ` +
-        `interactions=${interactions.length} users=${userIds.size}`,
-      );
-    } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       console.error(`[CopilotPromptAssessment] ${assessmentId} FAILED:`, err);
       await failAssessment(assessmentId, message);
-    }
+    });
   });
 
   return assessmentId;

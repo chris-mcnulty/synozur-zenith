@@ -5,6 +5,7 @@ import type { Workspace } from "@shared/schema";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useTenant } from "@/lib/tenant-context";
+import { DatasetFreshnessBanner } from "@/components/datasets";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { GovernanceRiskTab, GovernanceOwnershipTab, GovernanceStorageTab, GovernanceSharingTab, GovernanceReviewsTab } from "./governance-tabs";
 import { 
@@ -1018,6 +1019,14 @@ export default function GovernancePage() {
           <p className="text-muted-foreground mt-1">Enumerate and inspect SharePoint sites across your tenant</p>
         </div>
       </div>
+
+      {/* BL-039: dataset freshness nudge — sites + sharing links underpin every tab */}
+      {tenantConnectionId && (
+        <DatasetFreshnessBanner
+          tenantConnectionId={tenantConnectionId}
+          datasets={["workspaces", "sharingLinks"]}
+        />
+      )}
 
       <Tabs defaultValue="sites" className="w-full">
         <TabsList className="grid w-full grid-cols-6 max-w-2xl">
