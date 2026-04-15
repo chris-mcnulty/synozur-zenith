@@ -30,6 +30,7 @@ import { runSharingLinkDiscovery } from "./sharing-link-discovery";
 import { runOneDriveInventoryDiscovery } from "./onedrive-inventory-discovery";
 import { runTeamsInventoryDiscovery } from "./teams-inventory-discovery";
 import { runTeamsRecordingsDiscovery } from "./recordings-discovery";
+import { runIASync } from "./ia-sync";
 
 export type DispatchOutcome =
   | { ok: true; jobId: string | null; alreadyRunning?: false; legacyRunId?: string }
@@ -225,12 +226,23 @@ export async function dispatchDatasetRefresh(opts: {
       };
 
     case "tenantSync":
-    case "iaSync":
       return {
         ok: false,
         status: 501,
         message: `Job type "${jobType}" has no service implementation yet.`,
       };
+
+    case "iaSync": {
+      const promise = trackJobRun(
+        { ...baseTrackOpts, jobType: "iaSync" },
+        () => runIASync(tenantConnectionId, conn.tenantId, clientId, clientSecret),
+      );
+      promise.catch((err) => {
+        if (err instanceof DuplicateJobError) return;
+        console.error("[dispatch] iaSync failed:", err);
+      });
+      return { ok: true, jobId: null };
+    }
 
     default: {
       const _exhaustive: never = jobType;
