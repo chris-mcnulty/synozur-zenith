@@ -31,11 +31,17 @@ export interface UserInventoryRunOptions {
   maxUsers?: number;
   /** Skip the refresh and return early if the cache is younger than this. */
   minRefreshIntervalMinutes?: number;
+  /**
+   * BL-039: optional abort signal. When `signal.aborted` becomes true, the
+   * paging loop stops at the next page boundary and the run is finalised
+   * with status="CANCELLED".
+   */
+  signal?: AbortSignal;
 }
 
 export interface UserInventoryRunResult {
   runId: string | null;
-  status: "COMPLETED" | "PARTIAL" | "FAILED" | "CAP_REACHED" | "SKIPPED";
+  status: "COMPLETED" | "PARTIAL" | "FAILED" | "CAP_REACHED" | "SKIPPED" | "CANCELLED";
   usersDiscovered: number;
   usersMarkedDeleted: number;
   pagesFetched: number;
@@ -113,9 +119,16 @@ export async function runUserInventoryRefresh(
   let pagesFetched = 0;
   let nextLink: string | null | undefined;
   let capReached = false;
+  let cancelled = false;
 
   try {
     do {
+      // BL-039: stop paging if the job was cancelled via AbortController.
+      if (options.signal?.aborted) {
+        cancelled = true;
+        break;
+      }
+
       const page = await fetchUserInventoryPage(token, nextLink ?? undefined);
       pagesFetched++;
 
@@ -190,13 +203,15 @@ export async function runUserInventoryRefresh(
     errors.push({ context: "markMissingAsDeleted", message: err?.message ?? String(err) });
   }
 
-  const status: UserInventoryRunResult["status"] = capReached
-    ? "CAP_REACHED"
-    : errors.length > 0 && usersDiscovered > 0
-      ? "PARTIAL"
-      : errors.length > 0
-        ? "FAILED"
-        : "COMPLETED";
+  const status: UserInventoryRunResult["status"] = cancelled
+    ? "CANCELLED"
+    : capReached
+      ? "CAP_REACHED"
+      : errors.length > 0 && usersDiscovered > 0
+        ? "PARTIAL"
+        : errors.length > 0
+          ? "FAILED"
+          : "COMPLETED";
 
   await storage.updateUserInventoryRun(run.id, {
     status,

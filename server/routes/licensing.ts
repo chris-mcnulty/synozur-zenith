@@ -9,6 +9,8 @@ import {
 } from "@shared/schema";
 import { requireAuth, type AuthenticatedRequest } from "../middleware/rbac";
 import { syncLicenses } from "../services/license-sync";
+import { trackJobRun, DuplicateJobError } from "../services/job-tracking";
+import { getActiveOrgId } from "./scope-helpers";
 import { decryptToken } from "../utils/encryption";
 
 const router = Router();
@@ -253,8 +255,29 @@ router.post("/api/licensing/sync", requireAuth(), async (req: AuthenticatedReque
     const clientId = conn.clientId || process.env.AZURE_CLIENT_ID!;
     const clientSecret = getEffectiveClientSecret(conn);
 
-    const result = await syncLicenses(tenantConnectionId, conn.tenantId, clientId, clientSecret);
-    res.json({ success: true, ...result });
+    // BL-039: route through trackJobRun so the run shows up in the unified
+    // Job Monitor and feeds the Dataset Freshness Registry. License sync is
+    // synchronous, so we await the wrapper directly and return its result.
+    const orgId = getActiveOrgId(req) ?? conn.organizationId ?? null;
+    try {
+      const { result } = await trackJobRun(
+        {
+          jobType: "licenseSync",
+          organizationId: orgId,
+          tenantConnectionId,
+          triggeredBy: "manual",
+          triggeredByUserId: req.user?.id ?? null,
+          targetName: conn.tenantName ?? conn.tenantId,
+        },
+        () => syncLicenses(tenantConnectionId, conn.tenantId, clientId, clientSecret),
+      );
+      return res.json({ success: true, ...result });
+    } catch (err: any) {
+      if (err instanceof DuplicateJobError) {
+        return res.status(409).json({ error: err.message, code: err.code });
+      }
+      throw err;
+    }
   } catch (err: any) {
     console.error("[licensing] sync error:", err);
     res.status(500).json({ error: err.message });

@@ -11,7 +11,8 @@ import {
 } from "@shared/schema";
 import { requireAuth, type AuthenticatedRequest } from "../middleware/rbac";
 import { computeGovernanceSnapshot } from "../services/governance-snapshot";
-import { getOrgTenantConnectionIds } from "./scope-helpers";
+import { trackJobRun, DuplicateJobError } from "../services/job-tracking";
+import { getOrgTenantConnectionIds, getActiveOrgId } from "./scope-helpers";
 import { storage } from "../storage";
 
 const router = Router();
@@ -238,8 +239,27 @@ router.post("/api/content-governance/snapshot", requireAuth(), async (req: Authe
     const tenantConnectionId = (req.body?.tenantConnectionId ?? req.query.tenantConnectionId) as string;
     if (!tenantConnectionId) return res.status(400).json({ error: "tenantConnectionId is required" });
 
-    await computeGovernanceSnapshot(tenantConnectionId);
-    res.json({ success: true });
+    // BL-039: route through trackJobRun so the snapshot run shows up in the
+    // unified Job Monitor and feeds the Dataset Freshness Registry.
+    const orgId = getActiveOrgId(req);
+    try {
+      await trackJobRun(
+        {
+          jobType: "governanceSnapshot",
+          organizationId: orgId,
+          tenantConnectionId,
+          triggeredBy: "manual",
+          triggeredByUserId: req.user?.id ?? null,
+        },
+        () => computeGovernanceSnapshot(tenantConnectionId),
+      );
+      return res.json({ success: true });
+    } catch (err: any) {
+      if (err instanceof DuplicateJobError) {
+        return res.status(409).json({ error: err.message, code: err.code });
+      }
+      throw err;
+    }
   } catch (err: any) {
     console.error("[content-governance] snapshot error:", err);
     res.status(500).json({ error: err.message });

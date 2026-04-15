@@ -25,6 +25,9 @@ import {
   renderReportCsv,
   requestEmailReportCancellation,
 } from "../services/email-content-storage-report";
+import { trackJobRun, DuplicateJobError } from "../services/job-tracking";
+import { jobRegistry } from "../services/job-registry";
+import { getActiveOrgId } from "./scope-helpers";
 
 const router = Router();
 
@@ -92,15 +95,34 @@ router.post(
     const options: { maxUsers?: number; minRefreshIntervalMinutes?: number } = {};
     if (Number.isFinite(maxUsersRaw) && maxUsersRaw > 0) options.maxUsers = maxUsersRaw;
 
+    // BL-039: refuse duplicate launches early so the caller gets 409 instead
+    // of a stranded fire-and-forget that never executes.
+    if (jobRegistry.isRunning("userInventory", access.conn.id)) {
+      return res.status(409).json({ message: "User inventory refresh is already running" });
+    }
+
     res.status(202).json({ message: "User inventory refresh started" });
 
-    runUserInventoryRefresh(
-      access.conn.id,
-      access.conn.tenantId,
-      clientId,
-      clientSecret,
-      options,
-    ).catch(err => {
+    const orgId = getActiveOrgId(req) ?? access.conn.organizationId ?? null;
+    void trackJobRun(
+      {
+        jobType: "userInventory",
+        organizationId: orgId,
+        tenantConnectionId: access.conn.id,
+        triggeredBy: "manual",
+        triggeredByUserId: req.user?.id ?? null,
+        targetName: access.conn.tenantName ?? access.conn.tenantId,
+      },
+      (signal) =>
+        runUserInventoryRefresh(
+          access.conn.id,
+          access.conn.tenantId,
+          clientId,
+          clientSecret,
+          { ...options, signal },
+        ),
+    ).catch((err) => {
+      if (err instanceof DuplicateJobError) return; // already 202'd above; race-loser
       console.error("[user-inventory] refresh failed:", err);
     });
   },
