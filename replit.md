@@ -60,6 +60,7 @@ The frontend utilizes React, Vite, TanStack Query, shadcn/ui, and wouter to deli
 | Mail.Read | Email Storage Report | Yes |
 | InformationProtectionPolicy.Read.All | Purview Sensitivity Labels | Yes |
 | RecordsManagement.Read.All | Purview Retention Labels | Yes (requires M365 E5 Compliance) |
+| AiEnterpriseInteraction.Read.All | Copilot Prompt Intelligence | Yes (requires M365 Copilot) |
 | AuditLog.Read.All | License Sign-In Activity | No (optional) |
 
 ### Delegated Permissions (Microsoft Graph)

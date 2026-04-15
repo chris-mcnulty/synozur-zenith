@@ -46,6 +46,15 @@ export interface SyncSummary {
   interactionsSkipped: number;
   interactionsPurged: number;
   errors: Array<{ userId?: string; context: string; message: string }>;
+  skipReasons?: {
+    nonUserPromptType: number;
+    noPromptText: number;
+    duplicateUpsert: number;
+    rateLimitDiscard: number;
+  };
+  seenInteractionTypes?: Record<string, number>;
+  graphPagesTotal?: number;
+  graphItemsTotal?: number;
 }
 
 interface CopilotLicensedUser {
@@ -61,17 +70,28 @@ interface GraphInteraction {
   appClass?: string;
   interactionType?: string;
   body?: { contentType?: string; content?: string };
-  contexts?: Array<{ contextType?: string; content?: string }>;
+  contexts?: Array<{ contextType?: string; content?: string; [key: string]: any }>;
+  requestBody?: { contentType?: string; content?: string };
+  [key: string]: any;
 }
 
 function extractPromptText(interaction: GraphInteraction): string | null {
   if (interaction.body?.content && typeof interaction.body.content === "string" && interaction.body.content.trim().length > 0) {
     return interaction.body.content.trim();
   }
-  if (!Array.isArray(interaction.contexts)) return null;
-  for (const ctx of interaction.contexts) {
-    if (ctx?.contextType === "prompt" && typeof ctx.content === "string" && ctx.content.trim().length > 0) {
-      return ctx.content.trim();
+  if (interaction.requestBody?.content && typeof interaction.requestBody.content === "string" && interaction.requestBody.content.trim().length > 0) {
+    return interaction.requestBody.content.trim();
+  }
+  if (Array.isArray(interaction.contexts)) {
+    for (const ctx of interaction.contexts) {
+      if (ctx?.contextType === "prompt" && typeof ctx.content === "string" && ctx.content.trim().length > 0) {
+        return ctx.content.trim();
+      }
+    }
+    for (const ctx of interaction.contexts) {
+      if (typeof ctx?.content === "string" && ctx.content.trim().length > 0) {
+        return ctx.content.trim();
+      }
     }
   }
   return null;
@@ -144,17 +164,10 @@ function delay(ms: number): Promise<void> {
  */
 interface FetchResult {
   interactions: GraphInteraction[];
-  /**
-   * true  – all available pages were fetched (or early-stopped by date filter).
-   * false – fetching was interrupted by a 429 rate-limit; results must be
-   *         discarded to prevent the watermark advancing past un-fetched pages.
-   *
-   * Page-cap stops do NOT set this flag — the Graph API returns interactions
-   * newest-first, so the cap always captures the most-recent interactions.
-   * The watermark advances to the newest item we have; subsequent syncs pick
-   * up only genuinely new interactions from that point onward.
-   */
   rateLimited: boolean;
+  pagesRead: number;
+  rawItemCount: number;
+  accessError?: string;
 }
 
 async function fetchInteractionsForUser(
@@ -171,6 +184,7 @@ async function fetchInteractionsForUser(
     `/interactionHistory/getAllEnterpriseInteractions?$top=100`;
 
   let pages = 0;
+  let rawItemCount = 0;
   let rateLimited = false;
 
   while (url && pages < MAX_PAGES_PER_USER) {
@@ -186,11 +200,15 @@ async function fetchInteractionsForUser(
 
     if (res.status === 403 || res.status === 404) {
       const errBody = await res.text().catch(() => "");
-      const errMsg = errBody.slice(0, 200);
-      if (!errMsg.includes("ResourceNotFound") && !errMsg.includes("does not have a mailbox")) {
-        console.log(`[copilot-interaction-sync] user=${userId} ${res.status}: ${errMsg}`);
-      }
-      break;
+      const errMsg = errBody.slice(0, 300);
+      console.log(`[copilot-interaction-sync] user=${userId} ${res.status}: ${errMsg}`);
+      return {
+        interactions,
+        rateLimited: false,
+        pagesRead: pages,
+        rawItemCount,
+        accessError: `${res.status}: ${errMsg}`,
+      };
     }
 
     if (res.status === 429) {
@@ -213,8 +231,10 @@ async function fetchInteractionsForUser(
       "@odata.nextLink"?: string;
     };
 
+    const pageItems = data.value ?? [];
+    rawItemCount += pageItems.length;
     let newOnThisPage = 0;
-    for (const item of data.value ?? []) {
+    for (const item of pageItems) {
       if (!item?.id) continue;
       if (sinceMs) {
         const createdMs = item.createdDateTime ? Date.parse(item.createdDateTime) : 0;
@@ -245,7 +265,7 @@ async function fetchInteractionsForUser(
     }
   }
 
-  return { interactions, rateLimited };
+  return { interactions, rateLimited, pagesRead: pages, rawItemCount };
 }
 
 type InteractionEncryptionContext =
@@ -400,13 +420,16 @@ export async function syncCopilotInteractions(
   }
 
   const users = await getCopilotLicensedUsers(tenantConnectionId);
-  // Absolute lower bound — never fetch interactions older than RETENTION_DAYS.
+  console.log(`[copilot-interaction-sync] tenant=${tenantConnectionId} found ${users.length} Copilot-licensed users`);
   const retentionCutoff = new Date(Date.now() - RETENTION_DAYS * 24 * 60 * 60 * 1000);
 
+  const skipReasons = { nonUserPromptType: 0, noPromptText: 0, duplicateUpsert: 0, rateLimitDiscard: 0 };
+  const seenInteractionTypes: Record<string, number> = {};
+  let graphPagesTotal = 0;
+  let graphItemsTotal = 0;
+  let noPromptSampleLogged = false;
+
   for (const user of users) {
-    // BL-039: stop the user loop cleanly if cancelled. Already-captured
-    // interactions are kept; the run is finalised as FAILED with the cancel
-    // reason so callers can see why it stopped early.
     if (signal?.aborted) {
       summary.errors.push({ context: "cancelled", message: "Job cancelled by operator" });
       await finalizeSyncRun("FAILED", "Cancelled by operator");
@@ -416,9 +439,6 @@ export async function syncCopilotInteractions(
     summary.usersScanned++;
     let fetchResult: FetchResult;
 
-    // Per-user incremental watermark: use the latest interaction already stored
-    // for this user, clamped to the retention window. This avoids re-fetching
-    // interactions we already have while still catching new ones efficiently.
     const perUserLastDate = await storage.getLatestCopilotInteractionDateForUser(
       tenantConnectionId,
       user.userPrincipalName,
@@ -444,12 +464,20 @@ export async function syncCopilotInteractions(
       continue;
     }
 
-    // If the fetch was rate-limited (429), discard results to prevent the
-    // watermark advancing past pages we never retrieved. The next sync retries
-    // from the same watermark. Page-cap stops are NOT discarded — the API
-    // returns interactions newest-first so we always have the most-recent data;
-    // the watermark advances normally and subsequent syncs add only new items.
+    graphPagesTotal += fetchResult.pagesRead;
+    graphItemsTotal += fetchResult.rawItemCount;
+
+    if (fetchResult.accessError) {
+      summary.errors.push({
+        userId: user.userId,
+        context: "accessDenied",
+        message: `User ${user.userPrincipalName}: ${fetchResult.accessError}`,
+      });
+      continue;
+    }
+
     if (fetchResult.rateLimited) {
+      skipReasons.rateLimitDiscard += fetchResult.interactions.length;
       console.warn(
         `[copilot-interaction-sync] user=${user.userId} rate-limited (${fetchResult.interactions.length} items buffered); ` +
         `discarding to preserve watermark`,
@@ -458,13 +486,30 @@ export async function syncCopilotInteractions(
     }
 
     for (const raw of fetchResult.interactions) {
+      const iType = raw.interactionType ?? "(undefined)";
+      seenInteractionTypes[iType] = (seenInteractionTypes[iType] || 0) + 1;
+
       if (raw.interactionType && raw.interactionType !== "userPrompt") {
+        skipReasons.nonUserPromptType++;
         summary.interactionsSkipped++;
         continue;
       }
       const promptText = extractPromptText(raw);
       if (!promptText) {
+        skipReasons.noPromptText++;
         summary.interactionsSkipped++;
+        if (!noPromptSampleLogged) {
+          noPromptSampleLogged = true;
+          const safeKeys = Object.keys(raw).filter(k => k !== "body" && k !== "contexts");
+          console.warn(
+            `[copilot-interaction-sync] DIAGNOSTIC: interaction with no extractable prompt ` +
+            `id=${raw.id} appClass=${raw.appClass ?? "?"} type=${raw.interactionType ?? "?"} ` +
+            `hasBody=${!!raw.body} bodyContentLen=${raw.body?.content?.length ?? 0} ` +
+            `contextsLen=${raw.contexts?.length ?? 0} ` +
+            `contextTypes=${(raw.contexts ?? []).map(c => c.contextType ?? "?").join(",")} ` +
+            `topLevelKeys=[${safeKeys.join(",")}]`,
+          );
+        }
         continue;
       }
 
@@ -483,7 +528,10 @@ export async function syncCopilotInteractions(
           flags: [],
         });
         if (outcome === "inserted") summary.interactionsCaptured++;
-        else summary.interactionsSkipped++;
+        else {
+          skipReasons.duplicateUpsert++;
+          summary.interactionsSkipped++;
+        }
       } catch (err: unknown) {
         summary.errors.push({
           userId: user.userId,
@@ -493,7 +541,6 @@ export async function syncCopilotInteractions(
       }
     }
 
-    // Delay between users to avoid 429 rate limits from Graph
     if (summary.usersScanned < users.length) await delay(300);
   }
 
@@ -506,12 +553,28 @@ export async function syncCopilotInteractions(
     });
   }
 
+  summary.skipReasons = skipReasons;
+  summary.seenInteractionTypes = seenInteractionTypes;
+  summary.graphPagesTotal = graphPagesTotal;
+  summary.graphItemsTotal = graphItemsTotal;
+
   console.log(
     `[copilot-interaction-sync] tenant=${tenantConnectionId} ` +
     `users=${summary.usersScanned} captured=${summary.interactionsCaptured} ` +
     `skipped=${summary.interactionsSkipped} purged=${summary.interactionsPurged} ` +
-    `errors=${summary.errors.length}`,
+    `errors=${summary.errors.length} ` +
+    `graphPages=${graphPagesTotal} graphItems=${graphItemsTotal}`,
   );
+  console.log(
+    `[copilot-interaction-sync] skipReasons: ` +
+    `nonUserPromptType=${skipReasons.nonUserPromptType} noPromptText=${skipReasons.noPromptText} ` +
+    `duplicateUpsert=${skipReasons.duplicateUpsert} rateLimitDiscard=${skipReasons.rateLimitDiscard}`,
+  );
+  if (Object.keys(seenInteractionTypes).length > 0) {
+    console.log(
+      `[copilot-interaction-sync] interactionTypes seen: ${JSON.stringify(seenInteractionTypes)}`,
+    );
+  }
 
   await finalizeSyncRun("COMPLETED");
   return summary;
