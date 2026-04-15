@@ -21,6 +21,8 @@ import {
 import { Link } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { useServicePlan } from "@/hooks/use-service-plan";
+import { useTenant } from "@/lib/tenant-context";
+import { DatasetFreshnessBanner } from "@/components/datasets";
 
 type AlertItem = {
   title: string;
@@ -252,6 +254,8 @@ export default function DashboardPage() {
   });
 
   const { isTrial } = useServicePlan();
+  const { selectedTenant } = useTenant();
+  const tenantConnectionId = selectedTenant?.id ?? "";
 
   const totalWorkspaces = stats?.totalWorkspaces ?? 0;
   const metadataCompliance = totalWorkspaces > 0 ? Math.round((stats!.metadataComplete / totalWorkspaces) * 100) : 0;
@@ -298,6 +302,14 @@ export default function DashboardPage() {
           </Link>
         </div>
       </div>
+
+      {/* BL-039: dataset freshness nudge for the selected tenant */}
+      {tenantConnectionId && (
+        <DatasetFreshnessBanner
+          tenantConnectionId={tenantConnectionId}
+          datasets={["workspaces"]}
+        />
+      )}
 
       {/* Enhancement 4: First-run onboarding checklist */}
       {!isLoading && !isDashLoading && (

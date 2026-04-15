@@ -26,6 +26,7 @@ import {
   getDatasetFreshness,
   getDatasetDefinition,
 } from "../services/dataset-freshness";
+import { dispatchDatasetRefresh } from "../services/dataset-refresh-dispatcher";
 
 const router = Router();
 
@@ -253,6 +254,54 @@ router.get(
 
     const freshness = await getDatasetFreshness(tenantConnectionId, datasetKey);
     return res.json({ dataset: freshness });
+  },
+);
+
+// ---------------------------------------------------------------------------
+// POST /api/datasets/:datasetKey/refresh
+// ---------------------------------------------------------------------------
+router.post(
+  "/api/datasets/:datasetKey/refresh",
+  requireAuth(),
+  requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN),
+  async (req: AuthenticatedRequest, res) => {
+    const datasetKey = String(req.params.datasetKey);
+    const def = getDatasetDefinition(datasetKey);
+    if (!def) return res.status(404).json({ message: "Unknown dataset" });
+
+    const tenantConnectionId =
+      typeof req.body?.tenantConnectionId === "string"
+        ? req.body.tenantConnectionId
+        : typeof req.query.tenantConnectionId === "string"
+          ? req.query.tenantConnectionId
+          : undefined;
+    if (!tenantConnectionId) {
+      return res.status(400).json({ message: "tenantConnectionId is required" });
+    }
+
+    const scope = await resolveTenantScope(req, tenantConnectionId);
+    if (!scope.ok) return res.status(scope.status).json({ message: scope.message });
+
+    const outcome = await dispatchDatasetRefresh({
+      jobType: def.refreshJobType,
+      tenantConnectionId,
+      triggeredByUserId: req.user?.id ?? null,
+    });
+
+    if (!outcome.ok) {
+      return res.status(outcome.status).json({ message: outcome.message });
+    }
+    if ("alreadyRunning" in outcome && outcome.alreadyRunning) {
+      return res.status(202).json({
+        message: `A ${def.label} refresh is already running for this tenant.`,
+        alreadyRunning: true,
+      });
+    }
+    return res.status(202).json({
+      jobId: outcome.jobId,
+      legacyRunId: "legacyRunId" in outcome ? outcome.legacyRunId : undefined,
+      message: `${def.label} refresh started.`,
+    });
   },
 );
 
