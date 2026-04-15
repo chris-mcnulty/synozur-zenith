@@ -156,7 +156,7 @@ async function getCopilotLicensedUsers(
 }
 
 /** Maximum pages to retrieve per user when falling back to unfiltered paging. */
-const MAX_PAGES_PER_USER = 30;
+const MAX_PAGES_PER_USER = 100;
 const MAX_THROTTLE_RETRIES = 3; // retry 429s up to 3 times with Retry-After back-off
 
 function delay(ms: number): Promise<void> {
@@ -196,58 +196,71 @@ async function fetchInteractionsForUser(
   userId: string,
   /** UPN for fallback if Entra Object ID returns 404 */
   upn?: string,
+  /** Retention cutoff epoch-ms; used for smart early-stop when descending order works */
+  retentionMs?: number,
 ): Promise<FetchResult> {
   const interactions: GraphInteraction[] = [];
   const headers: Record<string, string> = { Authorization: `Bearer ${token}` };
 
-  let url: string | null =
-    `https://graph.microsoft.com/beta/copilot/users/${encodeURIComponent(userId)}` +
+  // Build initial URL. Request $orderby=createdDateTime desc so we get the
+  // NEWEST interactions first. This is critical for heavy users (3k+ items)
+  // where oldest-first + page cap means we never reach recent data.
+  const basePath =
     `/interactionHistory/getAllEnterpriseInteractions?$top=100`;
+  const buildUrl = (id: string, withOrderBy: boolean) =>
+    `https://graph.microsoft.com/beta/copilot/users/${encodeURIComponent(id)}` +
+    basePath + (withOrderBy ? `&$orderby=createdDateTime%20desc` : "");
+
+  let url: string | null = buildUrl(userId, true);
+  let usingOrderBy = true;
 
   let pages = 0;
   let rawItemCount = 0;
   let rateLimited = false;
   let triedUpnFallback = false;
+  let triedWithoutOrderBy = false;
   let midStreamTruncated = false;
   let throttleRetries = 0;
+  let consecutiveOldPages = 0;
 
   while (url && pages < MAX_PAGES_PER_USER) {
     if (pages > 0) await delay(500);
     pages++;
 
-    // Plain fetch — NOT graphFetchWithRetry. This endpoint has tight per-user
-    // rate limits. Retrying 429s with exponential backoff hammers the already-
-    // throttled endpoint and blocks subsequent users. On 429, we mark the fetch
-    // as rate-limited and discard results so the watermark stays unchanged for
-    // the next sync.
     const res: Response = await fetch(url, { headers });
+
+    // --- 400: $orderby may be rejected → retry without it ---
+    if (res.status === 400 && pages === 1 && usingOrderBy && !triedWithoutOrderBy) {
+      triedWithoutOrderBy = true;
+      usingOrderBy = false;
+      console.warn(
+        `[copilot-interaction-sync] user=${userId} 400 on page 1 (likely $orderby rejected); retrying without`,
+      );
+      url = buildUrl(userId, false);
+      pages = 0;
+      continue;
+    }
 
     if (res.status === 403 || res.status === 404) {
       const errBody = await res.text().catch(() => "");
       const errMsg = errBody.slice(0, 300);
 
-      // First-page 404 with an Entra Object ID: try UPN-based URL as fallback
-      // (one attempt only to avoid infinite retry loops).
+      // First-page 404 with Entra Object ID → try UPN (one attempt)
       if (res.status === 404 && pages === 1 && upn && !triedUpnFallback && !userId.includes("@")) {
         triedUpnFallback = true;
         console.warn(
           `[copilot-interaction-sync] user=${userId} 404 on page 1; retrying with UPN=${upn}`,
         );
-        url =
-          `https://graph.microsoft.com/beta/copilot/users/${encodeURIComponent(upn)}` +
-          `/interactionHistory/getAllEnterpriseInteractions?$top=100`;
+        url = buildUrl(upn, usingOrderBy);
         pages = 0;
         continue;
       }
 
-      // Mid-stream 404 (pages > 1): the API pagination broke partway through.
-      // Keep items already collected but flag as truncated so the caller
-      // does NOT advance the watermark (which would permanently skip items
-      // on pages we never reached).
+      // Mid-stream 404/403 → keep partial items, flag as truncated
       if (pages > 1) {
         console.warn(
           `[copilot-interaction-sync] user=${userId} ${res.status} mid-stream on page ${pages}; ` +
-          `treating as end-of-data (${interactions.length} items kept, watermark frozen)`,
+          `keeping ${interactions.length} items`,
         );
         midStreamTruncated = true;
         break;
@@ -280,7 +293,7 @@ async function fetchInteractionsForUser(
         `waiting ${waitSec}s (retry ${throttleRetries}/${MAX_THROTTLE_RETRIES})`,
       );
       await delay(waitSec * 1000);
-      pages--; // retry the same page
+      pages--;
       continue;
     }
 
@@ -300,21 +313,41 @@ async function fetchInteractionsForUser(
 
     const pageItems = data.value ?? [];
     rawItemCount += pageItems.length;
+    let recentOnThisPage = 0;
     for (const item of pageItems) {
       if (!item?.id) continue;
       interactions.push(item);
+      if (retentionMs && item.createdDateTime) {
+        const ms = Date.parse(item.createdDateTime);
+        if (Number.isFinite(ms) && ms >= retentionMs) recentOnThisPage++;
+      }
     }
 
-    // No early-stop: the Graph beta API does NOT guarantee ordering.
-    // Production data shows oldest-first results, so page 1 may contain
-    // only old items while recent items are on later pages.
-
     url = data["@odata.nextLink"] ?? null;
+
+    // Smart early-stop: if $orderby desc is active and we already captured
+    // some recent items, stop once an entire page is older than retention.
+    // This means we've crossed the retention boundary from newest to oldest
+    // and there's no point reading further.
+    if (retentionMs && usingOrderBy && pageItems.length > 0) {
+      if (recentOnThisPage === 0) {
+        consecutiveOldPages++;
+        if (consecutiveOldPages >= 2 && interactions.length > pageItems.length) {
+          console.log(
+            `[copilot-interaction-sync] user=${userId} early-stop on page ${pages}: ` +
+            `${consecutiveOldPages} consecutive pages older than retention; ${interactions.length} items collected`,
+          );
+          break;
+        }
+      } else {
+        consecutiveOldPages = 0;
+      }
+    }
 
     if (pages >= MAX_PAGES_PER_USER && url) {
       console.log(
         `[copilot-interaction-sync] user=${userId} page cap (${MAX_PAGES_PER_USER}) reached; ` +
-        `saving ${interactions.length} interactions and advancing watermark`,
+        `saving ${interactions.length} interactions`,
       );
     }
   }
@@ -495,7 +528,7 @@ export async function syncCopilotInteractions(
     let fetchResult: FetchResult;
 
     try {
-      fetchResult = await fetchInteractionsForUser(token, user.userId, user.userPrincipalName);
+      fetchResult = await fetchInteractionsForUser(token, user.userId, user.userPrincipalName, retentionMs);
     } catch (err: unknown) {
       const status = (err as { status?: number })?.status;
       const errMsg = err instanceof Error ? err.message : String(err);
