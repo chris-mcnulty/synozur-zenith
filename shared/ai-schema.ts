@@ -8,6 +8,7 @@ export type AIProvider = typeof AI_PROVIDERS[keyof typeof AI_PROVIDERS];
 
 export const AI_FEATURES = {
   COPILOT_ASSESSMENT: 'copilot_assessment',
+  COPILOT_PROMPT_INTELLIGENCE: 'copilot_prompt_intelligence',
   IA_ASSESSMENT: 'ia_assessment',
   WORKSPACE_INSIGHT: 'workspace_insight',
   GOVERNANCE_NARRATIVE: 'governance_narrative',
@@ -17,6 +18,7 @@ export type AIFeature = typeof AI_FEATURES[keyof typeof AI_FEATURES];
 
 export const AI_FEATURE_LABELS: Record<AIFeature, string> = {
   [AI_FEATURES.COPILOT_ASSESSMENT]: 'Copilot Readiness Assessment',
+  [AI_FEATURES.COPILOT_PROMPT_INTELLIGENCE]: 'Copilot Prompt Intelligence',
   [AI_FEATURES.IA_ASSESSMENT]: 'Information Architecture Assessment',
   [AI_FEATURES.WORKSPACE_INSIGHT]: 'Workspace Insight',
   [AI_FEATURES.GOVERNANCE_NARRATIVE]: 'Governance Narrative',
@@ -107,6 +109,7 @@ export const AI_PROVIDER_LABELS: Record<AIProvider, string> = {
 
 export const DEFAULT_FEATURE_ASSIGNMENTS: Record<AIFeature, { provider: AIProvider; model: string }> = {
   [AI_FEATURES.COPILOT_ASSESSMENT]: { provider: AI_PROVIDERS.AZURE_FOUNDRY, model: 'gpt-4o' },
+  [AI_FEATURES.COPILOT_PROMPT_INTELLIGENCE]: { provider: AI_PROVIDERS.AZURE_FOUNDRY, model: 'gpt-4o' },
   [AI_FEATURES.IA_ASSESSMENT]: { provider: AI_PROVIDERS.AZURE_FOUNDRY, model: 'gpt-4o' },
   [AI_FEATURES.WORKSPACE_INSIGHT]: { provider: AI_PROVIDERS.AZURE_FOUNDRY, model: 'gpt-4o-mini' },
   [AI_FEATURES.GOVERNANCE_NARRATIVE]: { provider: AI_PROVIDERS.AZURE_FOUNDRY, model: 'gpt-4o' },

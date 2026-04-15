@@ -532,7 +532,7 @@ export async function runCopilotPromptAssessment(
 
         try {
           const messages = buildAIPrompt(orgSummary, departmentBreakdown);
-          const aiResult = await completeForFeature("copilot_assessment", messages, 2000);
+          const aiResult = await completeForFeature("copilot_prompt_intelligence", messages, 2000);
           executiveSummary = aiResult.content;
           recommendations = parseRecommendations(aiResult.content);
           modelUsed = aiResult.model;
