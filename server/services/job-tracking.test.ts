@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
-import { afterEach, describe, it } from "node:test";
+import { after, afterEach, describe, it } from "node:test";
 
-process.env.DATABASE_URL ??= "postgres://postgres:postgres@localhost:5432/synozur_test";
+const originalDatabaseUrl = process.env.DATABASE_URL;
+process.env.DATABASE_URL ??= process.env.TEST_DATABASE_URL ?? "postgres://localhost:5432/synozur_test";
 
 const { storage } = await import("../storage");
 const { jobRegistry } = await import("./job-registry");
@@ -17,6 +18,14 @@ afterEach(() => {
   storage.createScheduledJobRun = originalCreateScheduledJobRun;
   storage.updateScheduledJobRun = originalUpdateScheduledJobRun;
   jobRegistry.cleanupStale(-1);
+});
+
+after(() => {
+  if (originalDatabaseUrl === undefined) {
+    delete process.env.DATABASE_URL;
+  } else {
+    process.env.DATABASE_URL = originalDatabaseUrl;
+  }
 });
 
 describe("jobRegistry/trackJobRun", () => {
@@ -99,6 +108,6 @@ describe("jobRegistry/trackJobRun", () => {
 
     const progressWrites = updates.filter((u) => u.progressLabel === "step 1");
     assert.equal(progressWrites.length, 1);
-    assert.equal(progressWrites[0].progressLabel, "step 1");
+    assert.equal(updates.some((u) => u.progressLabel === "step 2"), false);
   });
 });
