@@ -50,6 +50,7 @@ import {
   Sparkles,
   Flame,
   MessageSquareText,
+  Activity,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -393,6 +394,12 @@ export default function AppShell({ children }: AppShellProps) {
       items: [
         { name: "User Management", href: "/app/admin/users", icon: UsersIcon, minRole: "tenant_admin" },
         { name: "Audit Log", href: "/app/admin/audit-log", icon: ClipboardList, minRole: "read_only_auditor" },
+      ]
+    },
+    {
+      subLabel: "Operations",
+      items: [
+        { name: "Job Monitor", href: "/app/admin/job-monitor", icon: Activity, minRole: "governance_admin" },
       ]
     },
   ];

@@ -47,6 +47,7 @@ import CustomFieldsPage from "./pages/app/admin/custom-fields";
 import AuditLogPage from "./pages/app/admin/audit-log";
 import AISettingsPage from "./pages/app/admin/ai-settings";
 import PlanManagementPage from "./pages/app/admin/plan-management";
+import JobMonitorPage from "./pages/app/admin/job-monitor";
 import SupportPage from "./pages/app/support";
 import TeamsChannelsPage from "./pages/app/teams-channels";
 import OneDriveInventoryPage from "./pages/app/onedrive-inventory";
@@ -212,6 +213,9 @@ function AppRoutes() {
         </Route>
         <Route path="/app/admin/audit-log">
           <RoleGuard minRole="read_only_auditor"><AuditLogPage /></RoleGuard>
+        </Route>
+        <Route path="/app/admin/job-monitor">
+          <RoleGuard minRole="governance_admin"><JobMonitorPage /></RoleGuard>
         </Route>
         <Route path="/app/admin/data-dictionaries">
           <RoleGuard minRole="tenant_admin"><DataDictionariesPage /></RoleGuard>
