@@ -13,13 +13,14 @@ import { requireFeature } from "../services/feature-gate";
 import { storage } from "../storage";
 import { buildHeatmapSnapshot } from "../services/content-intensity-heatmap";
 import { getOrgTenantConnectionIds } from "./scope-helpers";
+import { ZENITH_ROLES } from "@shared/schema";
 
 const router = Router();
 
 router.get(
   "/api/content-intensity-heatmap",
   requireAuth(),
-  requireRole("operator"),
+  requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN, ZENITH_ROLES.OPERATOR),
   requireFeature("contentIntensityHeatmap"),
   async (req: AuthenticatedRequest, res) => {
     const tenantConnectionId =

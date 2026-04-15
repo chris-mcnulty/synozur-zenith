@@ -65,7 +65,7 @@ async function assertTenantAccess(
 router.post(
   "/api/ia-assessment",
   requireAuth(),
-  requireRole("operator"),
+  requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN, ZENITH_ROLES.OPERATOR),
   requireFeature("iaAssessment"),
   async (req: AuthenticatedRequest, res) => {
     const body = z
@@ -103,7 +103,7 @@ router.post(
 router.get(
   "/api/ia-assessment/history",
   requireAuth(),
-  requireRole("operator"),
+  requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN, ZENITH_ROLES.OPERATOR),
   requireFeature("iaAssessment"),
   async (req: AuthenticatedRequest, res) => {
     const orgId = req.activeOrganizationId || req.user?.organizationId;
@@ -134,7 +134,7 @@ router.get(
 router.get(
   "/api/ia-assessment/latest",
   requireAuth(),
-  requireRole("operator"),
+  requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN, ZENITH_ROLES.OPERATOR),
   requireFeature("iaAssessment"),
   async (req: AuthenticatedRequest, res) => {
     const tenantConnectionId = typeof req.query.tenantConnectionId === "string"
@@ -175,7 +175,7 @@ router.get(
 router.get(
   "/api/ia-assessment/:runId",
   requireAuth(),
-  requireRole("operator"),
+  requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN, ZENITH_ROLES.OPERATOR),
   requireFeature("iaAssessment"),
   async (req: AuthenticatedRequest, res) => {
     const run = await getRunById(req.params.runId);
