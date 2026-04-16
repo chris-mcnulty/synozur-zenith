@@ -10,7 +10,8 @@
     "start": "NODE_ENV=production node dist/index.cjs",
     "check": "tsc",
     "db:push": "drizzle-kit push",
-    "test:email-report": "tsx --test server/services/email-report-metrics.test.ts"
+    "test:email-report": "tsx --test server/services/email-report-metrics.test.ts",
+    "test:m365-overview-report": "tsx --test server/services/m365-overview-report.test.ts"
   },
   "dependencies": {
     "@azure/msal-node": "^5.0.4",

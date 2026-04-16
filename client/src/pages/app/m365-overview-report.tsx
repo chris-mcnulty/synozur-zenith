@@ -378,7 +378,7 @@ export default function M365OverviewReportPage() {
                   <div className="flex justify-between"><span className="text-muted-foreground">Archived</span><span className="font-semibold">{snapshot.sites.archivedSites}</span></div>
                   <div className="flex justify-between"><span className="text-muted-foreground">Deleted</span><span className="font-semibold">{snapshot.sites.deletedSites}</span></div>
                   <div className="flex justify-between"><span className="text-muted-foreground">Newly inactive</span><span className="font-semibold">{snapshot.sites.newlyInactive}</span></div>
-                  <div className="flex justify-between"><span className="text-muted-foreground">Top-10 storage total</span><span className="font-semibold">{formatBytes(snapshot.sites.storageDeltaBytes)}</span></div>
+                  <div className="flex justify-between"><span className="text-muted-foreground">Top-10 storage total</span><span className="font-semibold">{formatBytes(snapshot.sites.storageTop10Bytes)}</span></div>
                 </CardContent>
               </Card>
 

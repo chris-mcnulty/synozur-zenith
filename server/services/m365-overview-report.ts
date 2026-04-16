@@ -25,6 +25,9 @@ import {
 } from "@shared/schema";
 import { storage } from "../storage";
 import { completeForFeature, type AIMessage } from "./ai-provider";
+import { extractJson, sanitizeRecommendations } from "./m365-overview-report-helpers";
+
+export { extractJson, sanitizeRecommendations };
 
 const WINDOW_DAYS = 30;
 
@@ -81,7 +84,6 @@ async function collectSnapshot(
     workspaceId: string;
     displayName: string;
     siteUrl: string | null;
-    storageDeltaBytes: number;
     storageUsedBytes: number;
   }> = [];
 
@@ -105,7 +107,6 @@ async function collectSnapshot(
       workspaceId: site.id,
       displayName: site.displayName,
       siteUrl: site.siteUrl ?? null,
-      storageDeltaBytes: used,
       storageUsedBytes: used,
     });
   }
@@ -117,7 +118,7 @@ async function collectSnapshot(
     );
   }
 
-  const storageDeltaBytes = growthRanking
+  const storageTop10Bytes = growthRanking
     .slice(0, 10)
     .reduce((sum, w) => sum + w.storageUsedBytes, 0);
 
@@ -318,7 +319,7 @@ async function collectSnapshot(
       newSites,
       archivedSites,
       deletedSites,
-      storageDeltaBytes,
+      storageTop10Bytes,
       topGrowth: growthRanking.slice(0, 10),
       newlyInactive,
     },
@@ -401,52 +402,6 @@ function buildLLMPrompt(snapshot: M365OverviewSnapshot, orgName: string): AIMess
         JSON.stringify(compact, null, 2),
     },
   ];
-}
-
-function extractJson(raw: string): string {
-  const trimmed = raw.trim();
-  if (trimmed.startsWith("{")) return trimmed;
-  const fenceMatch = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  if (fenceMatch) return fenceMatch[1].trim();
-  const firstBrace = trimmed.indexOf("{");
-  const lastBrace = trimmed.lastIndexOf("}");
-  if (firstBrace >= 0 && lastBrace > firstBrace) {
-    return trimmed.slice(firstBrace, lastBrace + 1);
-  }
-  return trimmed;
-}
-
-function sanitizeRecommendations(input: unknown): M365OverviewRecommendation[] {
-  if (!Array.isArray(input)) return [];
-  const allowedImpact = new Set(["HIGH", "MEDIUM", "LOW"]);
-  const allowedCategory = new Set([
-    "SITES",
-    "TEAMS",
-    "IA",
-    "COPILOT",
-    "SHARING",
-    "LIFECYCLE",
-    "LABELING",
-  ]);
-  const out: M365OverviewRecommendation[] = [];
-  input.forEach((item, idx) => {
-    if (!item || typeof item !== "object") return;
-    const r = item as Record<string, unknown>;
-    const title = typeof r.title === "string" ? r.title : null;
-    const rationale = typeof r.rationale === "string" ? r.rationale : null;
-    if (!title || !rationale) return;
-    const impact = allowedImpact.has(String(r.impact)) ? (r.impact as "HIGH" | "MEDIUM" | "LOW") : "MEDIUM";
-    const effort = allowedImpact.has(String(r.effort)) ? (r.effort as "HIGH" | "MEDIUM" | "LOW") : "MEDIUM";
-    const category = allowedCategory.has(String(r.category))
-      ? (r.category as M365OverviewRecommendation["category"])
-      : "SITES";
-    const rank = typeof r.rank === "number" ? r.rank : idx + 1;
-    const evidenceRefs = Array.isArray(r.evidenceRefs)
-      ? (r.evidenceRefs.filter(e => typeof e === "string") as string[])
-      : undefined;
-    out.push({ rank, title, rationale, impact, effort, category, evidenceRefs });
-  });
-  return out.sort((a, b) => a.rank - b.rank).slice(0, 10);
 }
 
 async function generateNarrative(

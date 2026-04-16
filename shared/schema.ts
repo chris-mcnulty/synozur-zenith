@@ -1679,12 +1679,12 @@ export interface M365OverviewSiteChanges {
   newSites: number;
   archivedSites: number;
   deletedSites: number;
-  storageDeltaBytes: number;
+  /** Sum of current storageUsedBytes for the top-10 largest sites (proxy; true 30-day delta not available). */
+  storageTop10Bytes: number;
   topGrowth: Array<{
     workspaceId: string;
     displayName: string;
     siteUrl: string | null;
-    storageDeltaBytes: number;
     storageUsedBytes: number;
   }>;
   newlyInactive: number;

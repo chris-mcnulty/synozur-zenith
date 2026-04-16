@@ -8,10 +8,9 @@
 
 import { Router } from "express";
 import { storage } from "../storage";
-import { ZENITH_ROLES } from "@shared/schema";
 import { requireAuth, requireRole, type AuthenticatedRequest } from "../middleware/rbac";
 import { requireFeature } from "../services/feature-gate";
-import { getActiveOrgId } from "./scope-helpers";
+import { getActiveOrgId, getOrgTenantConnectionIds } from "./scope-helpers";
 import {
   startOverviewReport,
   getOverviewReport,
@@ -21,15 +20,6 @@ import {
 } from "../services/m365-overview-report";
 
 const router = Router();
-
-async function getOrgTenantConnectionIds(
-  user: AuthenticatedRequest["user"],
-): Promise<string[] | null> {
-  if (!user?.organizationId) return null;
-  if (user.role === ZENITH_ROLES.PLATFORM_OWNER) return null;
-  const connections = await storage.getTenantConnectionsByOrganization(user.organizationId);
-  return connections.map(c => c.id);
-}
 
 async function assertTenantAccess(
   req: AuthenticatedRequest,
@@ -45,8 +35,10 @@ async function assertTenantAccess(
   }
   const conn = await storage.getTenantConnection(tenantConnectionId);
   if (!conn) return { ok: false, status: 404, message: "Tenant connection not found" };
-  const allowedIds = await getOrgTenantConnectionIds(req.user);
-  if (allowedIds && !allowedIds.includes(conn.id)) {
+  // getOrgTenantConnectionIds returns null only for PLATFORM_OWNER (all-access).
+  // For everyone else it returns the org's own + MSP-granted connection ids.
+  const allowedIds = await getOrgTenantConnectionIds(req);
+  if (allowedIds !== null && !allowedIds.includes(conn.id)) {
     return { ok: false, status: 403, message: "Access denied" };
   }
   return { ok: true, conn };
