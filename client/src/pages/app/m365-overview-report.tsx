@@ -470,43 +470,47 @@ export default function M365OverviewReportPage() {
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-3">
-                  {recommendations.map((r) => (
-                    <div
-                      key={r.rank}
-                      className="rounded-xl border border-border p-4 space-y-2"
-                      data-testid={`recommendation-${r.rank}`}
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="flex items-start gap-3 min-w-0">
-                          <div className="w-7 h-7 shrink-0 rounded-full bg-primary/10 border border-primary/20 flex items-center justify-center text-xs font-semibold text-primary">
-                            {r.rank}
+                  {recommendations.map((r) => {
+                    const recommendationKey = `${r.rank}-${r.title}-${r.category}-${r.impact}-${r.effort}`;
+
+                    return (
+                      <div
+                        key={recommendationKey}
+                        className="rounded-xl border border-border p-4 space-y-2"
+                        data-testid={`recommendation-${recommendationKey}`}
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="flex items-start gap-3 min-w-0">
+                            <div className="w-7 h-7 shrink-0 rounded-full bg-primary/10 border border-primary/20 flex items-center justify-center text-xs font-semibold text-primary">
+                              {r.rank}
+                            </div>
+                            <div className="min-w-0">
+                              <p className="font-medium">{r.title}</p>
+                              <p className="text-sm text-muted-foreground mt-0.5">{r.rationale}</p>
+                            </div>
                           </div>
-                          <div className="min-w-0">
-                            <p className="font-medium">{r.title}</p>
-                            <p className="text-sm text-muted-foreground mt-0.5">{r.rationale}</p>
-                          </div>
-                        </div>
-                        <div className="flex shrink-0 flex-col items-end gap-1">
-                          <Badge variant="outline" className={`text-[10px] ${impactColor(r.impact)}`}>
-                            {r.impact} IMPACT
-                          </Badge>
-                          <Badge variant="outline" className="text-[10px]">
-                            {r.effort} EFFORT
-                          </Badge>
-                          {categoryIcon(r.category)}
-                        </div>
-                      </div>
-                      {r.evidenceRefs && r.evidenceRefs.length > 0 && (
-                        <div className="flex flex-wrap gap-1 pl-10">
-                          {r.evidenceRefs.map((e, i) => (
-                            <Badge key={i} variant="outline" className="text-[10px] font-mono bg-muted/30">
-                              {e}
+                          <div className="flex shrink-0 flex-col items-end gap-1">
+                            <Badge variant="outline" className={`text-[10px] ${impactColor(r.impact)}`}>
+                              {r.impact} IMPACT
                             </Badge>
-                          ))}
+                            <Badge variant="outline" className="text-[10px]">
+                              {r.effort} EFFORT
+                            </Badge>
+                            {categoryIcon(r.category)}
+                          </div>
                         </div>
-                      )}
-                    </div>
-                  ))}
+                        {r.evidenceRefs && r.evidenceRefs.length > 0 && (
+                          <div className="flex flex-wrap gap-1 pl-10">
+                            {r.evidenceRefs.map((e, i) => (
+                              <Badge key={i} variant="outline" className="text-[10px] font-mono bg-muted/30">
+                                {e}
+                              </Badge>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
                 </CardContent>
               </Card>
             )}
