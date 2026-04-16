@@ -71,7 +71,7 @@ export const DATASETS: DatasetDefinition[] = [
     key: "workspaces",
     label: "Workspace Inventory",
     description: "Sites, groups, usage metrics, sensitivity labels",
-    staleness: { warningAfterHours: 24, criticalAfterHours: 72 },
+    staleness: { warningAfterHours: 168, criticalAfterHours: 336 },
     refreshJobType: "tenantSync",
     getLastRefreshedAt: (tcId) =>
       getLatestCompletion(tcId, "tenantSync", async () => {
@@ -83,7 +83,7 @@ export const DATASETS: DatasetDefinition[] = [
     key: "userInventory",
     label: "User Directory Cache",
     description: "Entra ID users — names, UPNs, departments",
-    staleness: { warningAfterHours: 48, criticalAfterHours: 168 },
+    staleness: { warningAfterHours: 168, criticalAfterHours: 336 },
     refreshJobType: "userInventory",
     getLastRefreshedAt: (tcId) =>
       getLatestCompletion(tcId, "userInventory", async () => {
@@ -95,7 +95,7 @@ export const DATASETS: DatasetDefinition[] = [
     key: "sharingLinks",
     label: "Sharing Link Scan",
     description: "External, anonymous, and org-wide sharing links",
-    staleness: { warningAfterHours: 24, criticalAfterHours: 72 },
+    staleness: { warningAfterHours: 168, criticalAfterHours: 336 },
     refreshJobType: "sharingLinkDiscovery",
     dependsOn: ["workspaces"],
     getLastRefreshedAt: (tcId) =>
@@ -108,7 +108,7 @@ export const DATASETS: DatasetDefinition[] = [
     key: "copilotInteractions",
     label: "Copilot Interactions",
     description: "User prompts and AI responses from M365 Copilot",
-    staleness: { warningAfterHours: 24, criticalAfterHours: 72 },
+    staleness: { warningAfterHours: 168, criticalAfterHours: 336 },
     refreshJobType: "copilotSync",
     getLastRefreshedAt: (tcId) =>
       getLatestCompletion(tcId, "copilotSync", async () => {
@@ -130,7 +130,7 @@ export const DATASETS: DatasetDefinition[] = [
     key: "onedriveInventory",
     label: "OneDrive Inventory",
     description: "Per-user OneDrive storage, file count, activity",
-    staleness: { warningAfterHours: 24, criticalAfterHours: 72 },
+    staleness: { warningAfterHours: 168, criticalAfterHours: 336 },
     refreshJobType: "oneDriveInventory",
     getLastRefreshedAt: (tcId) => getLatestCompletion(tcId, "oneDriveInventory"),
   },
@@ -138,7 +138,7 @@ export const DATASETS: DatasetDefinition[] = [
     key: "teamsInventory",
     label: "Teams & Channels Inventory",
     description: "Teams, channels, membership, privacy",
-    staleness: { warningAfterHours: 24, criticalAfterHours: 72 },
+    staleness: { warningAfterHours: 168, criticalAfterHours: 336 },
     refreshJobType: "teamsInventory",
     getLastRefreshedAt: (tcId) => getLatestCompletion(tcId, "teamsInventory"),
   },
@@ -146,7 +146,7 @@ export const DATASETS: DatasetDefinition[] = [
     key: "recordings",
     label: "Teams Recordings",
     description: "Meeting recordings stored in OneDrive/SharePoint",
-    staleness: { warningAfterHours: 48, criticalAfterHours: 168 },
+    staleness: { warningAfterHours: 168, criticalAfterHours: 336 },
     refreshJobType: "teamsRecordings",
     dependsOn: ["teamsInventory"],
     getLastRefreshedAt: (tcId) => getLatestCompletion(tcId, "teamsRecordings"),
@@ -155,7 +155,7 @@ export const DATASETS: DatasetDefinition[] = [
     key: "iaColumns",
     label: "Information Architecture — Columns",
     description: "SharePoint content types and site columns",
-    staleness: { warningAfterHours: 48, criticalAfterHours: 168 },
+    staleness: { warningAfterHours: 168, criticalAfterHours: 336 },
     refreshJobType: "iaSync",
     getLastRefreshedAt: (tcId) => getLatestCompletion(tcId, "iaSync"),
   },
@@ -172,7 +172,7 @@ export const DATASETS: DatasetDefinition[] = [
     key: "emailStorageReport",
     label: "Email Storage Report",
     description: "Per-user mailbox size and growth telemetry",
-    staleness: { warningAfterHours: 168, criticalAfterHours: 720 },
+    staleness: { warningAfterHours: 168, criticalAfterHours: 336 },
     refreshJobType: "emailStorageReport",
     dependsOn: ["userInventory"],
     getLastRefreshedAt: (tcId) => getLatestCompletion(tcId, "emailStorageReport"),
