@@ -359,6 +359,7 @@ export async function leaveHubSite(spoToken: string, siteUrl: string): Promise<{
 export async function fetchSiteArchiveStatus(token: string, graphSiteId: string): Promise<{
   isArchived: boolean;
   archiveStatus: string | null;
+  httpStatus: number | null;
   error?: string;
 }> {
   try {
@@ -367,7 +368,12 @@ export async function fetchSiteArchiveStatus(token: string, graphSiteId: string)
     });
 
     if (!res.ok) {
-      return { isArchived: false, archiveStatus: null, error: `Graph API ${res.status}` };
+      return {
+        isArchived: false,
+        archiveStatus: null,
+        httpStatus: res.status,
+        error: `Graph API ${res.status}`,
+      };
     }
 
     const data = await res.json();
@@ -378,9 +384,9 @@ export async function fetchSiteArchiveStatus(token: string, graphSiteId: string)
       console.log(`[archive-status] ${graphSiteId} → ${archiveStatus} (isArchived=${isArchived})`);
     }
 
-    return { isArchived, archiveStatus };
+    return { isArchived, archiveStatus, httpStatus: 200 };
   } catch (err: any) {
-    return { isArchived: false, archiveStatus: null, error: err.message };
+    return { isArchived: false, archiveStatus: null, httpStatus: null, error: err.message };
   }
 }
 

@@ -26,6 +26,7 @@ import {
   fetchSiteLockState,
   enumerateSiteDocumentLibraries,
   fetchContentTypes,
+  fetchSiteArchiveStatus,
 } from "./graph";
 import { getPlanFeatures } from "./feature-gate";
 import { computeWritebackHash, computeSpoSyncHash } from "./writeback-hash";
@@ -613,20 +614,30 @@ export async function runSharePointTenantSync(
       upsertedCount++;
     }
 
-    // --- Reconcile deleted sites ---------------------------------------------
-    // Sites deleted in M365 (sent to the recycle bin via the SharePoint Admin
-    // Center or M365 Admin) disappear from `GET /sites` entirely, so they are
-    // never visited by the upsert loop above. Without an explicit reconcile
-    // pass, our `workspaces` table keeps them indefinitely flagged
-    // `isDeleted=false`, which is why lifecycle reports were showing
-    // `0 deleted` even when the M365 Admin "Deleted sites" report showed
-    // recent deletions.
+    // --- Reconcile missing sites (archived vs deleted) -----------------------
+    // Sites can disappear from `GET /sites` for two different reasons:
+    //   1. They were deleted (recycle bin) in M365 Admin / SharePoint Admin.
+    //   2. They were archived via M365 Archive — Graph's site listing
+    //      filters them out once `archivalDetails.archiveStatus` reaches
+    //      `recentlyArchived` / `fullyArchived`.
+    //
+    // Both classes of sites are "missing" from the upsert loop, so without
+    // an explicit reconcile pass our `workspaces` table keeps them flagged
+    // `isDeleted=false AND isArchived=false` indefinitely.
+    //
+    // To distinguish the two, we probe Graph's per-site endpoint
+    // (`GET /sites/{id}`) for every missing workspace:
+    //   - HTTP 200 with an archive status  → site is archived, mark
+    //     isArchived=true (do NOT set isDeleted — the site still exists).
+    //   - HTTP 404 (or any other non-OK)   → site is genuinely gone,
+    //     mark isDeleted=true.
     //
     // Safety: only run reconciliation when (a) the listing succeeded
     // (siteResult.error is empty) AND (b) the per-tenant site cap was NOT
     // applied — otherwise sites beyond the cap would be falsely marked deleted.
     let reconciledDeletedCount = 0;
-    if (!siteResult.error && !sitesCapApplied) {
+    let reconciledArchivedCount = 0;
+    if (!siteResult.error && !sitesCapApplied && token) {
       // Query workspaces directly (bypassing storage.getWorkspaces, which
       // hard-filters out archived AND deleted rows). We need archived rows
       // included so an archived-then-deleted site is still reconciled.
@@ -638,21 +649,65 @@ export async function runSharePointTenantSync(
           id: workspacesTable.id,
           m365ObjectId: workspacesTable.m365ObjectId,
           isDeleted: workspacesTable.isDeleted,
+          isArchived: workspacesTable.isArchived,
         })
         .from(workspacesTable)
         .where(eq(workspacesTable.tenantConnectionId, tenantConnectionId));
 
       const seenObjectIds = new Set(siteResult.sites.map((s) => s.id));
+      let reconciledRecoveredCount = 0;
       for (const ws of tenantWorkspaces) {
         if (!ws.m365ObjectId) continue; // skip provisioned-but-unsynced rows
-        if (ws.isDeleted) continue;
         if (seenObjectIds.has(ws.m365ObjectId)) continue;
-        await storage.updateWorkspace(ws.id, { isDeleted: true } as any);
-        reconciledDeletedCount++;
+
+        // Two cases to handle:
+        //   (A) currently-alive workspace that dropped from the listing
+        //       → classify as archived or deleted based on the probe.
+        //   (B) already isDeleted=true but not archived — may have been
+        //       mis-marked by an earlier version of this reconcile pass
+        //       that conflated "archived" with "deleted". Probe to recover.
+        const needsClassification = !ws.isDeleted;
+        const needsRecovery = ws.isDeleted && !ws.isArchived;
+        if (!needsClassification && !needsRecovery) continue;
+
+        // Probe Graph per-site. Only definitive "not found" responses
+        // (404/410) mark deleted. Transient failures (401/403/429/5xx,
+        // network errors) leave flags untouched so the next sync can retry.
+        const probe = await fetchSiteArchiveStatus(token, ws.m365ObjectId);
+        if (probe.httpStatus === 200 && probe.isArchived) {
+          // Site still exists in M365 Archive.
+          if (needsRecovery) {
+            // Recover a previously mis-marked row: clear isDeleted, set isArchived.
+            await storage.updateWorkspace(ws.id, {
+              isDeleted: false,
+              isArchived: true,
+            } as any);
+            reconciledRecoveredCount++;
+          } else if (!ws.isArchived) {
+            await storage.updateWorkspace(ws.id, { isArchived: true } as any);
+            reconciledArchivedCount++;
+          }
+        } else if (
+          needsClassification &&
+          (probe.httpStatus === 404 || probe.httpStatus === 410)
+        ) {
+          await storage.updateWorkspace(ws.id, { isDeleted: true } as any);
+          reconciledDeletedCount++;
+        } else {
+          // 200-without-archive-status, or transient non-OK, or 404 during
+          // a recovery probe (already marked deleted — nothing to change).
+          console.log(
+            `[sync] Reconcile probe for ${ws.m365ObjectId} inconclusive (httpStatus=${probe.httpStatus ?? "network"}${probe.error ? `, err=${probe.error}` : ""}) — leaving unchanged`,
+          );
+        }
       }
-      if (reconciledDeletedCount > 0) {
+      if (
+        reconciledDeletedCount > 0 ||
+        reconciledArchivedCount > 0 ||
+        reconciledRecoveredCount > 0
+      ) {
         console.log(
-          `[sync] Reconciled ${reconciledDeletedCount} workspace${reconciledDeletedCount === 1 ? "" : "s"} as deleted (no longer present in tenant site listing) for ${connection.tenantName}`,
+          `[sync] Reconciled missing sites for ${connection.tenantName}: ${reconciledArchivedCount} archived, ${reconciledDeletedCount} deleted, ${reconciledRecoveredCount} recovered (deleted→archived)`,
         );
       }
     }
