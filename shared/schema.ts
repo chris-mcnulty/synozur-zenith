@@ -385,6 +385,7 @@ export const PLAN_FEATURES = {
     iaAssessment: false,
     contentIntensityHeatmap: false,
     copilotPromptIntelligence: false,
+    m365OverviewReport: false,
     trendRetentionDays: 0,
     maxUsers: 25,
     maxTenants: 1,
@@ -412,6 +413,7 @@ export const PLAN_FEATURES = {
     iaAssessment: false,
     contentIntensityHeatmap: false,
     copilotPromptIntelligence: false,
+    m365OverviewReport: false,
     trendRetentionDays: 0,
     maxUsers: 500,
     maxTenants: 2,
@@ -439,6 +441,7 @@ export const PLAN_FEATURES = {
     iaAssessment: false,
     contentIntensityHeatmap: false,
     copilotPromptIntelligence: true,
+    m365OverviewReport: false,
     trendRetentionDays: 30,
     maxUsers: 5000,
     maxTenants: 10,
@@ -466,6 +469,7 @@ export const PLAN_FEATURES = {
     iaAssessment: true,
     contentIntensityHeatmap: true,
     copilotPromptIntelligence: true,
+    m365OverviewReport: true,
     trendRetentionDays: -1,
     maxUsers: -1,
     maxTenants: -1,
@@ -1652,6 +1656,145 @@ export const insertEmailStorageReportSchema = createInsertSchema(emailStorageRep
 });
 export type InsertEmailStorageReport = z.infer<typeof insertEmailStorageReportSchema>;
 export type EmailStorageReport = typeof emailStorageReports.$inferSelect;
+
+// ── M365 30-Day Overview Report (premium) ───────────────────────────────────
+//
+// A periodic executive-style snapshot combining 30-day change deltas across
+// sites, Teams channels, document libraries, and sharing links with an
+// LLM-authored narrative plus prioritized recommendations derived from
+// Copilot prompt intelligence, IA scoring, and sharing posture.
+
+export const M365_OVERVIEW_STATUSES = ["RUNNING", "COMPLETED", "FAILED"] as const;
+export type M365OverviewStatus = (typeof M365_OVERVIEW_STATUSES)[number];
+
+export interface M365OverviewKpi {
+  label: string;
+  value: number;
+  previousValue: number | null;
+  deltaPct: number | null;
+  unit?: "count" | "bytes" | "percent";
+}
+
+export interface M365OverviewSiteChanges {
+  newSites: number;
+  archivedSites: number;
+  deletedSites: number;
+  /** Sum of current storageUsedBytes for the top-10 largest sites (proxy; true 30-day delta not available). */
+  storageTop10Bytes: number;
+  topGrowth: Array<{
+    workspaceId: string;
+    displayName: string;
+    siteUrl: string | null;
+    storageUsedBytes: number;
+  }>;
+  newlyInactive: number;
+}
+
+export interface M365OverviewTeamsChanges {
+  newTeams: number;
+  newChannels: number;
+  // "Remixed" = created, renamed membership-type, archived/restored, or
+  // visibility flipped within the window.
+  remixedChannels: number;
+  privateChannels: number;
+  sharedChannels: number;
+  topActiveTeams: Array<{
+    teamId: string;
+    displayName: string;
+    channelCount: number;
+    memberCount: number | null;
+  }>;
+}
+
+export interface M365OverviewLibraryChanges {
+  newLibraries: number;
+  versionSprawlFlagged: number;
+  deepFolderFlagged: number;
+  averageMaxFolderDepth: number | null;
+  unlabeledLibraries: number;
+}
+
+export interface M365OverviewSharingChanges {
+  newExternalLinks: number;
+  anonymousLinks: number;
+  activeLinks: number;
+  expiringSoon: number;
+}
+
+export interface M365OverviewCopilotSignals {
+  totalInteractions: number;
+  uniqueUsers: number;
+  averageQualityScore: number | null;
+  problematicShare: number; // 0..1
+  topFlags: Array<{ signal: string; count: number }>;
+  topDepartments: Array<{ department: string; interactions: number; avgQuality: number | null }>;
+}
+
+export interface M365OverviewIASignals {
+  librariesAssessed: number;
+  versionSprawlCount: number;
+  deepHierarchyCount: number;
+  missingSensitivityLabelsCount: number;
+}
+
+export interface M365OverviewSnapshot {
+  generatedAt: string;
+  windowStart: string;
+  windowEnd: string;
+  priorWindowStart: string;
+  priorWindowEnd: string;
+  kpis: M365OverviewKpi[];
+  sites: M365OverviewSiteChanges;
+  teams: M365OverviewTeamsChanges;
+  libraries: M365OverviewLibraryChanges;
+  sharing: M365OverviewSharingChanges;
+  copilot: M365OverviewCopilotSignals;
+  ia: M365OverviewIASignals;
+  dataCaveats: string[];
+}
+
+export interface M365OverviewRecommendation {
+  rank: number;
+  title: string;
+  rationale: string;
+  impact: "HIGH" | "MEDIUM" | "LOW";
+  effort: "HIGH" | "MEDIUM" | "LOW";
+  category: "SITES" | "TEAMS" | "IA" | "COPILOT" | "SHARING" | "LIFECYCLE" | "LABELING";
+  evidenceRefs?: string[];
+}
+
+export const m365OverviewReports = pgTable("m365_overview_reports", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  organizationId: varchar("organization_id").notNull(),
+  tenantConnectionId: varchar("tenant_connection_id").notNull(),
+
+  status: text("status").notNull().default("RUNNING"),
+  windowStart: timestamp("window_start").notNull(),
+  windowEnd: timestamp("window_end").notNull(),
+
+  snapshot: jsonb("snapshot").$type<M365OverviewSnapshot>(),
+  narrative: text("narrative"),
+  recommendations: jsonb("recommendations").$type<M365OverviewRecommendation[]>(),
+
+  modelUsed: text("model_used"),
+  tokensUsed: integer("tokens_used"),
+
+  triggeredByUserId: varchar("triggered_by_user_id"),
+
+  startedAt: timestamp("started_at").defaultNow().notNull(),
+  completedAt: timestamp("completed_at"),
+  error: text("error"),
+
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertM365OverviewReportSchema = createInsertSchema(m365OverviewReports).omit({
+  id: true,
+  createdAt: true,
+  startedAt: true,
+});
+export type InsertM365OverviewReport = z.infer<typeof insertM365OverviewReportSchema>;
+export type M365OverviewReport = typeof m365OverviewReports.$inferSelect;
 
 export const aiAgentSkills = pgTable("ai_agent_skills", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),

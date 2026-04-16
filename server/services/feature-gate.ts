@@ -33,6 +33,7 @@ export function requireFeature(feature: keyof typeof PLAN_FEATURES.TRIAL) {
         iaAssessment: "IA Assessment",
         contentIntensityHeatmap: "Content Intensity Heat Map",
         copilotPromptIntelligence: "Copilot Prompt Intelligence",
+        m365OverviewReport: "M365 30-Day Overview Report",
       };
       const label = featureLabels[feature] || feature;
       return res.status(403).json({
