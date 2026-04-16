@@ -538,16 +538,28 @@ export async function runCopilotPromptAssessment(
         let modelUsed: string | null = null;
         let tokensUsed: number | null = null;
 
+        let narrativeErrorMessage: string | null = null;
         try {
           const messages = buildAIPrompt(orgSummary, departmentBreakdown);
-          const aiResult = await completeForFeature("copilot_prompt_intelligence", messages, 2000);
+          // 6000 tokens — GPT-5 / o-series reasoning models count internal
+          // reasoning tokens against this budget, so the body needs ~3–4× the
+          // visible-output budget to avoid empty completions.
+          const aiResult = await completeForFeature("copilot_prompt_intelligence", messages, 6000);
+          if (!aiResult.content || aiResult.content.trim().length === 0) {
+            throw new Error(
+              `AI returned empty content (model=${aiResult.model}, output_tokens=${aiResult.outputTokens}). ` +
+              `If using a GPT-5 / o-series reasoning model, raise the token budget further.`,
+            );
+          }
           executiveSummary = aiResult.content;
           recommendations = parseRecommendations(aiResult.content);
           modelUsed = aiResult.model;
           tokensUsed = aiResult.inputTokens + aiResult.outputTokens;
         } catch (aiErr) {
-          console.warn("[CopilotPromptAssessment] AI narrative failed (non-fatal):", aiErr);
+          const msg = aiErr instanceof Error ? aiErr.message : String(aiErr);
+          console.warn("[CopilotPromptAssessment] AI narrative failed (non-fatal):", msg);
           executiveSummary = null;
+          narrativeErrorMessage = msg.slice(0, 1000);
         }
 
         // 5. Persist completed assessment
@@ -565,7 +577,10 @@ export async function runCopilotPromptAssessment(
           orgSummary: orgSummary as CopilotOrgSummary,
           departmentBreakdown: departmentBreakdown as CopilotDepartmentBreakdown[],
           userBreakdown: userBreakdown as CopilotUserBreakdown[],
-          executiveSummary,
+          executiveSummary: executiveSummary
+            ?? (narrativeErrorMessage
+              ? `> **Narrative generation failed:** ${narrativeErrorMessage}\n\nThe quantitative assessment data above is complete. Re-run the assessment after resolving the AI provider issue to generate the narrative.`
+              : null),
           recommendations: recommendations as CopilotRecommendation[],
           modelUsed,
           tokensUsed,
