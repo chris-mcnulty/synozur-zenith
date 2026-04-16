@@ -44,6 +44,7 @@ import {
   KeySquare,
   Lock,
   Network,
+  Flame,
   Activity,
 } from "lucide-react";
 import {
