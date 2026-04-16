@@ -94,7 +94,7 @@ async function collectSnapshot(
     if (site.isDeleted) deletedSites += 1;
 
     const lastActive = parseIsoLike(site.lastActivityDate);
-    if (lastActive && lastActive.getTime() < windowStart.getTime()) {
+    if (inWindow(lastActive, priorStart, priorEnd)) {
       newlyInactive += 1;
     }
 
