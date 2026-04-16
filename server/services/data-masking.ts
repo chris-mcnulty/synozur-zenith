@@ -77,7 +77,7 @@ export const SENSITIVE_FIELDS: Record<string, string[]> = {
     "resourceName", "description", "recommendedAction",
   ],
   copilot_interactions: [
-    "userPrincipalName", "userDisplayName", "promptText", "recommendation",
+    "userPrincipalName", "userDisplayName", "promptText", "bodyContent", "recommendation",
   ],
 };
 

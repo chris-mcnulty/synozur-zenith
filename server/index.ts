@@ -791,6 +791,24 @@ async function ensureTenantConnectionsSchema() {
     `);
 
     await client.query(`
+      ALTER TABLE copilot_interactions ALTER COLUMN app_class DROP NOT NULL;
+      ALTER TABLE copilot_interactions ALTER COLUMN prompt_text DROP NOT NULL;
+      ALTER TABLE copilot_interactions ADD COLUMN IF NOT EXISTS request_id TEXT;
+      ALTER TABLE copilot_interactions ADD COLUMN IF NOT EXISTS session_id TEXT;
+      ALTER TABLE copilot_interactions ADD COLUMN IF NOT EXISTS interaction_type TEXT NOT NULL DEFAULT 'userPrompt';
+      ALTER TABLE copilot_interactions ADD COLUMN IF NOT EXISTS body_content TEXT;
+      ALTER TABLE copilot_interactions ADD COLUMN IF NOT EXISTS body_content_type TEXT;
+      ALTER TABLE copilot_interactions ADD COLUMN IF NOT EXISTS contexts JSONB;
+      ALTER TABLE copilot_interactions ADD COLUMN IF NOT EXISTS attachments JSONB;
+      ALTER TABLE copilot_interactions ADD COLUMN IF NOT EXISTS links JSONB;
+      ALTER TABLE copilot_interactions ADD COLUMN IF NOT EXISTS mentions JSONB;
+      ALTER TABLE copilot_interactions ADD COLUMN IF NOT EXISTS raw_data JSONB;
+      CREATE INDEX IF NOT EXISTS idx_ci_interaction_type ON copilot_interactions (tenant_connection_id, interaction_type);
+      CREATE INDEX IF NOT EXISTS idx_ci_session ON copilot_interactions (tenant_connection_id, session_id);
+      CREATE INDEX IF NOT EXISTS idx_ci_request ON copilot_interactions (tenant_connection_id, request_id);
+    `);
+
+    await client.query(`
       CREATE TABLE IF NOT EXISTS copilot_prompt_assessments (
         id                    VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
         organization_id       VARCHAR NOT NULL,

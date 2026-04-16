@@ -1,4 +1,4 @@
-import { eq, desc, ilike, or, and, sql, gt, lt, max, gte, lte, inArray, isNull } from "drizzle-orm";
+import { eq, desc, ilike, or, and, sql, gt, lt, max, gte, lte, inArray, isNull, isNotNull } from "drizzle-orm";
 import { db } from "./db";
 import {
   workspaces,
@@ -3509,6 +3509,8 @@ export class DatabaseStorage implements IStorage {
         and(
           eq(copilotInteractions.tenantConnectionId, tenantConnectionId),
           isNull(copilotInteractions.analyzedAt),
+          eq(copilotInteractions.interactionType, "userPrompt"),
+          isNotNull(copilotInteractions.promptText),
         ),
       )
       .orderBy(desc(copilotInteractions.interactionAt))
@@ -3560,6 +3562,9 @@ export class DatabaseStorage implements IStorage {
       tenantConnectionId: copilotInteractions.tenantConnectionId,
       organizationId: copilotInteractions.organizationId,
       graphInteractionId: copilotInteractions.graphInteractionId,
+      requestId: copilotInteractions.requestId,
+      sessionId: copilotInteractions.sessionId,
+      interactionType: copilotInteractions.interactionType,
       userId: copilotInteractions.userId,
       userPrincipalName: copilotInteractions.userPrincipalName,
       userDisplayName: copilotInteractions.userDisplayName,

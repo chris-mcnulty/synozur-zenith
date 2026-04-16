@@ -56,6 +56,9 @@ interface InteractionRow {
   qualityScore: number | null;
   riskLevel: string | null;
   analyzedAt: Date | null;
+  interactionType?: string;
+  requestId?: string | null;
+  sessionId?: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -122,21 +125,26 @@ async function failAssessment(id: string, message: string): Promise<void> {
 
 async function loadInteractions(tenantConnectionId: string): Promise<InteractionRow[]> {
   const rows = await storage.loadCopilotInteractionsForAnalysis(tenantConnectionId);
-  return rows.map(r => ({
-    id: r.id,
-    userId: r.userId,
-    userPrincipalName: r.userPrincipalName,
-    userDisplayName: r.userDisplayName ?? null,
-    userDepartment: r.userDepartment ?? null,
-    appClass: r.appClass,
-    promptText: r.promptText,
-    interactionAt: r.interactionAt,
-    flags: (r.flags as CopilotPromptFlag[]) ?? [],
-    qualityTier: r.qualityTier ?? null,
-    qualityScore: r.qualityScore ?? null,
-    riskLevel: r.riskLevel ?? null,
-    analyzedAt: r.analyzedAt ?? null,
-  }));
+  return rows
+    .filter(r => r.interactionType === "userPrompt" && r.promptText)
+    .map(r => ({
+      id: r.id,
+      userId: r.userId,
+      userPrincipalName: r.userPrincipalName,
+      userDisplayName: r.userDisplayName ?? null,
+      userDepartment: r.userDepartment ?? null,
+      appClass: r.appClass ?? "Unknown",
+      promptText: r.promptText!,
+      interactionAt: r.interactionAt,
+      flags: (r.flags as CopilotPromptFlag[]) ?? [],
+      qualityTier: r.qualityTier ?? null,
+      qualityScore: r.qualityScore ?? null,
+      riskLevel: r.riskLevel ?? null,
+      analyzedAt: r.analyzedAt ?? null,
+      interactionType: r.interactionType,
+      requestId: r.requestId,
+      sessionId: r.sessionId,
+    }));
 }
 
 // ---------------------------------------------------------------------------

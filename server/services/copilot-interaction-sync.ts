@@ -1,21 +1,23 @@
 /**
  * Copilot Interaction Sync Service (BL-038)
  *
- * Syncs user-initiated Microsoft 365 Copilot interactions from the Microsoft
- * Graph API (beta) for all Copilot-licensed users in a given tenant
- * connection. Implements a rolling 30-day capture window, with automatic
- * cleanup of records older than 30 days after every sync.
+ * Syncs ALL Microsoft 365 Copilot interactions (userPrompt AND aiResponse) from
+ * the Microsoft Graph Beta API for all Copilot-licensed users in a given tenant.
+ * Implements incremental collection via per-user $filter=createdDateTime gt {date}
+ * and a rolling 30-day retention purge.
  *
- * Graph endpoint:
- *   GET /beta/users/{userId}/copilot/interactions
+ * Graph endpoint (per-user, NOT tenant-wide):
+ *   GET /beta/copilot/users/{userId}/interactionHistory/getAllEnterpriseInteractions
  *
  * Required permission: AiEnterpriseInteraction.Read.All (application permission,
- * admin consent required). This must be added to the Entra app registration
- * shared by Zenith's other Graph-consuming services.
+ * admin consent required).
  *
- * NOTE: the Copilot interactions endpoint is a BETA Graph API. Microsoft may
- * change the schema. The parse layer is isolated here so future changes don't
- * ripple into the analyzer/assessment layer.
+ * Key design decisions aligned with reference implementation:
+ *   - Store BOTH userPrompt and aiResponse (linked via requestId)
+ *   - Use sessionId to group full conversation threads
+ *   - Use $filter=createdDateTime gt {lastDate} for incremental collection
+ *   - UNIQUE constraint on graphInteractionId for idempotent re-runs
+ *   - Gracefully skip 403/404 users (no Copilot license or not provisioned)
  */
 
 import { and, eq, sql } from "drizzle-orm";
@@ -31,14 +33,12 @@ import { encryptRecord, getTenantKeyBuffer } from "./data-masking";
 import { decryptToken } from "../utils/encryption";
 import { trackJobRun, DuplicateJobError } from "./job-tracking";
 
-/** M365 Copilot SKU part identifier — used to filter license_assignments. */
 export const COPILOT_SKU_PART_ID = "639dec6b-bb19-468b-871c-c5c441c4b0cb";
 
-/** Hard upper bound on users per sync to avoid runaway cost. */
 const MAX_USERS_PER_SYNC = 2000;
-
-/** Days of interactions to request from the Graph API (rolling window). */
 const RETENTION_DAYS = 30;
+const MAX_PAGES_PER_USER = 200;
+const MAX_THROTTLE_RETRIES = 3;
 
 export interface SyncSummary {
   usersScanned: number;
@@ -47,10 +47,8 @@ export interface SyncSummary {
   interactionsPurged: number;
   errors: Array<{ userId?: string; context: string; message: string }>;
   skipReasons?: {
-    nonUserPromptType: number;
-    noPromptText: number;
     duplicateUpsert: number;
-    rateLimitDiscard: number;
+    invalidDate: number;
   };
   seenInteractionTypes?: Record<string, number>;
   graphPagesTotal?: number;
@@ -69,38 +67,19 @@ interface GraphInteraction {
   createdDateTime: string;
   appClass?: string;
   interactionType?: string;
+  requestId?: string;
+  sessionId?: string;
   body?: { contentType?: string; content?: string };
-  contexts?: Array<{ contextType?: string; content?: string; [key: string]: any }>;
-  requestBody?: { contentType?: string; content?: string };
+  contexts?: any[];
+  attachments?: any[];
+  links?: any[];
+  mentions?: any[];
   [key: string]: any;
-}
-
-function extractPromptText(interaction: GraphInteraction): string | null {
-  if (interaction.body?.content && typeof interaction.body.content === "string" && interaction.body.content.trim().length > 0) {
-    return interaction.body.content.trim();
-  }
-  if (interaction.requestBody?.content && typeof interaction.requestBody.content === "string" && interaction.requestBody.content.trim().length > 0) {
-    return interaction.requestBody.content.trim();
-  }
-  if (Array.isArray(interaction.contexts)) {
-    for (const ctx of interaction.contexts) {
-      if (ctx?.contextType === "prompt" && typeof ctx.content === "string" && ctx.content.trim().length > 0) {
-        return ctx.content.trim();
-      }
-    }
-    for (const ctx of interaction.contexts) {
-      if (typeof ctx?.content === "string" && ctx.content.trim().length > 0) {
-        return ctx.content.trim();
-      }
-    }
-  }
-  return null;
 }
 
 async function getCopilotLicensedUsers(
   tenantConnectionId: string,
 ): Promise<CopilotLicensedUser[]> {
-  // Filter by either exact SKU part id or the Copilot for M365 service plan name.
   const rows = await db
     .select({
       userId: licenseAssignments.userId,
@@ -113,14 +92,8 @@ async function getCopilotLicensedUsers(
     .from(licenseAssignments)
     .where(
       eq(licenseAssignments.tenantConnectionId, tenantConnectionId),
-      // accountEnabled filter removed: the license sync has inconsistent
-      // defaults across code paths (one defaults to false when Graph omits
-      // the field). Filtering here silently drops valid Copilot users. The
-      // Graph API naturally rejects disabled accounts with 403/404, which
-      // fetchInteractionsForUser already handles gracefully.
     );
 
-  // Deduplicate on userId and filter to Copilot SKUs.
   const byUser = new Map<string, CopilotLicensedUser>();
   for (const r of rows) {
     const sku = (r.skuPartNumber ?? "").toUpperCase();
@@ -155,86 +128,65 @@ async function getCopilotLicensedUsers(
   return result;
 }
 
-/** Maximum pages to retrieve per user when falling back to unfiltered paging. */
-const MAX_PAGES_PER_USER = 100;
-const MAX_THROTTLE_RETRIES = 3; // retry 429s up to 3 times with Retry-After back-off
-
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/**
- * Fetch Copilot interactions for a single user from the Graph beta endpoint.
- *
- * The $filter=createdDateTime OData parameter is NOT used. Despite being
- * documented as supported, the Graph filterTransformer consistently rejects it
- * with "Missing 'createdDateTime' value" on this tenant — tested across v1.0/
- * beta, URLSearchParams/raw strings, with/without milliseconds, open/closed
- * ranges. The reference implementation (Sentry) also encounters this but relies
- * on unfiltered paging with client-side date windowing.
- *
- * Strategy: page through ALL available results with $top=100, apply
- * client-side date filter via sinceMs, and collect only post-watermark items.
- * We request $orderby=createdDateTime desc (best-effort; the API may ignore
- * it). No early-stop is used because the Graph beta endpoint does NOT
- * guarantee newest-first ordering — production data shows oldest-first
- * results, which caused page-1 early-stop to miss ALL recent interactions.
- * Rate-limit with 100ms delay between pages.
- */
 interface FetchResult {
   interactions: GraphInteraction[];
   rateLimited: boolean;
   pagesRead: number;
   rawItemCount: number;
-  watermarkFiltered: number;
   accessError?: string;
-  midStreamTruncated?: boolean;
 }
 
+/**
+ * Fetch Copilot interactions for a single user from the Graph beta endpoint.
+ *
+ * Uses $filter=createdDateTime gt {lastDate} for incremental collection when
+ * a lastDate is provided. Falls back to unfiltered paging if $filter is
+ * rejected (400). Handles 403/404 gracefully (no Copilot license or not
+ * provisioned). Retries 429 with Retry-After back-off.
+ */
 async function fetchInteractionsForUser(
   token: string,
   userId: string,
-  /** UPN for fallback if Entra Object ID returns 404 */
   upn?: string,
-  /** Retention cutoff epoch-ms; used for smart early-stop when descending order works */
-  retentionMs?: number,
+  lastDate?: Date | null,
 ): Promise<FetchResult> {
   const interactions: GraphInteraction[] = [];
   const headers: Record<string, string> = { Authorization: `Bearer ${token}` };
 
-  // Build initial URL. Request $orderby=createdDateTime desc so we get the
-  // NEWEST interactions first. This is critical for heavy users (3k+ items)
-  // where oldest-first + page cap means we never reach recent data.
-  const basePath =
-    `/interactionHistory/getAllEnterpriseInteractions?$top=100`;
-  const buildUrl = (id: string, withOrderBy: boolean) =>
-    `https://graph.microsoft.com/beta/copilot/users/${encodeURIComponent(id)}` +
-    basePath + (withOrderBy ? `&$orderby=createdDateTime%20desc` : "");
+  const basePath = `/interactionHistory/getAllEnterpriseInteractions?$top=100`;
+  const buildUrl = (id: string, withFilter: boolean) => {
+    let u = `https://graph.microsoft.com/beta/copilot/users/${encodeURIComponent(id)}${basePath}`;
+    if (withFilter && lastDate) {
+      u += `&$filter=createdDateTime gt ${lastDate.toISOString()}`;
+    }
+    return u;
+  };
 
-  let url: string | null = buildUrl(userId, true);
-  let usingOrderBy = true;
+  let url: string | null = buildUrl(userId, !!lastDate);
+  let usingFilter = !!lastDate;
+  let triedWithoutFilter = false;
+  let triedUpnFallback = false;
 
   let pages = 0;
   let rawItemCount = 0;
   let rateLimited = false;
-  let triedUpnFallback = false;
-  let triedWithoutOrderBy = false;
-  let midStreamTruncated = false;
   let throttleRetries = 0;
-  let consecutiveOldPages = 0;
 
   while (url && pages < MAX_PAGES_PER_USER) {
-    if (pages > 0) await delay(500);
+    if (pages > 0) await delay(100);
     pages++;
 
     const res: Response = await fetch(url, { headers });
 
-    // --- 400: $orderby may be rejected → retry without it ---
-    if (res.status === 400 && pages === 1 && usingOrderBy && !triedWithoutOrderBy) {
-      triedWithoutOrderBy = true;
-      usingOrderBy = false;
+    if (res.status === 400 && pages === 1 && usingFilter && !triedWithoutFilter) {
+      triedWithoutFilter = true;
+      usingFilter = false;
       console.warn(
-        `[copilot-interaction-sync] user=${userId} 400 on page 1 (likely $orderby rejected); retrying without`,
+        `[copilot-interaction-sync] user=${userId} 400 on page 1 ($filter rejected); retrying without filter`,
       );
       url = buildUrl(userId, false);
       pages = 0;
@@ -245,24 +197,21 @@ async function fetchInteractionsForUser(
       const errBody = await res.text().catch(() => "");
       const errMsg = errBody.slice(0, 300);
 
-      // First-page 404 with Entra Object ID → try UPN (one attempt)
       if (res.status === 404 && pages === 1 && upn && !triedUpnFallback && !userId.includes("@")) {
         triedUpnFallback = true;
         console.warn(
           `[copilot-interaction-sync] user=${userId} 404 on page 1; retrying with UPN=${upn}`,
         );
-        url = buildUrl(upn, usingOrderBy);
+        url = buildUrl(upn, usingFilter);
         pages = 0;
         continue;
       }
 
-      // Mid-stream 404/403 → keep partial items, flag as truncated
-      if (pages > 1) {
+      if (pages > 1 && interactions.length > 0) {
         console.warn(
           `[copilot-interaction-sync] user=${userId} ${res.status} mid-stream on page ${pages}; ` +
           `keeping ${interactions.length} items`,
         );
-        midStreamTruncated = true;
         break;
       }
 
@@ -272,7 +221,6 @@ async function fetchInteractionsForUser(
         rateLimited: false,
         pagesRead: pages,
         rawItemCount,
-        watermarkFiltered: 0,
         accessError: `${res.status}: ${errMsg}`,
       };
     }
@@ -313,36 +261,12 @@ async function fetchInteractionsForUser(
 
     const pageItems = data.value ?? [];
     rawItemCount += pageItems.length;
-    let recentOnThisPage = 0;
     for (const item of pageItems) {
       if (!item?.id) continue;
       interactions.push(item);
-      if (retentionMs && item.createdDateTime) {
-        const ms = Date.parse(item.createdDateTime);
-        if (Number.isFinite(ms) && ms >= retentionMs) recentOnThisPage++;
-      }
     }
 
     url = data["@odata.nextLink"] ?? null;
-
-    // Smart early-stop: if $orderby desc is active and we already captured
-    // some recent items, stop once an entire page is older than retention.
-    // This means we've crossed the retention boundary from newest to oldest
-    // and there's no point reading further.
-    if (retentionMs && usingOrderBy && pageItems.length > 0) {
-      if (recentOnThisPage === 0) {
-        consecutiveOldPages++;
-        if (consecutiveOldPages >= 2 && interactions.length > pageItems.length) {
-          console.log(
-            `[copilot-interaction-sync] user=${userId} early-stop on page ${pages}: ` +
-            `${consecutiveOldPages} consecutive pages older than retention; ${interactions.length} items collected`,
-          );
-          break;
-        }
-      } else {
-        consecutiveOldPages = 0;
-      }
-    }
 
     if (pages >= MAX_PAGES_PER_USER && url) {
       console.log(
@@ -352,7 +276,7 @@ async function fetchInteractionsForUser(
     }
   }
 
-  return { interactions, rateLimited, pagesRead: pages, rawItemCount, watermarkFiltered: 0, midStreamTruncated };
+  return { interactions, rateLimited, pagesRead: pages, rawItemCount };
 }
 
 type InteractionEncryptionContext =
@@ -392,20 +316,22 @@ async function upsertInteraction(
   tenantConnectionId: string,
   record: InsertCopilotInteraction,
 ): Promise<"inserted" | "skipped"> {
-  // Encryption is applied when the tenant has masking enabled.
   const encryptionContext =
     await getInteractionEncryptionContext(tenantConnectionId);
-  const encrypted = encryptionContext.shouldEncrypt
-    ? encryptRecord(
-        record,
-        "copilot_interactions",
-        encryptionContext.keyBuffer,
-      )
-    : record;
+
+  let toInsert = record;
+  if (encryptionContext.shouldEncrypt) {
+    const withoutRaw = { ...record, rawData: null };
+    toInsert = encryptRecord(
+      withoutRaw,
+      "copilot_interactions",
+      encryptionContext.keyBuffer,
+    );
+  }
 
   const inserted = await db
     .insert(copilotInteractions)
-    .values(encrypted)
+    .values(toInsert)
     .onConflictDoNothing({
       target: [copilotInteractions.tenantConnectionId, copilotInteractions.graphInteractionId],
     })
@@ -414,26 +340,12 @@ async function upsertInteraction(
   return inserted.length > 0 ? "inserted" : "skipped";
 }
 
-/**
- * Delete interactions older than the retention window for a single tenant.
- * Called at the end of that tenant's sync to avoid cross-tenant contention.
- * Delegates to storage.purgeCopilotInteractions which enforces the 30-day window.
- */
 export async function purgeExpiredInteractions(
   tenantConnectionId: string,
 ): Promise<number> {
   return storage.purgeCopilotInteractions(tenantConnectionId);
 }
 
-/**
- * Sync Copilot interactions for a single tenant connection. Returns a
- * per-user summary. Per-user Graph errors (403 on a specific user, user not
- * found, etc.) are logged and do not abort the entire sync.
- *
- * When `syncRunId` is supplied the function writes the completed summary back
- * to the `copilot_sync_runs` row so callers can poll the run status via the
- * GET /api/copilot-prompt-intelligence/sync/:syncRunId endpoint.
- */
 export async function syncCopilotInteractions(
   tenantConnectionId: string,
   syncRunId?: string,
@@ -447,7 +359,6 @@ export async function syncCopilotInteractions(
     errors: [],
   };
 
-  /** Persist terminal state to the sync run row (best-effort). */
   async function finalizeSyncRun(status: "COMPLETED" | "FAILED", fatalError?: string) {
     if (!syncRunId) return;
     try {
@@ -483,7 +394,6 @@ export async function syncCopilotInteractions(
     return summary;
   }
 
-  // Resolve client secret (may be encrypted or provided via env)
   const clientSecret = conn.clientSecret
     ? (() => { try { return decryptToken(conn.clientSecret!); } catch { return conn.clientSecret!; } })()
     : process.env.AZURE_CLIENT_SECRET ?? "";
@@ -508,14 +418,11 @@ export async function syncCopilotInteractions(
 
   const users = await getCopilotLicensedUsers(tenantConnectionId);
   console.log(`[copilot-interaction-sync] tenant=${tenantConnectionId} found ${users.length} Copilot-licensed users`);
-  const retentionCutoff = new Date(Date.now() - RETENTION_DAYS * 24 * 60 * 60 * 1000);
 
-  const skipReasons = { nonUserPromptType: 0, noPromptText: 0, duplicateUpsert: 0, rateLimitDiscard: 0, olderThanRetention: 0, invalidDate: 0 };
+  const skipReasons = { duplicateUpsert: 0, invalidDate: 0 };
   const seenInteractionTypes: Record<string, number> = {};
   let graphPagesTotal = 0;
   let graphItemsTotal = 0;
-  let noPromptSampleLogged = false;
-  const retentionMs = retentionCutoff.getTime();
 
   for (const user of users) {
     if (signal?.aborted) {
@@ -525,10 +432,19 @@ export async function syncCopilotInteractions(
     }
 
     summary.usersScanned++;
-    let fetchResult: FetchResult;
 
+    const lastDate = await storage.getLatestCopilotInteractionDateForUser(
+      tenantConnectionId, user.userPrincipalName,
+    );
+    if (lastDate) {
+      console.log(
+        `[copilot-interaction-sync] user=${user.userPrincipalName} incremental since ${lastDate.toISOString()}`,
+      );
+    }
+
+    let fetchResult: FetchResult;
     try {
-      fetchResult = await fetchInteractionsForUser(token, user.userId, user.userPrincipalName, retentionMs);
+      fetchResult = await fetchInteractionsForUser(token, user.userId, user.userPrincipalName, lastDate);
     } catch (err: unknown) {
       const status = (err as { status?: number })?.status;
       const errMsg = err instanceof Error ? err.message : String(err);
@@ -550,7 +466,6 @@ export async function syncCopilotInteractions(
       `[copilot-interaction-sync] user=${user.userPrincipalName} ` +
       `graphItems=${fetchResult.rawItemCount} ` +
       `fetched=${fetchResult.interactions.length} pages=${fetchResult.pagesRead}` +
-      `${fetchResult.midStreamTruncated ? " TRUNCATED" : ""}` +
       `${fetchResult.rateLimited ? " RATE_LIMITED" : ""}` +
       `${fetchResult.accessError ? ` ERROR=${fetchResult.accessError.slice(0, 80)}` : ""}`,
     );
@@ -575,54 +490,40 @@ export async function syncCopilotInteractions(
       const iType = raw.interactionType ?? "(undefined)";
       seenInteractionTypes[iType] = (seenInteractionTypes[iType] || 0) + 1;
 
-      // Date validation + retention check
       const createdMs = raw.createdDateTime ? Date.parse(raw.createdDateTime) : NaN;
       if (!Number.isFinite(createdMs)) {
         skipReasons.invalidDate++;
         summary.interactionsSkipped++;
         continue;
       }
-      if (createdMs < retentionMs) {
-        skipReasons.olderThanRetention++;
-        summary.interactionsSkipped++;
-        continue;
-      }
 
-      if (raw.interactionType && raw.interactionType !== "userPrompt") {
-        skipReasons.nonUserPromptType++;
-        summary.interactionsSkipped++;
-        continue;
-      }
-      const promptText = extractPromptText(raw);
-      if (!promptText) {
-        skipReasons.noPromptText++;
-        summary.interactionsSkipped++;
-        if (!noPromptSampleLogged) {
-          noPromptSampleLogged = true;
-          const safeKeys = Object.keys(raw).filter(k => k !== "body" && k !== "contexts");
-          console.warn(
-            `[copilot-interaction-sync] DIAGNOSTIC: interaction with no extractable prompt ` +
-            `id=${raw.id} appClass=${raw.appClass ?? "?"} type=${raw.interactionType ?? "?"} ` +
-            `hasBody=${!!raw.body} bodyContentLen=${raw.body?.content?.length ?? 0} ` +
-            `contextsLen=${raw.contexts?.length ?? 0} ` +
-            `contextTypes=${(raw.contexts ?? []).map(c => c.contextType ?? "?").join(",")} ` +
-            `topLevelKeys=[${safeKeys.join(",")}]`,
-          );
-        }
-        continue;
-      }
+      const rawBodyContent = raw.body?.content;
+      const bodyContent = (typeof rawBodyContent === "string" && rawBodyContent.trim().length > 0)
+        ? rawBodyContent.trim()
+        : null;
+      const promptText = (raw.interactionType === "userPrompt" && bodyContent) ? bodyContent : null;
 
       try {
         const outcome = await upsertInteraction(tenantConnectionId, {
           tenantConnectionId,
           organizationId,
           graphInteractionId: raw.id,
+          requestId: raw.requestId ?? null,
+          sessionId: raw.sessionId ?? null,
+          interactionType: raw.interactionType ?? "userPrompt",
           userId: user.userId,
           userPrincipalName: user.userPrincipalName,
           userDisplayName: user.userDisplayName,
           userDepartment: user.userDepartment,
-          appClass: raw.appClass ?? "Unknown",
+          appClass: raw.appClass ?? null,
           promptText,
+          bodyContent,
+          bodyContentType: raw.body?.contentType ?? null,
+          contexts: raw.contexts ?? null,
+          attachments: raw.attachments ?? null,
+          links: raw.links ?? null,
+          mentions: raw.mentions ?? null,
+          rawData: raw,
           interactionAt: new Date(raw.createdDateTime),
           flags: [],
         });
@@ -632,15 +533,21 @@ export async function syncCopilotInteractions(
           summary.interactionsSkipped++;
         }
       } catch (err: unknown) {
-        summary.errors.push({
-          userId: user.userId,
-          context: "upsertInteraction",
-          message: err instanceof Error ? err.message : String(err),
-        });
+        const errMsg = err instanceof Error ? err.message : String(err);
+        if (errMsg.includes("duplicate") || errMsg.includes("unique")) {
+          skipReasons.duplicateUpsert++;
+          summary.interactionsSkipped++;
+        } else {
+          summary.errors.push({
+            userId: user.userId,
+            context: "upsertInteraction",
+            message: errMsg,
+          });
+        }
       }
     }
 
-    if (summary.usersScanned < users.length) await delay(2000);
+    if (summary.usersScanned < users.length) await delay(300);
   }
 
   try {
@@ -666,9 +573,7 @@ export async function syncCopilotInteractions(
   );
   console.log(
     `[copilot-interaction-sync] skipReasons: ` +
-    `olderThanRetention=${skipReasons.olderThanRetention} nonUserPromptType=${skipReasons.nonUserPromptType} ` +
-    `noPromptText=${skipReasons.noPromptText} duplicateUpsert=${skipReasons.duplicateUpsert} ` +
-    `rateLimitDiscard=${skipReasons.rateLimitDiscard} invalidDate=${skipReasons.invalidDate}`,
+    `duplicateUpsert=${skipReasons.duplicateUpsert} invalidDate=${skipReasons.invalidDate}`,
   );
   if (Object.keys(seenInteractionTypes).length > 0) {
     console.log(
@@ -680,20 +585,11 @@ export async function syncCopilotInteractions(
   return summary;
 }
 
-/**
- * Create a sync run record and execute `syncCopilotInteractions` in the
- * background (via setImmediate). Returns the `syncRunId` immediately so the
- * caller can return it to the HTTP client for polling.
- *
- * The run starts in RUNNING state. Stale runs (> 2 hours) are auto-failed
- * before creating a new one, matching the assessment service pattern.
- */
 export async function startTrackedSync(
   tenantConnectionId: string,
   organizationId: string,
   triggeredBy: string | null,
 ): Promise<string> {
-  // Clean up any stale RUNNING rows from previous crashed syncs.
   await storage.failStaleCopilotSyncRuns(tenantConnectionId);
 
   const run = await storage.createCopilotSyncRun({
@@ -704,10 +600,6 @@ export async function startTrackedSync(
     startedAt: new Date(),
   });
 
-  // BL-039: dual-write to scheduled_job_runs and route through the unified
-  // job registry. The legacy copilot_sync_runs row is preserved so the
-  // existing /api/copilot-prompt-intelligence/sync/:syncRunId polling UI
-  // continues to work; trackJobRun's jobId is correlated via targetId.
   setImmediate(() => {
     void trackJobRun(
       {
@@ -745,10 +637,6 @@ export async function startTrackedSync(
   return run.id;
 }
 
-/**
- * Fetch interactions already captured for a tenant that have not yet been
- * scored by the analyzer. Used by the analysis pass.
- */
 export async function getUnanalyzedInteractionIds(
   tenantConnectionId: string,
   limit = 1000,
@@ -756,11 +644,6 @@ export async function getUnanalyzedInteractionIds(
   return storage.getUnanalyzedCopilotInteractionIds(tenantConnectionId, limit);
 }
 
-/** Return interactions for a tenant, optionally including raw prompt text.
- * Prompt text is omitted by default to avoid inadvertent PII exposure in
- * API responses. Pass `includePromptText: true` only from callers that have
- * verified the caller's authorization to see raw prompt content.
- */
 export async function getInteractionsForTenant(
   tenantConnectionId: string,
   options: { limit?: number; offset?: number; includePromptText?: boolean } = {},
