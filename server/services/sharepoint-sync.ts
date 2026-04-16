@@ -528,9 +528,16 @@ export async function runSharePointTenantSync(
       const spoLockState = enriched.lockState;
       const usageLockState = usage?.lockState;
 
-      workspaceData.isArchived = graphArchived;
+      // Honor the SPO REST `IsArchived` signal in addition to the Graph
+      // `siteCollection.archivalDetails.archiveStatus` field. The Graph bulk
+      // listing does not always populate `archivalDetails` for recently-
+      // archived sites — without this, sites archived in the Microsoft 365
+      // Admin "Archived sites" view (e.g. via Microsoft 365 Archive) appear
+      // as live in our inventory and as `0 archived` in lifecycle reports.
+      const spoArchivedFlag = enriched.isArchived === true;
+      workspaceData.isArchived = graphArchived || spoArchivedFlag;
 
-      if (graphArchived) {
+      if (graphArchived || spoArchivedFlag) {
         workspaceData.lockState =
           spoLockState && spoLockState !== "Unknown"
             ? spoLockState
@@ -604,6 +611,50 @@ export async function runSharePointTenantSync(
         await storage.createWorkspace(workspaceData as any);
       }
       upsertedCount++;
+    }
+
+    // --- Reconcile deleted sites ---------------------------------------------
+    // Sites deleted in M365 (sent to the recycle bin via the SharePoint Admin
+    // Center or M365 Admin) disappear from `GET /sites` entirely, so they are
+    // never visited by the upsert loop above. Without an explicit reconcile
+    // pass, our `workspaces` table keeps them indefinitely flagged
+    // `isDeleted=false`, which is why lifecycle reports were showing
+    // `0 deleted` even when the M365 Admin "Deleted sites" report showed
+    // recent deletions.
+    //
+    // Safety: only run reconciliation when (a) the listing succeeded
+    // (siteResult.error is empty) AND (b) the per-tenant site cap was NOT
+    // applied — otherwise sites beyond the cap would be falsely marked deleted.
+    let reconciledDeletedCount = 0;
+    if (!siteResult.error && !sitesCapApplied) {
+      // Query workspaces directly (bypassing storage.getWorkspaces, which
+      // hard-filters out archived AND deleted rows). We need archived rows
+      // included so an archived-then-deleted site is still reconciled.
+      const { db } = await import("../db");
+      const { workspaces: workspacesTable } = await import("@shared/schema");
+      const { eq } = await import("drizzle-orm");
+      const tenantWorkspaces = await db
+        .select({
+          id: workspacesTable.id,
+          m365ObjectId: workspacesTable.m365ObjectId,
+          isDeleted: workspacesTable.isDeleted,
+        })
+        .from(workspacesTable)
+        .where(eq(workspacesTable.tenantConnectionId, tenantConnectionId));
+
+      const seenObjectIds = new Set(siteResult.sites.map((s) => s.id));
+      for (const ws of tenantWorkspaces) {
+        if (!ws.m365ObjectId) continue; // skip provisioned-but-unsynced rows
+        if (ws.isDeleted) continue;
+        if (seenObjectIds.has(ws.m365ObjectId)) continue;
+        await storage.updateWorkspace(ws.id, { isDeleted: true } as any);
+        reconciledDeletedCount++;
+      }
+      if (reconciledDeletedCount > 0) {
+        console.log(
+          `[sync] Reconciled ${reconciledDeletedCount} workspace${reconciledDeletedCount === 1 ? "" : "s"} as deleted (no longer present in tenant site listing) for ${connection.tenantName}`,
+        );
+      }
     }
 
     // --- Sensitivity labels ---
