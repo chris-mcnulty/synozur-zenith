@@ -53,6 +53,7 @@ import TeamsChannelsPage from "./pages/app/teams-channels";
 import OneDriveInventoryPage from "./pages/app/onedrive-inventory";
 import RecordingsPage from "./pages/app/recordings";
 import EmailStorageReportPage from "./pages/app/email-storage-report";
+import M365OverviewReportPage from "./pages/app/m365-overview-report";
 import LicensingPage from "./pages/app/licensing";
 import AppShell from "./components/layout/app-shell";
 
@@ -245,6 +246,7 @@ function AppRoutes() {
         <Route path="/app/onedrive-inventory" component={OneDriveInventoryPage} />
         <Route path="/app/recordings" component={RecordingsPage} />
         <Route path="/app/email-storage-report" component={EmailStorageReportPage} />
+        <Route path="/app/m365-overview-report" component={M365OverviewReportPage} />
         <Route path="/app/licensing" component={LicensingPage} />
         <Route path="/app/support/:tab" component={SupportPage} />
         <Route path="/app/support" component={SupportPage} />

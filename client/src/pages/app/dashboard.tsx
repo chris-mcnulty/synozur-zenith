@@ -20,10 +20,12 @@ import {
   Activity,
   RefreshCw,
   XCircle,
+  BarChart3,
 } from "lucide-react";
 import { Link } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { useServicePlan } from "@/hooks/use-service-plan";
+import { UpgradeBadge } from "@/components/upgrade-gate";
 import { useTenant } from "@/lib/tenant-context";
 import { DatasetFreshnessBanner } from "@/components/datasets";
 
@@ -312,7 +314,18 @@ export default function DashboardPage() {
             Governance overview for {orgName}
           </p>
         </div>
-        <div className="flex gap-3">
+        <div className="flex flex-wrap gap-3">
+          <Link href="/app/m365-overview-report">
+            <Button
+              variant="outline"
+              className="gap-2 rounded-full"
+              data-testid="button-dashboard-generate-overview"
+            >
+              <BarChart3 className="w-4 h-4" />
+              30-Day Overview
+              <UpgradeBadge feature="m365OverviewReport" />
+            </Button>
+          </Link>
           <Link href="/app/provision/new">
             <Button className="gap-2 rounded-full shadow-md shadow-primary/20">
               <FolderPlus className="w-4 h-4" />
