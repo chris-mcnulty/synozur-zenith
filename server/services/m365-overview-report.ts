@@ -213,7 +213,7 @@ async function collectSnapshot(
   let expiringSoon = 0;
   const inSevenDays = new Date(windowEnd.getTime() + 7 * 24 * 60 * 60 * 1000);
   for (const link of sharingRows) {
-    if (link.createdAtGraph && link.createdAtGraph.getTime() >= windowStart.getTime()) {
+    if (link.createdAtGraph && inWindow(link.createdAtGraph, windowStart, windowEnd)) {
       newExternalLinks += 1;
     }
     if (link.linkType === "anonymous") anonymousLinks += 1;
