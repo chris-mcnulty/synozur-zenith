@@ -2032,7 +2032,6 @@ export const JOB_TYPES = {
   copilotAssessment:    { label: "Copilot Prompt Assessment",   dataset: "copilotAssessments" },
   iaAssessment:         { label: "IA Health Assessment",        dataset: "iaAssessment" },
   emailStorageReport:   { label: "Email Storage Report",        dataset: "emailStorageReport" },
-  m365Overview:         { label: "M365 30-Day Overview Report", dataset: "m365OverviewReports" },
   governanceSnapshot:   { label: "Governance Snapshot",         dataset: "governanceSnapshot" },
   licenseSync:          { label: "License Sync",                dataset: "licenses" },
   iaSync:               { label: "IA Column Sync",              dataset: "iaColumns" },
