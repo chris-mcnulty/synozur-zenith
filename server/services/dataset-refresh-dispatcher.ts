@@ -32,6 +32,7 @@ import { runTeamsInventoryDiscovery } from "./teams-inventory-discovery";
 import { runTeamsRecordingsDiscovery } from "./recordings-discovery";
 import { runIASync } from "./ia-sync";
 import { runSharePointTenantSync } from "./sharepoint-sync";
+import { runEmailContentStorageReport } from "./email-content-storage-report";
 
 export type DispatchOutcome =
   | { ok: true; jobId: string | null; alreadyRunning?: false; legacyRunId?: string }
@@ -215,16 +216,36 @@ export async function dispatchDatasetRefresh(opts: {
       return { ok: true, jobId: null };
     }
 
-    case "emailStorageReport":
-      // Email Storage Report needs configuration (mode, limits, etc.) that
-      // the dataset gate does not collect. Refresh from the dedicated
-      // page/endpoint instead.
-      return {
-        ok: false,
-        status: 501,
-        message:
-          "Email Storage Report must be triggered with run options. Open the Email Storage Report page.",
-      };
+    case "emailStorageReport": {
+      if (!orgId) return { ok: false, status: 400, message: "Tenant has no organizationId" };
+      if (jobRegistry.isRunning("emailStorageReport", conn.id)) {
+        return { ok: true, jobId: null, alreadyRunning: true };
+      }
+      const inventoryCount = await storage.countUserInventoryActive(conn.id);
+      if (inventoryCount === 0) {
+        return { ok: false, status: 409, message: "User inventory is empty. Run User Inventory sync first." };
+      }
+      const emailClientId = conn.clientId || process.env.AZURE_CLIENT_ID!;
+      const emailClientSecret = getEffectiveClientSecret(conn);
+      void trackJobRun(
+        { ...baseTrackOpts, jobType: "emailStorageReport" },
+        () =>
+          runEmailContentStorageReport(
+            conn.id,
+            conn.tenantId,
+            emailClientId,
+            emailClientSecret,
+            {
+              mode: "ESTIMATE",
+              triggeredByUserId: triggeredByUserId ?? undefined,
+            },
+          ),
+      ).catch((err) => {
+        if (err instanceof DuplicateJobError) return;
+        console.error("[dispatch] emailStorageReport failed:", err);
+      });
+      return { ok: true, jobId: null };
+    }
 
     case "tenantSync": {
       const promise = trackJobRun(
