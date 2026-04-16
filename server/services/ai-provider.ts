@@ -99,6 +99,26 @@ async function getEntraAccessToken(): Promise<string> {
   return data.access_token;
 }
 
+/**
+ * Pick the correct token-limit field for an OpenAI-style chat completion
+ * request. Newer models (gpt-5.x, o1/o3/o4 reasoning, gpt-4.1+) only accept
+ * `max_completion_tokens`; legacy models (gpt-4o, gpt-4-turbo, gpt-3.5) still
+ * expect `max_tokens`.
+ */
+function openAITokenField(model: string): 'max_completion_tokens' | 'max_tokens' {
+  const m = (model || '').toLowerCase();
+  if (
+    m.startsWith('gpt-5') ||
+    m.startsWith('o1') ||
+    m.startsWith('o3') ||
+    m.startsWith('o4') ||
+    m.startsWith('gpt-4.1')
+  ) {
+    return 'max_completion_tokens';
+  }
+  return 'max_tokens';
+}
+
 function hasEntraCredentials(): boolean {
   return !!(process.env.AZURE_TENANT_ID && process.env.AZURE_CLIENT_ID && process.env.AZURE_CLIENT_SECRET);
 }
@@ -121,6 +141,8 @@ export class ReplitOpenAIProvider implements IAIProvider {
   async complete(messages: AIMessage[], model: string, maxTokens = 1024): Promise<AICompletionResult> {
     if (!this.isAvailable()) throw new Error('OpenAI provider not configured');
 
+    const tokenField = openAITokenField(model);
+
     const start = Date.now();
     const res = await fetch(`${this.getBaseUrl()}/chat/completions`, {
       method: 'POST',
@@ -128,7 +150,7 @@ export class ReplitOpenAIProvider implements IAIProvider {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${this.getApiKey()}`,
       },
-      body: JSON.stringify({ model, messages, max_tokens: maxTokens }),
+      body: JSON.stringify({ model, messages, [tokenField]: maxTokens }),
     });
 
     if (!res.ok) {
@@ -231,7 +253,7 @@ export class AzureFoundryProvider implements IAIProvider {
         'Content-Type': 'application/json',
         ...authHeaders,
       },
-      body: JSON.stringify({ messages, max_tokens: maxTokens }),
+      body: JSON.stringify({ messages, [openAITokenField(model)]: maxTokens }),
     });
 
     if (!res.ok) {
@@ -264,7 +286,7 @@ export class AzureFoundryProvider implements IAIProvider {
         'extra-parameters': 'ignore',
         ...authHeaders,
       },
-      body: JSON.stringify({ model, messages, max_tokens: maxTokens }),
+      body: JSON.stringify({ model, messages, [openAITokenField(model)]: maxTokens }),
     });
 
     if (!res.ok) {
