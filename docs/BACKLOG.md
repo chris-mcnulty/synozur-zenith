@@ -1359,6 +1359,105 @@ This must be added to the existing Entra app registration used for Graph API cal
 
 ---
 
+### 🟠 BL-039: Sharing Link Discovery — Progress Tracking & Resumable Scans
+**Status:** Backlog | **Priority:** High | **Effort:** Medium (~1 day) | **Service Plan:** All tiers
+
+**Background**
+
+The `sharingLinkDiscovery` job walks every SharePoint site and OneDrive drive in the tenant and enumerates every sharing link via Microsoft Graph. On a typical mid-size tenant it runs **1–3 hours** end-to-end. Production telemetry (April 14–16, 2026) shows that 4 of the last 5 runs were killed by server restarts (deploys, scale events) and marked `failed` with `"Process restarted — job orphaned"`. Because the job has no progress tracking and no checkpoint, every restart wastes the prior 1–3 hours of Graph calls and the next run starts from site #1.
+
+This work makes the scan **observable** (live progress) and **resilient** (resumes from where it died), without changing the underlying Graph behaviour.
+
+**Current State**
+
+| Capability | Status | Location |
+|---|---|---|
+| Job orchestration via `trackJobRun` | ✅ Live | `server/services/job-registry.ts` |
+| `scheduled_job_runs` row created per run | ✅ Live | `server/storage.ts` |
+| Startup orphan reconciler | ✅ Live | `server/storage.ts:3973` |
+| Per-tenant `sharing_link_discovery_runs` legacy stats table | ✅ Live | `shared/schema.ts:1312` |
+| `items_processed` / `items_total` populated | ❌ Always NULL | — |
+| `progress_label` populated | ❌ Always NULL | — |
+| Per-run checkpoint cursor | ❌ Missing | — |
+| Resume-on-restart logic | ❌ Missing | — |
+
+---
+
+### Improvement 1 — Progress Tracking (Small, ~30 min)
+
+**Problem:** Today `items_processed` and `items_total` are NULL on every sharing-link run, so the Job Monitor and Data Freshness pages show no progress and no "where did it die" diagnostic when a run is killed.
+
+**Changes:**
+1. In `runSharingLinkDiscovery` (`server/services/sharing-link-discovery.ts`), before the main SharePoint loop:
+   - Count workspaces with a valid `m365ObjectId` and OneDrive drives in `onedriveInventory`.
+   - Set `itemsTotal = spoSiteCount + oneDriveCount` on the `scheduled_job_runs` row.
+2. After each SharePoint site is processed, increment `itemsProcessed` and update `progressLabel = "SharePoint sites: 47/120"`.
+3. After each OneDrive drive is processed, increment `itemsProcessed` and update `progressLabel = "OneDrive drives: 12/45"`.
+4. Use `storage.updateScheduledJobRunProgress(runId, { itemsProcessed, itemsTotal, progressLabel })` — add the method if it does not yet exist (single Drizzle `update` call).
+
+**Result:** The Job Monitor and Data Freshness pages show a live progress bar. Even when a deploy kills the run, you can see exactly which site it was on. **Zero risk of breakage.**
+
+---
+
+### Improvement 2 — Resumability Across Restarts (Medium, ~2 hr)
+
+**Problem:** A deploy at minute 90 of a 180-minute run wastes 90 minutes of Graph calls. The next scheduled run starts from site #1.
+
+**Approach:** Add a per-run "checkpoint cursor" so a restarted run can pick up where the killed one left off.
+
+**Schema changes** — add to `sharing_link_discovery_runs`:
+- `last_processed_spo_site_id text` (nullable)
+- `last_processed_onedrive_id text` (nullable)
+- `phase text` — one of `'spo' | 'onedrive' | 'cleanup' | 'done'`
+
+**Discovery logic** — at the start of `runSharingLinkDiscovery`:
+1. Look for the most recent `failed` run for this tenant from the last ~6 hours where `errorMessage` starts with `"Process restarted — job orphaned"` AND the dispatcher was **not** invoked with `ignoreCheckpoint: true`.
+2. If found, **resume** from its checkpoint: re-snapshot the workspace and OneDrive lists fresh (handles add/remove between runs), then skip items up to and including the saved cursor and continue from the next item in the saved `phase`.
+3. Otherwise, start a fresh full run.
+
+**Checkpointing:**
+- Every N items (default N=10), write `lastProcessedSpoSiteId` (or `lastProcessedOneDriveId`) and `phase` to the `sharing_link_discovery_runs` row.
+- Fire-and-forget — never block the main loop if the write fails.
+
+**Startup reconciler:**
+- Keep marking orphans as `failed`, but change the message to `"Process restarted — job orphaned (resumable)"` so the UI can surface a "will resume on next run" indicator.
+
+**Force-full-rescan path:**
+- Add `ignoreCheckpoint?: boolean` to the dispatcher options for `sharingLinkDiscovery`.
+- "Refresh" button on Data Freshness defaults to **resumable**.
+- Add a separate "Full Rescan" affordance on the Sharing Links inventory page that passes `ignoreCheckpoint: true`.
+
+**Result:** A deploy at minute 90 of a 180-minute run loses only ~10 minutes (back to the last checkpoint). Even with frequent deploys, successive runs walk the entire tenant.
+
+---
+
+**Risks (must be addressed during implementation)**
+
+1. **Stale-link cleanup window** (`sharing-link-discovery.ts:200–218`). Today the cleanup pass marks any link not seen in the last 5 minutes as `isActive: false`. With resumable scans, the cleanup pass must use the **logical run start time** (the start of the *original* run that the resume picked up) — not the start time of the resumed-into invocation — otherwise links on not-yet-rescanned sites will be incorrectly marked inactive. Recommended approach: persist `logicalRunStartedAt` on the `sharing_link_discovery_runs` row at first start, propagate it across resumes, and use it as the "last seen since" comparator in the cleanup pass.
+2. **Workspace drift across resume.** Workspaces and OneDrive drives can be added or removed between the killed run and the resume. The resume must **re-snapshot** the workspace/drive list at resume time, then position the cursor by ID (skip everything up to and including `lastProcessedSpoSiteId`). It must not blindly reuse a stored list from the killed run. New workspaces added after the cursor will be picked up automatically; removed workspaces simply won't appear and that's fine.
+3. **Partial-cleanup semantics on resume.** If a previous run died inside the `cleanup` phase, the resume should skip directly to cleanup rather than re-scanning. The `phase` column drives this.
+4. **Concurrent runs.** If a manual "Full Rescan" is triggered while a resumable run is queued, the dispatcher must not start two `sharingLinkDiscovery` runs against the same tenant. The existing `discovery-cancellation` mechanism already handles this — verify it covers the resume path.
+5. **Operator override.** Add an admin-only "Discard checkpoint" button on the Job Monitor for the rare case where the saved cursor itself is the problem.
+
+**Acceptance Criteria**
+
+- Job Monitor and Data Freshness pages display a live progress bar and `"SharePoint sites: X/Y"` / `"OneDrive drives: X/Y"` label for in-flight `sharingLinkDiscovery` runs.
+- A killed `sharingLinkDiscovery` run can be resumed by the next dispatcher invocation, picking up within ±N items of where it died (N = checkpoint frequency, default 10).
+- Stale-link cleanup correctly uses the logical run start time across resumes; no false-positive `isActive=false` flips on not-yet-rescanned sites.
+- Workspaces added between runs are picked up on resume; workspaces removed between runs are silently skipped without errors.
+- An "ignoreCheckpoint" path exists and is wired to a "Full Rescan" UI affordance, separate from the standard "Refresh" button.
+- Orphaned runs whose checkpoint will be honored display as `"Process restarted — job orphaned (resumable)"` in the job history; runs flagged for full rescan display as `"Process restarted — job orphaned"`.
+- No new npm packages required.
+
+**Open Questions** *(to confirm before implementation)*
+
+1. **Checkpoint frequency:** is every 10 items the right granularity, or should we make it adaptive (e.g., every 60 seconds of wall time)? At 1–2 sec per site, every-10 = checkpoint every ~15 sec, which is cheap.
+2. **Resume eligibility window:** I proposed "last 6 hours". Is that right, or should it be tied to the dataset's freshness threshold (now 168h warning / 336h critical)?
+3. **Should resumability also apply to other long-running scans** — `oneDriveInventory`, `iaSync`, `tenantSync`, `userInventory`, `emailStorageReport`? If yes, this work should generalize the checkpoint columns to live on `scheduled_job_runs` itself rather than the per-job legacy stats tables.
+4. **UI exposure of "(resumable)"** — should the Data Freshness card visibly say "will resume on next refresh" when the most recent run was a resumable orphan, or is the existing "stale" indicator enough?
+
+---
+
 ## Low Priority
 
 ### 🟢 BL-021: MGDC Integration (Enterprise Tier)
