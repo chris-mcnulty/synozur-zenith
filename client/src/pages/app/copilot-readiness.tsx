@@ -547,6 +547,17 @@ export default function CopilotReadinessPage() {
   const remediationQueue = data?.remediationQueue ?? [];
 
   const excludedWorkspaces = useMemo(() => workspaces.filter(w => w.excluded), [workspaces]);
+  const readyWorkspaces = useMemo(
+    () =>
+      workspaces
+        .filter(w => !w.excluded && w.tier === "READY")
+        .sort((a, b) => b.score - a.score || a.displayName.localeCompare(b.displayName)),
+    [workspaces],
+  );
+  const [readyExpandedId, setReadyExpandedId] = useState<string | null>(null);
+  const [showAllReady, setShowAllReady] = useState(false);
+  const READY_COLLAPSED_LIMIT = 10;
+  const visibleReady = showAllReady ? readyWorkspaces : readyWorkspaces.slice(0, READY_COLLAPSED_LIMIT);
 
   const handleToggleExclusion = () => {
     if (!excludeDialog) return;
@@ -612,9 +623,6 @@ export default function CopilotReadinessPage() {
 
         {!isLoading && summary && (
           <>
-            {/* AI Assessment Panel */}
-            <AIAssessmentPanel readinessData={data} />
-
             {/* Summary cards */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
               <Card className="glass-panel" data-testid="card-summary-score">
@@ -834,6 +842,138 @@ export default function CopilotReadinessPage() {
               </CardContent>
             </Card>
 
+            {/* Copilot-Ready Workspaces */}
+            <Card className="glass-panel">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2 text-base">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-500" /> Copilot-Ready Workspaces
+                  <Badge variant="outline" className="bg-emerald-500/10 text-emerald-500 border-emerald-500/20 ml-1">
+                    {readyWorkspaces.length}
+                  </Badge>
+                </CardTitle>
+                <CardDescription>
+                  Workspaces that pass every required readiness criterion today and are safe to enable
+                  for Microsoft 365 Copilot. Click a row to see exactly which criteria they satisfy.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="p-0">
+                {readyWorkspaces.length === 0 ? (
+                  <div className="text-center text-muted-foreground py-12" data-testid="empty-ready-workspaces">
+                    <AlertTriangle className="w-8 h-8 mx-auto mb-3 text-amber-500" />
+                    <p className="font-medium">No workspaces are fully Copilot-ready yet.</p>
+                    <p className="text-xs mt-1">Resolve items in the remediation queue above to graduate workspaces here.</p>
+                  </div>
+                ) : (
+                  <>
+                    <div className="divide-y divide-border/50">
+                      {visibleReady.map((ws) => {
+                        const isExpanded = readyExpandedId === ws.workspaceId;
+                        const passing = ws.criteria.filter(c => c.pass);
+                        return (
+                          <div key={ws.workspaceId} data-testid={`row-ready-${ws.workspaceId}`}>
+                            <button
+                              type="button"
+                              className="w-full flex items-center gap-4 p-4 hover:bg-muted/10 transition-colors text-left"
+                              onClick={() => setReadyExpandedId(isExpanded ? null : ws.workspaceId)}
+                            >
+                              <ScoreBadge score={ws.score} />
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-2">
+                                  <span className="font-medium truncate" data-testid={`text-ready-name-${ws.workspaceId}`}>
+                                    {ws.displayName}
+                                  </span>
+                                  <TierBadge tier={ws.tier} />
+                                </div>
+                                <div className="text-xs text-muted-foreground mt-1 flex items-center gap-2">
+                                  <span>{passing.length}/{ws.totalCount} criteria passing</span>
+                                  {ws.sensitivity && (
+                                    <>
+                                      <span>·</span>
+                                      <span className="uppercase text-[10px] font-mono">{ws.sensitivity}</span>
+                                    </>
+                                  )}
+                                </div>
+                              </div>
+                              <ChevronDown
+                                className={`w-4 h-4 text-muted-foreground transition-transform ${isExpanded ? "rotate-180" : ""}`}
+                              />
+                            </button>
+
+                            {isExpanded && (
+                              <div className="bg-muted/5 border-t border-border/50 p-6 space-y-4" data-testid={`detail-ready-${ws.workspaceId}`}>
+                                <div className="space-y-2">
+                                  <h4 className="text-sm font-semibold flex items-center gap-2">
+                                    <CheckCircle2 className="w-4 h-4 text-emerald-500" /> Passing Criteria
+                                  </h4>
+                                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                    {passing.map(c => (
+                                      <div
+                                        key={c.key}
+                                        className="text-xs p-2 rounded border border-emerald-500/20 bg-emerald-500/5 text-emerald-300 flex items-center gap-2"
+                                      >
+                                        <CheckCircle2 className="w-3 h-3 shrink-0" />
+                                        <span className="truncate">{c.label}</span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+
+                                <div className="flex items-center justify-between pt-2 border-t border-border/40">
+                                  {ws.siteUrl ? (
+                                    <a
+                                      href={ws.siteUrl}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      className="text-xs text-primary hover:underline"
+                                      data-testid={`link-ready-site-${ws.workspaceId}`}
+                                    >
+                                      Open in SharePoint ↗
+                                    </a>
+                                  ) : (
+                                    <span />
+                                  )}
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    className="gap-2 text-xs"
+                                    onClick={() =>
+                                      setExcludeDialog({
+                                        workspaceId: ws.workspaceId,
+                                        displayName: ws.displayName,
+                                        currentlyExcluded: ws.excluded,
+                                      })
+                                    }
+                                    data-testid={`button-exclude-ready-${ws.workspaceId}`}
+                                  >
+                                    <ShieldOff className="w-3 h-3" />
+                                    Exclude from Copilot
+                                  </Button>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                    {readyWorkspaces.length > READY_COLLAPSED_LIMIT && (
+                      <div className="p-3 border-t border-border/50 text-center">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => setShowAllReady(v => !v)}
+                          data-testid="button-toggle-ready-list"
+                        >
+                          {showAllReady
+                            ? `Show fewer`
+                            : `Show all ${readyWorkspaces.length} ready workspaces`}
+                        </Button>
+                      </div>
+                    )}
+                  </>
+                )}
+              </CardContent>
+            </Card>
+
             {/* Exclusions */}
             {excludedWorkspaces.length > 0 && (
               <Card className="glass-panel">
@@ -885,6 +1025,9 @@ export default function CopilotReadinessPage() {
                 </CardContent>
               </Card>
             )}
+            {/* AI Assessment Panel — moved to bottom so KPIs and the inspectable
+                workspace lists appear before the long AI narrative. */}
+            <AIAssessmentPanel readinessData={data} />
           </>
         )}
 
