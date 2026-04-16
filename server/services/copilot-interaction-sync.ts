@@ -433,10 +433,12 @@ export async function syncCopilotInteractions(
 
     summary.usersScanned++;
 
-    const lastDate = await storage.getLatestCopilotInteractionDateForUser(
+    const rawLastDate = await storage.getLatestCopilotInteractionDateForUser(
       tenantConnectionId, user.userPrincipalName,
     );
-    if (lastDate) {
+    const lastDate = rawLastDate instanceof Date ? rawLastDate
+      : rawLastDate ? new Date(rawLastDate as any) : null;
+    if (lastDate && !isNaN(lastDate.getTime())) {
       console.log(
         `[copilot-interaction-sync] user=${user.userPrincipalName} incremental since ${lastDate.toISOString()}`,
       );
@@ -444,7 +446,8 @@ export async function syncCopilotInteractions(
 
     let fetchResult: FetchResult;
     try {
-      fetchResult = await fetchInteractionsForUser(token, user.userId, user.userPrincipalName, lastDate);
+      const validLastDate = (lastDate && !isNaN(lastDate.getTime())) ? lastDate : null;
+      fetchResult = await fetchInteractionsForUser(token, user.userId, user.userPrincipalName, validLastDate);
     } catch (err: unknown) {
       const status = (err as { status?: number })?.status;
       const errMsg = err instanceof Error ? err.message : String(err);
