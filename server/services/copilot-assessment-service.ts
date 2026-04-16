@@ -12,6 +12,7 @@
 import { pool } from '../db';
 import { storage } from '../storage';
 import { scoreWorkspaces, scoreWorkspace, type CopilotReadinessResult, type WorkspaceReadiness } from './copilot-scoring';
+import { buildRequiredFieldsByTenantId, getRequiredFieldsForWorkspace } from './metadata-completeness';
 import { completeForFeature, type AIMessage } from './ai-provider';
 
 export type AssessmentStatus = 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED';
@@ -242,7 +243,8 @@ export async function runCopilotReadinessAssessment(
         allWorkspaces = perTenantResults.flat();
       }
 
-      const scoringResult = scoreWorkspaces(allWorkspaces);
+      const requiredFieldsByTenantId = await buildRequiredFieldsByTenantId(allWorkspaces);
+      const scoringResult = scoreWorkspaces(allWorkspaces, requiredFieldsByTenantId);
       const messages = buildOrgAssessmentPrompt(orgId, scoringResult);
 
       const aiResult = await completeForFeature('copilot_assessment', messages, 3000);
@@ -323,7 +325,8 @@ export async function getWorkspaceNarrative(workspaceId: string, orgId: string):
   const workspace = await storage.getWorkspace(workspaceId);
   if (!workspace) throw new Error('Workspace not found');
 
-  const ws = scoreWorkspace(workspace);
+  const requiredFields = await getRequiredFieldsForWorkspace(workspace);
+  const ws = scoreWorkspace(workspace, requiredFields);
 
   const systemPrompt = `You are a Microsoft 365 governance expert. Write a concise, specific remediation narrative for a SharePoint workspace that is not yet Copilot-eligible. Focus on actionable steps, not generic advice. Output plain Markdown (2–4 short paragraphs, no headers).`;
 

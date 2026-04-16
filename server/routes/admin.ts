@@ -4,6 +4,7 @@ import { ZENITH_ROLES, SERVICE_PLANS, type ServicePlanTier } from "@shared/schem
 import { storage } from "../storage";
 import { getPlanFeatures } from "../services/feature-gate";
 import { invalidateDefaultSignupPlanCache } from "../utils/platformSettingsCache";
+import { buildRequiredFieldsByTenantId, evaluateMetadataCompleteness } from "../services/metadata-completeness";
 
 const router = Router();
 
@@ -38,8 +39,20 @@ router.get("/api/stats", requireAuth(), async (req: AuthenticatedRequest, res) =
 
   const total = allWorkspaces.length;
   const copilotReady = allWorkspaces.filter(w => w.copilotReady).length;
-  const metadataComplete = allWorkspaces.filter(w => w.metadataStatus === "COMPLETE").length;
-  const metadataMissing = allWorkspaces.filter(w => w.metadataStatus === "MISSING_REQUIRED").length;
+
+  // Dynamic metadata completeness — evaluate each workspace against its tenant's
+  // configured Required Metadata Fields (Data Dictionary). Tenants with zero
+  // required fields configured pass automatically. The legacy static
+  // `workspace.metadataStatus` field is no longer consulted because it is set
+  // only at provisioning time and never recomputed.
+  const requiredFieldsByTenantId = await buildRequiredFieldsByTenantId(allWorkspaces);
+  let metadataComplete = 0;
+  let metadataMissing = 0;
+  for (const ws of allWorkspaces) {
+    const fields = ws.tenantConnectionId ? (requiredFieldsByTenantId[ws.tenantConnectionId] || []) : [];
+    if (evaluateMetadataCompleteness(ws, fields).pass) metadataComplete++;
+    else metadataMissing++;
+  }
   const highlyConfidential = allWorkspaces.filter(w => w.sensitivity === "HIGHLY_CONFIDENTIAL").length;
 
   // Scope provisioning requests to this org
@@ -78,8 +91,12 @@ router.get("/api/dashboard", requireAuth(), async (req: AuthenticatedRequest, re
     allWorkspaces = perTenantResults.flat();
   }
 
-  // Alert 1: Missing required metadata
-  const missingMetadata = allWorkspaces.filter(w => w.metadataStatus === "MISSING_REQUIRED").length;
+  // Alert 1: Missing required metadata — dynamic per-tenant evaluation
+  const requiredFieldsByTenantIdForAlerts = await buildRequiredFieldsByTenantId(allWorkspaces);
+  const missingMetadata = allWorkspaces.filter(w => {
+    const fields = w.tenantConnectionId ? (requiredFieldsByTenantIdForAlerts[w.tenantConnectionId] || []) : [];
+    return !evaluateMetadataCompleteness(w, fields).pass;
+  }).length;
 
   // Alert 2: Workspaces with fewer than 2 owners
   const fewOwners = allWorkspaces.filter(w => {

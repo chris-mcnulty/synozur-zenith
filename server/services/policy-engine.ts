@@ -46,12 +46,16 @@ const BUILT_IN_EVALUATORS: Record<string, (workspace: Workspace, config?: Record
   METADATA_COMPLETE: (workspace, config) => {
     const requiredFields = (config?.requiredFields as string[]) || [];
 
+    // No required fields configured — there is nothing to check, so PASS.
+    // (Previously this fell back to the legacy static `workspace.metadataStatus`
+    // field which is set only at provisioning time and never recomputed,
+    // producing false negatives. The shared evaluator is the source of truth.)
     if (requiredFields.length === 0) {
       return {
         ruleType: "METADATA_COMPLETE",
         ruleName: "Metadata Complete",
-        ruleResult: workspace.metadataStatus === "COMPLETE" ? "PASS" : "FAIL",
-        ruleDescription: "All required governance metadata fields must be populated.",
+        ruleResult: "PASS",
+        ruleDescription: "No required governance metadata fields are configured for this tenant.",
       };
     }
 

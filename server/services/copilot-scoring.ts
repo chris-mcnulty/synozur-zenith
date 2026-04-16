@@ -16,6 +16,7 @@
  */
 
 import type { Workspace } from "@shared/schema";
+import { evaluateMetadataCompleteness } from "./metadata-completeness";
 
 export interface ScoringCriterion {
   key: string;
@@ -88,10 +89,21 @@ const CRITERION_WEIGHTS = {
   labelEncryption: 5,
 };
 
-function evaluateWorkspace(workspace: Workspace): ScoringCriterion[] {
+function evaluateWorkspace(
+  workspace: Workspace,
+  requiredMetadataFields: string[] = [],
+): ScoringCriterion[] {
   const customFields = (workspace as any).customFields as Record<string, any> | null | undefined;
   const siteOwners = (workspace as any).siteOwners as Array<unknown> | null | undefined;
   const ownerCount = siteOwners && siteOwners.length > 0 ? siteOwners.length : workspace.owners || 0;
+
+  const metadataEval = evaluateMetadataCompleteness(workspace, requiredMetadataFields);
+  const metadataDescription = requiredMetadataFields.length === 0
+    ? "No required governance metadata fields are configured for this tenant."
+    : `Required fields: ${requiredMetadataFields.join(", ")}.`;
+  const metadataRemediation = metadataEval.pass
+    ? "All required metadata fields are populated."
+    : `Populate required metadata field${metadataEval.missingFields.length === 1 ? "" : "s"} (${metadataEval.missingFields.join(", ")}) via Site Governance.`;
 
   const criteria: ScoringCriterion[] = [
     {
@@ -114,9 +126,9 @@ function evaluateWorkspace(workspace: Workspace): ScoringCriterion[] {
       key: "metadata",
       label: "Governance Metadata Complete",
       weight: CRITERION_WEIGHTS.metadata,
-      pass: workspace.metadataStatus === "COMPLETE",
-      description: "All required governance metadata fields must be populated.",
-      remediation: "Populate required metadata fields (department, cost center, project code) via Site Governance.",
+      pass: metadataEval.pass,
+      description: metadataDescription,
+      remediation: metadataRemediation,
     },
     {
       key: "sharingPosture",
@@ -186,9 +198,12 @@ function isExcluded(workspace: Workspace): { excluded: boolean; reason: string |
   return { excluded: false, reason: null };
 }
 
-export function scoreWorkspace(workspace: Workspace): WorkspaceReadiness {
+export function scoreWorkspace(
+  workspace: Workspace,
+  requiredMetadataFields: string[] = [],
+): WorkspaceReadiness {
   const { excluded, reason } = isExcluded(workspace);
-  const criteria = evaluateWorkspace(workspace);
+  const criteria = evaluateWorkspace(workspace, requiredMetadataFields);
   const totalWeight = criteria.reduce((sum, c) => sum + c.weight, 0);
   const passedWeight = criteria.filter(c => c.pass).reduce((sum, c) => sum + c.weight, 0);
   const score = totalWeight === 0 ? 0 : Math.round((passedWeight / totalWeight) * 100);
@@ -225,8 +240,16 @@ export function scoreWorkspace(workspace: Workspace): WorkspaceReadiness {
   };
 }
 
-export function scoreWorkspaces(workspaces: Workspace[]): CopilotReadinessResult {
-  const scored = workspaces.map(scoreWorkspace);
+export function scoreWorkspaces(
+  workspaces: Workspace[],
+  requiredMetadataFieldsByTenantId: Record<string, string[]> = {},
+): CopilotReadinessResult {
+  const scored = workspaces.map((w) => {
+    const fields = w.tenantConnectionId
+      ? requiredMetadataFieldsByTenantId[w.tenantConnectionId] || []
+      : [];
+    return scoreWorkspace(w, fields);
+  });
 
   const evaluated = scored.filter(s => !s.excluded);
   const ready = scored.filter(s => s.tier === "READY").length;

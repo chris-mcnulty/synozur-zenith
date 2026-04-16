@@ -6,6 +6,7 @@ import { evaluatePolicy, evaluationResultsToCopilotRules, formatPolicyBagValue, 
 import { getOrgTenantConnectionIds, isWorkspaceInScope } from "./scope-helpers";
 import { requireFeature } from "../services/feature-gate";
 import { scoreWorkspaces, scoreWorkspace } from "../services/copilot-scoring";
+import { buildRequiredFieldsByTenantId, getRequiredFieldsForWorkspace } from "../services/metadata-completeness";
 import {
   runCopilotReadinessAssessment,
   getAssessmentRun,
@@ -559,7 +560,8 @@ router.get("/api/copilot-readiness", requireAuth(), requireFeature("copilotReadi
       allWorkspaces = allWorkspaces.filter(w => w.tenantConnectionId === tenantFilter);
     }
 
-    const result = scoreWorkspaces(allWorkspaces);
+    const requiredFieldsByTenantId = await buildRequiredFieldsByTenantId(allWorkspaces);
+    const result = scoreWorkspaces(allWorkspaces, requiredFieldsByTenantId);
     res.json(result);
   } catch (err: any) {
     console.error("[copilot-readiness] Error:", err);
@@ -577,7 +579,8 @@ router.get("/api/workspaces/:id/copilot-readiness", requireAuth(), requireFeatur
   }
   const workspace = await storage.getWorkspace(req.params.id);
   if (!workspace) return res.status(404).json({ message: "Workspace not found" });
-  res.json(scoreWorkspace(workspace));
+  const requiredFields = await getRequiredFieldsForWorkspace(workspace);
+  res.json(scoreWorkspace(workspace, requiredFields));
 });
 
 /**
@@ -625,7 +628,8 @@ router.patch("/api/workspaces/:id/copilot-exclusion", requireRole(ZENITH_ROLES.G
     ipAddress: req.ip || null,
   });
 
-  res.json(updated ? scoreWorkspace(updated) : null);
+  const requiredFields = updated ? await getRequiredFieldsForWorkspace(updated) : [];
+  res.json(updated ? scoreWorkspace(updated, requiredFields) : null);
 });
 
 // ── AI Copilot Readiness Assessment Routes (Task #52) ──
