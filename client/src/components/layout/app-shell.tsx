@@ -33,25 +33,26 @@ import {
   CreditCard,
   Cloud,
   Users as UsersIcon,
-  MessagesSquare,
   MonitorPlay,
   Server,
   CheckCircle2,
   KeyRound,
   BookMarked,
   FlaskConical,
-  HardDrive,
   ClipboardList,
   Loader2,
   KeySquare,
   Lock,
-  Mail,
   Network,
-  Sparkles,
-  Flame,
-  MessageSquareText,
   Activity,
 } from "lucide-react";
+import {
+  SharePointIcon,
+  TeamsIcon,
+  OneDriveIcon,
+  OutlookIcon,
+  CopilotIcon,
+} from "@/components/icons/microsoft";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -168,11 +169,11 @@ const navGroups: NavGroup[] = [
       {
         subLabel: "Inventory",
         items: [
-          { name: "SharePoint Sites", href: "/app/governance", icon: ShieldCheck },
-          { name: "Teams & Channels", href: "/app/teams-channels", icon: MessagesSquare, featureToggle: "teamsDiscovery" },
-          { name: "OneDrive Inventory", href: "/app/onedrive-inventory", icon: HardDrive, featureToggle: "onedriveInventory" },
+          { name: "SharePoint Sites", href: "/app/governance", icon: SharePointIcon },
+          { name: "Teams & Channels", href: "/app/teams-channels", icon: TeamsIcon, featureToggle: "teamsDiscovery" },
+          { name: "OneDrive Inventory", href: "/app/onedrive-inventory", icon: OneDriveIcon, featureToggle: "onedriveInventory" },
           { name: "Recordings Discovery", href: "/app/recordings", icon: MonitorPlay, featureToggle: "recordingsDiscovery" },
-          { name: "Email Content Report", href: "/app/email-storage-report", icon: Mail, badge: "Ent+" },
+          { name: "Email Content Report", href: "/app/email-storage-report", icon: OutlookIcon, badge: "Ent+" },
           { name: "Embedded Containers", href: "/app/embedded-containers", icon: Box, featureToggle: "speDiscovery" },
         ]
       },
@@ -200,8 +201,8 @@ const navGroups: NavGroup[] = [
     label: "Insights & Licensing",
     collapsible: true,
     items: [
-      { name: "Copilot Readiness", href: "/app/copilot-readiness", icon: Sparkles, badge: "Pro+" },
-      { name: "Copilot Prompt Intelligence", href: "/app/copilot-prompt-intelligence", icon: MessageSquareText, badge: "Pro+" },
+      { name: "Copilot Readiness", href: "/app/copilot-readiness", icon: CopilotIcon, badge: "Pro+" },
+      { name: "Copilot Prompt Intelligence", href: "/app/copilot-prompt-intelligence", icon: CopilotIcon, badge: "Pro+" },
       { name: "IA Assessment", href: "/app/ia-assessment", icon: BarChart3, badge: "Ent+" },
       { name: "Content Intensity Heat Map", href: "/app/content-intensity-heatmap", icon: Flame, badge: "Ent+" },
       { name: "AI Assistant", href: "/app/ai-copilot", icon: BrainCircuit },
