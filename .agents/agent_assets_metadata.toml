@@ -6,3 +6,9 @@ id = "IQYij62VWWGBX1s8Dt2y5"
 uri = "file://public/zenith-platform-overview.md"
 type = "text"
 title = "Zenith Platform Overview — M365 Administrators"
+
+[[outputs]]
+id = "zYPlRiaEgULLbF3XinBPC"
+uri = "file://docs/Zenith-Overview-for-M365-Admins.md"
+type = "text"
+title = "Zenith Overview for M365 Admins"
