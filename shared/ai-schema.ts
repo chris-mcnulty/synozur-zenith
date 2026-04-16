@@ -25,6 +25,7 @@ export const AI_FEATURE_LABELS: Record<AIFeature, string> = {
 };
 
 export const AI_MODELS = {
+  GPT_5_4: 'gpt-5.4',
   GPT_5_2: 'gpt-5.2',
   GPT_5_MINI: 'gpt-5-mini',
   GPT_4O: 'gpt-4o',
@@ -45,6 +46,13 @@ export type AIModelInfo = {
 };
 
 export const AI_MODEL_INFO: Record<AIModel, AIModelInfo> = {
+  [AI_MODELS.GPT_5_4]: {
+    label: 'GPT-5.4',
+    provider: AI_PROVIDERS.AZURE_FOUNDRY,
+    inputPricePer1k: 0.0,
+    outputPricePer1k: 0.0,
+    contextWindow: 128000,
+  },
   [AI_MODELS.GPT_5_2]: {
     label: 'GPT-5.2',
     provider: AI_PROVIDERS.REPLIT_OPENAI,
