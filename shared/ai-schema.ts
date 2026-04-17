@@ -21,7 +21,7 @@ export const AI_FEATURE_LABELS: Record<AIFeature, string> = {
   [AI_FEATURES.COPILOT_PROMPT_INTELLIGENCE]: 'Copilot Prompt Intelligence',
   [AI_FEATURES.IA_ASSESSMENT]: 'Information Architecture Assessment',
   [AI_FEATURES.WORKSPACE_INSIGHT]: 'Workspace Insight',
-  [AI_FEATURES.GOVERNANCE_NARRATIVE]: 'Governance Narrative',
+  [AI_FEATURES.GOVERNANCE_NARRATIVE]: 'Dashboard 30-Day Overview Narrative',
 };
 
 export const AI_MODELS = {
