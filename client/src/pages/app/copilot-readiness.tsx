@@ -229,32 +229,41 @@ function formatRelativeTime(dateStr: string): string {
 
 function AIAssessmentPanel({
   readinessData,
+  tenantConnectionId,
 }: {
   readinessData: ReadinessResponse | undefined;
+  tenantConnectionId: string;
 }) {
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const { data: latestRun, refetch: refetchLatest } = useQuery<AssessmentRun | null>({
-    queryKey: ["copilot-assessment-latest"],
+    queryKey: ["copilot-assessment-latest", tenantConnectionId],
     queryFn: async () => {
-      const res = await fetch("/api/copilot-readiness/assessment/latest", { credentials: "include" });
+      const res = await fetch(
+        `/api/copilot-readiness/assessment/latest?tenantConnectionId=${encodeURIComponent(tenantConnectionId)}`,
+        { credentials: "include" },
+      );
       if (!res.ok) return null;
       return res.json();
     },
+    enabled: !!tenantConnectionId,
     staleTime: 30_000,
   });
 
   const { data: activeRun, refetch: refetchActive } = useQuery<AssessmentRun | null>({
-    queryKey: ["copilot-assessment-run", activeRunId],
+    queryKey: ["copilot-assessment-run", activeRunId, tenantConnectionId],
     queryFn: async () => {
       if (!activeRunId) return null;
-      const res = await fetch(`/api/copilot-readiness/assessment/${activeRunId}`, { credentials: "include" });
+      const res = await fetch(
+        `/api/copilot-readiness/assessment/${activeRunId}?tenantConnectionId=${encodeURIComponent(tenantConnectionId)}`,
+        { credentials: "include" },
+      );
       if (!res.ok) return null;
       return res.json();
     },
-    enabled: !!activeRunId,
+    enabled: !!activeRunId && !!tenantConnectionId,
     staleTime: 0,
   });
 
@@ -286,6 +295,14 @@ function AIAssessmentPanel({
   }, [activeRunId, refetchActive]);
 
   useEffect(() => {
+    setActiveRunId(null);
+    if (pollIntervalRef.current) {
+      clearInterval(pollIntervalRef.current);
+      pollIntervalRef.current = null;
+    }
+  }, [tenantConnectionId]);
+
+  useEffect(() => {
     if (toastMsg) {
       const t = setTimeout(() => setToastMsg(null), 4000);
       return () => clearTimeout(t);
@@ -298,7 +315,7 @@ function AIAssessmentPanel({
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
+        body: JSON.stringify({ tenantConnectionId }),
       });
       if (!res.ok) {
         const err = await res.json();
@@ -446,12 +463,16 @@ function AIAssessmentPanel({
   );
 }
 
-function WorkspaceAIGuidance({ workspaceId, orgId }: { workspaceId: string; orgId?: string }) {
+function WorkspaceAIGuidance({ workspaceId, orgId, tenantConnectionId }: { workspaceId: string; orgId?: string; tenantConnectionId?: string }) {
   const [expanded, setExpanded] = useState(false);
   const { data, isLoading, refetch, isFetching } = useQuery<{ narrative: string }>({
-    queryKey: ["workspace-narrative", workspaceId],
+    queryKey: ["workspace-narrative", workspaceId, tenantConnectionId ?? ""],
     queryFn: async () => {
-      const url = `/api/workspaces/${workspaceId}/copilot-readiness/narrative${orgId ? `?orgId=${orgId}` : ''}`;
+      const params = new URLSearchParams();
+      if (orgId) params.set("orgId", orgId);
+      if (tenantConnectionId) params.set("tenantConnectionId", tenantConnectionId);
+      const qs = params.toString();
+      const url = `/api/workspaces/${workspaceId}/copilot-readiness/narrative${qs ? `?${qs}` : ''}`;
       const res = await fetch(url, { credentials: "include" });
       if (!res.ok) {
         const err = await res.json();
@@ -509,9 +530,12 @@ export default function CopilotReadinessPage() {
   const [exclusionReason, setExclusionReason] = useState("");
 
   const { data, isLoading, refetch, isFetching } = useQuery<ReadinessResponse>({
-    queryKey: ["copilot-readiness"],
+    queryKey: ["copilot-readiness", tenantConnectionId],
     queryFn: async () => {
-      const res = await fetch("/api/copilot-readiness", { credentials: "include" });
+      const res = await fetch(
+        `/api/copilot-readiness?tenantConnectionId=${encodeURIComponent(tenantConnectionId)}`,
+        { credentials: "include" },
+      );
       if (res.status === 403) {
         const err = await res.json();
         throw new Error(err.message || "Copilot readiness is not available on your current plan.");
@@ -519,6 +543,7 @@ export default function CopilotReadinessPage() {
       if (!res.ok) throw new Error("Failed to fetch readiness data");
       return res.json();
     },
+    enabled: !!tenantConnectionId,
   });
 
   const exclusionMutation = useMutation({
@@ -536,7 +561,7 @@ export default function CopilotReadinessPage() {
       return res.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["copilot-readiness"] });
+      queryClient.invalidateQueries({ queryKey: ["copilot-readiness", tenantConnectionId] });
       setExcludeDialog(null);
       setExclusionReason("");
     },
@@ -615,13 +640,26 @@ export default function CopilotReadinessPage() {
           />
         )}
 
-        {isLoading && (
+        {!tenantConnectionId && (
+          <Card className="glass-panel" data-testid="empty-no-tenant">
+            <CardContent className="flex flex-col items-center justify-center py-16 text-center gap-3">
+              <Sparkles className="w-10 h-10 text-primary opacity-60" />
+              <h3 className="text-lg font-semibold">Select a tenant to view Copilot Readiness</h3>
+              <p className="text-sm text-muted-foreground max-w-md">
+                Use the tenant switcher above to choose a tenant. Readiness scores, the
+                remediation queue, and the AI assessment are scoped to one tenant at a time.
+              </p>
+            </CardContent>
+          </Card>
+        )}
+
+        {tenantConnectionId && isLoading && (
           <div className="flex items-center justify-center py-24 text-muted-foreground">
             <Loader2 className="w-5 h-5 animate-spin mr-2" /> Computing readiness scores…
           </div>
         )}
 
-        {!isLoading && summary && (
+        {tenantConnectionId && !isLoading && summary && (
           <>
             {/* Summary cards */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -802,7 +840,7 @@ export default function CopilotReadinessPage() {
                               )}
 
                               {/* AI Guidance expandable section */}
-                              <WorkspaceAIGuidance workspaceId={ws.workspaceId} />
+                              <WorkspaceAIGuidance workspaceId={ws.workspaceId} tenantConnectionId={tenantConnectionId} />
 
                               <div className="flex items-center justify-between pt-2 border-t border-border/40">
                                 {ws.siteUrl && (
@@ -1027,7 +1065,7 @@ export default function CopilotReadinessPage() {
             )}
             {/* AI Assessment Panel — moved to bottom so KPIs and the inspectable
                 workspace lists appear before the long AI narrative. */}
-            <AIAssessmentPanel readinessData={data} />
+            <AIAssessmentPanel readinessData={data} tenantConnectionId={tenantConnectionId} />
           </>
         )}
 

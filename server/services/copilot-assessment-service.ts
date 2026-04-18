@@ -29,6 +29,7 @@ export interface AiAssessmentRun {
   providerUsed: string | null;
   tokensUsed: number | null;
   triggeredBy: string | null;
+  tenantConnectionId: string | null;
   createdAt: Date;
   completedAt: Date | null;
 }
@@ -45,6 +46,7 @@ function rowToRun(row: Record<string, unknown>): AiAssessmentRun {
     providerUsed: (row.provider_used as string | null) ?? null,
     tokensUsed: (row.tokens_used as number | null) ?? null,
     triggeredBy: (row.triggered_by as string | null) ?? null,
+    tenantConnectionId: (row.tenant_connection_id as string | null) ?? null,
     createdAt: new Date(row.created_at as string),
     completedAt: row.completed_at ? new Date(row.completed_at as string) : null,
   };
@@ -54,14 +56,15 @@ export async function createAssessmentRun(
   orgId: string,
   feature: AssessmentFeature,
   triggeredBy: string | null,
+  tenantConnectionId: string | null = null,
 ): Promise<AiAssessmentRun> {
   const client = await pool.connect();
   try {
     const { rows } = await client.query(
-      `INSERT INTO ai_assessment_runs (org_id, feature, status, triggered_by)
-       VALUES ($1, $2, 'PENDING', $3)
+      `INSERT INTO ai_assessment_runs (org_id, feature, status, triggered_by, tenant_connection_id)
+       VALUES ($1, $2, 'PENDING', $3, $4)
        RETURNING *`,
-      [orgId, feature, triggeredBy],
+      [orgId, feature, triggeredBy, tenantConnectionId],
     );
     return rowToRun(rows[0] as Record<string, unknown>);
   } finally {
@@ -86,15 +89,24 @@ export async function getAssessmentRun(runId: string): Promise<AiAssessmentRun |
 export async function getLatestAssessmentRun(
   orgId: string,
   feature: AssessmentFeature = 'copilot_readiness',
+  tenantConnectionId: string | null = null,
 ): Promise<AiAssessmentRun | null> {
   const client = await pool.connect();
   try {
+    const params: unknown[] = [orgId, feature];
+    let tenantClause = '';
+    if (tenantConnectionId) {
+      params.push(tenantConnectionId);
+      tenantClause = ` AND tenant_connection_id = $${params.length}`;
+    } else {
+      tenantClause = ' AND tenant_connection_id IS NULL';
+    }
     const { rows } = await client.query(
       `SELECT * FROM ai_assessment_runs
-       WHERE org_id = $1 AND feature = $2 AND status = 'COMPLETED'
+       WHERE org_id = $1 AND feature = $2 AND status = 'COMPLETED'${tenantClause}
        ORDER BY created_at DESC
        LIMIT 1`,
-      [orgId, feature],
+      params,
     );
     if (rows.length === 0) return null;
     return rowToRun(rows[0] as Record<string, unknown>);
@@ -224,23 +236,27 @@ Longer-horizon work — sharing posture reviews, architectural decisions, Highly
 export async function runCopilotReadinessAssessment(
   orgId: string,
   triggeredBy: string | null,
+  tenantConnectionId: string | null = null,
 ): Promise<string> {
-  const run = await createAssessmentRun(orgId, 'copilot_readiness', triggeredBy);
+  const run = await createAssessmentRun(orgId, 'copilot_readiness', triggeredBy, tenantConnectionId);
   const runId = run.id;
 
   setImmediate(async () => {
     try {
       await updateAssessmentRun(runId, { status: 'RUNNING' });
 
-      const tenants = await storage.getTenantConnections(orgId);
-      const tenantIds = tenants.map(t => t.id);
-
       let allWorkspaces: Awaited<ReturnType<typeof storage.getWorkspaces>> = [];
-      if (tenantIds.length > 0) {
-        const perTenantResults = await Promise.all(
-          tenantIds.map(tid => storage.getWorkspaces(undefined, tid)),
-        );
-        allWorkspaces = perTenantResults.flat();
+      if (tenantConnectionId) {
+        allWorkspaces = await storage.getWorkspaces(undefined, tenantConnectionId);
+      } else {
+        const tenants = await storage.getTenantConnections(orgId);
+        const tenantIds = tenants.map(t => t.id);
+        if (tenantIds.length > 0) {
+          const perTenantResults = await Promise.all(
+            tenantIds.map(tid => storage.getWorkspaces(undefined, tid)),
+          );
+          allWorkspaces = perTenantResults.flat();
+        }
       }
 
       const requiredFieldsByTenantId = await buildRequiredFieldsByTenantId(allWorkspaces);

@@ -543,21 +543,28 @@ router.get("/api/copilot-readiness", requireAuth(), requireFeature("copilotReadi
       });
     }
 
-    const tenants = await storage.getTenantConnections(orgId);
-    const tenantIds = tenants.map(t => t.id);
+    const tenantFilter = typeof req.query.tenantConnectionId === "string" && req.query.tenantConnectionId
+      ? req.query.tenantConnectionId
+      : undefined;
 
     let allWorkspaces: Awaited<ReturnType<typeof storage.getWorkspaces>> = [];
-    if (tenantIds.length > 0) {
-      const perTenantResults = await Promise.all(
-        tenantIds.map(tid => storage.getWorkspaces(undefined, tid)),
-      );
-      allWorkspaces = perTenantResults.flat();
-    }
-
-    // Optional tenant filter
-    const tenantFilter = req.query.tenantConnectionId as string | undefined;
     if (tenantFilter) {
-      allWorkspaces = allWorkspaces.filter(w => w.tenantConnectionId === tenantFilter);
+      // Validate that the requested tenant belongs to this org's scope
+      const tenants = await storage.getTenantConnections(orgId);
+      const allowed = tenants.some(t => t.id === tenantFilter);
+      if (!allowed) {
+        return res.status(403).json({ message: "Tenant connection is not in scope for this organization." });
+      }
+      allWorkspaces = await storage.getWorkspaces(undefined, tenantFilter);
+    } else {
+      const tenants = await storage.getTenantConnections(orgId);
+      const tenantIds = tenants.map(t => t.id);
+      if (tenantIds.length > 0) {
+        const perTenantResults = await Promise.all(
+          tenantIds.map(tid => storage.getWorkspaces(undefined, tid)),
+        );
+        allWorkspaces = perTenantResults.flat();
+      }
     }
 
     const requiredFieldsByTenantId = await buildRequiredFieldsByTenantId(allWorkspaces);
@@ -649,8 +656,19 @@ router.post("/api/copilot-readiness/assessment", requireAuth(), requireFeature("
       return res.status(400).json({ message: "Organization context required" });
     }
 
+    const tenantConnectionId = typeof req.body.tenantConnectionId === "string" && req.body.tenantConnectionId
+      ? req.body.tenantConnectionId
+      : null;
+
+    if (tenantConnectionId) {
+      const tenants = await storage.getTenantConnections(orgId);
+      if (!tenants.some(t => t.id === tenantConnectionId)) {
+        return res.status(403).json({ message: "Tenant connection is not in scope for this organization." });
+      }
+    }
+
     const triggeredBy = req.user?.id || req.user?.email || null;
-    const runId = await runCopilotReadinessAssessment(orgId, triggeredBy);
+    const runId = await runCopilotReadinessAssessment(orgId, triggeredBy, tenantConnectionId);
     res.status(202).json({ runId, status: "PENDING" });
   } catch (err: any) {
     console.error("[AI Assessment] Error triggering assessment:", err);
@@ -672,7 +690,18 @@ router.get("/api/copilot-readiness/assessment/latest", requireAuth(), requireFea
       return res.json(null);
     }
 
-    const run = await getLatestAssessmentRun(orgId, 'copilot_readiness');
+    const tenantConnectionId = typeof req.query.tenantConnectionId === "string" && req.query.tenantConnectionId
+      ? req.query.tenantConnectionId
+      : null;
+
+    if (tenantConnectionId) {
+      const tenants = await storage.getTenantConnections(orgId);
+      if (!tenants.some(t => t.id === tenantConnectionId)) {
+        return res.status(403).json({ message: "Tenant connection is not in scope for this organization." });
+      }
+    }
+
+    const run = await getLatestAssessmentRun(orgId, 'copilot_readiness', tenantConnectionId);
     res.json(run);
   } catch (err: any) {
     console.error("[AI Assessment] Error fetching latest:", err);
@@ -699,6 +728,14 @@ router.get("/api/copilot-readiness/assessment/:runId", requireAuth(), requireFea
       return res.status(404).json({ message: "Assessment run not found" });
     }
 
+    const tenantConnectionId = typeof req.query.tenantConnectionId === "string" && req.query.tenantConnectionId
+      ? req.query.tenantConnectionId
+      : null;
+
+    if (!isPlatformOwner && tenantConnectionId && run.tenantConnectionId !== tenantConnectionId) {
+      return res.status(404).json({ message: "Assessment run not found" });
+    }
+
     res.json(run);
   } catch (err: any) {
     console.error("[AI Assessment] Error fetching run:", err);
@@ -722,6 +759,18 @@ router.get("/api/workspaces/:id/copilot-readiness/narrative", requireAuth(), req
 
     if (!orgId) {
       return res.status(400).json({ message: "Organization context required" });
+    }
+
+    // If the caller has an active tenant scope, ensure the workspace belongs
+    // to that tenant — prevents cross-tenant lookup by guessed workspace id.
+    const tenantConnectionId = typeof req.query.tenantConnectionId === "string" && req.query.tenantConnectionId
+      ? req.query.tenantConnectionId
+      : null;
+    if (tenantConnectionId) {
+      const ws = await storage.getWorkspace(req.params.id);
+      if (!ws || ws.tenantConnectionId !== tenantConnectionId) {
+        return res.status(404).json({ message: "Workspace not found" });
+      }
     }
 
     const narrative = await getWorkspaceNarrative(req.params.id, orgId);
