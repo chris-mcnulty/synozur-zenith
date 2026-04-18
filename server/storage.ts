@@ -153,6 +153,7 @@ import {
   decryptRecord,
   encryptRecord,
   getTenantKeyBuffer,
+  isMaskedValue,
   maskEmailReportSummary,
   unmaskEmailReportSummary,
 } from "./services/data-masking";
@@ -1922,6 +1923,7 @@ export class DatabaseStorage implements IStorage {
     }
 
     const rows = await db.select({
+      tenantConnectionId: teamsRecordings.tenantConnectionId,
       teamId: teamsRecordings.teamId,
       teamDisplayName: sql<string | null>`max(${teamsRecordings.teamDisplayName})`,
       channelId: teamsRecordings.channelId,
@@ -1934,20 +1936,33 @@ export class DatabaseStorage implements IStorage {
       .from(teamsRecordings)
       .where(and(...conditions))
       .groupBy(
+        teamsRecordings.tenantConnectionId,
         teamsRecordings.teamId,
         teamsRecordings.channelId,
       );
 
+    // Decrypt the aggregated MASKED: display names per-tenant. The encrypted
+    // ciphertext is selected straight through max(), so we have to run it back
+    // through the tenant-aware decrypt step the same way other inventory paths do.
+    const decryptedRows = await this.decryptRows(rows, "teams_recordings");
+
     // Aggregate into team → channels hierarchy
     const teamMap = new Map<string, TeamsChannelsSummary>();
 
-    for (const row of rows) {
+    const safeName = (value: string | null | undefined, fallback: string): string => {
+      if (!value) return fallback;
+      // Guard: if decryption failed (e.g. tenant key rotated), don't leak ciphertext to UI.
+      if (isMaskedValue(value)) return fallback;
+      return value;
+    };
+
+    for (const row of decryptedRows) {
       if (!row.teamId) continue;
       let team = teamMap.get(row.teamId);
       if (!team) {
         team = {
           teamId: row.teamId,
-          teamDisplayName: row.teamDisplayName ?? row.teamId,
+          teamDisplayName: safeName(row.teamDisplayName, row.teamId),
           channelCount: 0,
           recordingCount: 0,
           channels: [],
@@ -1960,7 +1975,7 @@ export class DatabaseStorage implements IStorage {
         team.channelCount++;
         team.channels.push({
           channelId: row.channelId,
-          channelDisplayName: row.channelDisplayName ?? row.channelId,
+          channelDisplayName: safeName(row.channelDisplayName, row.channelId),
           channelType: row.channelType ?? "standard",
           recordingCount: row.recordingCount,
           lastActivity: row.lastActivity,
@@ -2165,11 +2180,15 @@ export class DatabaseStorage implements IStorage {
       );
     }
 
-    const inventoryTeams = await db.select().from(teamsInventory)
+    const inventoryTeamsRaw = await db.select().from(teamsInventory)
       .where(and(...teamConditions))
       .orderBy(teamsInventory.displayName);
 
-    if (inventoryTeams.length === 0) return [];
+    if (inventoryTeamsRaw.length === 0) return [];
+
+    // Decrypt team display names per-tenant so MASKED: ciphertext doesn't bleed
+    // through to the API response.
+    const inventoryTeams = await this.decryptRows(inventoryTeamsRaw, "teams_inventory");
 
     // Fetch all inventory channels for these tenant connections
     const channelConditions = [eq(channelsInventory.discoveryStatus, "ACTIVE")];
@@ -2182,9 +2201,12 @@ export class DatabaseStorage implements IStorage {
       );
     }
 
-    const inventoryChannels = await db.select().from(channelsInventory)
+    const inventoryChannelsRaw = await db.select().from(channelsInventory)
       .where(and(...channelConditions))
       .orderBy(channelsInventory.displayName);
+
+    // Decrypt channel display names per-tenant.
+    const inventoryChannels = await this.decryptRows(inventoryChannelsRaw, "channels_inventory");
 
     // Fetch recording counts per team+channel for enrichment
     const recConditions = [
@@ -2231,6 +2253,14 @@ export class DatabaseStorage implements IStorage {
       channelsByTeam.set(key, list);
     }
 
+    // Guard: if a value is still MASKED: after the decrypt attempt (e.g. tenant
+    // key was rotated), fall back to the id rather than leaking ciphertext.
+    const safeName = (value: string | null | undefined, fallback: string): string => {
+      if (!value) return fallback;
+      if (isMaskedValue(value)) return fallback;
+      return value;
+    };
+
     // Assemble summary
     const result: TeamsChannelsSummary[] = [];
     for (const team of inventoryTeams) {
@@ -2240,7 +2270,7 @@ export class DatabaseStorage implements IStorage {
         const recInfo = recByChannel.get(`${team.tenantConnectionId}:${team.teamId}:${ch.channelId}`);
         return {
           channelId: ch.channelId,
-          channelDisplayName: ch.displayName,
+          channelDisplayName: safeName(ch.displayName, ch.channelId),
           channelType: ch.membershipType ?? "standard",
           recordingCount: recInfo?.count ?? 0,
           lastActivity: recInfo?.lastActivity ?? null,
@@ -2255,7 +2285,7 @@ export class DatabaseStorage implements IStorage {
 
       result.push({
         teamId: team.teamId,
-        teamDisplayName: team.displayName,
+        teamDisplayName: safeName(team.displayName, team.teamId),
         channelCount: teamChannels.length,
         recordingCount: recByTeam.get(teamKey) ?? 0,
         channels,
