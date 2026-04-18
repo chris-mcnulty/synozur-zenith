@@ -653,6 +653,12 @@ export default function GovernancePage() {
         case "fileCount":
           cmp = (a.fileCount ?? 0) - (b.fileCount ?? 0);
           break;
+        case "siteMembers": {
+          const ma = Array.isArray(a.siteMembers) ? a.siteMembers.length : 0;
+          const mb = Array.isArray(b.siteMembers) ? b.siteMembers.length : 0;
+          cmp = ma - mb;
+          break;
+        }
         case "lastActivityDate": {
           const da = a.lastActivityDate ? new Date(a.lastActivityDate).getTime() : 0;
           const db = b.lastActivityDate ? new Date(b.lastActivityDate).getTime() : 0;
@@ -904,6 +910,17 @@ export default function GovernancePage() {
           ) : (
             <span className="text-xs text-muted-foreground">{"—"}</span>
           )}
+        </TableCell>
+        <TableCell className="relative z-10">
+          {(() => {
+            const memberCount = Array.isArray(ws.siteMembers) ? ws.siteMembers.length : 0;
+            return (
+              <div className="flex items-center gap-1.5" data-testid={`text-members-${ws.id}`}>
+                <Users className="w-3.5 h-3.5 text-muted-foreground" />
+                <span className="text-sm font-medium">{memberCount.toLocaleString()}</span>
+              </div>
+            );
+          })()}
         </TableCell>
         <TableCell className="relative z-10">
           <div className="flex flex-col gap-1 min-w-[120px]">
@@ -1411,6 +1428,9 @@ export default function GovernancePage() {
                       <span className="inline-flex items-center">Site{getSortIcon("displayName")}</span>
                     </TableHead>
                     <TableHead className="min-w-[160px]">Owner</TableHead>
+                    <TableHead className="min-w-[100px] cursor-pointer select-none" onClick={() => handleSort("siteMembers")} data-testid="sort-header-members">
+                      <div className="flex items-center">Members {getSortIcon("siteMembers")}</div>
+                    </TableHead>
                     <TableHead className="min-w-[160px] cursor-pointer select-none" onClick={() => handleSort("storageUsedBytes")} data-testid="sort-header-storage">
                       <span className="inline-flex items-center">Storage{getSortIcon("storageUsedBytes")}</span>
                     </TableHead>
@@ -1450,7 +1470,7 @@ export default function GovernancePage() {
                                 />
                               )}
                             </TableCell>
-                            <TableCell colSpan={8 + columnOutcomes.length} onClick={() => toggleHubCollapse(group.hubId)}>
+                            <TableCell colSpan={9 + columnOutcomes.length} onClick={() => toggleHubCollapse(group.hubId)}>
                               <div className="flex items-center gap-2">
                                 {isCollapsed ? <ChevronRight className="w-4 h-4 text-muted-foreground" /> : <ChevronDown className="w-4 h-4 text-muted-foreground" />}
                                 {group.hubId === "__standalone__" ? (
