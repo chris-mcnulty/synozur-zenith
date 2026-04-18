@@ -40,6 +40,7 @@ import {
   Clock,
   MessageSquare,
   Trash2,
+  Archive,
 } from "lucide-react";
 import {
   AlertDialog,
@@ -255,7 +256,9 @@ function AIAssessmentPanel({
 }) {
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [viewingRunId, setViewingRunId] = useState<string | null>(null);
+  const [viewingLegacy, setViewingLegacy] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [legacyOpen, setLegacyOpen] = useState(false);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -303,17 +306,30 @@ function AIAssessmentPanel({
   });
 
   const { data: viewingRun } = useQuery<AssessmentRun | null>({
-    queryKey: ["copilot-assessment-run-view", viewingRunId, tenantConnectionId],
+    queryKey: ["copilot-assessment-run-view", viewingRunId, viewingLegacy ? "legacy" : tenantConnectionId],
     queryFn: async () => {
       if (!viewingRunId) return null;
-      const res = await fetch(
-        `/api/copilot-readiness/assessment/${viewingRunId}?tenantConnectionId=${encodeURIComponent(tenantConnectionId)}`,
-        { credentials: "include" },
-      );
+      const url = viewingLegacy
+        ? `/api/copilot-readiness/assessment/${viewingRunId}`
+        : `/api/copilot-readiness/assessment/${viewingRunId}?tenantConnectionId=${encodeURIComponent(tenantConnectionId)}`;
+      const res = await fetch(url, { credentials: "include" });
       if (!res.ok) return null;
       return res.json();
     },
-    enabled: !!viewingRunId && !!tenantConnectionId,
+    enabled: !!viewingRunId && (viewingLegacy || !!tenantConnectionId),
+    staleTime: 60_000,
+  });
+
+  const { data: legacyRuns } = useQuery<AssessmentRun[]>({
+    queryKey: ["copilot-assessment-legacy"],
+    queryFn: async () => {
+      const res = await fetch(
+        `/api/copilot-readiness/assessment/legacy`,
+        { credentials: "include" },
+      );
+      if (!res.ok) return [];
+      return res.json();
+    },
     staleTime: 60_000,
   });
 
@@ -349,7 +365,9 @@ function AIAssessmentPanel({
   useEffect(() => {
     setActiveRunId(null);
     setViewingRunId(null);
+    setViewingLegacy(false);
     setHistoryOpen(false);
+    setLegacyOpen(false);
     if (pollIntervalRef.current) {
       clearInterval(pollIntervalRef.current);
       pollIntervalRef.current = null;
@@ -410,7 +428,8 @@ function AIAssessmentPanel({
 
   const isRunning = !!activeRunId || activeRun?.status === 'RUNNING' || activeRun?.status === 'PENDING';
   const displayRun = viewingRunId ? viewingRun : latestRun;
-  const isViewingHistorical = !!viewingRunId && !!latestRun && viewingRunId !== latestRun.id;
+  const isViewingHistorical = !!viewingRunId && (viewingLegacy || (!!latestRun && viewingRunId !== latestRun.id));
+  const hasLegacyRuns = !!legacyRuns && legacyRuns.length > 0;
 
   const handleDownload = useCallback((overrideRun?: AssessmentRun | null) => {
     const runToDownload = overrideRun ?? displayRun;
@@ -471,7 +490,7 @@ function AIAssessmentPanel({
             </CardDescription>
           </div>
           <div className="flex items-center gap-2 shrink-0">
-            {displayRun && (
+            {displayRun && !viewingLegacy && (
               <Button
                 variant="outline"
                 size="sm"
@@ -540,14 +559,21 @@ function AIAssessmentPanel({
       {isViewingHistorical && (
         <div className="mx-6 mb-4 p-3 rounded-lg bg-amber-500/10 border border-amber-500/20 text-sm text-amber-600 dark:text-amber-400 flex items-center justify-between gap-2" data-testid="banner-viewing-historical">
           <div className="flex items-center gap-2">
-            <Clock className="w-3 h-3 shrink-0" />
-            <span>Viewing a previous assessment.</span>
+            {viewingLegacy ? <Archive className="w-3 h-3 shrink-0" /> : <Clock className="w-3 h-3 shrink-0" />}
+            <span>
+              {viewingLegacy
+                ? "Viewing a previous org-wide run from before tenant scoping."
+                : "Viewing a previous assessment."}
+            </span>
           </div>
           <Button
             variant="ghost"
             size="sm"
             className="h-7 text-xs"
-            onClick={() => setViewingRunId(null)}
+            onClick={() => {
+              setViewingRunId(null);
+              setViewingLegacy(false);
+            }}
             data-testid="button-back-to-latest"
           >
             Back to latest
@@ -679,6 +705,83 @@ function AIAssessmentPanel({
                 );
               })}
             </div>
+          )}
+        </CardContent>
+      )}
+
+      {hasLegacyRuns && (
+        <CardContent className="border-t border-border/40 pt-4">
+          <button
+            type="button"
+            onClick={() => setLegacyOpen(o => !o)}
+            className="flex items-center gap-2 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors w-full"
+            data-testid="button-toggle-legacy-runs"
+          >
+            <ChevronDown className={`w-3 h-3 transition-transform ${legacyOpen ? "rotate-180" : ""}`} />
+            <Archive className="w-3 h-3" />
+            View previous org-wide runs ({legacyRuns!.length})
+          </button>
+
+          {legacyOpen && (
+            <>
+              <p className="mt-2 text-xs text-muted-foreground" data-testid="text-legacy-runs-help">
+                Historical Copilot Readiness runs from before assessments were scoped to a single tenant.
+              </p>
+              <div className="mt-3 divide-y divide-border/40 rounded-lg border border-border/40 overflow-hidden" data-testid="list-legacy-runs">
+                {legacyRuns!.map(run => {
+                  const isActive = viewingLegacy && viewingRunId === run.id;
+                  const summary = (run.resultStructured as { summary?: { averageScore?: number } } | null)?.summary;
+                  const score = typeof summary?.averageScore === "number" ? summary.averageScore : null;
+                  return (
+                    <div
+                      key={run.id}
+                      className={`flex items-center justify-between gap-3 p-3 text-sm ${isActive ? "bg-primary/5" : ""}`}
+                      data-testid={`row-legacy-run-${run.id}`}
+                    >
+                      <div className="flex items-center gap-3 min-w-0 flex-1">
+                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-medium text-foreground" data-testid={`text-legacy-run-date-${run.id}`}>
+                              {new Date(run.completedAt ?? run.createdAt).toLocaleString()}
+                            </span>
+                            {score !== null && (
+                              <Badge
+                                variant="outline"
+                                className="text-[10px] bg-primary/10 text-primary border-primary/20"
+                                data-testid={`text-legacy-run-score-${run.id}`}
+                              >
+                                Score: {score}/100
+                              </Badge>
+                            )}
+                          </div>
+                          <div className="text-xs text-muted-foreground truncate">
+                            {run.modelUsed ?? "—"}
+                            {run.tokensUsed ? ` · ${run.tokensUsed.toLocaleString()} tokens` : ""}
+                            {run.triggeredBy ? ` · by ${run.triggeredBy}` : ""}
+                          </div>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-1 shrink-0">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 text-xs gap-1"
+                          onClick={() => {
+                            setViewingLegacy(true);
+                            setViewingRunId(run.id);
+                          }}
+                          disabled={isActive}
+                          data-testid={`button-view-legacy-run-${run.id}`}
+                        >
+                          View
+                        </Button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </>
           )}
         </CardContent>
       )}
