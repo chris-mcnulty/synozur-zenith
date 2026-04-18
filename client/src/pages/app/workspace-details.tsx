@@ -1419,7 +1419,7 @@ export default function WorkspaceDetailsPage() {
               <Separator />
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Created</span>
-                <span className="font-medium">{workspace.createdAt ? new Date(workspace.createdAt).toLocaleDateString() : "—"}</span>
+                <span className="font-medium">{workspace.siteCreatedDate ? new Date(workspace.siteCreatedDate).toLocaleDateString() : "—"}</span>
               </div>
             </CardContent>
           </Card>
