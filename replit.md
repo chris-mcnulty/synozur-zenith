@@ -91,6 +91,12 @@ The following environment variables are required for the AI Provider Foundation 
 
 Azure AI Foundry is the primary/default provider, using managed identity (client credentials flow to Entra) as the preferred auth method. If `AZURE_CLIENT_ID / AZURE_CLIENT_SECRET / AZURE_TENANT_ID` are set, a Bearer token is acquired from `https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token` with the `https://cognitiveservices.azure.com/.default` scope and cached with a 60-second refresh buffer. If Entra creds are absent, `AZURE_FOUNDRY_API_KEY` is used as a fallback auth method. Calls via Azure Foundry incur $0 estimated cost in the usage log (billed to the org's own Azure subscription). Replit OpenAI and Anthropic are available as fallback providers.
 
+## Deployment
+
+The deployment build runs `npm run db:push -- --force && npm run build` so the production database schema is synced from `shared/schema.ts` on every publish. This is required because Drizzle issues `SELECT *`-style queries that include every column declared in the schema; if a newly added column is missing from the production DB the entire query throws (`column "<name>" does not exist`) and breaks downstream features (dashboard, site inventory, onboarding, Copilot Readiness, etc.). Keeping the push in the build step prevents schema drift between dev and prod.
+
+If you ever need to redeploy without the push (rare — e.g. the prod DB is intentionally pinned to an older shape), edit the deployment build command in `.replit` / via `deployConfig`.
+
 ## External Dependencies
 - **Microsoft 365 / SharePoint**: Core platform for M365 governance.
 - **Microsoft Entra ID**: For SSO authentication and identity management.
