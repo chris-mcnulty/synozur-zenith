@@ -15,6 +15,7 @@ import {
   fetchSiteDriveOwner,
   fetchSiteAnalytics,
   fetchSiteGroupOwners,
+  fetchSiteGroupMembers,
   fetchSiteCollectionAdmins,
   getAppToken,
   fetchSitePropertyBag,
@@ -333,6 +334,7 @@ export async function runSharePointTenantSync(
       driveOwner: any;
       analytics: any;
       groupOwners: any;
+      groupMembers?: any;
       siteAdmins?: any[];
       lockState?: string;
       isArchived?: boolean;
@@ -348,18 +350,37 @@ export async function runSharePointTenantSync(
             const domain = siteUrl.match(/https?:\/\/([^/]+)/)?.[1] || "";
             const spoToken = domain ? await getSpoTokenForDomain(domain) : null;
 
-            const [driveResult, analyticsResult, groupOwnersResult, lockStateResult, propBagResult] =
-              await Promise.allSettled([
-                fetchSiteDriveOwner(token!, site.id),
-                fetchSiteAnalytics(token!, site.id),
-                fetchSiteGroupOwners(token!, site.id),
-                spoToken && siteUrl
-                  ? fetchSiteLockState(spoToken, siteUrl)
-                  : Promise.resolve({ lockState: "Unknown", isArchived: false }),
-                spoToken && siteUrl
-                  ? fetchSitePropertyBag(spoToken, siteUrl)
-                  : Promise.resolve({ properties: {} }),
-              ]);
+            const siteUsageRow =
+              usageMap.get(
+                (site.id.split(",")[1] || site.id).toLowerCase().trim(),
+              ) || (siteUrl ? usageUrlMap.get(normalizeUrl(siteUrl)) : undefined);
+            const inferredType = inferSiteType(
+              siteUsageRow?.rootWebTemplate,
+              site.siteCollection?.root,
+            );
+            const isCommunicationSite = inferredType === "COMMUNICATION_SITE";
+
+            const [
+              driveResult,
+              analyticsResult,
+              groupOwnersResult,
+              groupMembersResult,
+              lockStateResult,
+              propBagResult,
+            ] = await Promise.allSettled([
+              fetchSiteDriveOwner(token!, site.id),
+              fetchSiteAnalytics(token!, site.id),
+              fetchSiteGroupOwners(token!, site.id),
+              isCommunicationSite
+                ? Promise.resolve({ members: [] })
+                : fetchSiteGroupMembers(token!, site.id),
+              spoToken && siteUrl
+                ? fetchSiteLockState(spoToken, siteUrl)
+                : Promise.resolve({ lockState: "Unknown", isArchived: false }),
+              spoToken && siteUrl
+                ? fetchSitePropertyBag(spoToken, siteUrl)
+                : Promise.resolve({ properties: {} }),
+            ]);
 
             const lockData =
               lockStateResult.status === "fulfilled"
@@ -369,6 +390,10 @@ export async function runSharePointTenantSync(
               propBagResult.status === "fulfilled" ? propBagResult.value : { properties: {} };
             const groupOwners =
               groupOwnersResult.status === "fulfilled" ? groupOwnersResult.value : { owners: [] };
+            const groupMembers =
+              groupMembersResult.status === "fulfilled"
+                ? groupMembersResult.value
+                : { members: [] };
 
             let siteAdmins: { id?: string; displayName: string; mail?: string; userPrincipalName?: string }[] | undefined;
             if (spoToken && siteUrl) {
@@ -386,6 +411,7 @@ export async function runSharePointTenantSync(
               driveOwner: driveResult.status === "fulfilled" ? driveResult.value : {},
               analytics: analyticsResult.status === "fulfilled" ? analyticsResult.value : {},
               groupOwners,
+              groupMembers,
               siteAdmins,
               lockState: lockData.lockState,
               isArchived: lockData.isArchived === true,
@@ -400,6 +426,7 @@ export async function runSharePointTenantSync(
               driveOwner: r.value.driveOwner,
               analytics: r.value.analytics,
               groupOwners: r.value.groupOwners,
+              groupMembers: r.value.groupMembers,
               siteAdmins: r.value.siteAdmins,
               lockState: r.value.lockState,
               isArchived: r.value.isArchived,
@@ -437,6 +464,7 @@ export async function runSharePointTenantSync(
         driveOwner: {},
         analytics: {},
         groupOwners: { owners: [] },
+        groupMembers: { members: [] },
         siteAdmins: undefined,
         lockState: undefined,
         isArchived: false,
@@ -444,6 +472,7 @@ export async function runSharePointTenantSync(
       const driveOwner = enriched.driveOwner;
       const siteAnalytics = enriched.analytics;
       const groupOwners = enriched.groupOwners;
+      const groupMembers = enriched.groupMembers || { members: [] };
 
       const siteType = inferSiteType(usage?.rootWebTemplate, site.siteCollection?.root);
 
@@ -500,6 +529,16 @@ export async function runSharePointTenantSync(
           workspaceData.siteOwners = mergedOwners;
           workspaceData.owners = mergedOwners.length;
         }
+      }
+
+      if (siteType !== "COMMUNICATION_SITE" && groupMembers.members && groupMembers.members.length >= 0) {
+        const members = (groupMembers.members || []).map((m: any) => ({
+          id: m.id,
+          displayName: m.displayName || "",
+          mail: m.mail,
+          userPrincipalName: m.userPrincipalName,
+        }));
+        workspaceData.siteMembers = members;
       }
 
       const storageUsed = usage?.storageUsedBytes ?? driveOwner.storageUsedBytes ?? null;
