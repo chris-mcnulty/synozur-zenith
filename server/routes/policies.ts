@@ -11,6 +11,7 @@ import {
   runCopilotReadinessAssessment,
   getAssessmentRun,
   getLatestAssessmentRun,
+  getLegacyOrgWideAssessmentRuns,
   getWorkspaceNarrative,
   getAssessmentRunHistory,
 } from "../services/copilot-assessment-service";
@@ -706,6 +707,33 @@ router.get("/api/copilot-readiness/assessment/latest", requireAuth(), requireFea
     res.json(run);
   } catch (err: any) {
     console.error("[AI Assessment] Error fetching latest:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * List "legacy" org-wide Copilot Readiness assessment runs — completed
+ * runs that pre-date tenant scoping (Task #57) and weren't safely
+ * attributable to a single tenant by the Task #58 backfill (i.e. the
+ * org has multiple tenant connections). Surfaced behind a "View
+ * previous org-wide runs" affordance so historical executive summaries
+ * and roadmaps stay visible instead of looking deleted.
+ */
+router.get("/api/copilot-readiness/assessment/legacy", requireAuth(), requireFeature("copilotReadiness"), async (req: AuthenticatedRequest, res) => {
+  try {
+    const isPlatformOwner = req.user?.role === ZENITH_ROLES.PLATFORM_OWNER;
+    const orgId = isPlatformOwner
+      ? ((req.query.orgId as string | undefined) || req.activeOrganizationId || req.user?.organizationId)
+      : (req.activeOrganizationId || req.user?.organizationId);
+
+    if (!orgId) {
+      return res.json([]);
+    }
+
+    const runs = await getLegacyOrgWideAssessmentRuns(orgId, 'copilot_readiness');
+    res.json(runs);
+  } catch (err: any) {
+    console.error("[AI Assessment] Error fetching legacy runs:", err);
     res.status(500).json({ error: err.message });
   }
 });

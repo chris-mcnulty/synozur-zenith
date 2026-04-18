@@ -115,6 +115,35 @@ export async function getLatestAssessmentRun(
   }
 }
 
+/**
+ * Returns "legacy" assessment runs for an org — runs created before
+ * tenant-scoping (Task #57) where tenant_connection_id IS NULL. After
+ * the Task #58 backfill, these only remain for orgs with multiple
+ * tenant connections (where we couldn't safely attribute them). They
+ * are surfaced via a "View previous org-wide runs" affordance so the
+ * historical executive summaries / roadmaps don't appear deleted.
+ */
+export async function getLegacyOrgWideAssessmentRuns(
+  orgId: string,
+  feature: AssessmentFeature = 'copilot_readiness',
+  limit = 20,
+): Promise<AiAssessmentRun[]> {
+  const client = await pool.connect();
+  try {
+    const { rows } = await client.query(
+      `SELECT * FROM ai_assessment_runs
+       WHERE org_id = $1 AND feature = $2 AND status = 'COMPLETED'
+         AND tenant_connection_id IS NULL
+       ORDER BY created_at DESC
+       LIMIT $3`,
+      [orgId, feature, limit],
+    );
+    return rows.map(r => rowToRun(r as Record<string, unknown>));
+  } finally {
+    client.release();
+  }
+}
+
 export async function getAssessmentRunHistory(
   orgId: string,
   feature: AssessmentFeature = 'copilot_readiness',
