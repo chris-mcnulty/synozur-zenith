@@ -367,6 +367,7 @@ export const PLAN_FEATURES = {
   TRIAL: {
     label: "Trial",
     m365WriteBack: false,
+    ownershipManagement: false,
     provisioning: true,
     inventorySync: true,
     copilotReadiness: false,
@@ -395,6 +396,7 @@ export const PLAN_FEATURES = {
   STANDARD: {
     label: "Standard",
     m365WriteBack: true,
+    ownershipManagement: true,
     provisioning: true,
     inventorySync: true,
     copilotReadiness: false,
@@ -423,6 +425,7 @@ export const PLAN_FEATURES = {
   PROFESSIONAL: {
     label: "Professional",
     m365WriteBack: true,
+    ownershipManagement: true,
     provisioning: true,
     inventorySync: true,
     copilotReadiness: true,
@@ -451,6 +454,7 @@ export const PLAN_FEATURES = {
   ENTERPRISE: {
     label: "Unlimited Enterprise",
     m365WriteBack: true,
+    ownershipManagement: true,
     provisioning: true,
     inventorySync: true,
     copilotReadiness: true,

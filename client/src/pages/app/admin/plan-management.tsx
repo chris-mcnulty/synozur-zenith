@@ -170,6 +170,7 @@ const FEATURE_GROUPS: FeatureGroup[] = [
     description: "M365 write-back and data export capabilities — blocked on Trial",
     rows: [
       { key: "m365WriteBack", label: "M365 Write-Back" },
+      { key: "ownershipManagement", label: "Site Owner Management" },
       { key: "csvExport", label: "CSV Data Export" },
       {
         key: "contentGovernanceReporting",

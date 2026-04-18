@@ -3955,6 +3955,129 @@ export async function resolveOwnerIds(
 }
 
 // ---------------------------------------------------------------------------
+// Group owner management (add / remove / search)
+// ---------------------------------------------------------------------------
+
+export type AddOwnerErrorCode = "ALREADY_OWNER" | "USER_NOT_FOUND" | "FORBIDDEN" | "OTHER";
+export type RemoveOwnerErrorCode = "USER_NOT_FOUND" | "NOT_AN_OWNER" | "LAST_OWNER" | "FORBIDDEN" | "OTHER";
+
+export async function addGroupOwner(
+  graphToken: string,
+  groupId: string,
+  userId: string,
+): Promise<{ success: boolean; errorCode?: AddOwnerErrorCode; error?: string }> {
+  try {
+    const res = await fetch(`https://graph.microsoft.com/v1.0/groups/${groupId}/owners/$ref`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${graphToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        "@odata.id": `https://graph.microsoft.com/v1.0/users/${userId}`,
+      }),
+    });
+
+    if (res.ok || res.status === 204) {
+      return { success: true };
+    }
+
+    const errText = await res.text();
+    const lower = errText.toLowerCase();
+    let errorCode: AddOwnerErrorCode = "OTHER";
+    if (lower.includes("already exist") || lower.includes("one or more added object references already exist")) {
+      errorCode = "ALREADY_OWNER";
+    } else if (res.status === 404 || lower.includes("does not exist") || lower.includes("resource not found")) {
+      errorCode = "USER_NOT_FOUND";
+    } else if (res.status === 401 || res.status === 403) {
+      errorCode = "FORBIDDEN";
+    }
+    return { success: false, errorCode, error: `Graph add owner ${res.status}: ${errText.substring(0, 400)}` };
+  } catch (err: any) {
+    return { success: false, errorCode: "OTHER", error: err.message };
+  }
+}
+
+export async function removeGroupOwner(
+  graphToken: string,
+  groupId: string,
+  userId: string,
+): Promise<{ success: boolean; errorCode?: RemoveOwnerErrorCode; error?: string }> {
+  try {
+    const res = await fetch(`https://graph.microsoft.com/v1.0/groups/${groupId}/owners/${userId}/$ref`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${graphToken}` },
+    });
+
+    if (res.ok || res.status === 204) {
+      return { success: true };
+    }
+
+    const errText = await res.text();
+    const lower = errText.toLowerCase();
+    let errorCode: RemoveOwnerErrorCode = "OTHER";
+    if (lower.includes("last owner") || lower.includes("at least one owner")) {
+      errorCode = "LAST_OWNER";
+    } else if (res.status === 404 || lower.includes("does not exist") || lower.includes("resource not found")) {
+      errorCode = "NOT_AN_OWNER";
+    } else if (res.status === 401 || res.status === 403) {
+      errorCode = "FORBIDDEN";
+    }
+    return { success: false, errorCode, error: `Graph remove owner ${res.status}: ${errText.substring(0, 400)}` };
+  } catch (err: any) {
+    return { success: false, errorCode: "OTHER", error: err.message };
+  }
+}
+
+export interface TenantUserSearchResult {
+  id: string;
+  displayName: string;
+  mail?: string;
+  userPrincipalName?: string;
+}
+
+export async function searchTenantUsers(
+  graphToken: string,
+  query: string,
+  limit: number = 20,
+): Promise<{ users: TenantUserSearchResult[]; error?: string }> {
+  const trimmed = query.trim();
+  if (!trimmed) return { users: [] };
+  const top = Math.min(Math.max(1, limit), 25);
+  const select = "id,displayName,mail,userPrincipalName";
+
+  try {
+    const escaped = trimmed.replace(/'/g, "''");
+    const filter = encodeURIComponent(
+      `startswith(displayName,'${escaped}') or startswith(mail,'${escaped}') or startswith(userPrincipalName,'${escaped}')`
+    );
+    const url = `https://graph.microsoft.com/v1.0/users?$filter=${filter}&$top=${top}&$select=${select}`;
+    const res = await fetch(url, {
+      headers: {
+        Authorization: `Bearer ${graphToken}`,
+        ConsistencyLevel: "eventual",
+      },
+    });
+
+    if (!res.ok) {
+      const errText = await res.text();
+      return { users: [], error: `Graph user search ${res.status}: ${errText.substring(0, 300)}` };
+    }
+
+    const data = await res.json();
+    const users: TenantUserSearchResult[] = (data.value || []).map((u: any) => ({
+      id: u.id,
+      displayName: u.displayName || "",
+      mail: u.mail || undefined,
+      userPrincipalName: u.userPrincipalName || undefined,
+    })).filter((u: TenantUserSearchResult) => !!u.id);
+    return { users };
+  } catch (err: any) {
+    return { users: [], error: err.message };
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Sharing Links
 // ---------------------------------------------------------------------------
 

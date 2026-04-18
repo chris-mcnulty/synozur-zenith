@@ -14,6 +14,7 @@ interface UpgradeGateProps {
 
 const FEATURE_LABELS: Record<string, { label: string; minPlan: string }> = {
   m365WriteBack: { label: "Microsoft 365 Write-Back", minPlan: "Standard" },
+  ownershipManagement: { label: "Site Owner Management", minPlan: "Standard" },
   copilotReadiness: { label: "Copilot Readiness", minPlan: "Professional" },
   lifecycleAutomation: { label: "Lifecycle Automation", minPlan: "Professional" },
   selfServicePortal: { label: "Self-Service Portal", minPlan: "Professional" },

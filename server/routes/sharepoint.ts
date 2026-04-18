@@ -2,7 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { storage } from "../storage";
 import { insertWorkspaceSchema, insertProvisioningRequestSchema, type ServicePlanTier, ZENITH_ROLES } from "@shared/schema";
-import { fetchSharePointSites, fetchSiteUsageReport, fetchSiteDriveOwner, fetchSiteAnalytics, fetchSiteGroupOwners, fetchSiteCollectionAdmins, getAppToken, writeSitePropertyBag, requestSiteReindex, fetchSitePropertyBag, fetchSensitivityLabels, fetchRetentionLabels, fetchHubSites, fetchSiteHubAssociation, fetchHubSitesViaSearch, applySensitivityLabelToSite, removeSensitivityLabelFromSite, joinHubSite, leaveHubSite, fetchSiteLockState, fetchSiteArchiveStatus, batchToggleNoScript, fetchSiteDocumentLibraries, enumerateSiteDocumentLibraries, fetchLibraryDetails, fetchLibraryFolderDepth, fetchLibraryViews, fetchLibraryItemFillRates, fetchSiteTelemetry, fetchContentTypes, createSharePointSite, createM365Group, createTeam, assignSensitivityLabelToGroup, resolveOwnerIds, archiveSite, unarchiveSite, deleteSiteFromGraph, graphFetchWithRetry } from "../services/graph";
+import { fetchSharePointSites, fetchSiteUsageReport, fetchSiteDriveOwner, fetchSiteAnalytics, fetchSiteGroupOwners, fetchSiteCollectionAdmins, getAppToken, writeSitePropertyBag, requestSiteReindex, fetchSitePropertyBag, fetchSensitivityLabels, fetchRetentionLabels, fetchHubSites, fetchSiteHubAssociation, fetchHubSitesViaSearch, applySensitivityLabelToSite, removeSensitivityLabelFromSite, joinHubSite, leaveHubSite, fetchSiteLockState, fetchSiteArchiveStatus, batchToggleNoScript, fetchSiteDocumentLibraries, enumerateSiteDocumentLibraries, fetchLibraryDetails, fetchLibraryFolderDepth, fetchLibraryViews, fetchLibraryItemFillRates, fetchSiteTelemetry, fetchContentTypes, createSharePointSite, createM365Group, createTeam, assignSensitivityLabelToGroup, resolveOwnerIds, archiveSite, unarchiveSite, deleteSiteFromGraph, graphFetchWithRetry, addGroupOwner, removeGroupOwner, searchTenantUsers } from "../services/graph";
 import { getPlanFeatures, requireFeature } from "../services/feature-gate";
 import { getDelegatedSpoToken } from "../routes-entra";
 import { requireAuth, requireRole, requirePermission, type AuthenticatedRequest } from "../middleware/rbac";
@@ -767,6 +767,220 @@ router.delete("/api/workspaces/:id/m365", requireRole(ZENITH_ROLES.GOVERNANCE_AD
   });
 
   res.json({ success: true, workspaceId: workspace.id });
+});
+
+// ── Site Owner Management (M365 Group owners) ──
+
+const addOwnerBodySchema = z.object({
+  userId: z.string().min(1).optional(),
+  userPrincipalName: z.string().min(1).optional(),
+}).refine(d => !!(d.userId || d.userPrincipalName), { message: "userId or userPrincipalName is required" });
+
+async function refreshOwnersFromGraph(graphToken: string, workspaceId: string, graphSiteId: string): Promise<{ owners: Array<{ id?: string; displayName: string; mail?: string; userPrincipalName?: string }>; count: number }> {
+  const result = await fetchSiteGroupOwners(graphToken, graphSiteId);
+  const owners = result.owners || [];
+  await storage.updateWorkspace(workspaceId, { siteOwners: owners, owners: owners.length } as any);
+  return { owners, count: owners.length };
+}
+
+router.get("/api/tenants/:tenantConnectionId/users/search", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN), requireFeature("ownershipManagement"), async (req: AuthenticatedRequest, res) => {
+  const tenantConnectionId = req.params.tenantConnectionId;
+  const q = (req.query.q as string | undefined)?.trim() || "";
+  if (!q) return res.json({ users: [] });
+
+  const allowedIds = await getOrgTenantConnectionIds(req);
+  if (allowedIds && !allowedIds.includes(tenantConnectionId)) {
+    return res.status(403).json({ message: "Tenant not in scope" });
+  }
+
+  const conn = await storage.getTenantConnection(tenantConnectionId);
+  if (!conn) return res.status(404).json({ message: "Tenant connection not found" });
+
+  const clientId = conn.clientId || process.env.AZURE_CLIENT_ID!;
+  const clientSecret = getEffectiveClientSecret(conn);
+  let graphToken: string;
+  try {
+    graphToken = await getAppToken(conn.tenantId, clientId, clientSecret);
+  } catch (err: any) {
+    return res.status(502).json({ message: `Failed to acquire Graph token: ${err.message}` });
+  }
+
+  const result = await searchTenantUsers(graphToken, q, 20);
+  if (result.error) {
+    return res.status(502).json({ message: result.error, users: [] });
+  }
+  res.json({ users: result.users });
+});
+
+router.post("/api/workspaces/:id/owners", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN), requireFeature("ownershipManagement"), async (req: AuthenticatedRequest, res) => {
+  if (!(await isWorkspaceInScope(req, req.params.id))) {
+    return res.status(404).json({ message: "Workspace not found" });
+  }
+  const parsed = addOwnerBodySchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ message: "userId or userPrincipalName is required" });
+  }
+
+  const workspace = await storage.getWorkspace(req.params.id);
+  if (!workspace) return res.status(404).json({ message: "Workspace not found" });
+  if (!workspace.tenantConnectionId) return res.status(400).json({ message: "Workspace has no tenant connection" });
+  if (!workspace.m365ObjectId) return res.status(400).json({ message: "Workspace has no Graph site ID — sync the workspace first" });
+  if (workspace.type === "COMMUNICATION_SITE") {
+    return res.status(400).json({ message: "Communication Sites are not group-backed and cannot have their owners managed here." });
+  }
+
+  const conn = await storage.getTenantConnection(workspace.tenantConnectionId);
+  if (!conn) return res.status(404).json({ message: "Tenant connection not found" });
+
+  const clientId = conn.clientId || process.env.AZURE_CLIENT_ID!;
+  const clientSecret = getEffectiveClientSecret(conn);
+
+  const auditBase = {
+    userId: req.user?.id || null,
+    userEmail: req.user?.email || null,
+    action: 'SITE_OWNER_ADDED',
+    resource: 'workspace',
+    resourceId: workspace.id,
+    organizationId: req.user?.organizationId || null,
+    tenantConnectionId: workspace.tenantConnectionId,
+    ipAddress: req.ip || null,
+  };
+
+  let graphToken: string;
+  try {
+    graphToken = await getAppToken(conn.tenantId, clientId, clientSecret);
+  } catch (err: any) {
+    await storage.createAuditEntry({ ...auditBase, details: { workspaceName: workspace.displayName, error: `Failed to acquire Graph token: ${err.message}` }, result: 'FAILURE' });
+    return res.status(502).json({ message: `Failed to acquire Graph token: ${err.message}` });
+  }
+
+  // Look up the underlying group id and resolve the user id (if only UPN was supplied)
+  const ownersInfo = await fetchSiteGroupOwners(graphToken, workspace.m365ObjectId);
+  const groupId = ownersInfo.groupId;
+  if (!groupId) {
+    await storage.createAuditEntry({ ...auditBase, details: { workspaceName: workspace.displayName, error: ownersInfo.error || 'No M365 group for site' }, result: 'FAILURE' });
+    return res.status(400).json({ message: ownersInfo.error || "This site is not backed by a Microsoft 365 group, so its owners cannot be managed here." });
+  }
+
+  let userId = parsed.data.userId;
+  let resolvedUpn = parsed.data.userPrincipalName;
+  if (!userId && parsed.data.userPrincipalName) {
+    try {
+      const lookupRes = await fetch(`https://graph.microsoft.com/v1.0/users/${encodeURIComponent(parsed.data.userPrincipalName)}?$select=id,displayName,mail,userPrincipalName`, {
+        headers: { Authorization: `Bearer ${graphToken}` },
+      });
+      if (lookupRes.ok) {
+        const lookupData = await lookupRes.json();
+        userId = lookupData.id;
+        resolvedUpn = lookupData.userPrincipalName || resolvedUpn;
+      }
+    } catch {}
+    if (!userId) {
+      await storage.createAuditEntry({ ...auditBase, details: { workspaceName: workspace.displayName, userPrincipalName: parsed.data.userPrincipalName, error: 'User not found in directory' }, result: 'FAILURE' });
+      return res.status(404).json({ message: "User not found in this tenant's directory.", errorCode: "USER_NOT_FOUND" });
+    }
+  }
+
+  const result = await addGroupOwner(graphToken, groupId, userId!);
+  if (!result.success) {
+    await storage.createAuditEntry({ ...auditBase, details: { workspaceName: workspace.displayName, targetUserId: userId, targetUserPrincipalName: resolvedUpn, errorCode: result.errorCode, error: result.error }, result: 'FAILURE' });
+    if (result.errorCode === "ALREADY_OWNER") {
+      return res.status(409).json({ message: "That user is already an owner of this site.", errorCode: result.errorCode });
+    }
+    if (result.errorCode === "USER_NOT_FOUND") {
+      return res.status(404).json({ message: "User not found in this tenant's directory.", errorCode: result.errorCode });
+    }
+    return res.status(502).json({ message: result.error || "Failed to add owner.", errorCode: result.errorCode });
+  }
+
+  const refreshed = await refreshOwnersFromGraph(graphToken, workspace.id, workspace.m365ObjectId);
+
+  await storage.createAuditEntry({ ...auditBase, details: { workspaceName: workspace.displayName, targetUserId: userId, targetUserPrincipalName: resolvedUpn, ownerCount: refreshed.count }, result: 'SUCCESS' });
+
+  res.json({ success: true, workspaceId: workspace.id, owners: refreshed.owners, ownerCount: refreshed.count });
+});
+
+router.delete("/api/workspaces/:id/owners/:userId", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN), requireFeature("ownershipManagement"), async (req: AuthenticatedRequest, res) => {
+  if (!(await isWorkspaceInScope(req, req.params.id))) {
+    return res.status(404).json({ message: "Workspace not found" });
+  }
+  const targetUserId = req.params.userId;
+  if (!targetUserId) return res.status(400).json({ message: "Owner user id is required" });
+
+  const workspace = await storage.getWorkspace(req.params.id);
+  if (!workspace) return res.status(404).json({ message: "Workspace not found" });
+  if (!workspace.tenantConnectionId) return res.status(400).json({ message: "Workspace has no tenant connection" });
+  if (!workspace.m365ObjectId) return res.status(400).json({ message: "Workspace has no Graph site ID — sync the workspace first" });
+  if (workspace.type === "COMMUNICATION_SITE") {
+    return res.status(400).json({ message: "Communication Sites are not group-backed and cannot have their owners managed here." });
+  }
+
+  const conn = await storage.getTenantConnection(workspace.tenantConnectionId);
+  if (!conn) return res.status(404).json({ message: "Tenant connection not found" });
+
+  const clientId = conn.clientId || process.env.AZURE_CLIENT_ID!;
+  const clientSecret = getEffectiveClientSecret(conn);
+
+  const auditBase = {
+    userId: req.user?.id || null,
+    userEmail: req.user?.email || null,
+    action: 'SITE_OWNER_REMOVED',
+    resource: 'workspace',
+    resourceId: workspace.id,
+    organizationId: req.user?.organizationId || null,
+    tenantConnectionId: workspace.tenantConnectionId,
+    ipAddress: req.ip || null,
+  };
+
+  let graphToken: string;
+  try {
+    graphToken = await getAppToken(conn.tenantId, clientId, clientSecret);
+  } catch (err: any) {
+    await storage.createAuditEntry({ ...auditBase, details: { workspaceName: workspace.displayName, targetUserId, error: `Failed to acquire Graph token: ${err.message}` }, result: 'FAILURE' });
+    return res.status(502).json({ message: `Failed to acquire Graph token: ${err.message}` });
+  }
+
+  // Always read the live owner list from Graph — the local count is convenience only.
+  const ownersInfo = await fetchSiteGroupOwners(graphToken, workspace.m365ObjectId);
+  const groupId = ownersInfo.groupId;
+  if (!groupId) {
+    await storage.createAuditEntry({ ...auditBase, details: { workspaceName: workspace.displayName, targetUserId, error: ownersInfo.error || 'No M365 group for site' }, result: 'FAILURE' });
+    return res.status(400).json({ message: ownersInfo.error || "This site is not backed by a Microsoft 365 group, so its owners cannot be managed here." });
+  }
+  const liveOwners = ownersInfo.owners || [];
+  const target = liveOwners.find(o => o.id === targetUserId);
+
+  // Last-owner safeguard — server-enforced.
+  if (liveOwners.length <= 1) {
+    await storage.createAuditEntry({ ...auditBase, details: { workspaceName: workspace.displayName, targetUserId, targetUserPrincipalName: target?.userPrincipalName, ownerCount: liveOwners.length, errorCode: 'LAST_OWNER', error: 'Refused to remove the last remaining owner' }, result: 'FAILURE' });
+    return res.status(400).json({
+      message: "Cannot remove the last remaining owner of this site. Add another owner before removing this one.",
+      errorCode: "LAST_OWNER",
+    });
+  }
+
+  if (!target) {
+    await storage.createAuditEntry({ ...auditBase, details: { workspaceName: workspace.displayName, targetUserId, errorCode: 'NOT_AN_OWNER' }, result: 'FAILURE' });
+    return res.status(404).json({ message: "That user is not currently an owner of this site.", errorCode: "NOT_AN_OWNER" });
+  }
+
+  const result = await removeGroupOwner(graphToken, groupId, targetUserId);
+  if (!result.success) {
+    await storage.createAuditEntry({ ...auditBase, details: { workspaceName: workspace.displayName, targetUserId, targetUserPrincipalName: target?.userPrincipalName, errorCode: result.errorCode, error: result.error }, result: 'FAILURE' });
+    if (result.errorCode === "LAST_OWNER") {
+      return res.status(400).json({ message: "Microsoft 365 refused the removal because this is the last remaining owner.", errorCode: "LAST_OWNER" });
+    }
+    if (result.errorCode === "NOT_AN_OWNER") {
+      return res.status(404).json({ message: "That user is not currently an owner of this site.", errorCode: result.errorCode });
+    }
+    return res.status(502).json({ message: result.error || "Failed to remove owner.", errorCode: result.errorCode });
+  }
+
+  const refreshed = await refreshOwnersFromGraph(graphToken, workspace.id, workspace.m365ObjectId);
+
+  await storage.createAuditEntry({ ...auditBase, details: { workspaceName: workspace.displayName, targetUserId, targetUserPrincipalName: target?.userPrincipalName, ownerCount: refreshed.count }, result: 'SUCCESS' });
+
+  res.json({ success: true, workspaceId: workspace.id, owners: refreshed.owners, ownerCount: refreshed.count });
 });
 
 router.post("/api/workspaces/:id/sync", requireRole(ZENITH_ROLES.OPERATOR, ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN), async (req: AuthenticatedRequest, res) => {
