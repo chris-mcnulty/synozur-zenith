@@ -12,6 +12,7 @@ import {
   getAssessmentRun,
   getLatestAssessmentRun,
   getLegacyOrgWideAssessmentRuns,
+  deleteAssessmentRun,
   getWorkspaceNarrative,
   getAssessmentRunHistory,
 } from "../services/copilot-assessment-service";
@@ -814,6 +815,56 @@ router.get("/api/copilot-readiness/assessment/:runId", requireAuth(), requireFea
     res.status(500).json({ error: err.message });
   }
 });
+
+/**
+ * Delete a Copilot Readiness assessment run. Governance admins only.
+ * Refuses to delete RUNNING runs. Enforces tenant + org scope.
+ */
+router.delete(
+  "/api/copilot-readiness/assessment/:runId",
+  requireAuth(),
+  requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN),
+  requireFeature("copilotReadiness"),
+  async (req: AuthenticatedRequest, res) => {
+    try {
+      const run = await getAssessmentRun(req.params.runId);
+      if (!run) {
+        return res.status(404).json({ message: "Assessment run not found" });
+      }
+
+      const isPlatformOwner = req.user?.role === ZENITH_ROLES.PLATFORM_OWNER;
+      const orgId = isPlatformOwner
+        ? run.orgId
+        : (req.activeOrganizationId || req.user?.organizationId);
+
+      if (!orgId || (!isPlatformOwner && run.orgId !== orgId)) {
+        return res.status(404).json({ message: "Assessment run not found" });
+      }
+
+      const tenantConnectionId = typeof req.query.tenantConnectionId === "string" && req.query.tenantConnectionId
+        ? req.query.tenantConnectionId
+        : null;
+
+      if (!isPlatformOwner && tenantConnectionId && run.tenantConnectionId !== tenantConnectionId) {
+        return res.status(404).json({ message: "Assessment run not found" });
+      }
+
+      if (run.status === "RUNNING") {
+        return res.status(409).json({ message: "Cannot delete a run that is still in progress" });
+      }
+
+      const deleted = await deleteAssessmentRun(req.params.runId, run.orgId);
+      if (!deleted) {
+        return res.status(404).json({ message: "Assessment run not found or already deleted" });
+      }
+
+      return res.status(204).end();
+    } catch (err: any) {
+      console.error("[AI Assessment] Error deleting run:", err);
+      res.status(500).json({ error: err.message });
+    }
+  },
+);
 
 /**
  * Per-workspace AI remediation narrative — fetched on demand, cached 1 hour.

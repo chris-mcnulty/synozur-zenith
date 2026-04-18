@@ -39,7 +39,19 @@ import {
   Play,
   Clock,
   MessageSquare,
+  Trash2,
 } from "lucide-react";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import { UpgradeGate } from "@/components/upgrade-gate";
 import { useTenant } from "@/lib/tenant-context";
 import { DatasetFreshnessBanner } from "@/components/datasets";
@@ -374,6 +386,28 @@ function AIAssessmentPanel({
     },
   });
 
+  const deleteMutation = useMutation({
+    mutationFn: async (runId: string) => {
+      const res = await fetch(
+        `/api/copilot-readiness/assessment/${runId}?tenantConnectionId=${encodeURIComponent(tenantConnectionId)}`,
+        { method: "DELETE", credentials: "include" },
+      );
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.message || "Failed to delete assessment");
+      }
+    },
+    onSuccess: (_data, runId) => {
+      setToastMsg("Assessment deleted.");
+      if (viewingRunId === runId) setViewingRunId(null);
+      refetchLatest();
+      refetchHistory();
+    },
+    onError: (err: Error) => {
+      setToastMsg(`Error: ${err.message}`);
+    },
+  });
+
   const isRunning = !!activeRunId || activeRun?.status === 'RUNNING' || activeRun?.status === 'PENDING';
   const displayRun = viewingRunId ? viewingRun : latestRun;
   const isViewingHistorical = !!viewingRunId && !!latestRun && viewingRunId !== latestRun.id;
@@ -602,6 +636,43 @@ function AIAssessmentPanel({
                             <Download className="w-3 h-3" />
                           </Button>
                         </>
+                      )}
+                      {run.status !== "RUNNING" && (
+                        <AlertDialog>
+                          <AlertDialogTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive"
+                              title="Delete assessment"
+                              disabled={deleteMutation.isPending}
+                              data-testid={`button-delete-history-${run.id}`}
+                            >
+                              <Trash2 className="w-3 h-3" />
+                            </Button>
+                          </AlertDialogTrigger>
+                          <AlertDialogContent>
+                            <AlertDialogHeader>
+                              <AlertDialogTitle>Delete this assessment?</AlertDialogTitle>
+                              <AlertDialogDescription>
+                                This will permanently delete the assessment from{" "}
+                                <strong>{new Date(run.completedAt ?? run.createdAt).toLocaleString()}</strong>.
+                                {isLatest && " The panel will fall back to the next most recent run, if one exists."}
+                                {" "}This action cannot be undone.
+                              </AlertDialogDescription>
+                            </AlertDialogHeader>
+                            <AlertDialogFooter>
+                              <AlertDialogCancel data-testid={`button-cancel-delete-${run.id}`}>Cancel</AlertDialogCancel>
+                              <AlertDialogAction
+                                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                                onClick={() => deleteMutation.mutate(run.id)}
+                                data-testid={`button-confirm-delete-${run.id}`}
+                              >
+                                Delete Assessment
+                              </AlertDialogAction>
+                            </AlertDialogFooter>
+                          </AlertDialogContent>
+                        </AlertDialog>
                       )}
                     </div>
                   </div>

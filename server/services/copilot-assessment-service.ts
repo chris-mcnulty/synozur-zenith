@@ -86,6 +86,19 @@ export async function getAssessmentRun(runId: string): Promise<AiAssessmentRun |
   }
 }
 
+export async function deleteAssessmentRun(runId: string, orgId: string): Promise<boolean> {
+  const client = await pool.connect();
+  try {
+    const { rowCount } = await client.query(
+      `DELETE FROM ai_assessment_runs WHERE id = $1 AND org_id = $2`,
+      [runId, orgId],
+    );
+    return (rowCount ?? 0) > 0;
+  } finally {
+    client.release();
+  }
+}
+
 export async function getLatestAssessmentRun(
   orgId: string,
   feature: AssessmentFeature = 'copilot_readiness',
