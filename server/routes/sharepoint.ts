@@ -26,8 +26,24 @@ const router = Router();
 // ── Workspaces (SharePoint Sites) ──
 router.get("/api/workspaces/writeback-pending", requireAuth(), async (req: AuthenticatedRequest, res) => {
   const tenantConnectionId = req.query.tenantConnectionId as string | undefined;
-  const orgId = req.activeOrganizationId || req.user?.organizationId || undefined;
-  const workspaces = await storage.getWorkspaces(undefined, tenantConnectionId, orgId);
+  const allowedIds = await getOrgTenantConnectionIds(req);
+
+  let workspaces: Workspace[] = [];
+  if (tenantConnectionId) {
+    if (allowedIds && !allowedIds.includes(tenantConnectionId)) {
+      return res.json({ count: 0, workspaces: [] });
+    }
+    workspaces = await storage.getWorkspaces(undefined, tenantConnectionId);
+  } else if (allowedIds) {
+    if (allowedIds.length > 0) {
+      const perTenant = await Promise.all(allowedIds.map(id => storage.getWorkspaces(undefined, id)));
+      workspaces = perTenant.flat();
+    }
+  } else {
+    // Platform Owner global view
+    workspaces = await storage.getWorkspaces();
+  }
+
   const pending = workspaces.filter(ws =>
     ws.localHash && ws.spoSyncHash && ws.localHash !== ws.spoSyncHash && ws.siteUrl
   );
@@ -1515,8 +1531,19 @@ router.patch("/api/workspaces/bulk/hub-assignment", requireRole(ZENITH_ROLES.GOV
   }
 
   const allowedTenantIds = await getOrgTenantConnectionIds(req);
-  const orgId = req.activeOrganizationId || req.user?.organizationId || undefined;
-  const allWs = await storage.getWorkspaces(undefined, undefined, orgId);
+
+  // Load every workspace the caller can reach (own org + MSP grants for
+  // regular users; everything for Platform Owner) so the bulk operation
+  // can validate scope correctly without dropping granted-tenant sites.
+  let allWs: Workspace[];
+  if (allowedTenantIds === null) {
+    allWs = await storage.getWorkspaces();
+  } else if (allowedTenantIds.length === 0) {
+    allWs = [];
+  } else {
+    const perTenant = await Promise.all(allowedTenantIds.map(id => storage.getWorkspaces(undefined, id)));
+    allWs = perTenant.flat();
+  }
 
   const allowedWsIds = new Set(allWs.map(ws => ws.id));
   const outOfScope = workspaceIds.filter((id: string) => !allowedWsIds.has(id));
