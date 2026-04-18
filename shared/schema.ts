@@ -50,6 +50,7 @@ export const workspaces = pgTable("workspaces", {
   reportRefreshDate: text("report_refresh_date"),
   propertyBag: jsonb("property_bag").$type<Record<string, string>>(),
   siteOwners: jsonb("site_owners").$type<Array<{ id?: string; displayName: string; mail?: string; userPrincipalName?: string }>>(),
+  siteMembers: jsonb("site_members").$type<Array<{ id?: string; displayName: string; mail?: string; userPrincipalName?: string }>>(),
   customFields: jsonb("custom_fields").$type<Record<string, any>>(),
   spoSyncHash: text("spo_sync_hash"),
   localHash: text("local_hash"),

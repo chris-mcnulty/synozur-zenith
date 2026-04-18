@@ -3960,6 +3960,114 @@ export async function resolveOwnerIds(
 
 export type AddOwnerErrorCode = "ALREADY_OWNER" | "USER_NOT_FOUND" | "FORBIDDEN" | "OTHER";
 export type RemoveOwnerErrorCode = "USER_NOT_FOUND" | "NOT_AN_OWNER" | "LAST_OWNER" | "FORBIDDEN" | "OTHER";
+export type AddMemberErrorCode = "ALREADY_MEMBER" | "USER_NOT_FOUND" | "FORBIDDEN" | "OTHER";
+export type RemoveMemberErrorCode = "USER_NOT_FOUND" | "NOT_A_MEMBER" | "FORBIDDEN" | "OTHER";
+
+export async function fetchSiteGroupMembers(
+  token: string,
+  graphSiteId: string,
+): Promise<{ members: SiteGroupOwner[]; groupId?: string; error?: string }> {
+  try {
+    let groupId: string | undefined;
+    const driveRes = await fetch(
+      `https://graph.microsoft.com/v1.0/sites/${graphSiteId}/drive`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    if (driveRes.ok) {
+      const driveData = await driveRes.json();
+      const ownerGroup = driveData?.owner?.group;
+      if (ownerGroup?.id) groupId = ownerGroup.id;
+    }
+    if (!groupId) {
+      return { members: [], error: "No M365 Group associated with this site" };
+    }
+
+    const membersRes = await fetch(
+      `https://graph.microsoft.com/v1.0/groups/${groupId}/members/microsoft.graph.user?$select=id,displayName,mail,userPrincipalName&$top=999`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    if (!membersRes.ok) {
+      const errText = await membersRes.text();
+      return { members: [], groupId, error: `Group members API error ${membersRes.status}: ${errText}` };
+    }
+    const data = await membersRes.json();
+    const members: SiteGroupOwner[] = (data.value || []).map((m: any) => ({
+      id: m.id,
+      displayName: m.displayName || '',
+      mail: m.mail,
+      userPrincipalName: m.userPrincipalName,
+    }));
+    return { members, groupId };
+  } catch (err: any) {
+    return { members: [], error: err.message };
+  }
+}
+
+export async function addGroupMember(
+  graphToken: string,
+  groupId: string,
+  userId: string,
+): Promise<{ success: boolean; errorCode?: AddMemberErrorCode; error?: string }> {
+  try {
+    const res = await fetch(`https://graph.microsoft.com/v1.0/groups/${groupId}/members/$ref`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${graphToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        "@odata.id": `https://graph.microsoft.com/v1.0/users/${userId}`,
+      }),
+    });
+
+    if (res.ok || res.status === 204) {
+      return { success: true };
+    }
+
+    const errText = await res.text();
+    const lower = errText.toLowerCase();
+    let errorCode: AddMemberErrorCode = "OTHER";
+    if (lower.includes("already exist") || lower.includes("one or more added object references already exist")) {
+      errorCode = "ALREADY_MEMBER";
+    } else if (res.status === 404 || lower.includes("does not exist") || lower.includes("resource not found")) {
+      errorCode = "USER_NOT_FOUND";
+    } else if (res.status === 401 || res.status === 403) {
+      errorCode = "FORBIDDEN";
+    }
+    return { success: false, errorCode, error: `Graph add member ${res.status}: ${errText.substring(0, 400)}` };
+  } catch (err: any) {
+    return { success: false, errorCode: "OTHER", error: err.message };
+  }
+}
+
+export async function removeGroupMember(
+  graphToken: string,
+  groupId: string,
+  userId: string,
+): Promise<{ success: boolean; errorCode?: RemoveMemberErrorCode; error?: string }> {
+  try {
+    const res = await fetch(`https://graph.microsoft.com/v1.0/groups/${groupId}/members/${userId}/$ref`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${graphToken}` },
+    });
+
+    if (res.ok || res.status === 204) {
+      return { success: true };
+    }
+
+    const errText = await res.text();
+    const lower = errText.toLowerCase();
+    let errorCode: RemoveMemberErrorCode = "OTHER";
+    if (res.status === 404 || lower.includes("does not exist") || lower.includes("resource not found")) {
+      errorCode = "NOT_A_MEMBER";
+    } else if (res.status === 401 || res.status === 403) {
+      errorCode = "FORBIDDEN";
+    }
+    return { success: false, errorCode, error: `Graph remove member ${res.status}: ${errText.substring(0, 400)}` };
+  } catch (err: any) {
+    return { success: false, errorCode: "OTHER", error: err.message };
+  }
+}
 
 export async function addGroupOwner(
   graphToken: string,

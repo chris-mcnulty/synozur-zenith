@@ -350,6 +350,60 @@ export default function WorkspaceDetailsPage() {
     },
   });
 
+  // ── Site Member Management ──
+  const [memberSearchOpen, setMemberSearchOpen] = useState(false);
+  const [memberSearch, setMemberSearch] = useState("");
+  const [debouncedMemberSearch, setDebouncedMemberSearch] = useState("");
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedMemberSearch(memberSearch.trim()), 300);
+    return () => clearTimeout(t);
+  }, [memberSearch]);
+
+  const { data: memberSearchResults, isFetching: memberSearchLoading } = useQuery<{ users: Array<{ id: string; displayName: string; mail?: string; userPrincipalName?: string }> }>({
+    queryKey: ["/api/tenants", workspace?.tenantConnectionId, "users/search", debouncedMemberSearch, "members"],
+    queryFn: async () => {
+      const r = await fetch(`/api/tenants/${workspace?.tenantConnectionId}/users/search?q=${encodeURIComponent(debouncedMemberSearch)}`, { credentials: "include" });
+      if (!r.ok) return { users: [] };
+      return r.json();
+    },
+    enabled: !!workspace?.tenantConnectionId && memberSearchOpen && debouncedMemberSearch.length >= 2,
+  });
+
+  const addMemberMutation = useMutation({
+    mutationFn: async (user: { id: string; userPrincipalName?: string; displayName: string }) => {
+      const res = await apiRequest("POST", `/api/workspaces/${id}/members`, { userId: user.id });
+      return res.json();
+    },
+    onSuccess: (_data, user) => {
+      queryClient.invalidateQueries({ queryKey: [`/api/workspaces/${id}`] });
+      queryClient.invalidateQueries({ queryKey: ["/api/workspaces"] });
+      setMemberSearch("");
+      setMemberSearchOpen(false);
+      toast({ title: "Member added", description: `${user.displayName} is now a member of this site.` });
+    },
+    onError: (err: any) => {
+      toast({ title: "Could not add member", description: parseErrorMessage(err, "Failed to add member."), variant: "destructive" });
+    },
+  });
+
+  const [confirmRemoveMember, setConfirmRemoveMember] = useState<{ id: string; displayName: string } | null>(null);
+  const removeMemberMutation = useMutation({
+    mutationFn: async (member: { id: string; displayName: string }) => {
+      const res = await apiRequest("DELETE", `/api/workspaces/${id}/members/${member.id}`);
+      return res.json();
+    },
+    onSuccess: (_data, member) => {
+      queryClient.invalidateQueries({ queryKey: [`/api/workspaces/${id}`] });
+      queryClient.invalidateQueries({ queryKey: ["/api/workspaces"] });
+      setConfirmRemoveMember(null);
+      toast({ title: "Member removed", description: `${member.displayName} is no longer a member of this site.` });
+    },
+    onError: (err: any) => {
+      toast({ title: "Could not remove member", description: parseErrorMessage(err, "Failed to remove member."), variant: "destructive" });
+      setConfirmRemoveMember(null);
+    },
+  });
+
   const handleSave = () => {
     const missingCustomRequired = customFieldDefs
       .filter(f => f.required && (customFieldValues[f.fieldName] === undefined || customFieldValues[f.fieldName] === "" || customFieldValues[f.fieldName] === null))
@@ -1006,6 +1060,155 @@ export default function WorkspaceDetailsPage() {
                       );
                     })()}
                   </div>
+
+                  <Separator />
+
+                  <div>
+                    {(() => {
+                      const siteMembers = ((workspace as any).siteMembers || []) as Array<{ id?: string; displayName: string; mail?: string; userPrincipalName?: string }>;
+                      const siteOwners = ((workspace as any).siteOwners || []) as Array<{ id?: string; displayName: string; mail?: string; userPrincipalName?: string }>;
+                      const isCommSite = workspace.type === "COMMUNICATION_SITE";
+                      const showAdminControls = canManageOwners && ownershipFeatureOn && !isCommSite;
+                      return (
+                        <>
+                          <div className="flex items-center justify-between mb-4 gap-2">
+                            <h3 className="text-sm font-semibold flex items-center gap-2">
+                              <Users className="w-4 h-4 text-primary" />
+                              Members ({siteMembers.length} {siteMembers.length === 1 ? 'member' : 'members'})
+                            </h3>
+                            {showAdminControls && (
+                              <Popover open={memberSearchOpen} onOpenChange={(o) => { setMemberSearchOpen(o); if (!o) setMemberSearch(""); }}>
+                                <PopoverTrigger asChild>
+                                  <Button size="sm" variant="outline" className="h-7 gap-1.5 text-xs" data-testid="button-add-member">
+                                    <UserPlus className="w-3.5 h-3.5" />
+                                    Add Member
+                                  </Button>
+                                </PopoverTrigger>
+                                <PopoverContent className="w-80 p-0" align="end">
+                                  <div className="p-3 border-b border-border/50">
+                                    <div className="relative">
+                                      <SearchIcon className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
+                                      <Input
+                                        autoFocus
+                                        placeholder="Search by name or email..."
+                                        value={memberSearch}
+                                        onChange={(e) => setMemberSearch(e.target.value)}
+                                        className="h-8 pl-8 text-sm"
+                                        data-testid="input-member-search"
+                                      />
+                                    </div>
+                                  </div>
+                                  <div className="max-h-64 overflow-y-auto">
+                                    {debouncedMemberSearch.length < 2 ? (
+                                      <div className="p-4 text-xs text-muted-foreground text-center">Type at least 2 characters to search the directory.</div>
+                                    ) : memberSearchLoading ? (
+                                      <div className="p-4 text-xs text-muted-foreground text-center flex items-center justify-center gap-2">
+                                        <Loader2 className="w-3.5 h-3.5 animate-spin" /> Searching…
+                                      </div>
+                                    ) : !memberSearchResults?.users?.length ? (
+                                      <div className="p-4 text-xs text-muted-foreground text-center">No matching users found.</div>
+                                    ) : (
+                                      <div className="py-1">
+                                        {memberSearchResults.users.map((u) => {
+                                          const alreadyMember = siteMembers.some(m => m.id === u.id);
+                                          const isOwner = siteOwners.some(o => o.id === u.id);
+                                          const disabled = alreadyMember || addMemberMutation.isPending;
+                                          return (
+                                            <button
+                                              key={u.id}
+                                              type="button"
+                                              disabled={disabled}
+                                              onClick={() => addMemberMutation.mutate({ id: u.id, userPrincipalName: u.userPrincipalName, displayName: u.displayName })}
+                                              className="w-full flex items-center gap-3 px-3 py-2 hover:bg-muted/50 disabled:opacity-50 disabled:cursor-not-allowed text-left"
+                                              data-testid={`button-add-member-result-${u.id}`}
+                                            >
+                                              <div className="min-w-0 flex-1">
+                                                <p className="text-sm font-medium truncate">{u.displayName}</p>
+                                                <p className="text-[10px] text-muted-foreground truncate">{u.mail || u.userPrincipalName}</p>
+                                              </div>
+                                              {alreadyMember && <span className="text-[10px] text-muted-foreground shrink-0">Already member</span>}
+                                              {!alreadyMember && isOwner && <span className="text-[10px] text-muted-foreground shrink-0">Owner</span>}
+                                            </button>
+                                          );
+                                        })}
+                                      </div>
+                                    )}
+                                  </div>
+                                </PopoverContent>
+                              </Popover>
+                            )}
+                          </div>
+
+                          {isCommSite && canManageOwners && (
+                            <div className="mb-3 p-3 rounded-lg bg-muted/30 border border-border/40 text-xs text-muted-foreground" data-testid="text-comm-site-member-note">
+                              Communication Sites are not backed by a Microsoft 365 group, so their members can't be edited from Zenith.
+                            </div>
+                          )}
+
+                          {siteMembers.length > 0 ? (
+                            <div className="space-y-2">
+                              {siteMembers.map((member, idx) => {
+                                const initials = member.displayName ? member.displayName.split(" ").map((w: string) => w[0]).join("").toUpperCase().slice(0, 2) : "?";
+                                return (
+                                  <div key={member.id || idx} className="flex items-center gap-3 p-2 rounded-lg bg-muted/30" data-testid={`text-member-${idx}`}>
+                                    <div className="w-8 h-8 rounded-full bg-primary/20 flex items-center justify-center text-primary text-[10px] font-bold shrink-0">
+                                      {initials}
+                                    </div>
+                                    <div className="min-w-0 flex-1">
+                                      <p className="text-sm font-medium truncate">{member.displayName}</p>
+                                      {member.mail && <p className="text-[10px] text-muted-foreground truncate">{member.mail}</p>}
+                                    </div>
+                                    {showAdminControls && member.id && (
+                                      <Button
+                                        variant="ghost"
+                                        size="sm"
+                                        className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive disabled:opacity-40"
+                                        disabled={removeMemberMutation.isPending}
+                                        onClick={() => setConfirmRemoveMember({ id: member.id!, displayName: member.displayName })}
+                                        data-testid={`button-remove-member-${member.id}`}
+                                        aria-label={`Remove ${member.displayName}`}
+                                      >
+                                        <XIcon className="w-3.5 h-3.5" />
+                                      </Button>
+                                    )}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          ) : (
+                            <div className="text-sm text-muted-foreground italic" data-testid="text-no-members">
+                              {isCommSite ? "Communication Sites do not have group members." : "No members yet. Use Add Member above to grant access."}
+                            </div>
+                          )}
+                        </>
+                      );
+                    })()}
+                  </div>
+
+                  <AlertDialog open={!!confirmRemoveMember} onOpenChange={(o) => { if (!o) setConfirmRemoveMember(null); }}>
+                    <AlertDialogContent data-testid="dialog-confirm-remove-member">
+                      <AlertDialogHeader>
+                        <AlertDialogTitle>Remove site member?</AlertDialogTitle>
+                        <AlertDialogDescription>
+                          {confirmRemoveMember ? (
+                            <>This will remove <strong>{confirmRemoveMember.displayName}</strong> as a member of this Microsoft 365 group and SharePoint site. They will lose member-level access immediately.</>
+                          ) : null}
+                        </AlertDialogDescription>
+                      </AlertDialogHeader>
+                      <AlertDialogFooter>
+                        <AlertDialogCancel data-testid="button-cancel-remove-member">Cancel</AlertDialogCancel>
+                        <AlertDialogAction
+                          className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                          disabled={removeMemberMutation.isPending}
+                          onClick={() => confirmRemoveMember && removeMemberMutation.mutate(confirmRemoveMember)}
+                          data-testid="button-confirm-remove-member"
+                        >
+                          {removeMemberMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1.5" /> : null}
+                          Remove member
+                        </AlertDialogAction>
+                      </AlertDialogFooter>
+                    </AlertDialogContent>
+                  </AlertDialog>
 
                   <AlertDialog open={!!confirmRemoveOwner} onOpenChange={(o) => { if (!o) setConfirmRemoveOwner(null); }}>
                     <AlertDialogContent data-testid="dialog-confirm-remove-owner">
