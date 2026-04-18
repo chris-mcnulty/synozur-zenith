@@ -422,6 +422,22 @@ export async function unarchiveSite(token: string, graphSiteId: string): Promise
   }
 }
 
+export async function deleteSiteFromGraph(token: string, graphSiteId: string): Promise<{ success: boolean; error?: string }> {
+  try {
+    const res = await fetch(`https://graph.microsoft.com/v1.0/sites/${graphSiteId}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok && res.status !== 204) {
+      const body = await res.text().catch(() => '');
+      return { success: false, error: `Graph API ${res.status}: ${body}` };
+    }
+    return { success: true };
+  } catch (err: any) {
+    return { success: false, error: err.message };
+  }
+}
+
 export async function fetchSiteLockState(spoToken: string, siteUrl: string): Promise<{
   lockState: string;
   isArchived: boolean;

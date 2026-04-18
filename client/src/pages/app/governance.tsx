@@ -92,6 +92,16 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { useServicePlan } from "@/hooks/use-service-plan";
 import { UpgradeGate } from "@/components/upgrade-gate";
 
@@ -769,6 +779,36 @@ export default function GovernancePage() {
     },
   });
 
+  const [confirmAction, setConfirmAction] = useState<{ kind: "archive" | "unarchive" | "delete"; ws: Workspace } | null>(null);
+
+  const lifecycleMutation = useMutation({
+    mutationFn: async ({ id, kind }: { id: string; kind: "archive" | "unarchive" | "delete" }) => {
+      if (kind === "archive") {
+        const res = await apiRequest("POST", `/api/workspaces/${id}/archive`);
+        return res.json();
+      }
+      if (kind === "unarchive") {
+        const res = await apiRequest("POST", `/api/workspaces/${id}/unarchive`);
+        return res.json();
+      }
+      const res = await apiRequest("DELETE", `/api/workspaces/${id}/m365`);
+      return res.json();
+    },
+    onSuccess: (_data, vars) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/workspaces"] });
+      setConfirmAction(null);
+      const messages = {
+        archive: { title: "Site archived", description: "The site is now read-only in Microsoft 365." },
+        unarchive: { title: "Site unarchived", description: "The site is writable again in Microsoft 365." },
+        delete: { title: "Site deleted in Microsoft 365", description: "Recoverable from the SharePoint Recycle Bin for 93 days." },
+      } as const;
+      toast(messages[vars.kind]);
+    },
+    onError: (err: any) => {
+      toast({ title: "Action failed", description: err?.message || "The operation could not be completed.", variant: "destructive" });
+    },
+  });
+
   const openHubAssignDialog = (targetIds: string[]) => {
     setHubAssignTargetIds(targetIds);
     const selectedSites = targetIds.map(id => workspaces.find(ws => ws.id === id)).filter(Boolean);
@@ -985,7 +1025,31 @@ export default function GovernancePage() {
               )}
               <DropdownMenuSeparator />
               <DropdownMenuItem>Request Attestation</DropdownMenuItem>
-              <DropdownMenuItem className="text-destructive">Archive Workspace</DropdownMenuItem>
+              {!ws.isArchived && !ws.isDeleted && (
+                <DropdownMenuItem
+                  onClick={() => setConfirmAction({ kind: "archive", ws })}
+                  data-testid={`button-archive-${ws.id}`}
+                >
+                  Archive Workspace
+                </DropdownMenuItem>
+              )}
+              {ws.isArchived && !ws.isDeleted && (
+                <DropdownMenuItem
+                  onClick={() => setConfirmAction({ kind: "unarchive", ws })}
+                  data-testid={`button-unarchive-${ws.id}`}
+                >
+                  Unarchive Workspace
+                </DropdownMenuItem>
+              )}
+              {!ws.isDeleted && (
+                <DropdownMenuItem
+                  className="text-destructive"
+                  onClick={() => setConfirmAction({ kind: "delete", ws })}
+                  data-testid={`button-delete-m365-${ws.id}`}
+                >
+                  Delete in Microsoft 365
+                </DropdownMenuItem>
+              )}
             </DropdownMenuContent>
           </DropdownMenu>
         </TableCell>
@@ -1979,6 +2043,54 @@ export default function GovernancePage() {
       </Dialog>
         </TabsContent>
       </Tabs>
+
+      <AlertDialog open={!!confirmAction} onOpenChange={(open) => !open && setConfirmAction(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {confirmAction?.kind === "archive" && "Archive site in Microsoft 365?"}
+              {confirmAction?.kind === "unarchive" && "Unarchive site in Microsoft 365?"}
+              {confirmAction?.kind === "delete" && "Delete site in Microsoft 365?"}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {confirmAction?.kind === "archive" && (
+                <>
+                  <strong>{confirmAction.ws.displayName}</strong> will be archived in Microsoft 365 and become read-only.
+                  Storage cost is reduced and content remains discoverable. The action is reversible via Unarchive.
+                </>
+              )}
+              {confirmAction?.kind === "unarchive" && (
+                <>
+                  <strong>{confirmAction.ws.displayName}</strong> will be unarchived in Microsoft 365 and become writable again.
+                </>
+              )}
+              {confirmAction?.kind === "delete" && (
+                <>
+                  <strong>{confirmAction.ws.displayName}</strong> will be deleted in Microsoft 365.
+                  The site moves to the SharePoint Recycle Bin and is recoverable for <strong>93 days</strong>;
+                  after that it is permanently destroyed. Type-confirm not required, but this action affects real M365 data.
+                </>
+              )}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel data-testid="button-cancel-lifecycle">Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={lifecycleMutation.isPending}
+              className={confirmAction?.kind === "delete" ? "bg-destructive text-destructive-foreground hover:bg-destructive/90" : undefined}
+              onClick={(e) => {
+                e.preventDefault();
+                if (confirmAction) {
+                  lifecycleMutation.mutate({ id: confirmAction.ws.id, kind: confirmAction.kind });
+                }
+              }}
+              data-testid="button-confirm-lifecycle"
+            >
+              {lifecycleMutation.isPending ? "Working…" : confirmAction?.kind === "delete" ? "Delete in M365" : confirmAction?.kind === "unarchive" ? "Unarchive" : "Archive"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

@@ -2,7 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { storage } from "../storage";
 import { insertWorkspaceSchema, insertProvisioningRequestSchema, type ServicePlanTier, ZENITH_ROLES } from "@shared/schema";
-import { fetchSharePointSites, fetchSiteUsageReport, fetchSiteDriveOwner, fetchSiteAnalytics, fetchSiteGroupOwners, fetchSiteCollectionAdmins, getAppToken, writeSitePropertyBag, requestSiteReindex, fetchSitePropertyBag, fetchSensitivityLabels, fetchRetentionLabels, fetchHubSites, fetchSiteHubAssociation, fetchHubSitesViaSearch, applySensitivityLabelToSite, removeSensitivityLabelFromSite, joinHubSite, leaveHubSite, fetchSiteLockState, fetchSiteArchiveStatus, batchToggleNoScript, fetchSiteDocumentLibraries, enumerateSiteDocumentLibraries, fetchLibraryDetails, fetchLibraryFolderDepth, fetchLibraryViews, fetchLibraryItemFillRates, fetchSiteTelemetry, fetchContentTypes, createSharePointSite, createM365Group, createTeam, assignSensitivityLabelToGroup, resolveOwnerIds, archiveSite, unarchiveSite, graphFetchWithRetry } from "../services/graph";
+import { fetchSharePointSites, fetchSiteUsageReport, fetchSiteDriveOwner, fetchSiteAnalytics, fetchSiteGroupOwners, fetchSiteCollectionAdmins, getAppToken, writeSitePropertyBag, requestSiteReindex, fetchSitePropertyBag, fetchSensitivityLabels, fetchRetentionLabels, fetchHubSites, fetchSiteHubAssociation, fetchHubSitesViaSearch, applySensitivityLabelToSite, removeSensitivityLabelFromSite, joinHubSite, leaveHubSite, fetchSiteLockState, fetchSiteArchiveStatus, batchToggleNoScript, fetchSiteDocumentLibraries, enumerateSiteDocumentLibraries, fetchLibraryDetails, fetchLibraryFolderDepth, fetchLibraryViews, fetchLibraryItemFillRates, fetchSiteTelemetry, fetchContentTypes, createSharePointSite, createM365Group, createTeam, assignSensitivityLabelToGroup, resolveOwnerIds, archiveSite, unarchiveSite, deleteSiteFromGraph, graphFetchWithRetry } from "../services/graph";
 import { getPlanFeatures, requireFeature } from "../services/feature-gate";
 import { getDelegatedSpoToken } from "../routes-entra";
 import { requireAuth, requireRole, requirePermission, type AuthenticatedRequest } from "../middleware/rbac";
@@ -688,6 +688,75 @@ router.post("/api/workspaces/:id/unarchive", requireRole(ZENITH_ROLES.GOVERNANCE
     userId: req.user?.id || null,
     userEmail: req.user?.email || null,
     action: 'SITE_UNARCHIVED',
+    resource: 'workspace',
+    resourceId: workspace.id,
+    organizationId: req.user?.organizationId || null,
+    tenantConnectionId: workspace.tenantConnectionId,
+    details: { workspaceName: workspace.displayName, siteUrl: workspace.siteUrl },
+    result: 'SUCCESS',
+    ipAddress: req.ip || null,
+  });
+
+  res.json({ success: true, workspaceId: workspace.id });
+});
+
+router.delete("/api/workspaces/:id/m365", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN), requireFeature("lifecycleAutomation"), async (req: AuthenticatedRequest, res) => {
+  if (!(await isWorkspaceInScope(req, req.params.id))) {
+    return res.status(404).json({ message: "Workspace not found" });
+  }
+  const workspace = await storage.getWorkspace(req.params.id);
+  if (!workspace) return res.status(404).json({ message: "Workspace not found" });
+  if (workspace.isDeleted) return res.status(400).json({ message: "Workspace is already deleted" });
+  if (!workspace.tenantConnectionId) return res.status(400).json({ message: "Workspace has no tenant connection" });
+  if (!workspace.m365ObjectId) return res.status(400).json({ message: "Workspace has no Graph site ID — sync the workspace first" });
+
+  const conn = await storage.getTenantConnection(workspace.tenantConnectionId);
+  if (!conn) return res.status(404).json({ message: "Tenant connection not found" });
+
+  const clientId = conn.clientId || process.env.AZURE_CLIENT_ID!;
+  const clientSecret = getEffectiveClientSecret(conn);
+  let graphToken: string;
+  try {
+    graphToken = await getAppToken(conn.tenantId, clientId, clientSecret);
+  } catch (err: any) {
+    await storage.createAuditEntry({
+      userId: req.user?.id || null,
+      userEmail: req.user?.email || null,
+      action: 'SITE_DELETED_M365',
+      resource: 'workspace',
+      resourceId: workspace.id,
+      organizationId: req.user?.organizationId || null,
+      tenantConnectionId: workspace.tenantConnectionId,
+      details: { workspaceName: workspace.displayName, siteUrl: workspace.siteUrl, error: `Failed to acquire Graph token: ${err.message}` },
+      result: 'FAILURE',
+      ipAddress: req.ip || null,
+    });
+    return res.status(502).json({ message: `Failed to acquire Graph token: ${err.message}` });
+  }
+
+  const result = await deleteSiteFromGraph(graphToken, workspace.m365ObjectId!);
+  if (!result.success) {
+    await storage.createAuditEntry({
+      userId: req.user?.id || null,
+      userEmail: req.user?.email || null,
+      action: 'SITE_DELETED_M365',
+      resource: 'workspace',
+      resourceId: workspace.id,
+      organizationId: req.user?.organizationId || null,
+      tenantConnectionId: workspace.tenantConnectionId,
+      details: { workspaceName: workspace.displayName, siteUrl: workspace.siteUrl, error: result.error },
+      result: 'FAILURE',
+      ipAddress: req.ip || null,
+    });
+    return res.status(502).json({ message: `Delete failed: ${result.error}` });
+  }
+
+  await storage.updateWorkspace(workspace.id, { isDeleted: true, isArchived: false } as any);
+
+  await storage.createAuditEntry({
+    userId: req.user?.id || null,
+    userEmail: req.user?.email || null,
+    action: 'SITE_DELETED_M365',
     resource: 'workspace',
     resourceId: workspace.id,
     organizationId: req.user?.organizationId || null,
