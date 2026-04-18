@@ -5,12 +5,40 @@ import { storage } from "../storage";
 import { getPlanFeatures } from "../services/feature-gate";
 import { invalidateDefaultSignupPlanCache } from "../utils/platformSettingsCache";
 import { buildRequiredFieldsByTenantId, evaluateMetadataCompleteness } from "../services/metadata-completeness";
+import { getOrgTenantConnectionIds } from "./scope-helpers";
 
 const router = Router();
+
+// Resolve which tenant connection IDs the dashboard should aggregate over.
+// If the client passed ?tenantConnectionId=..., narrow to just that one (after
+// verifying the caller is allowed to see it). Otherwise return all of the
+// org's tenant IDs (existing org-wide behavior). Returns null when the caller
+// has no scope at all.
+async function resolveDashboardTenantIds(
+  req: AuthenticatedRequest,
+  requested: string | undefined,
+): Promise<{ tenantIds: string[]; forbidden?: boolean }> {
+  const allowed = await getOrgTenantConnectionIds(req);
+  // Platform Owner with no allow-list = global; we still scope to the active
+  // org's own tenants for the dashboard so per-tenant totals make sense.
+  const orgId = req.activeOrganizationId;
+  const orgTenants = orgId ? await storage.getTenantConnections(orgId) : [];
+  const orgTenantIds = orgTenants.map(t => t.id);
+
+  if (requested) {
+    const isAllowed = allowed === null || allowed.includes(requested);
+    if (!isAllowed) return { tenantIds: [], forbidden: true };
+    return { tenantIds: [requested] };
+  }
+  return { tenantIds: orgTenantIds };
+}
 
 // ── Dashboard Stats ──
 router.get("/api/stats", requireAuth(), async (req: AuthenticatedRequest, res) => {
   const orgId = req.activeOrganizationId;
+  const requestedTenantId = typeof req.query.tenantConnectionId === "string" && req.query.tenantConnectionId.length > 0
+    ? req.query.tenantConnectionId
+    : undefined;
 
   const EMPTY_STATS = {
     totalWorkspaces: 0,
@@ -25,9 +53,8 @@ router.get("/api/stats", requireAuth(), async (req: AuthenticatedRequest, res) =
 
   if (!orgId) return res.json(EMPTY_STATS);
 
-  // Scope workspaces to this org's tenant connections only
-  const tenants = await storage.getTenantConnections(orgId);
-  const tenantIds = tenants.map(t => t.id);
+  const { tenantIds, forbidden } = await resolveDashboardTenantIds(req, requestedTenantId);
+  if (forbidden) return res.status(403).json({ error: "Access denied to the requested tenant" });
 
   let allWorkspaces: Awaited<ReturnType<typeof storage.getWorkspaces>> = [];
   if (tenantIds.length > 0) {
@@ -77,12 +104,18 @@ router.get("/api/dashboard", requireAuth(), async (req: AuthenticatedRequest, re
   if (!orgId) {
     return res.status(403).json({ error: "No active organization context. Please select an organization." });
   }
+  const requestedTenantId = typeof req.query.tenantConnectionId === "string" && req.query.tenantConnectionId.length > 0
+    ? req.query.tenantConnectionId
+    : undefined;
 
-  // Service Status — tenant connections for the org (used to scope workspaces too)
+  // Service Status — always show all of the org's tenants in the status panel,
+  // regardless of which one is selected (it's the per-tenant health overview).
   const tenants = await storage.getTenantConnections(orgId);
-  const tenantIds = tenants.map(t => t.id);
 
-  // Fetch org-scoped workspaces by iterating over org's tenant connections
+  // Workspace aggregates respect the tenant selector when one is chosen.
+  const { tenantIds, forbidden } = await resolveDashboardTenantIds(req, requestedTenantId);
+  if (forbidden) return res.status(403).json({ error: "Access denied to the requested tenant" });
+
   let allWorkspaces: Awaited<ReturnType<typeof storage.getWorkspaces>> = [];
   if (tenantIds.length > 0) {
     const perTenantResults = await Promise.all(

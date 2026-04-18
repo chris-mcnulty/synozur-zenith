@@ -239,6 +239,10 @@ function OnboardingChecklist({ totalWorkspaces, activeTenantsCount, pendingReque
 }
 
 export default function DashboardPage() {
+  const { isTrial } = useServicePlan();
+  const { selectedTenant } = useTenant();
+  const tenantConnectionId = selectedTenant?.id ?? "";
+
   const { data: stats, isLoading } = useQuery<{
     totalWorkspaces: number;
     copilotReady: number;
@@ -248,19 +252,33 @@ export default function DashboardPage() {
     highlyConfidential: number;
     pendingRequests: number;
     totalRequests: number;
-  }>({ queryKey: ["/api/stats"] });
+  }>({
+    queryKey: ["/api/stats", tenantConnectionId],
+    queryFn: async () => {
+      const url = tenantConnectionId
+        ? `/api/stats?tenantConnectionId=${encodeURIComponent(tenantConnectionId)}`
+        : `/api/stats`;
+      const res = await fetch(url, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to load stats");
+      return res.json();
+    },
+  });
 
   const { data: dashData, isLoading: isDashLoading } = useQuery<DashboardData>({
-    queryKey: ["/api/dashboard"],
+    queryKey: ["/api/dashboard", tenantConnectionId],
+    queryFn: async () => {
+      const url = tenantConnectionId
+        ? `/api/dashboard?tenantConnectionId=${encodeURIComponent(tenantConnectionId)}`
+        : `/api/dashboard`;
+      const res = await fetch(url, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to load dashboard");
+      return res.json();
+    },
   });
 
   const { data: org } = useQuery<Organization>({
     queryKey: ["/api/organization"],
   });
-
-  const { isTrial } = useServicePlan();
-  const { selectedTenant } = useTenant();
-  const tenantConnectionId = selectedTenant?.id ?? "";
 
   const { data: freshnessData } = useQuery<{
     datasets: Array<{ key: string; label: string; status: string; ageHours: number | null }>
