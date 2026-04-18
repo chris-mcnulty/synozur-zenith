@@ -12,6 +12,7 @@ import {
   getAssessmentRun,
   getLatestAssessmentRun,
   getWorkspaceNarrative,
+  getAssessmentRunHistory,
 } from "../services/copilot-assessment-service";
 
 const router = Router();
@@ -705,6 +706,49 @@ router.get("/api/copilot-readiness/assessment/latest", requireAuth(), requireFea
     res.json(run);
   } catch (err: any) {
     console.error("[AI Assessment] Error fetching latest:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * Paginated history of past Copilot Readiness assessments for the active tenant
+ * within the active organization. Newest first.
+ */
+router.get("/api/copilot-readiness/assessment/history", requireAuth(), requireFeature("copilotReadiness"), async (req: AuthenticatedRequest, res) => {
+  try {
+    const isPlatformOwner = req.user?.role === ZENITH_ROLES.PLATFORM_OWNER;
+    const orgId = isPlatformOwner
+      ? ((req.query.orgId as string | undefined) || req.activeOrganizationId || req.user?.organizationId)
+      : (req.activeOrganizationId || req.user?.organizationId);
+
+    if (!orgId) {
+      return res.status(400).json({ message: "Organization context required" });
+    }
+
+    const tenantConnectionId = typeof req.query.tenantConnectionId === "string" && req.query.tenantConnectionId
+      ? req.query.tenantConnectionId
+      : null;
+
+    if (tenantConnectionId) {
+      const tenants = await storage.getTenantConnections(orgId);
+      if (!tenants.some(t => t.id === tenantConnectionId)) {
+        return res.status(403).json({ message: "Tenant connection is not in scope for this organization." });
+      }
+    }
+
+    const limit = Math.min(Math.max(parseInt(String(req.query.limit ?? "20"), 10) || 20, 1), 100);
+    const offset = Math.max(parseInt(String(req.query.offset ?? "0"), 10) || 0, 0);
+
+    const { runs, total } = await getAssessmentRunHistory(
+      orgId,
+      'copilot_readiness',
+      tenantConnectionId,
+      limit,
+      offset,
+    );
+    res.json({ runs, total, limit, offset });
+  } catch (err: any) {
+    console.error("[AI Assessment] Error fetching history:", err);
     res.status(500).json({ error: err.message });
   }
 });

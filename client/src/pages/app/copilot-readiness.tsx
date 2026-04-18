@@ -105,6 +105,13 @@ type AssessmentRun = {
   completedAt: string | null;
 };
 
+type AssessmentHistoryResponse = {
+  runs: AssessmentRun[];
+  total: number;
+  limit: number;
+  offset: number;
+};
+
 const TIER_META: Record<WorkspaceReadiness["tier"], { label: string; className: string; icon: ElementType }> = {
   READY: {
     label: "Ready",
@@ -235,6 +242,8 @@ function AIAssessmentPanel({
   tenantConnectionId: string;
 }) {
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
+  const [viewingRunId, setViewingRunId] = useState<string | null>(null);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -267,6 +276,35 @@ function AIAssessmentPanel({
     staleTime: 0,
   });
 
+  const { data: history, refetch: refetchHistory } = useQuery<AssessmentHistoryResponse>({
+    queryKey: ["copilot-assessment-history", tenantConnectionId],
+    queryFn: async () => {
+      const res = await fetch(
+        `/api/copilot-readiness/assessment/history?tenantConnectionId=${encodeURIComponent(tenantConnectionId)}`,
+        { credentials: "include" },
+      );
+      if (!res.ok) throw new Error("Failed to fetch history");
+      return res.json();
+    },
+    enabled: !!tenantConnectionId,
+    staleTime: 30_000,
+  });
+
+  const { data: viewingRun } = useQuery<AssessmentRun | null>({
+    queryKey: ["copilot-assessment-run-view", viewingRunId, tenantConnectionId],
+    queryFn: async () => {
+      if (!viewingRunId) return null;
+      const res = await fetch(
+        `/api/copilot-readiness/assessment/${viewingRunId}?tenantConnectionId=${encodeURIComponent(tenantConnectionId)}`,
+        { credentials: "include" },
+      );
+      if (!res.ok) return null;
+      return res.json();
+    },
+    enabled: !!viewingRunId && !!tenantConnectionId,
+    staleTime: 60_000,
+  });
+
   useEffect(() => {
     if (activeRunId && activeRun) {
       if (activeRun.status === 'COMPLETED' || activeRun.status === 'FAILED') {
@@ -275,13 +313,15 @@ function AIAssessmentPanel({
         if (activeRun.status === 'COMPLETED') {
           setToastMsg("AI Assessment complete!");
           refetchLatest();
+          refetchHistory();
         } else {
           setToastMsg("Assessment failed. Please try again.");
+          refetchHistory();
         }
         setActiveRunId(null);
       }
     }
-  }, [activeRun, activeRunId, refetchLatest]);
+  }, [activeRun, activeRunId, refetchLatest, refetchHistory]);
 
   useEffect(() => {
     if (activeRunId) {
@@ -296,6 +336,8 @@ function AIAssessmentPanel({
 
   useEffect(() => {
     setActiveRunId(null);
+    setViewingRunId(null);
+    setHistoryOpen(false);
     if (pollIntervalRef.current) {
       clearInterval(pollIntervalRef.current);
       pollIntervalRef.current = null;
@@ -333,17 +375,20 @@ function AIAssessmentPanel({
   });
 
   const isRunning = !!activeRunId || activeRun?.status === 'RUNNING' || activeRun?.status === 'PENDING';
-  const displayRun = latestRun;
+  const displayRun = viewingRunId ? viewingRun : latestRun;
+  const isViewingHistorical = !!viewingRunId && !!latestRun && viewingRunId !== latestRun.id;
 
-  const handleDownload = useCallback(() => {
-    if (!displayRun?.resultMarkdown || !readinessData) return;
+  const handleDownload = useCallback((overrideRun?: AssessmentRun | null) => {
+    const runToDownload = overrideRun ?? displayRun;
+    if (!runToDownload?.resultMarkdown || !readinessData) return;
     const { summary, remediationQueue } = readinessData;
     const topItems = remediationQueue.slice(0, 20);
 
     const lines = [
       `# Copilot Readiness Assessment Report`,
       `Generated: ${new Date().toLocaleDateString()}`,
-      `Model: ${displayRun.modelUsed ?? 'AI'}`,
+      `Model: ${runToDownload.modelUsed ?? 'AI'}`,
+      `Run timestamp: ${new Date(runToDownload.completedAt ?? runToDownload.createdAt).toLocaleString()}`,
       ``,
       `## Organization Summary`,
       `- Total workspaces: ${summary.totalWorkspaces}`,
@@ -356,7 +401,7 @@ function AIAssessmentPanel({
       ``,
       `## AI Executive Assessment`,
       ``,
-      displayRun.resultMarkdown,
+      runToDownload.resultMarkdown,
       ``,
       `## Top Remediation Items`,
       ``,
@@ -370,7 +415,10 @@ function AIAssessmentPanel({
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `copilot-readiness-assessment-${new Date().toISOString().slice(0, 10)}.md`;
+    const runDateForFile = runToDownload.completedAt
+      ? new Date(runToDownload.completedAt).toISOString().slice(0, 10)
+      : new Date(runToDownload.createdAt).toISOString().slice(0, 10);
+    a.download = `copilot-readiness-assessment-${runDateForFile}.md`;
     a.click();
     URL.revokeObjectURL(url);
   }, [displayRun, readinessData]);
@@ -394,7 +442,7 @@ function AIAssessmentPanel({
                 variant="outline"
                 size="sm"
                 className="gap-2 text-xs"
-                onClick={handleDownload}
+                onClick={() => handleDownload()}
                 data-testid="button-download-report"
               >
                 <Download className="w-3 h-3" /> Download Report
@@ -419,7 +467,10 @@ function AIAssessmentPanel({
         {displayRun?.completedAt && (
           <div className="flex items-center gap-1.5 text-xs text-muted-foreground mt-2" data-testid="text-assessment-timestamp">
             <Clock className="w-3 h-3" />
-            Last run {formatRelativeTime(displayRun.completedAt)}
+            {isViewingHistorical ? "Run on " : "Last run "}
+            {isViewingHistorical
+              ? new Date(displayRun.completedAt).toLocaleString()
+              : formatRelativeTime(displayRun.completedAt)}
             {displayRun.modelUsed && <> · {displayRun.modelUsed}</>}
             {displayRun.tokensUsed && <> · {displayRun.tokensUsed.toLocaleString()} tokens</>}
           </div>
@@ -452,11 +503,112 @@ function AIAssessmentPanel({
         </CardContent>
       )}
 
+      {isViewingHistorical && (
+        <div className="mx-6 mb-4 p-3 rounded-lg bg-amber-500/10 border border-amber-500/20 text-sm text-amber-600 dark:text-amber-400 flex items-center justify-between gap-2" data-testid="banner-viewing-historical">
+          <div className="flex items-center gap-2">
+            <Clock className="w-3 h-3 shrink-0" />
+            <span>Viewing a previous assessment.</span>
+          </div>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 text-xs"
+            onClick={() => setViewingRunId(null)}
+            data-testid="button-back-to-latest"
+          >
+            Back to latest
+          </Button>
+        </div>
+      )}
+
       {displayRun?.resultMarkdown && (
         <CardContent>
           <div className="prose prose-sm max-w-none" data-testid="text-assessment-result">
             <MarkdownRenderer content={displayRun.resultMarkdown} />
           </div>
+        </CardContent>
+      )}
+
+      {history && history.runs.length > 0 && (
+        <CardContent className="border-t border-border/40 pt-4">
+          <button
+            type="button"
+            onClick={() => setHistoryOpen(o => !o)}
+            className="flex items-center gap-2 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors w-full"
+            data-testid="button-toggle-assessment-history"
+          >
+            <ChevronDown className={`w-3 h-3 transition-transform ${historyOpen ? "rotate-180" : ""}`} />
+            Previous assessments ({history.total})
+          </button>
+
+          {historyOpen && (
+            <div className="mt-3 divide-y divide-border/40 rounded-lg border border-border/40 overflow-hidden" data-testid="list-assessment-history">
+              {history.runs.map(run => {
+                const isLatest = latestRun?.id === run.id;
+                const isActive = viewingRunId === run.id || (!viewingRunId && isLatest);
+                return (
+                  <div
+                    key={run.id}
+                    className={`flex items-center justify-between gap-3 p-3 text-sm ${isActive ? "bg-primary/5" : ""}`}
+                    data-testid={`row-assessment-history-${run.id}`}
+                  >
+                    <div className="flex items-center gap-3 min-w-0 flex-1">
+                      {run.status === "COMPLETED" ? (
+                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+                      ) : run.status === "FAILED" ? (
+                        <XCircle className="w-3.5 h-3.5 text-red-500 shrink-0" />
+                      ) : (
+                        <Loader2 className="w-3.5 h-3.5 text-blue-500 animate-spin shrink-0" />
+                      )}
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-medium text-foreground" data-testid={`text-history-date-${run.id}`}>
+                            {new Date(run.completedAt ?? run.createdAt).toLocaleString()}
+                          </span>
+                          {isLatest && (
+                            <Badge variant="outline" className="text-[10px] bg-primary/10 text-primary border-primary/20">
+                              Latest
+                            </Badge>
+                          )}
+                        </div>
+                        <div className="text-xs text-muted-foreground truncate">
+                          {run.modelUsed ?? "—"}
+                          {run.tokensUsed ? ` · ${run.tokensUsed.toLocaleString()} tokens` : ""}
+                          {run.triggeredBy ? ` · by ${run.triggeredBy}` : ""}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1 shrink-0">
+                      {run.status === "COMPLETED" && (
+                        <>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 text-xs gap-1"
+                            onClick={() => setViewingRunId(isLatest ? null : run.id)}
+                            disabled={isActive}
+                            data-testid={`button-view-history-${run.id}`}
+                          >
+                            View
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 w-7 p-0"
+                            title="Download report"
+                            onClick={() => handleDownload(run)}
+                            data-testid={`button-download-history-${run.id}`}
+                          >
+                            <Download className="w-3 h-3" />
+                          </Button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </CardContent>
       )}
     </Card>

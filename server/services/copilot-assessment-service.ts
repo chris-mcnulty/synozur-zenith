@@ -115,6 +115,50 @@ export async function getLatestAssessmentRun(
   }
 }
 
+export async function getAssessmentRunHistory(
+  orgId: string,
+  feature: AssessmentFeature = 'copilot_readiness',
+  tenantConnectionId: string | null = null,
+  limit = 20,
+  offset = 0,
+): Promise<{ runs: AiAssessmentRun[]; total: number }> {
+  const client = await pool.connect();
+  try {
+    const params: unknown[] = [orgId, feature];
+    let tenantClause = '';
+    if (tenantConnectionId) {
+      params.push(tenantConnectionId);
+      tenantClause = ` AND tenant_connection_id = $${params.length}`;
+    } else {
+      tenantClause = ' AND tenant_connection_id IS NULL';
+    }
+
+    const { rows: countRows } = await client.query(
+      `SELECT COUNT(*) AS total FROM ai_assessment_runs
+       WHERE org_id = $1 AND feature = $2${tenantClause}`,
+      params,
+    );
+    const total = parseInt(countRows[0].total as string, 10) || 0;
+
+    const limitParamIdx = params.length + 1;
+    const offsetParamIdx = params.length + 2;
+    const { rows } = await client.query(
+      `SELECT * FROM ai_assessment_runs
+       WHERE org_id = $1 AND feature = $2${tenantClause}
+       ORDER BY created_at DESC
+       LIMIT $${limitParamIdx} OFFSET $${offsetParamIdx}`,
+      [...params, limit, offset],
+    );
+
+    return {
+      runs: rows.map(r => rowToRun(r as Record<string, unknown>)),
+      total,
+    };
+  } finally {
+    client.release();
+  }
+}
+
 async function updateAssessmentRun(
   runId: string,
   updates: {
