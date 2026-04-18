@@ -10,6 +10,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Download, Filter, RefreshCw, ChevronLeft, ChevronRight, ShieldAlert, Lock, ChevronDown, FileJson } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { UpgradeGate } from "@/components/upgrade-gate";
+import { useTenant } from "@/lib/tenant-context";
 
 type AuditLogEntry = {
   id: string;
@@ -162,7 +163,10 @@ export default function AuditLogPage() {
   const [applied, setApplied] = useState(filters);
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
-  const buildQuery = useCallback((f: typeof filters, p: number) => {
+  const { selectedTenant } = useTenant();
+  const tenantConnectionId = selectedTenant?.id ?? "";
+
+  const buildQuery = useCallback((f: typeof filters, p: number, tid: string) => {
     const params = new URLSearchParams();
     params.set("page", String(p));
     params.set("limit", String(limit));
@@ -172,13 +176,14 @@ export default function AuditLogPage() {
     if (f.result && f.result !== "ALL") params.set("result", f.result);
     if (f.startDate) params.set("startDate", f.startDate);
     if (f.endDate) params.set("endDate", f.endDate);
+    if (tid) params.set("tenantConnectionId", tid);
     return `/api/audit-log?${params.toString()}`;
   }, [limit]);
 
   const { data, isLoading, refetch } = useQuery<AuditLogResponse>({
-    queryKey: ["audit-log", applied, page],
+    queryKey: ["audit-log", applied, page, tenantConnectionId],
     queryFn: async () => {
-      const res = await fetch(buildQuery(applied, page), { credentials: "include" });
+      const res = await fetch(buildQuery(applied, page, tenantConnectionId), { credentials: "include" });
       if (!res.ok) throw new Error("Failed to fetch audit log");
       return res.json();
     },

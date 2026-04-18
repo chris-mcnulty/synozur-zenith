@@ -1451,13 +1451,25 @@ router.put("/api/workspaces/:id/copilot-rules", requireRole(ZENITH_ROLES.GOVERNA
 // ── Provisioning Requests ──
 router.get("/api/provisioning-requests", requireAuth(), requireFeature("selfServicePortal"), async (req: AuthenticatedRequest, res) => {
   const isPlatformOwner = req.user?.role === ZENITH_ROLES.PLATFORM_OWNER;
+  const requestedTenantId = typeof req.query.tenantConnectionId === "string" && req.query.tenantConnectionId.length > 0
+    ? req.query.tenantConnectionId
+    : undefined;
+
+  // If a specific tenant was requested, verify it's in the caller's allow-list.
+  if (requestedTenantId && !isPlatformOwner) {
+    const allowed = await getOrgTenantConnectionIds(req);
+    if (allowed && !allowed.includes(requestedTenantId)) {
+      return res.status(403).json({ error: "Access denied to the requested tenant" });
+    }
+  }
+
   if (isPlatformOwner) {
-    const requests = await storage.getProvisioningRequests(null);
+    const requests = await storage.getProvisioningRequests(null, requestedTenantId);
     return res.json(requests);
   }
   const orgId = req.activeOrganizationId || req.user?.organizationId;
   if (!orgId) return res.json([]);
-  const requests = await storage.getProvisioningRequests(orgId);
+  const requests = await storage.getProvisioningRequests(orgId, requestedTenantId);
   res.json(requests);
 });
 

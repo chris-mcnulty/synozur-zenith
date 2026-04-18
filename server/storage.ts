@@ -843,13 +843,13 @@ export class DatabaseStorage implements IStorage {
     }
   }
 
-  async getProvisioningRequests(orgId: string | null): Promise<ProvisioningRequest[]> {
-    if (orgId) {
-      return db.select().from(provisioningRequests)
-        .where(eq(provisioningRequests.organizationId, orgId))
-        .orderBy(desc(provisioningRequests.createdAt));
-    }
-    return db.select().from(provisioningRequests).orderBy(desc(provisioningRequests.createdAt));
+  async getProvisioningRequests(orgId: string | null, tenantConnectionId?: string): Promise<ProvisioningRequest[]> {
+    const conditions: any[] = [];
+    if (orgId) conditions.push(eq(provisioningRequests.organizationId, orgId));
+    if (tenantConnectionId) conditions.push(eq(provisioningRequests.tenantConnectionId, tenantConnectionId));
+    const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
+    const query = db.select().from(provisioningRequests).orderBy(desc(provisioningRequests.createdAt));
+    return whereClause ? query.where(whereClause) : query;
   }
 
   async getProvisioningRequest(id: string): Promise<ProvisioningRequest | undefined> {
@@ -1385,6 +1385,9 @@ export class DatabaseStorage implements IStorage {
 
   async getAuditLog(filters: {
     orgId?: string;
+    tenantConnectionId?: string;
+    tenantConnectionIds?: string[];
+    onlyNullTenant?: boolean;
     action?: string;
     resource?: string;
     userId?: string;
@@ -1395,10 +1398,23 @@ export class DatabaseStorage implements IStorage {
     limit?: number;
     offset?: number;
   } = {}): Promise<{ rows: AuditLog[]; total: number }> {
-    const { orgId, action, resource, userId, userEmail, result, startDate, endDate, limit = 100, offset = 0 } = filters;
+    const { orgId, tenantConnectionId, tenantConnectionIds, onlyNullTenant, action, resource, userId, userEmail, result, startDate, endDate, limit = 100, offset = 0 } = filters;
     const conditions: any[] = [];
 
     if (orgId) conditions.push(eq(auditLog.organizationId, orgId));
+    if (tenantConnectionId) {
+      conditions.push(eq(auditLog.tenantConnectionId, tenantConnectionId));
+    } else if (onlyNullTenant) {
+      // Caller has no tenants in their allow-list — only show org-level events.
+      conditions.push(sql`${auditLog.tenantConnectionId} IS NULL`);
+    } else if (tenantConnectionIds && tenantConnectionIds.length > 0) {
+      // Widen visibility to ANY tenant in the caller's allow-list (own org +
+      // MSP-granted tenants). Rows with NULL tenantConnectionId (org-level
+      // events) are still included.
+      conditions.push(
+        sql`(${auditLog.tenantConnectionId} IS NULL OR ${auditLog.tenantConnectionId} = ANY(${tenantConnectionIds}))`,
+      );
+    }
     if (action) conditions.push(eq(auditLog.action, action));
     if (resource) conditions.push(eq(auditLog.resource, resource));
     if (userId) conditions.push(eq(auditLog.userId, userId));

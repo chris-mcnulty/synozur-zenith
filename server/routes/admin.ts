@@ -205,6 +205,7 @@ router.get("/api/audit-log", requireAuth(), requireRole(ZENITH_ROLES.PLATFORM_OW
       endDate: endDateStr,
       page: pageStr,
       limit: limitStr,
+      tenantConnectionId: requestedTenantId,
     } = req.query as Record<string, string | undefined>;
 
     const limit = Math.min(parseInt(limitStr || "50", 10), 500);
@@ -214,8 +215,38 @@ router.get("/api/audit-log", requireAuth(), requireRole(ZENITH_ROLES.PLATFORM_OW
     const startDate = startDateStr ? new Date(startDateStr) : undefined;
     const endDate = endDateStr ? new Date(endDateStr + "T23:59:59.999Z") : undefined;
 
+    // Tenant scoping.
+    //  - Platform Owner with no requested tenant => true global view (no narrowing).
+    //  - Caller requested a specific tenant      => verify it's in their allow-list.
+    //  - Otherwise (regular user)                => widen across own org + MSP grants.
+    //    If allow-list is empty, restrict to org-level (null tenant) rows only so
+    //    we don't leak tenant-tagged events from the org.
+    const isPlatformOwner = req.user?.role === ZENITH_ROLES.PLATFORM_OWNER;
+    let tenantConnectionId: string | undefined;
+    let tenantConnectionIds: string[] | undefined;
+    let restrictToNullTenant = false;
+
+    if (requestedTenantId) {
+      const allowed = await getOrgTenantConnectionIds(req);
+      const isAllowed = allowed === null || allowed.includes(requestedTenantId);
+      if (!isAllowed) return res.status(403).json({ error: "Access denied to the requested tenant" });
+      tenantConnectionId = requestedTenantId;
+    } else if (!isPlatformOwner) {
+      const allowed = await getOrgTenantConnectionIds(req);
+      if (allowed === null) {
+        // Effectively global; no narrowing.
+      } else if (allowed.length > 0) {
+        tenantConnectionIds = allowed;
+      } else {
+        restrictToNullTenant = true;
+      }
+    }
+
     const { rows, total } = await storage.getAuditLog({
       orgId,
+      tenantConnectionId,
+      tenantConnectionIds,
+      onlyNullTenant: restrictToNullTenant,
       action: action || undefined,
       resource: resource || undefined,
       userId: userId || undefined,
