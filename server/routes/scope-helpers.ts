@@ -6,10 +6,7 @@ export function getActiveOrgId(req: AuthenticatedRequest): string | null {
   return req.activeOrganizationId || req.user?.organizationId || null;
 }
 
-export async function getOrgTenantConnectionIds(req: AuthenticatedRequest): Promise<string[] | null> {
-  const orgId = getActiveOrgId(req);
-  if (!orgId) return req.user?.role === ZENITH_ROLES.PLATFORM_OWNER ? null : [];
-
+export async function getTenantConnectionIdsForOrg(orgId: string): Promise<string[]> {
   const [ownConnections, legacyGrants, newGrantIds] = await Promise.all([
     storage.getTenantConnectionsByOrganization(orgId),
     storage.getActiveMspGrantsForGrantee(orgId),
@@ -20,6 +17,13 @@ export async function getOrgTenantConnectionIds(req: AuthenticatedRequest): Prom
   const legacyGrantedIds = legacyGrants.map(g => g.tenantConnectionId);
 
   return [...new Set([...ownIds, ...legacyGrantedIds, ...newGrantIds])];
+}
+
+export async function getOrgTenantConnectionIds(req: AuthenticatedRequest): Promise<string[] | null> {
+  const orgId = getActiveOrgId(req);
+  if (!orgId) return req.user?.role === ZENITH_ROLES.PLATFORM_OWNER ? null : [];
+
+  return getTenantConnectionIdsForOrg(orgId);
 }
 
 export async function isWorkspaceInScope(req: AuthenticatedRequest, workspaceId: string): Promise<boolean> {

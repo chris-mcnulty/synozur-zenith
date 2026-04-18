@@ -14,6 +14,7 @@ import { storage } from '../storage';
 import { scoreWorkspaces, scoreWorkspace, type CopilotReadinessResult, type WorkspaceReadiness } from './copilot-scoring';
 import { buildRequiredFieldsByTenantId, getRequiredFieldsForWorkspace } from './metadata-completeness';
 import { completeForFeature, type AIMessage } from './ai-provider';
+import { getTenantConnectionIdsForOrg } from '../routes/scope-helpers';
 
 export type AssessmentStatus = 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED';
 export type AssessmentFeature = 'copilot_readiness' | 'information_architecture';
@@ -335,8 +336,7 @@ export async function runCopilotReadinessAssessment(
       if (tenantConnectionId) {
         allWorkspaces = await storage.getWorkspaces(undefined, tenantConnectionId);
       } else {
-        const tenants = await storage.getTenantConnections(orgId);
-        const tenantIds = tenants.map(t => t.id);
+        const tenantIds = await getTenantConnectionIdsForOrg(orgId);
         if (tenantIds.length > 0) {
           const perTenantResults = await Promise.all(
             tenantIds.map(tid => storage.getWorkspaces(undefined, tid)),

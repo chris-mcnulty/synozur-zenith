@@ -3,7 +3,7 @@ import { requireAuth, requireRole, type AuthenticatedRequest } from "../middlewa
 import { ZENITH_ROLES, insertGovernancePolicySchema, insertPolicyOutcomeSchema, type PolicyRuleDefinition, type GovernancePolicy } from "@shared/schema";
 import { storage } from "../storage";
 import { evaluatePolicy, evaluationResultsToCopilotRules, formatPolicyBagValue, type EvaluationContext } from "../services/policy-engine";
-import { getOrgTenantConnectionIds, isWorkspaceInScope } from "./scope-helpers";
+import { getOrgTenantConnectionIds, getTenantConnectionIdsForOrg, isWorkspaceInScope } from "./scope-helpers";
 import { requireFeature } from "../services/feature-gate";
 import { scoreWorkspaces, scoreWorkspace } from "../services/copilot-scoring";
 import { buildRequiredFieldsByTenantId, getRequiredFieldsForWorkspace } from "../services/metadata-completeness";
@@ -38,11 +38,10 @@ async function resolveAllowedTenantIdsForOrg(
   targetOrgId: string,
 ): Promise<string[]> {
   if (isPlatformOwner) {
-    const conns = await storage.getTenantConnections(targetOrgId);
-    return conns.map(t => t.id);
+    return getTenantConnectionIdsForOrg(targetOrgId);
   }
   const allowed = await getOrgTenantConnectionIds(req);
-  return allowed ?? (await storage.getTenantConnections(targetOrgId)).map(t => t.id);
+  return allowed ?? (await getTenantConnectionIdsForOrg(targetOrgId));
 }
 
 const RESERVED_PROPERTY_BAG_PREFIXES = ['vti_', 'ows_', 'docid_', '_vti_', '__', 'ecm_', 'ir_'];
