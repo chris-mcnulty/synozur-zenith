@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { requireAuth, type AuthenticatedRequest } from "../middleware/rbac";
 import { storage } from "../storage";
-import { getOrgTenantConnectionIds } from "./scope-helpers";
+import { getAccessibleTenantConnectionIds, getOwnedTenantConnectionIds } from "./scope-helpers";
 import { z } from "zod";
 
 const router = Router();
@@ -58,19 +58,21 @@ router.post("/api/ai/chat", requireAuth(), async (req: AuthenticatedRequest, res
     const { message, tenantConnectionId } = parsed.data;
     const intent = detectIntent(message);
 
-    // Fetch workspaces. If a specific tenant was requested, validate it against
-    // the caller's full allow-list (own org + MSP grants); otherwise widen the
-    // scan across every tenant the caller can reach so MSP users see managed
-    // workspaces too.
-    const allowedTenantIds = await getOrgTenantConnectionIds(req);
+    // Fetch workspaces. If a specific tenant was requested, validate against
+    // the caller's broader accessible set (own + MSP grants) so an MSP user
+    // can ask about a managed tenant they picked via the selector. Otherwise
+    // default to the org's OWN tenants only — managed tenants are reachable
+    // only via the tenant selector.
     let workspaces: Awaited<ReturnType<typeof storage.getWorkspaces>> = [];
     if (tenantConnectionId) {
-      if (allowedTenantIds !== null && !allowedTenantIds.includes(tenantConnectionId)) {
+      const accessible = await getAccessibleTenantConnectionIds(req);
+      if (accessible !== null && !accessible.includes(tenantConnectionId)) {
         return res.status(403).json({ error: "Access denied to the requested tenant" });
       }
       workspaces = await storage.getWorkspaces(undefined, tenantConnectionId);
     } else {
-      const tenantIds = allowedTenantIds ?? (await storage.getTenantConnections(orgId)).map(t => t.id);
+      const ownedTenantIds = await getOwnedTenantConnectionIds(req);
+      const tenantIds = ownedTenantIds ?? (await storage.getTenantConnections(orgId)).map(t => t.id);
       if (tenantIds.length > 0) {
         const perTenantResults = await Promise.all(
           tenantIds.map(tid => storage.getWorkspaces(undefined, tid)),

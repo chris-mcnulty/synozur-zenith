@@ -10,7 +10,7 @@ import { computeWritebackHash, computeSpoSyncHash } from "../services/writeback-
 import { evaluatePolicy, evaluationResultsToCopilotRules, formatPolicyBagValue, DEFAULT_COPILOT_READINESS_RULES, type EvaluationContext } from "../services/policy-engine";
 import { BUILT_IN_TEMPLATES, getTemplateById, deriveRetentionPolicy, validateProvisioningPayload, validateGovernedName } from "../services/provisioning-templates";
 import type { Workspace, PolicyOutcome, GovernancePolicy } from "@shared/schema";
-import { getActiveOrgId, getOrgTenantConnectionIds, isWorkspaceInScope } from "./scope-helpers";
+import { getActiveOrgId, getOrgTenantConnectionIds, getAccessibleTenantConnectionIds, getOwnedTenantConnectionIds, isWorkspaceInScope } from "./scope-helpers";
 import { runIASync } from "../services/ia-sync";
 import {
   runSharePointTenantSync,
@@ -26,22 +26,25 @@ const router = Router();
 // ── Workspaces (SharePoint Sites) ──
 router.get("/api/workspaces/writeback-pending", requireAuth(), async (req: AuthenticatedRequest, res) => {
   const tenantConnectionId = req.query.tenantConnectionId as string | undefined;
-  const allowedIds = await getOrgTenantConnectionIds(req);
 
+  // Selector pick is validated against the broader accessible set (own + MSP
+  // grants); the default aggregate is the org's OWN tenants only.
   let workspaces: Workspace[] = [];
   if (tenantConnectionId) {
-    if (allowedIds && !allowedIds.includes(tenantConnectionId)) {
+    const accessible = await getAccessibleTenantConnectionIds(req);
+    if (accessible && !accessible.includes(tenantConnectionId)) {
       return res.json({ count: 0, workspaces: [] });
     }
     workspaces = await storage.getWorkspaces(undefined, tenantConnectionId);
-  } else if (allowedIds) {
-    if (allowedIds.length > 0) {
-      const perTenant = await Promise.all(allowedIds.map(id => storage.getWorkspaces(undefined, id)));
+  } else {
+    const ownedIds = await getOwnedTenantConnectionIds(req);
+    if (ownedIds === null) {
+      // Platform Owner global view
+      workspaces = await storage.getWorkspaces();
+    } else if (ownedIds.length > 0) {
+      const perTenant = await Promise.all(ownedIds.map(id => storage.getWorkspaces(undefined, id)));
       workspaces = perTenant.flat();
     }
-  } else {
-    // Platform Owner global view
-    workspaces = await storage.getWorkspaces();
   }
 
   const pending = workspaces.filter(ws =>
@@ -58,25 +61,28 @@ router.get("/api/workspaces", requireAuth(), async (req: AuthenticatedRequest, r
   const tenantConnectionId = req.query.tenantConnectionId as string | undefined;
   const pageParam = req.query.page as string | undefined;
   const pageSizeParam = req.query.pageSize as string | undefined;
-  const allowedIds = await getOrgTenantConnectionIds(req);
 
+  // Selector pick is validated against the broader accessible set (own + MSP
+  // grants); the default aggregate is the org's OWN tenants only.
   if (pageParam !== undefined) {
     const page = Math.max(1, parseInt(pageParam, 10) || 1);
     const pageSize = Math.min(500, Math.max(1, parseInt(pageSizeParam || "50", 10)));
 
     if (tenantConnectionId) {
-      if (allowedIds && !allowedIds.includes(tenantConnectionId)) {
+      const accessible = await getAccessibleTenantConnectionIds(req);
+      if (accessible && !accessible.includes(tenantConnectionId)) {
         return res.json({ items: [], total: 0, page, pageSize });
       }
       const result = await storage.getWorkspacesPaginated({ page, pageSize, search, tenantConnectionId });
       return res.json({ ...result, page, pageSize });
     }
 
-    if (allowedIds) {
-      if (allowedIds.length === 0) {
+    const ownedIds = await getOwnedTenantConnectionIds(req);
+    if (ownedIds) {
+      if (ownedIds.length === 0) {
         return res.json({ items: [], total: 0, page, pageSize });
       }
-      const result = await storage.getWorkspacesPaginated({ page, pageSize, search, tenantConnectionIds: allowedIds });
+      const result = await storage.getWorkspacesPaginated({ page, pageSize, search, tenantConnectionIds: ownedIds });
       return res.json({ ...result, page, pageSize });
     }
 
@@ -85,21 +91,24 @@ router.get("/api/workspaces", requireAuth(), async (req: AuthenticatedRequest, r
   }
 
   if (tenantConnectionId) {
-    if (allowedIds && !allowedIds.includes(tenantConnectionId)) {
+    const accessible = await getAccessibleTenantConnectionIds(req);
+    if (accessible && !accessible.includes(tenantConnectionId)) {
       return res.json([]);
     }
     const workspaces = await storage.getWorkspaces(search, tenantConnectionId);
     return res.json(workspaces);
   }
-  if (allowedIds) {
+
+  const ownedIds = await getOwnedTenantConnectionIds(req);
+  if (ownedIds) {
     let allWorkspaces: Workspace[] = [];
-    for (const id of allowedIds) {
+    for (const id of ownedIds) {
       const ws = await storage.getWorkspaces(search, id);
       allWorkspaces = allWorkspaces.concat(ws);
     }
     return res.json(allWorkspaces);
   }
-  const workspaces = await storage.getWorkspaces(search, tenantConnectionId);
+  const workspaces = await storage.getWorkspaces(search);
   res.json(workspaces);
 });
 

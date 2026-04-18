@@ -5,33 +5,33 @@ import { storage } from "../storage";
 import { getPlanFeatures } from "../services/feature-gate";
 import { invalidateDefaultSignupPlanCache } from "../utils/platformSettingsCache";
 import { buildRequiredFieldsByTenantId, evaluateMetadataCompleteness } from "../services/metadata-completeness";
-import { getOrgTenantConnectionIds } from "./scope-helpers";
+import { getAccessibleTenantConnectionIds, getOwnedTenantConnectionIds } from "./scope-helpers";
 
 const router = Router();
 
 // Resolve which tenant connection IDs the dashboard should aggregate over.
 // If the client passed ?tenantConnectionId=..., narrow to just that one (after
-// verifying the caller is allowed to see it). Otherwise aggregate across the
-// caller's full visible scope — that means the org's own tenants PLUS any
-// tenants delegated to this org via MSP grants. This matches how every other
-// scoped surface (jobs, workspaces) computes scope, so an MSP user without a
-// tenant selected sees a true union of own-org + managed-tenant data.
+// verifying it is in the caller's broader accessible set, which includes
+// MSP-granted tenants — so an MSP user can drill into a managed tenant via
+// the selector). Otherwise default to the org's OWN tenants only — managed
+// tenants are intentionally excluded from aggregate org views and are reachable
+// only via the tenant selector until a dedicated MSP overview page exists.
 async function resolveDashboardTenantIds(
   req: AuthenticatedRequest,
   requested: string | undefined,
 ): Promise<{ tenantIds: string[] | null; forbidden?: boolean }> {
-  const allowed = await getOrgTenantConnectionIds(req);
-
   if (requested) {
-    const isAllowed = allowed === null || allowed.includes(requested);
+    const accessible = await getAccessibleTenantConnectionIds(req);
+    const isAllowed = accessible === null || accessible.includes(requested);
     if (!isAllowed) return { tenantIds: [], forbidden: true };
     return { tenantIds: [requested] };
   }
 
-  // null = Platform Owner with global visibility; caller decides how to handle
-  // (we treat it as "no narrowing" and aggregate across every tenant the
-  // platform knows about — same semantics platform-owner has elsewhere).
-  return { tenantIds: allowed };
+  // Default aggregate: own tenants only.
+  // null = Platform Owner with global visibility; caller treats as "no
+  // narrowing" and aggregates across every tenant the platform knows about.
+  const owned = await getOwnedTenantConnectionIds(req);
+  return { tenantIds: owned };
 }
 
 async function loadWorkspacesForScope(tenantIds: string[] | null) {
@@ -217,26 +217,28 @@ router.get("/api/audit-log", requireAuth(), requireRole(ZENITH_ROLES.PLATFORM_OW
 
     // Tenant scoping.
     //  - Platform Owner with no requested tenant => true global view (no narrowing).
-    //  - Caller requested a specific tenant      => verify it's in their allow-list.
-    //  - Otherwise (regular user)                => widen across own org + MSP grants.
-    //    If allow-list is empty, restrict to org-level (null tenant) rows only so
-    //    we don't leak tenant-tagged events from the org.
+    //  - Caller requested a specific tenant      => verify it's in their accessible
+    //    set (own + MSP grants), so an MSP user can audit a managed tenant via
+    //    the selector.
+    //  - Otherwise (regular user)                => default to OWN tenants only.
+    //    If the caller has zero own tenants, restrict to org-level (null tenant)
+    //    rows so we don't leak tenant-tagged events from the org.
     const isPlatformOwner = req.user?.role === ZENITH_ROLES.PLATFORM_OWNER;
     let tenantConnectionId: string | undefined;
     let tenantConnectionIds: string[] | undefined;
     let restrictToNullTenant = false;
 
     if (requestedTenantId) {
-      const allowed = await getOrgTenantConnectionIds(req);
-      const isAllowed = allowed === null || allowed.includes(requestedTenantId);
+      const accessible = await getAccessibleTenantConnectionIds(req);
+      const isAllowed = accessible === null || accessible.includes(requestedTenantId);
       if (!isAllowed) return res.status(403).json({ error: "Access denied to the requested tenant" });
       tenantConnectionId = requestedTenantId;
     } else if (!isPlatformOwner) {
-      const allowed = await getOrgTenantConnectionIds(req);
-      if (allowed === null) {
+      const owned = await getOwnedTenantConnectionIds(req);
+      if (owned === null) {
         // Effectively global; no narrowing.
-      } else if (allowed.length > 0) {
-        tenantConnectionIds = allowed;
+      } else if (owned.length > 0) {
+        tenantConnectionIds = owned;
       } else {
         restrictToNullTenant = true;
       }

@@ -3,7 +3,7 @@ import { requireAuth, requireRole, type AuthenticatedRequest } from "../middlewa
 import { ZENITH_ROLES, insertGovernancePolicySchema, insertPolicyOutcomeSchema, type PolicyRuleDefinition, type GovernancePolicy } from "@shared/schema";
 import { storage } from "../storage";
 import { evaluatePolicy, evaluationResultsToCopilotRules, formatPolicyBagValue, type EvaluationContext } from "../services/policy-engine";
-import { getOrgTenantConnectionIds, getTenantConnectionIdsForOrg, isWorkspaceInScope } from "./scope-helpers";
+import { getOrgTenantConnectionIds, getTenantConnectionIdsForOrg, getOwnedTenantConnectionIdsForOrg, getOwnedTenantConnectionIds, isWorkspaceInScope } from "./scope-helpers";
 import { requireFeature } from "../services/feature-gate";
 import { scoreWorkspaces, scoreWorkspace } from "../services/copilot-scoring";
 import { buildRequiredFieldsByTenantId, getRequiredFieldsForWorkspace } from "../services/metadata-completeness";
@@ -20,17 +20,15 @@ import {
 const router = Router();
 
 /**
- * Resolve the allowed tenant-connection IDs for a request scoped to a specific
- * target organization. Use this in routes that accept a `?orgId=` override
- * (Platform Owner) so tenant validation is checked against the *effective*
- * target org rather than the caller's active org context.
+ * Resolve the SELECTOR-VALIDATION allow-list (own + MSP grants) for a request
+ * scoped to a specific target organization. Use this for `?tenantConnectionId=`
+ * checks so MSP-managed tenants remain reachable when a Synozur user picks
+ * one explicitly.
  *
- * - Platform Owner: returns the target org's tenant connections (PO has global
- *   access; we still require the requested tenant to belong to the target org
- *   for cross-org context integrity).
- * - All other roles: returns the caller's full allow-list (own org + MSP
- *   grants) via getOrgTenantConnectionIds; for non-PO users active org always
- *   matches the target org so this stays correct.
+ * - Platform Owner: returns the target org's accessible connections.
+ * - Other roles: returns the caller's accessible set (own + grants) via
+ *   getOrgTenantConnectionIds; for non-PO users the active org matches the
+ *   target org so this stays correct.
  */
 async function resolveAllowedTenantIdsForOrg(
   req: AuthenticatedRequest,
@@ -42,6 +40,23 @@ async function resolveAllowedTenantIdsForOrg(
   }
   const allowed = await getOrgTenantConnectionIds(req);
   return allowed ?? (await getTenantConnectionIdsForOrg(targetOrgId));
+}
+
+/**
+ * Resolve the DEFAULT-AGGREGATE tenant-connection IDs for a request scoped to a
+ * specific target organization — own tenants only. MSP-granted tenants are
+ * intentionally excluded; pick them via the tenant selector to drill in.
+ */
+async function resolveOwnedTenantIdsForOrg(
+  req: AuthenticatedRequest,
+  isPlatformOwner: boolean,
+  targetOrgId: string,
+): Promise<string[]> {
+  if (isPlatformOwner) {
+    return getOwnedTenantConnectionIdsForOrg(targetOrgId);
+  }
+  const owned = await getOwnedTenantConnectionIds(req);
+  return owned ?? (await getOwnedTenantConnectionIdsForOrg(targetOrgId));
 }
 
 const RESERVED_PROPERTY_BAG_PREFIXES = ['vti_', 'ows_', 'docid_', '_vti_', '__', 'ecm_', 'ir_'];
@@ -576,17 +591,23 @@ router.get("/api/copilot-readiness", requireAuth(), requireFeature("copilotReadi
       : undefined;
 
     let allWorkspaces: Awaited<ReturnType<typeof storage.getWorkspaces>> = [];
-    const allowedIdsForOrg = await resolveAllowedTenantIdsForOrg(req, isPlatformOwner, orgId);
     if (tenantFilter) {
-      if (!allowedIdsForOrg.includes(tenantFilter)) {
+      // Selector pick — validate against the broader accessible set (own +
+      // MSP grants) so MSP users can drill into managed tenants.
+      const accessibleIdsForOrg = await resolveAllowedTenantIdsForOrg(req, isPlatformOwner, orgId);
+      if (!accessibleIdsForOrg.includes(tenantFilter)) {
         return res.status(403).json({ message: "Tenant connection is not in scope for this organization." });
       }
       allWorkspaces = await storage.getWorkspaces(undefined, tenantFilter);
-    } else if (allowedIdsForOrg.length > 0) {
-      const perTenantResults = await Promise.all(
-        allowedIdsForOrg.map(tid => storage.getWorkspaces(undefined, tid)),
-      );
-      allWorkspaces = perTenantResults.flat();
+    } else {
+      // Default aggregate — own tenants only.
+      const ownedIdsForOrg = await resolveOwnedTenantIdsForOrg(req, isPlatformOwner, orgId);
+      if (ownedIdsForOrg.length > 0) {
+        const perTenantResults = await Promise.all(
+          ownedIdsForOrg.map(tid => storage.getWorkspaces(undefined, tid)),
+        );
+        allWorkspaces = perTenantResults.flat();
+      }
     }
 
     const requiredFieldsByTenantId = await buildRequiredFieldsByTenantId(allWorkspaces);

@@ -14,7 +14,7 @@ import { storage } from '../storage';
 import { scoreWorkspaces, scoreWorkspace, type CopilotReadinessResult, type WorkspaceReadiness } from './copilot-scoring';
 import { buildRequiredFieldsByTenantId, getRequiredFieldsForWorkspace } from './metadata-completeness';
 import { completeForFeature, type AIMessage } from './ai-provider';
-import { getTenantConnectionIdsForOrg } from '../routes/scope-helpers';
+import { getOwnedTenantConnectionIdsForOrg } from '../routes/scope-helpers';
 
 export type AssessmentStatus = 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED';
 export type AssessmentFeature = 'copilot_readiness' | 'information_architecture';
@@ -336,7 +336,10 @@ export async function runCopilotReadinessAssessment(
       if (tenantConnectionId) {
         allWorkspaces = await storage.getWorkspaces(undefined, tenantConnectionId);
       } else {
-        const tenantIds = await getTenantConnectionIdsForOrg(orgId);
+        // Default-aggregate org assessment uses OWN tenants only — managed
+        // (MSP-granted) tenants are reachable only when the caller picks one
+        // explicitly via the tenantConnectionId param above.
+        const tenantIds = await getOwnedTenantConnectionIdsForOrg(orgId);
         if (tenantIds.length > 0) {
           const perTenantResults = await Promise.all(
             tenantIds.map(tid => storage.getWorkspaces(undefined, tid)),

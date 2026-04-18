@@ -19,7 +19,7 @@ import { z } from "zod";
 import { requireAuth, requireRole, type AuthenticatedRequest } from "../middleware/rbac";
 import { storage } from "../storage";
 import { ZENITH_ROLES, JOB_TYPES, JOB_STATUSES, type JobType, type JobStatus } from "@shared/schema";
-import { getOrgTenantConnectionIds, getActiveOrgId } from "./scope-helpers";
+import { getAccessibleTenantConnectionIds, getOwnedTenantConnectionIds, getActiveOrgId } from "./scope-helpers";
 import { jobRegistry } from "../services/job-registry";
 import {
   getAllDatasetFreshness,
@@ -40,18 +40,20 @@ async function resolveTenantScope(
   | { ok: true; tenantConnectionId: string | null; tenantConnectionIds: string[] | null }
   | { ok: false; status: number; message: string }
 > {
-  const allowedIds = await getOrgTenantConnectionIds(req);
-  // Platform owner → allowedIds === null → no tenant restriction
+  // Selector pick is validated against the broader accessible set (own + MSP
+  // grants); the default aggregate is the org's OWN tenants only.
   if (requestedTenantId) {
-    if (allowedIds !== null && !allowedIds.includes(requestedTenantId)) {
+    const accessible = await getAccessibleTenantConnectionIds(req);
+    if (accessible !== null && !accessible.includes(requestedTenantId)) {
       return { ok: false, status: 403, message: "Access denied to this tenant connection" };
     }
     return { ok: true, tenantConnectionId: requestedTenantId, tenantConnectionIds: null };
   }
+  const ownedIds = await getOwnedTenantConnectionIds(req);
   return {
     ok: true,
     tenantConnectionId: null,
-    tenantConnectionIds: allowedIds,
+    tenantConnectionIds: ownedIds,
   };
 }
 
