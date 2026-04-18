@@ -19,6 +19,32 @@ import {
 
 const router = Router();
 
+/**
+ * Resolve the allowed tenant-connection IDs for a request scoped to a specific
+ * target organization. Use this in routes that accept a `?orgId=` override
+ * (Platform Owner) so tenant validation is checked against the *effective*
+ * target org rather than the caller's active org context.
+ *
+ * - Platform Owner: returns the target org's tenant connections (PO has global
+ *   access; we still require the requested tenant to belong to the target org
+ *   for cross-org context integrity).
+ * - All other roles: returns the caller's full allow-list (own org + MSP
+ *   grants) via getOrgTenantConnectionIds; for non-PO users active org always
+ *   matches the target org so this stays correct.
+ */
+async function resolveAllowedTenantIdsForOrg(
+  req: AuthenticatedRequest,
+  isPlatformOwner: boolean,
+  targetOrgId: string,
+): Promise<string[]> {
+  if (isPlatformOwner) {
+    const conns = await storage.getTenantConnections(targetOrgId);
+    return conns.map(t => t.id);
+  }
+  const allowed = await getOrgTenantConnectionIds(req);
+  return allowed ?? (await storage.getTenantConnections(targetOrgId)).map(t => t.id);
+}
+
 const RESERVED_PROPERTY_BAG_PREFIXES = ['vti_', 'ows_', 'docid_', '_vti_', '__', 'ecm_', 'ir_'];
 
 function validatePropertyBagKey(key: string | undefined | null): string | null {
@@ -551,23 +577,17 @@ router.get("/api/copilot-readiness", requireAuth(), requireFeature("copilotReadi
       : undefined;
 
     let allWorkspaces: Awaited<ReturnType<typeof storage.getWorkspaces>> = [];
+    const allowedIdsForOrg = await resolveAllowedTenantIdsForOrg(req, isPlatformOwner, orgId);
     if (tenantFilter) {
-      // Validate that the requested tenant belongs to this org's scope
-      const tenants = await storage.getTenantConnections(orgId);
-      const allowed = tenants.some(t => t.id === tenantFilter);
-      if (!allowed) {
+      if (!allowedIdsForOrg.includes(tenantFilter)) {
         return res.status(403).json({ message: "Tenant connection is not in scope for this organization." });
       }
       allWorkspaces = await storage.getWorkspaces(undefined, tenantFilter);
-    } else {
-      const tenants = await storage.getTenantConnections(orgId);
-      const tenantIds = tenants.map(t => t.id);
-      if (tenantIds.length > 0) {
-        const perTenantResults = await Promise.all(
-          tenantIds.map(tid => storage.getWorkspaces(undefined, tid)),
-        );
-        allWorkspaces = perTenantResults.flat();
-      }
+    } else if (allowedIdsForOrg.length > 0) {
+      const perTenantResults = await Promise.all(
+        allowedIdsForOrg.map(tid => storage.getWorkspaces(undefined, tid)),
+      );
+      allWorkspaces = perTenantResults.flat();
     }
 
     const requiredFieldsByTenantId = await buildRequiredFieldsByTenantId(allWorkspaces);
@@ -664,8 +684,8 @@ router.post("/api/copilot-readiness/assessment", requireAuth(), requireFeature("
       : null;
 
     if (tenantConnectionId) {
-      const tenants = await storage.getTenantConnections(orgId);
-      if (!tenants.some(t => t.id === tenantConnectionId)) {
+      const allowedIds = await resolveAllowedTenantIdsForOrg(req, isPlatformOwner, orgId);
+      if (!allowedIds.includes(tenantConnectionId)) {
         return res.status(403).json({ message: "Tenant connection is not in scope for this organization." });
       }
     }
@@ -698,8 +718,8 @@ router.get("/api/copilot-readiness/assessment/latest", requireAuth(), requireFea
       : null;
 
     if (tenantConnectionId) {
-      const tenants = await storage.getTenantConnections(orgId);
-      if (!tenants.some(t => t.id === tenantConnectionId)) {
+      const allowedIds = await resolveAllowedTenantIdsForOrg(req, isPlatformOwner, orgId);
+      if (!allowedIds.includes(tenantConnectionId)) {
         return res.status(403).json({ message: "Tenant connection is not in scope for this organization." });
       }
     }
@@ -759,8 +779,8 @@ router.get("/api/copilot-readiness/assessment/history", requireAuth(), requireFe
       : null;
 
     if (tenantConnectionId) {
-      const tenants = await storage.getTenantConnections(orgId);
-      if (!tenants.some(t => t.id === tenantConnectionId)) {
+      const allowedIds = await resolveAllowedTenantIdsForOrg(req, isPlatformOwner, orgId);
+      if (!allowedIds.includes(tenantConnectionId)) {
         return res.status(403).json({ message: "Tenant connection is not in scope for this organization." });
       }
     }
