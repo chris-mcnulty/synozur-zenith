@@ -11,26 +11,39 @@ const router = Router();
 
 // Resolve which tenant connection IDs the dashboard should aggregate over.
 // If the client passed ?tenantConnectionId=..., narrow to just that one (after
-// verifying the caller is allowed to see it). Otherwise return all of the
-// org's tenant IDs (existing org-wide behavior). Returns null when the caller
-// has no scope at all.
+// verifying the caller is allowed to see it). Otherwise aggregate across the
+// caller's full visible scope — that means the org's own tenants PLUS any
+// tenants delegated to this org via MSP grants. This matches how every other
+// scoped surface (jobs, workspaces) computes scope, so an MSP user without a
+// tenant selected sees a true union of own-org + managed-tenant data.
 async function resolveDashboardTenantIds(
   req: AuthenticatedRequest,
   requested: string | undefined,
-): Promise<{ tenantIds: string[]; forbidden?: boolean }> {
+): Promise<{ tenantIds: string[] | null; forbidden?: boolean }> {
   const allowed = await getOrgTenantConnectionIds(req);
-  // Platform Owner with no allow-list = global; we still scope to the active
-  // org's own tenants for the dashboard so per-tenant totals make sense.
-  const orgId = req.activeOrganizationId;
-  const orgTenants = orgId ? await storage.getTenantConnections(orgId) : [];
-  const orgTenantIds = orgTenants.map(t => t.id);
 
   if (requested) {
     const isAllowed = allowed === null || allowed.includes(requested);
     if (!isAllowed) return { tenantIds: [], forbidden: true };
     return { tenantIds: [requested] };
   }
-  return { tenantIds: orgTenantIds };
+
+  // null = Platform Owner with global visibility; caller decides how to handle
+  // (we treat it as "no narrowing" and aggregate across every tenant the
+  // platform knows about — same semantics platform-owner has elsewhere).
+  return { tenantIds: allowed };
+}
+
+async function loadWorkspacesForScope(tenantIds: string[] | null) {
+  if (tenantIds === null) {
+    // Platform Owner: aggregate across every tenant in the system.
+    return storage.getWorkspaces();
+  }
+  if (tenantIds.length === 0) return [];
+  const perTenantResults = await Promise.all(
+    tenantIds.map(tid => storage.getWorkspaces(undefined, tid))
+  );
+  return perTenantResults.flat();
 }
 
 // ── Dashboard Stats ──
@@ -56,13 +69,7 @@ router.get("/api/stats", requireAuth(), async (req: AuthenticatedRequest, res) =
   const { tenantIds, forbidden } = await resolveDashboardTenantIds(req, requestedTenantId);
   if (forbidden) return res.status(403).json({ error: "Access denied to the requested tenant" });
 
-  let allWorkspaces: Awaited<ReturnType<typeof storage.getWorkspaces>> = [];
-  if (tenantIds.length > 0) {
-    const perTenantResults = await Promise.all(
-      tenantIds.map(tid => storage.getWorkspaces(undefined, tid))
-    );
-    allWorkspaces = perTenantResults.flat();
-  }
+  const allWorkspaces = await loadWorkspacesForScope(tenantIds);
 
   const total = allWorkspaces.length;
   const copilotReady = allWorkspaces.filter(w => w.copilotReady).length;
@@ -116,13 +123,7 @@ router.get("/api/dashboard", requireAuth(), async (req: AuthenticatedRequest, re
   const { tenantIds, forbidden } = await resolveDashboardTenantIds(req, requestedTenantId);
   if (forbidden) return res.status(403).json({ error: "Access denied to the requested tenant" });
 
-  let allWorkspaces: Awaited<ReturnType<typeof storage.getWorkspaces>> = [];
-  if (tenantIds.length > 0) {
-    const perTenantResults = await Promise.all(
-      tenantIds.map(tid => storage.getWorkspaces(undefined, tid))
-    );
-    allWorkspaces = perTenantResults.flat();
-  }
+  const allWorkspaces = await loadWorkspacesForScope(tenantIds);
 
   // Alert 1: Missing required metadata — dynamic per-tenant evaluation
   const requiredFieldsByTenantIdForAlerts = await buildRequiredFieldsByTenantId(allWorkspaces);
