@@ -1219,10 +1219,14 @@ router.post("/api/workspaces/:id/sync", requireRole(ZENITH_ROLES.OPERATOR, ZENIT
       try { spoToken = await getDelegatedSpoTokenForOrg(spoHost, req.session?.userId, connection.organizationId); } catch {}
     }
 
-    const [driveResult, analyticsResult, groupOwnersResult, lockStateResult, archiveResult, propertyBagResult] = await Promise.allSettled([
+    const skipGroupMembers = workspace.type === "COMMUNICATION_SITE";
+    const [driveResult, analyticsResult, groupOwnersResult, groupMembersResult, lockStateResult, archiveResult, propertyBagResult] = await Promise.allSettled([
       fetchSiteDriveOwner(token, graphSiteId),
       fetchSiteAnalytics(token, graphSiteId),
       fetchSiteGroupOwners(token, graphSiteId),
+      skipGroupMembers
+        ? Promise.resolve({ members: [] as Awaited<ReturnType<typeof fetchSiteGroupMembers>>["members"], groupId: undefined })
+        : fetchSiteGroupMembers(token, graphSiteId),
       spoToken && siteUrl ? fetchSiteLockState(spoToken, siteUrl) : Promise.resolve({ lockState: "Unknown", isArchived: false }),
       fetchSiteArchiveStatus(token, graphSiteId),
       spoToken && siteUrl ? fetchSitePropertyBag(spoToken, siteUrl) : Promise.resolve({ properties: {} }),
@@ -1232,6 +1236,7 @@ router.post("/api/workspaces/:id/sync", requireRole(ZENITH_ROLES.OPERATOR, ZENIT
     const driveOwner = driveResult.status === 'fulfilled' ? driveResult.value : {} as any;
     const siteAnalytics = analyticsResult.status === 'fulfilled' ? analyticsResult.value : {} as any;
     const groupOwners = groupOwnersResult.status === 'fulfilled' ? groupOwnersResult.value : { owners: [] } as any;
+    const groupMembers = groupMembersResult.status === 'fulfilled' ? groupMembersResult.value : { members: [] } as any;
     const lockStateData = lockStateResult.status === 'fulfilled' ? lockStateResult.value as any : { lockState: "Unknown", isArchived: false };
     const lockState = lockStateData.lockState;
     const archiveData = archiveResult.status === 'fulfilled' ? archiveResult.value : { isArchived: false, archiveStatus: null };
@@ -1240,6 +1245,7 @@ router.post("/api/workspaces/:id/sync", requireRole(ZENITH_ROLES.OPERATOR, ZENIT
     if (driveResult.status === 'rejected') warnings.push("Storage/drive data unavailable — your account may lack read permissions for this site.");
     if (analyticsResult.status === 'rejected') warnings.push("Analytics data unavailable — Reports.Read.All permission may be missing or your account may lack access.");
     if (groupOwnersResult.status === 'rejected') warnings.push("Group owners data unavailable — Group.Read.All permission may be missing.");
+    if (!skipGroupMembers && groupMembersResult.status === 'rejected') warnings.push("Group members data unavailable — Group.Read.All permission may be missing.");
     if (lockStateResult.status === 'rejected') warnings.push("Lock state unavailable — SharePoint admin permissions required to read site lock state.");
     if (propertyBagResult.status === 'rejected') warnings.push("Property bag unavailable — SharePoint permissions may be insufficient.");
     else if (propertyBagData.error) warnings.push(`Property bag partially unavailable — ${propertyBagData.error}`);
@@ -1283,6 +1289,22 @@ router.post("/api/workspaces/:id/sync", requireRole(ZENITH_ROLES.OPERATOR, ZENIT
         updates.owners = mergedOwners.length;
       }
       console.log(`[single-sync] ${siteUrl}: groupOwners=${groupOwners.owners?.length || 0}, siteAdmins merged, total=${mergedOwners.length} => ${mergedOwners.map(o => o.displayName).join(', ')}`);
+    }
+
+    if (!skipGroupMembers && groupMembersResult.status === 'fulfilled' && groupMembers.groupId) {
+      const members = (groupMembers.members || []).map((m: any) => ({
+        id: m.id,
+        displayName: m.displayName || '',
+        mail: m.mail,
+        userPrincipalName: m.userPrincipalName,
+      }));
+      updates.siteMembers = members;
+      console.log(`[single-sync] ${siteUrl}: groupMembers=${members.length}`);
+      if (groupMembers.error) {
+        warnings.push(`Group members partially unavailable: ${groupMembers.error}`);
+      }
+    } else if (!skipGroupMembers && groupMembers.error) {
+      console.log(`[single-sync] ${siteUrl}: skipping member refresh — ${groupMembers.error}`);
     }
 
     const storageUsed = driveOwner.storageUsedBytes ?? workspace.storageUsedBytes ?? null;
