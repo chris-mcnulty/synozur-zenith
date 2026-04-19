@@ -22,7 +22,6 @@ import {
   Settings2,
   FileJson,
   Save,
-  Wand2,
   CheckCircle2,
   Activity,
   Loader2,
@@ -154,7 +153,6 @@ export default function WorkspaceDetailsPage() {
     sensitivityLabelId: "",
     externalSharing: false,
     teamsConnected: false,
-    type: "",
     projectType: "",
   });
   const [customFieldValues, setCustomFieldValues] = useState<Record<string, any>>({});
@@ -171,7 +169,6 @@ export default function WorkspaceDetailsPage() {
 
         externalSharing: workspace.externalSharing,
         teamsConnected: workspace.teamsConnected,
-        type: workspace.type || "",
         projectType: workspace.projectType || "",
       });
       const existingCustom = workspace.customFields || {};
@@ -427,7 +424,6 @@ export default function WorkspaceDetailsPage() {
 
         externalSharing: workspace.externalSharing,
         teamsConnected: workspace.teamsConnected,
-        type: workspace.type || "",
         projectType: workspace.projectType || "",
       });
       const existingCustom2 = workspace.customFields || {};
@@ -473,6 +469,20 @@ export default function WorkspaceDetailsPage() {
       case 'HUB_SITE': return 'Hub Site';
       default: return 'SharePoint Site';
     }
+  };
+
+  // Prefer the actual SharePoint web template ID when we have it (e.g. "GROUP#0",
+  // "SITEPAGEPUBLISHING#0"); fall back to the inferred type so newly-synced sites
+  // without a usage-report row still get a meaningful label.
+  const getResolvedTemplateLabel = (ws: { type: string; rootWebTemplate?: string | null }) => {
+    const t = (ws.rootWebTemplate || "").toUpperCase();
+    if (t.includes("SITEPAGEPUBLISHING")) return "Communication Site";
+    if (t.includes("GROUP")) return "Team Site (Group-connected)";
+    if (t.includes("STS#3")) return "Team Site (Modern)";
+    if (t.includes("STS#0")) return "Team Site (Classic)";
+    if (t.includes("STS")) return "Team Site";
+    if (t) return ws.rootWebTemplate || getSiteTypeLabel(ws.type);
+    return getSiteTypeLabel(ws.type);
   };
 
   const getSiteTypeColor = (type: string) => {
@@ -559,7 +569,7 @@ export default function WorkspaceDetailsPage() {
             </div>
             <div className="flex items-center gap-3 mt-1">
               <Globe className={`w-3.5 h-3.5 ${getSiteTypeColor(workspace.type)}`} />
-              <span className="text-muted-foreground text-xs">{getSiteTypeLabel(workspace.type)}</span>
+              <span className="text-muted-foreground text-xs">{getResolvedTemplateLabel(workspace)}</span>
               <span className="text-muted-foreground text-xs">|</span>
               {workspace.siteUrl ? (
                 <a href={workspace.siteUrl} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline font-mono text-xs flex items-center gap-1" data-testid="link-sharepoint-site">
@@ -595,9 +605,6 @@ export default function WorkspaceDetailsPage() {
               >
                 <RefreshCw className={`w-4 h-4 ${siteSyncMutation.isPending ? 'animate-spin' : ''}`} />
                 {siteSyncMutation.isPending ? "Refreshing..." : "Refresh from M365"}
-              </Button>
-              <Button variant="outline" className="gap-2 text-primary border-primary/30 hover:bg-primary/10" data-testid="button-apply-defaults">
-                <Wand2 className="w-4 h-4" /> Apply Defaults
               </Button>
               <Button onClick={() => setEditMode(true)} className="gap-2" data-testid="button-edit">
                 <Pencil className="w-4 h-4" /> Edit Properties
@@ -724,20 +731,21 @@ export default function WorkspaceDetailsPage() {
                     </div>
                     <div className="space-y-2">
                       <Label>Site Template</Label>
-                      {editMode ? (
-                        <Select value={form.type} onValueChange={(v) => setForm({...form, type: v})}>
-                          <SelectTrigger className="bg-background/50" data-testid="select-type"><SelectValue /></SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="TEAM_SITE">Team Site</SelectItem>
-                            <SelectItem value="COMMUNICATION_SITE">Communication Site</SelectItem>
-                            <SelectItem value="HUB_SITE">Hub Site</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      ) : (
-                        <div className="h-10 flex items-center gap-2 px-3 rounded-md bg-muted/50 text-sm">
-                          <Globe className={`w-4 h-4 ${getSiteTypeColor(workspace.type)}`} />
-                          {getSiteTypeLabel(workspace.type)}
-                        </div>
+                      {/*
+                        Site template is set when the SharePoint site is provisioned and
+                        cannot be changed afterwards via the Microsoft 365 APIs. We always
+                        render this as read-only so users don't believe a Zenith edit will
+                        reconfigure the site.
+                      */}
+                      <div className="h-10 flex items-center gap-2 px-3 rounded-md bg-muted/50 text-sm" data-testid="text-site-template">
+                        <Globe className={`w-4 h-4 ${getSiteTypeColor(workspace.type)}`} />
+                        {getResolvedTemplateLabel(workspace)}
+                        <Badge variant="outline" className="ml-auto text-[10px] font-medium text-muted-foreground border-border/50">Read-only</Badge>
+                      </div>
+                      {editMode && (
+                        <p className="text-[11px] text-muted-foreground">
+                          Set at site provisioning in Microsoft 365 and cannot be changed from Zenith.
+                        </p>
                       )}
                     </div>
                     <div className="space-y-2">
@@ -1824,7 +1832,7 @@ export default function WorkspaceDetailsPage() {
             <CardContent className="space-y-3 text-sm">
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Template</span>
-                <span className="font-medium">{getSiteTypeLabel(workspace.type)}</span>
+                <span className="font-medium">{getResolvedTemplateLabel(workspace)}</span>
               </div>
               <Separator />
               <div className="flex justify-between">

@@ -19,6 +19,7 @@ import {
   fetchSiteCollectionAdmins,
   getAppToken,
   fetchSitePropertyBag,
+  fetchSiteWebTemplate,
   fetchSensitivityLabels,
   fetchRetentionLabels,
   fetchHubSites,
@@ -339,6 +340,7 @@ export async function runSharePointTenantSync(
       lockState?: string;
       isArchived?: boolean;
       propertyBag?: Record<string, string>;
+      webTemplate?: string | null;
     }>();
 
     if (token) {
@@ -367,6 +369,7 @@ export async function runSharePointTenantSync(
               groupMembersResult,
               lockStateResult,
               propBagResult,
+              webTemplateResult,
             ] = await Promise.allSettled([
               fetchSiteDriveOwner(token!, site.id),
               fetchSiteAnalytics(token!, site.id),
@@ -380,6 +383,11 @@ export async function runSharePointTenantSync(
               spoToken && siteUrl
                 ? fetchSitePropertyBag(spoToken, siteUrl)
                 : Promise.resolve({ properties: {} }),
+              // Only call when the usage report didn't already give us a template,
+              // since this is an extra per-site SPO REST request.
+              spoToken && siteUrl && !siteUsageRow?.rootWebTemplate
+                ? fetchSiteWebTemplate(spoToken, siteUrl)
+                : Promise.resolve({ webTemplate: null as string | null }),
             ]);
 
             const lockData =
@@ -394,6 +402,8 @@ export async function runSharePointTenantSync(
               groupMembersResult.status === "fulfilled"
                 ? groupMembersResult.value
                 : { members: [] };
+            const webTemplate =
+              webTemplateResult.status === "fulfilled" ? webTemplateResult.value.webTemplate : null;
 
             let siteAdmins: { id?: string; displayName: string; mail?: string; userPrincipalName?: string }[] | undefined;
             if (spoToken && siteUrl) {
@@ -417,6 +427,7 @@ export async function runSharePointTenantSync(
               isArchived: lockData.isArchived === true,
               propertyBag:
                 Object.keys(propBagData.properties).length > 0 ? propBagData.properties : undefined,
+              webTemplate,
             };
           }),
         );
@@ -431,6 +442,7 @@ export async function runSharePointTenantSync(
               lockState: r.value.lockState,
               isArchived: r.value.isArchived,
               propertyBag: r.value.propertyBag,
+              webTemplate: r.value.webTemplate,
             });
           }
         }
@@ -474,7 +486,11 @@ export async function runSharePointTenantSync(
       const groupOwners = enriched.groupOwners;
       const groupMembers = enriched.groupMembers || { members: [] };
 
-      const siteType = inferSiteType(usage?.rootWebTemplate, site.siteCollection?.root);
+      // Prefer the usage-report template (M365 admin truth), then fall back to
+      // the per-site SPO REST web template fetched during enrichment so sites
+      // without a usage-report row still get an accurate template.
+      const resolvedRootWebTemplate = usage?.rootWebTemplate || enriched.webTemplate || null;
+      const siteType = inferSiteType(resolvedRootWebTemplate || undefined, site.siteCollection?.root);
 
       const workspaceData: Record<string, any> = {
         displayName: site.displayName || "Untitled Site",
@@ -486,6 +502,9 @@ export async function runSharePointTenantSync(
         siteCreatedDate: site.createdDateTime || null,
         lastContentModifiedDate: site.lastModifiedDateTime || null,
       };
+      if (resolvedRootWebTemplate) {
+        workspaceData.rootWebTemplate = resolvedRootWebTemplate;
+      }
 
       workspaceData.ownerDisplayName = usage?.ownerDisplayName || driveOwner.ownerDisplayName || null;
       workspaceData.ownerPrincipalName =
@@ -554,7 +573,8 @@ export async function runSharePointTenantSync(
         workspaceData.activeFileCount = usage.activeFileCount;
         workspaceData.pageViewCount = usage.pageViewCount;
         workspaceData.visitedPageCount = usage.visitedPageCount;
-        workspaceData.rootWebTemplate = usage.rootWebTemplate || null;
+        // rootWebTemplate already set above from resolvedRootWebTemplate when available;
+        // don't clobber the SPO REST fallback with a null usage value.
         workspaceData.isDeleted = usage.isDeleted;
         workspaceData.reportRefreshDate = usage.reportRefreshDate || null;
         workspaceData.sensitivityLabelId = usage.sensitivityLabelId || null;

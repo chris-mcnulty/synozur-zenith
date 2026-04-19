@@ -1657,6 +1657,40 @@ export async function fetchSitePropertyBag(
   }
 }
 
+/**
+ * Fetch the SharePoint web template identifier (e.g. "GROUP#0",
+ * "SITEPAGEPUBLISHING#0", "STS#3") from the site's root web. Microsoft Graph
+ * does not expose this directly, so we read it from the SPO REST
+ * `/_api/site/rootweb` endpoint. Used as a fallback when the SharePoint usage
+ * report does not include `rootWebTemplate` for a given site (common for
+ * newly-created sites and sites without recent activity).
+ */
+export async function fetchSiteWebTemplate(
+  spoToken: string,
+  siteUrl: string,
+): Promise<{ webTemplate: string | null; error?: string }> {
+  const url = `${siteUrl.replace(/\/+$/, '')}/_api/site/rootweb?$select=WebTemplate,Configuration`;
+  try {
+    const res = await fetch(url, {
+      headers: {
+        Authorization: `Bearer ${spoToken}`,
+        Accept: "application/json;odata=nometadata",
+      },
+    });
+    if (!res.ok) {
+      return { webTemplate: null, error: `API ${res.status}: ${res.statusText}` };
+    }
+    const data: any = await res.json();
+    const tpl = typeof data?.WebTemplate === "string" ? data.WebTemplate : null;
+    if (!tpl) return { webTemplate: null };
+    const cfg = data?.Configuration;
+    const combined = cfg !== undefined && cfg !== null ? `${tpl}#${cfg}` : tpl;
+    return { webTemplate: combined };
+  } catch (err: any) {
+    return { webTemplate: null, error: err.message };
+  }
+}
+
 const PROPERTY_BAG_BLOCKED_PREFIXES = ['vti_', 'ows_', 'docid_', '_vti_', '__', 'ecm_', 'ir_'];
 
 function sanitizePropertyBagKeys(properties: Record<string, string>): { safe: Record<string, string>; blocked: string[] } {

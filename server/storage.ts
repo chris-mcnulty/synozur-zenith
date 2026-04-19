@@ -1555,8 +1555,9 @@ export class DatabaseStorage implements IStorage {
     const connIds = conns.map(c => c.id);
     if (connIds.length === 0) return [];
 
-    const results = await db.select({
+    const rows = await db.select({
       workspaceId: workspaces.id,
+      tenantConnectionId: workspaces.tenantConnectionId,
       displayName: workspaces.displayName,
       siteUrl: workspaces.siteUrl,
       sensitivityLabelId: workspaces.sensitivityLabelId,
@@ -1567,10 +1568,13 @@ export class DatabaseStorage implements IStorage {
         connIds.length === 1
           ? eq(workspaces.tenantConnectionId, connIds[0])
           : sql`${workspaces.tenantConnectionId} IN (${sql.join(connIds.map(id => sql`${id}`), sql`, `)})`
-      )
-      .orderBy(workspaces.displayName);
+      );
 
-    return results;
+    // Decrypt masked fields (displayName, siteUrl) before sorting/returning so the
+    // Purview coverage view shows clear-text site names rather than MASKED:... blobs.
+    const decrypted = await this.decryptRows(rows, "workspaces");
+    decrypted.sort((a, b) => (a.displayName ?? "").localeCompare(b.displayName ?? ""));
+    return decrypted.map(({ tenantConnectionId, ...rest }) => rest);
   }
 
   async getOrgMembership(userId: string, organizationId: string): Promise<OrganizationUser | undefined> {
