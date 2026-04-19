@@ -153,7 +153,6 @@ export default function WorkspaceDetailsPage() {
     sensitivityLabelId: "",
     externalSharing: false,
     teamsConnected: false,
-    type: "",
     projectType: "",
   });
   const [customFieldValues, setCustomFieldValues] = useState<Record<string, any>>({});
@@ -170,7 +169,6 @@ export default function WorkspaceDetailsPage() {
 
         externalSharing: workspace.externalSharing,
         teamsConnected: workspace.teamsConnected,
-        type: workspace.type || "",
         projectType: workspace.projectType || "",
       });
       const existingCustom = workspace.customFields || {};
@@ -426,7 +424,6 @@ export default function WorkspaceDetailsPage() {
 
         externalSharing: workspace.externalSharing,
         teamsConnected: workspace.teamsConnected,
-        type: workspace.type || "",
         projectType: workspace.projectType || "",
       });
       const existingCustom2 = workspace.customFields || {};
