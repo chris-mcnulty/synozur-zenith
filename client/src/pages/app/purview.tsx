@@ -130,6 +130,11 @@ export default function PurviewConfigPage() {
     return !latest || new Date(l.syncedAt) > new Date(latest) ? l.syncedAt : latest;
   }, null as string | null) : null;
 
+  const SCOPE_FIX_DATE = new Date("2026-04-20T00:00:00Z");
+  const needsSensitivityResync =
+    labels.length > 0 &&
+    (!lastSynced || new Date(lastSynced) < SCOPE_FIX_DATE);
+
   const retentionLastSynced = retentionLabelsData.length > 0 ? retentionLabelsData.reduce((latest, l) => {
     if (!l.syncedAt) return latest;
     return !latest || new Date(l.syncedAt) > new Date(latest) ? l.syncedAt : latest;
@@ -489,6 +494,32 @@ export default function PurviewConfigPage() {
 
           {/* ── Site Sensitivity Labels Tab ── */}
           <TabsContent value="siteLabels" className="space-y-6 m-0 animate-in fade-in slide-in-from-bottom-4">
+            {needsSensitivityResync && (
+              <Card className="border-amber-500/30 bg-amber-500/5" data-testid="card-resync-banner">
+                <CardContent className="p-4 flex items-start gap-3">
+                  <AlertCircle className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
+                  <div className="flex-1 min-w-0">
+                    <h4 className="font-semibold text-sm text-amber-700">Re-sync recommended</h4>
+                    <p className="text-xs text-amber-600 mt-1">
+                      A fix was applied on April 20, 2026 to correctly detect which sensitivity labels apply to Groups &amp; sites.
+                      Your stored labels were last synced before this fix and may show incorrect scope data.
+                      Click <strong>Sync from Purview</strong> to re-fetch and correct all label scopes.
+                    </p>
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleSyncSensitivityLabels}
+                    disabled={isSyncingSensitivity}
+                    className="shrink-0 gap-1.5 border-amber-400/50 text-amber-700 hover:bg-amber-500/10"
+                    data-testid="button-resync-banner"
+                  >
+                    {isSyncingSensitivity ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCcw className="w-3.5 h-3.5" />}
+                    Sync Now
+                  </Button>
+                </CardContent>
+              </Card>
+            )}
             <div className="flex items-center justify-between">
               <div />
               <div className="flex gap-3 items-center">
@@ -656,6 +687,32 @@ export default function PurviewConfigPage() {
 
           {/* ── All Labels Tab ── */}
           <TabsContent value="allLabels" className="space-y-6 m-0 animate-in fade-in slide-in-from-bottom-4">
+            {needsSensitivityResync && (
+              <Card className="border-amber-500/30 bg-amber-500/5" data-testid="card-resync-banner-all">
+                <CardContent className="p-4 flex items-start gap-3">
+                  <AlertCircle className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
+                  <div className="flex-1 min-w-0">
+                    <h4 className="font-semibold text-sm text-amber-700">Re-sync recommended</h4>
+                    <p className="text-xs text-amber-600 mt-1">
+                      A fix was applied on April 20, 2026 to correctly detect which sensitivity labels apply to Groups &amp; sites.
+                      Your stored labels were last synced before this fix and may show incorrect scope data.
+                      Re-syncing will correct the <strong>appliesToGroupsSites</strong> flag for all labels.
+                    </p>
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleSyncSensitivityLabels}
+                    disabled={isSyncingSensitivity}
+                    className="shrink-0 gap-1.5 border-amber-400/50 text-amber-700 hover:bg-amber-500/10"
+                    data-testid="button-resync-banner-all"
+                  >
+                    {isSyncingSensitivity ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCcw className="w-3.5 h-3.5" />}
+                    Sync Now
+                  </Button>
+                </CardContent>
+              </Card>
+            )}
             <Card className="glass-panel border-border/50 shadow-xl">
               <CardHeader className="pb-4 border-b border-border/40">
                 <CardTitle>Complete Sensitivity Label Inventory</CardTitle>
