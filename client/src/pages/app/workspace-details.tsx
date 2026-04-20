@@ -90,6 +90,19 @@ export default function WorkspaceDetailsPage() {
     enabled: !!id,
   });
 
+  const { data: scoringResult } = useQuery<{
+    eligible: boolean;
+    score: number;
+    tier: string;
+    passingCount: number;
+    totalCount: number;
+    criteria: { key: string; label: string; pass: boolean; description: string; remediation: string }[];
+    blockers: { key: string; label: string; pass: boolean; description: string; remediation: string }[];
+  }>({
+    queryKey: [`/api/workspaces/${id}/copilot-readiness`],
+    enabled: !!id,
+  });
+
   const tenantConnectionId = workspace?.tenantConnectionId || "";
 
   const { data: dictEntries = [] } = useQuery<DataDictEntry[]>({
@@ -518,7 +531,10 @@ export default function WorkspaceDetailsPage() {
   const passCount = computedRules.filter(r => r.ruleResult === "PASS").length;
   const failCount = computedRules.filter(r => r.ruleResult === "FAIL").length;
   const allRulesPass = computedRules.length > 0 && failCount === 0;
-  const copilotEligible = allRulesPass || workspace.copilotReady;
+  // Scoring engine is the authoritative Copilot eligibility signal — same engine
+  // as the Copilot Readiness page. Fall back to the policy/DB flag only when the
+  // scoring result has not yet loaded.
+  const copilotEligible = scoringResult !== undefined ? scoringResult.eligible : (allRulesPass || workspace.copilotReady);
 
   const metadataFields = [
     { key: "department", label: "Department", required: requiredMetadataKeys.includes("department") },
@@ -1728,8 +1744,12 @@ export default function WorkspaceDetailsPage() {
           <Card className={`border-border/50 ${copilotEligible ? 'bg-gradient-to-br from-emerald-500/5 to-card' : 'bg-gradient-to-br from-card to-card/50'}`}>
             <CardHeader className="pb-2">
               <CardTitle className="text-base flex items-center justify-between">
-                {policyName}
-                {hasPolicyResults && (
+                Copilot Readiness
+                {scoringResult ? (
+                  <Badge variant={copilotEligible ? "default" : "destructive"} className={copilotEligible ? "bg-emerald-500/10 text-emerald-600 border-emerald-500/20" : "bg-destructive/10 text-destructive border-destructive/20"}>
+                    {scoringResult.passingCount}/{scoringResult.totalCount} criteria
+                  </Badge>
+                ) : hasPolicyResults && (
                   <Badge variant={copilotEligible ? "default" : "destructive"} className={copilotEligible ? "bg-emerald-500/10 text-emerald-600 border-emerald-500/20" : "bg-destructive/10 text-destructive border-destructive/20"}>
                     {passCount}/{computedRules.length} Passed
                   </Badge>
@@ -1737,7 +1757,7 @@ export default function WorkspaceDetailsPage() {
               </CardTitle>
             </CardHeader>
             <CardContent>
-              {!hasPolicyResults ? (
+              {!hasPolicyResults && !scoringResult ? (
                 <div className="flex items-center gap-3 py-4">
                   <div className="w-12 h-12 rounded-full flex items-center justify-center shrink-0 bg-muted">
                     <ShieldAlert className="w-6 h-6 text-muted-foreground" />
@@ -1757,10 +1777,39 @@ export default function WorkspaceDetailsPage() {
                       }
                     </div>
                     <div>
-                      <h4 className="font-semibold text-sm" data-testid="text-copilot-status">{copilotEligible ? "All Policies Passed" : "Action Required"}</h4>
-                      <p className="text-xs text-muted-foreground">{copilotEligible ? "All governance rules passed" : `${failCount} rule${failCount > 1 ? 's' : ''} failed — resolve to enable`}</p>
+                      <h4 className="font-semibold text-sm" data-testid="text-copilot-status">
+                        {copilotEligible ? "Copilot Ready" : "Action Required"}
+                      </h4>
+                      <p className="text-xs text-muted-foreground">
+                        {scoringResult
+                          ? copilotEligible
+                            ? `All ${scoringResult.totalCount} readiness criteria met`
+                            : `${scoringResult.blockers.length} criteria failing — resolve to enable`
+                          : copilotEligible
+                            ? "All governance rules passed"
+                            : `${failCount} rule${failCount > 1 ? 's' : ''} failed — resolve to enable`
+                        }
+                      </p>
                     </div>
                   </div>
+                  {scoringResult && scoringResult.blockers.length > 0 && (
+                    <div className="space-y-2 mb-4">
+                      {scoringResult.blockers.map(b => (
+                        <div key={b.key} className="flex items-start gap-2 text-xs p-2 rounded-lg bg-destructive/5" data-testid={`scoring-blocker-${b.key}`}>
+                          <ShieldAlert className="w-3.5 h-3.5 text-destructive shrink-0 mt-0.5" />
+                          <div>
+                            <span className="font-medium block text-destructive">{b.label}</span>
+                            <span className="text-muted-foreground">{b.remediation}</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {hasPolicyResults && (
+                    <p className="text-[10px] uppercase tracking-wider font-semibold text-muted-foreground mb-2 mt-1">
+                      Governance Policy Rules
+                    </p>
+                  )}
                   {policyResults?.policies && policyResults.policies.length > 0 ? (
                     <div className="space-y-4">
                       {policyResults.policies.map((pol) => {
