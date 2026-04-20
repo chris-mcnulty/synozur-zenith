@@ -2211,12 +2211,18 @@ export async function fetchSensitivityLabels(token: string): Promise<{
 
     const labels = allLabels.map((l: any) => {
       const contentFormats: string[] = l.contentFormats || [];
+      // When contentFormats is absent or empty the Graph beta endpoint has not
+      // populated scope information for this label. Rather than incorrectly
+      // hiding the label from site/group dropdowns, default to true so it
+      // remains usable. Only mark false when contentFormats is explicitly
+      // populated AND contains no site/group scope values.
+      const hasScopeData = contentFormats.length > 0;
       const appliesToGroupsSites =
+        !hasScopeData || // no scope data → assume applicable
         contentFormats.includes("site") ||
         contentFormats.includes("unifiedgroup") ||
         contentFormats.includes("schematizeddata") ||
-        (l.parent && l.parent["@odata.type"]?.includes("group")) ||
-        false;
+        (l.parent && l.parent["@odata.type"]?.includes("group"));
 
       return {
         id: l.id,
