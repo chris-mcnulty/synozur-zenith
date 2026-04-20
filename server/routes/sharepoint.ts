@@ -23,6 +23,34 @@ import {
 
 const router = Router();
 
+// Validate that sensitivity label rules are not violated by the given combination
+// of fields. Returns an error object describing the violation, or null if valid.
+// Highly Confidential workspaces cannot have external sharing or Copilot Ready enabled.
+function validateSensitivityPolicy(
+  sensitivity: string | null | undefined,
+  externalSharing: boolean | null | undefined,
+  copilotReady: boolean | null | undefined,
+): { error: string; message: string; violation: string } | null {
+  if (sensitivity === 'HIGHLY_CONFIDENTIAL') {
+    if (externalSharing === true) {
+      return {
+        error: 'SENSITIVITY_POLICY_VIOLATION',
+        message: 'External sharing cannot be enabled on Highly Confidential workspaces. Disable external sharing or change the sensitivity label first.',
+        violation: 'external_sharing_on_highly_confidential',
+      };
+    }
+    if (copilotReady === true) {
+      return {
+        error: 'SENSITIVITY_POLICY_VIOLATION',
+        message: 'Copilot Ready cannot be enabled on Highly Confidential workspaces. Change the sensitivity label first.',
+        violation: 'copilot_ready_on_highly_confidential',
+      };
+    }
+  }
+  return null;
+}
+
+
 // ── Workspaces (SharePoint Sites) ──
 router.get("/api/workspaces/writeback-pending", requireAuth(), async (req: AuthenticatedRequest, res) => {
   const tenantConnectionId = req.query.tenantConnectionId as string | undefined;
@@ -172,6 +200,14 @@ router.post("/api/workspaces/:id/telemetry/snapshot", requireRole(ZENITH_ROLES.G
 router.post("/api/workspaces", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN), async (req: AuthenticatedRequest, res) => {
   const parsed = insertWorkspaceSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ message: parsed.error.message });
+
+  const policyError = validateSensitivityPolicy(
+    parsed.data.sensitivity,
+    parsed.data.externalSharing,
+    parsed.data.copilotReady,
+  );
+  if (policyError) return res.status(400).json(policyError);
+
   const isPlatformOwner = req.user?.role === ZENITH_ROLES.PLATFORM_OWNER;
   if (!isPlatformOwner && parsed.data.tenantConnectionId) {
     const allowedIds = await getOrgTenantConnectionIds(req);
@@ -205,51 +241,29 @@ router.patch("/api/workspaces/:id", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, Z
   const effectiveExternalSharing = 'externalSharing' in body ? body.externalSharing : existing.externalSharing;
   const effectiveCopilotReady = 'copilotReady' in body ? body.copilotReady : existing.copilotReady;
 
-  if (effectiveSensitivity === 'HIGHLY_CONFIDENTIAL') {
-    if (effectiveExternalSharing === true) {
-      await storage.createAuditEntry({
-        userId: req.user?.id || null,
-        userEmail: req.user?.email || null,
-        action: 'SENSITIVITY_POLICY_VIOLATION',
-        resource: 'workspace',
-        resourceId: req.params.id,
-        organizationId: req.user?.organizationId || null,
-        tenantConnectionId: existing.tenantConnectionId || null,
-        details: {
-          workspaceName: existing.displayName,
-          violation: 'external_sharing_on_highly_confidential',
-          attemptedValue: true,
-        },
-        result: 'DENIED',
-        ipAddress: req.ip || null,
-      });
-      return res.status(400).json({
-        error: 'SENSITIVITY_POLICY_VIOLATION',
-        message: 'External sharing cannot be enabled on Highly Confidential workspaces. Disable external sharing or change the sensitivity label first.',
-      });
-    }
-    if (effectiveCopilotReady === true) {
-      await storage.createAuditEntry({
-        userId: req.user?.id || null,
-        userEmail: req.user?.email || null,
-        action: 'SENSITIVITY_POLICY_VIOLATION',
-        resource: 'workspace',
-        resourceId: req.params.id,
-        organizationId: req.user?.organizationId || null,
-        tenantConnectionId: existing.tenantConnectionId || null,
-        details: {
-          workspaceName: existing.displayName,
-          violation: 'copilot_ready_on_highly_confidential',
-          attemptedValue: true,
-        },
-        result: 'DENIED',
-        ipAddress: req.ip || null,
-      });
-      return res.status(400).json({
-        error: 'SENSITIVITY_POLICY_VIOLATION',
-        message: 'Copilot Ready cannot be enabled on Highly Confidential workspaces. Change the sensitivity label first.',
-      });
-    }
+  const policyError = validateSensitivityPolicy(
+    effectiveSensitivity,
+    effectiveExternalSharing,
+    effectiveCopilotReady,
+  );
+  if (policyError) {
+    await storage.createAuditEntry({
+      userId: req.user?.id || null,
+      userEmail: req.user?.email || null,
+      action: 'SENSITIVITY_POLICY_VIOLATION',
+      resource: 'workspace',
+      resourceId: req.params.id,
+      organizationId: req.user?.organizationId || null,
+      tenantConnectionId: existing.tenantConnectionId || null,
+      details: {
+        workspaceName: existing.displayName,
+        violation: policyError.violation,
+        attemptedValue: true,
+      },
+      result: 'DENIED',
+      ipAddress: req.ip || null,
+    });
+    return res.status(400).json(policyError);
   }
 
   const sensitivityLabelChanged = 'sensitivityLabelId' in body &&
@@ -1467,13 +1481,56 @@ router.patch("/api/workspaces/bulk/update", requireRole(ZENITH_ROLES.GOVERNANCE_
   if (!Array.isArray(ids) || ids.length === 0) {
     return res.status(400).json({ message: "ids array is required" });
   }
+  if (!updates || typeof updates !== 'object' || Array.isArray(updates)) {
+    return res.status(400).json({ message: "updates must be an object" });
+  }
+
+  // Fetch all target workspaces in parallel once; reuse for scope + policy checks
+  // to avoid repeated per-workspace DB round-trips.
+  const workspaceResults = await Promise.all(ids.map(id => storage.getWorkspace(id)));
+  const workspaceMap = new Map<string, typeof workspaceResults[number]>();
+  for (let i = 0; i < ids.length; i++) {
+    const ws = workspaceResults[i];
+    if (ws) workspaceMap.set(ids[i], ws);
+  }
+
+  // Scope validation first so we never leak workspace names for out-of-scope IDs.
   const allowedIds = await getOrgTenantConnectionIds(req);
   if (allowedIds !== null) {
     for (const wsId of ids) {
-      if (!(await isWorkspaceInScope(req, wsId))) {
+      const ws = workspaceMap.get(wsId);
+      if (!ws?.tenantConnectionId || !allowedIds.includes(ws.tenantConnectionId)) {
         return res.status(403).json({ message: "One or more workspaces are outside your organization scope" });
       }
     }
+  }
+
+  // Sensitivity policy validation using pre-fetched workspaces.
+  // Skip when the update cannot possibly trigger a violation.
+  const couldViolatePolicy =
+    updates.sensitivity === 'HIGHLY_CONFIDENTIAL' ||
+    updates.externalSharing === true ||
+    updates.copilotReady === true;
+  if (couldViolatePolicy) {
+    for (const wsId of ids) {
+      const existing = workspaceMap.get(wsId);
+      if (!existing) continue;
+      const effectiveSensitivity = 'sensitivity' in updates ? updates.sensitivity : existing.sensitivity;
+      const effectiveExternalSharing = 'externalSharing' in updates ? updates.externalSharing : existing.externalSharing;
+      const effectiveCopilotReady = 'copilotReady' in updates ? updates.copilotReady : existing.copilotReady;
+      const policyError = validateSensitivityPolicy(effectiveSensitivity, effectiveExternalSharing, effectiveCopilotReady);
+      if (policyError) {
+        return res.status(400).json({
+          ...policyError,
+          workspaceId: wsId,
+          workspaceName: existing.displayName,
+        });
+      }
+    }
+  }
+
+  // Perform the DB update; use the scoped variant when the caller has restricted access.
+  if (allowedIds !== null) {
     await storage.bulkUpdateWorkspacesScoped(ids, updates, allowedIds);
   } else {
     await storage.bulkUpdateWorkspaces(ids, updates);
