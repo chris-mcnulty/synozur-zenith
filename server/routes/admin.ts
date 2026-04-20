@@ -4,12 +4,54 @@ import { ZENITH_ROLES, SERVICE_PLANS, type ServicePlanTier } from "@shared/schem
 import { storage } from "../storage";
 import { getPlanFeatures } from "../services/feature-gate";
 import { invalidateDefaultSignupPlanCache } from "../utils/platformSettingsCache";
+import { buildRequiredFieldsByTenantId, evaluateMetadataCompleteness } from "../services/metadata-completeness";
+import { getAccessibleTenantConnectionIds, getOwnedTenantConnectionIds } from "./scope-helpers";
 
 const router = Router();
+
+// Resolve which tenant connection IDs the dashboard should aggregate over.
+// If the client passed ?tenantConnectionId=..., narrow to just that one (after
+// verifying it is in the caller's broader accessible set, which includes
+// MSP-granted tenants — so an MSP user can drill into a managed tenant via
+// the selector). Otherwise default to the org's OWN tenants only — managed
+// tenants are intentionally excluded from aggregate org views and are reachable
+// only via the tenant selector until a dedicated MSP overview page exists.
+async function resolveDashboardTenantIds(
+  req: AuthenticatedRequest,
+  requested: string | undefined,
+): Promise<{ tenantIds: string[] | null; forbidden?: boolean }> {
+  if (requested) {
+    const accessible = await getAccessibleTenantConnectionIds(req);
+    const isAllowed = accessible === null || accessible.includes(requested);
+    if (!isAllowed) return { tenantIds: [], forbidden: true };
+    return { tenantIds: [requested] };
+  }
+
+  // Default aggregate: own tenants only.
+  // null = Platform Owner with global visibility; caller treats as "no
+  // narrowing" and aggregates across every tenant the platform knows about.
+  const owned = await getOwnedTenantConnectionIds(req);
+  return { tenantIds: owned };
+}
+
+async function loadWorkspacesForScope(tenantIds: string[] | null) {
+  if (tenantIds === null) {
+    // Platform Owner: aggregate across every tenant in the system.
+    return storage.getWorkspaces();
+  }
+  if (tenantIds.length === 0) return [];
+  const perTenantResults = await Promise.all(
+    tenantIds.map(tid => storage.getWorkspaces(undefined, tid))
+  );
+  return perTenantResults.flat();
+}
 
 // ── Dashboard Stats ──
 router.get("/api/stats", requireAuth(), async (req: AuthenticatedRequest, res) => {
   const orgId = req.activeOrganizationId;
+  const requestedTenantId = typeof req.query.tenantConnectionId === "string" && req.query.tenantConnectionId.length > 0
+    ? req.query.tenantConnectionId
+    : undefined;
 
   const EMPTY_STATS = {
     totalWorkspaces: 0,
@@ -24,22 +66,27 @@ router.get("/api/stats", requireAuth(), async (req: AuthenticatedRequest, res) =
 
   if (!orgId) return res.json(EMPTY_STATS);
 
-  // Scope workspaces to this org's tenant connections only
-  const tenants = await storage.getTenantConnections(orgId);
-  const tenantIds = tenants.map(t => t.id);
+  const { tenantIds, forbidden } = await resolveDashboardTenantIds(req, requestedTenantId);
+  if (forbidden) return res.status(403).json({ error: "Access denied to the requested tenant" });
 
-  let allWorkspaces: Awaited<ReturnType<typeof storage.getWorkspaces>> = [];
-  if (tenantIds.length > 0) {
-    const perTenantResults = await Promise.all(
-      tenantIds.map(tid => storage.getWorkspaces(undefined, tid))
-    );
-    allWorkspaces = perTenantResults.flat();
-  }
+  const allWorkspaces = await loadWorkspacesForScope(tenantIds);
 
   const total = allWorkspaces.length;
   const copilotReady = allWorkspaces.filter(w => w.copilotReady).length;
-  const metadataComplete = allWorkspaces.filter(w => w.metadataStatus === "COMPLETE").length;
-  const metadataMissing = allWorkspaces.filter(w => w.metadataStatus === "MISSING_REQUIRED").length;
+
+  // Dynamic metadata completeness — evaluate each workspace against its tenant's
+  // configured Required Metadata Fields (Data Dictionary). Tenants with zero
+  // required fields configured pass automatically. The legacy static
+  // `workspace.metadataStatus` field is no longer consulted because it is set
+  // only at provisioning time and never recomputed.
+  const requiredFieldsByTenantId = await buildRequiredFieldsByTenantId(allWorkspaces);
+  let metadataComplete = 0;
+  let metadataMissing = 0;
+  for (const ws of allWorkspaces) {
+    const fields = ws.tenantConnectionId ? (requiredFieldsByTenantId[ws.tenantConnectionId] || []) : [];
+    if (evaluateMetadataCompleteness(ws, fields).pass) metadataComplete++;
+    else metadataMissing++;
+  }
   const highlyConfidential = allWorkspaces.filter(w => w.sensitivity === "HIGHLY_CONFIDENTIAL").length;
 
   // Scope provisioning requests to this org
@@ -64,22 +111,26 @@ router.get("/api/dashboard", requireAuth(), async (req: AuthenticatedRequest, re
   if (!orgId) {
     return res.status(403).json({ error: "No active organization context. Please select an organization." });
   }
+  const requestedTenantId = typeof req.query.tenantConnectionId === "string" && req.query.tenantConnectionId.length > 0
+    ? req.query.tenantConnectionId
+    : undefined;
 
-  // Service Status — tenant connections for the org (used to scope workspaces too)
+  // Service Status — always show all of the org's tenants in the status panel,
+  // regardless of which one is selected (it's the per-tenant health overview).
   const tenants = await storage.getTenantConnections(orgId);
-  const tenantIds = tenants.map(t => t.id);
 
-  // Fetch org-scoped workspaces by iterating over org's tenant connections
-  let allWorkspaces: Awaited<ReturnType<typeof storage.getWorkspaces>> = [];
-  if (tenantIds.length > 0) {
-    const perTenantResults = await Promise.all(
-      tenantIds.map(tid => storage.getWorkspaces(undefined, tid))
-    );
-    allWorkspaces = perTenantResults.flat();
-  }
+  // Workspace aggregates respect the tenant selector when one is chosen.
+  const { tenantIds, forbidden } = await resolveDashboardTenantIds(req, requestedTenantId);
+  if (forbidden) return res.status(403).json({ error: "Access denied to the requested tenant" });
 
-  // Alert 1: Missing required metadata
-  const missingMetadata = allWorkspaces.filter(w => w.metadataStatus === "MISSING_REQUIRED").length;
+  const allWorkspaces = await loadWorkspacesForScope(tenantIds);
+
+  // Alert 1: Missing required metadata — dynamic per-tenant evaluation
+  const requiredFieldsByTenantIdForAlerts = await buildRequiredFieldsByTenantId(allWorkspaces);
+  const missingMetadata = allWorkspaces.filter(w => {
+    const fields = w.tenantConnectionId ? (requiredFieldsByTenantIdForAlerts[w.tenantConnectionId] || []) : [];
+    return !evaluateMetadataCompleteness(w, fields).pass;
+  }).length;
 
   // Alert 2: Workspaces with fewer than 2 owners
   const fewOwners = allWorkspaces.filter(w => {
@@ -146,6 +197,7 @@ router.get("/api/audit-log", requireAuth(), requireRole(ZENITH_ROLES.PLATFORM_OW
 
     const {
       action,
+      resource,
       userId,
       userEmail,
       result,
@@ -153,6 +205,7 @@ router.get("/api/audit-log", requireAuth(), requireRole(ZENITH_ROLES.PLATFORM_OW
       endDate: endDateStr,
       page: pageStr,
       limit: limitStr,
+      tenantConnectionId: requestedTenantId,
     } = req.query as Record<string, string | undefined>;
 
     const limit = Math.min(parseInt(limitStr || "50", 10), 500);
@@ -162,9 +215,42 @@ router.get("/api/audit-log", requireAuth(), requireRole(ZENITH_ROLES.PLATFORM_OW
     const startDate = startDateStr ? new Date(startDateStr) : undefined;
     const endDate = endDateStr ? new Date(endDateStr + "T23:59:59.999Z") : undefined;
 
+    // Tenant scoping.
+    //  - Platform Owner with no requested tenant => true global view (no narrowing).
+    //  - Caller requested a specific tenant      => verify it's in their accessible
+    //    set (own + MSP grants), so an MSP user can audit a managed tenant via
+    //    the selector.
+    //  - Otherwise (regular user)                => default to OWN tenants only.
+    //    If the caller has zero own tenants, restrict to org-level (null tenant)
+    //    rows so we don't leak tenant-tagged events from the org.
+    const isPlatformOwner = req.user?.role === ZENITH_ROLES.PLATFORM_OWNER;
+    let tenantConnectionId: string | undefined;
+    let tenantConnectionIds: string[] | undefined;
+    let restrictToNullTenant = false;
+
+    if (requestedTenantId) {
+      const accessible = await getAccessibleTenantConnectionIds(req);
+      const isAllowed = accessible === null || accessible.includes(requestedTenantId);
+      if (!isAllowed) return res.status(403).json({ error: "Access denied to the requested tenant" });
+      tenantConnectionId = requestedTenantId;
+    } else if (!isPlatformOwner) {
+      const owned = await getOwnedTenantConnectionIds(req);
+      if (owned === null) {
+        // Effectively global; no narrowing.
+      } else if (owned.length > 0) {
+        tenantConnectionIds = owned;
+      } else {
+        restrictToNullTenant = true;
+      }
+    }
+
     const { rows, total } = await storage.getAuditLog({
       orgId,
+      tenantConnectionId,
+      tenantConnectionIds,
+      onlyNullTenant: restrictToNullTenant,
       action: action || undefined,
+      resource: resource || undefined,
       userId: userId || undefined,
       userEmail: userEmail || undefined,
       result: result || undefined,
@@ -359,14 +445,43 @@ router.get("/api/admin/platform/settings", requireRole(ZENITH_ROLES.TENANT_ADMIN
 
 router.patch("/api/admin/platform/settings", requireRole(ZENITH_ROLES.PLATFORM_OWNER), async (req: AuthenticatedRequest, res) => {
   try {
-    const { defaultSignupPlan } = req.body;
-    if (!defaultSignupPlan || !SERVICE_PLANS.includes(defaultSignupPlan)) {
-      return res.status(400).json({ error: `Invalid defaultSignupPlan. Must be one of: ${SERVICE_PLANS.join(", ")}` });
-    }
-    const updated = await storage.updatePlatformSettings({
-      defaultSignupPlan,
+    const { defaultSignupPlan, plannerPlanId, plannerBucketId } = req.body ?? {};
+
+    const patch: { defaultSignupPlan?: string; plannerPlanId?: string | null; plannerBucketId?: string | null; updatedBy?: string | null } = {
       updatedBy: req.user?.id ?? null,
-    });
+    };
+
+    if (defaultSignupPlan !== undefined) {
+      if (!defaultSignupPlan || !SERVICE_PLANS.includes(defaultSignupPlan)) {
+        return res.status(400).json({ error: `Invalid defaultSignupPlan. Must be one of: ${SERVICE_PLANS.join(", ")}` });
+      }
+      patch.defaultSignupPlan = defaultSignupPlan;
+    }
+
+    // Planner Plan/Bucket IDs are GUIDs from Microsoft Graph. Allow null/empty
+    // string to clear the value (which disables the integration), otherwise
+    // require a non-trivial string. We do not enforce a strict GUID regex
+    // because Planner ids are opaque tokens, not standard UUIDs.
+    if (plannerPlanId !== undefined) {
+      if (plannerPlanId === null || plannerPlanId === "") {
+        patch.plannerPlanId = null;
+      } else if (typeof plannerPlanId !== "string" || plannerPlanId.trim().length < 8) {
+        return res.status(400).json({ error: "plannerPlanId must be at least 8 characters" });
+      } else {
+        patch.plannerPlanId = plannerPlanId.trim();
+      }
+    }
+    if (plannerBucketId !== undefined) {
+      if (plannerBucketId === null || plannerBucketId === "") {
+        patch.plannerBucketId = null;
+      } else if (typeof plannerBucketId !== "string" || plannerBucketId.trim().length < 8) {
+        return res.status(400).json({ error: "plannerBucketId must be at least 8 characters" });
+      } else {
+        patch.plannerBucketId = plannerBucketId.trim();
+      }
+    }
+
+    const updated = await storage.updatePlatformSettings(patch);
     invalidateDefaultSignupPlanCache();
     res.json(updated);
   } catch (err: any) {

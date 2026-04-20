@@ -1,4 +1,4 @@
-import { eq, desc, ilike, or, and, sql, gt, lt, max, gte, lte, inArray, isNull } from "drizzle-orm";
+import { eq, desc, ilike, or, and, sql, gt, lt, max, gte, lte, inArray, isNull, isNotNull } from "drizzle-orm";
 import { db } from "./db";
 import {
   workspaces,
@@ -16,6 +16,8 @@ import {
   tenantDataDictionaries,
   sensitivityLabels,
   retentionLabels,
+  aiAgentSkills,
+  AI_SKILL_KEYS,
   type Workspace,
   type InsertWorkspace,
   type ProvisioningRequest,
@@ -46,6 +48,7 @@ import {
   type InsertSensitivityLabel,
   type RetentionLabel,
   type InsertRetentionLabel,
+  type AiAgentSkill,
   customFieldDefinitions,
   type CustomFieldDefinition,
   type InsertCustomFieldDefinition,
@@ -127,11 +130,30 @@ import {
   governanceReviewFindings,
   type GovernanceReviewFinding,
   type InsertGovernanceReviewFinding,
+  aiGroundingDocuments,
+  type AiGroundingDocument,
+  type InsertAiGroundingDocument,
+  copilotInteractions,
+  type CopilotInteraction,
+  type InsertCopilotInteraction,
+  copilotPromptAssessments,
+  type CopilotPromptAssessment,
+  type InsertCopilotPromptAssessment,
+  type CopilotPromptFlag,
+  copilotSyncRuns,
+  type CopilotSyncRun,
+  type InsertCopilotSyncRun,
+  scheduledJobRuns,
+  type ScheduledJobRun,
+  type InsertScheduledJobRun,
+  type JobType,
+  type JobStatus,
 } from "@shared/schema";
 import {
   decryptRecord,
   encryptRecord,
   getTenantKeyBuffer,
+  isMaskedValue,
   maskEmailReportSummary,
   unmaskEmailReportSummary,
 } from "./services/data-masking";
@@ -224,6 +246,7 @@ export interface IStorage {
   getAuditLog(filters?: {
     orgId?: string;
     action?: string;
+    resource?: string;
     userId?: string;
     userEmail?: string;
     result?: string;
@@ -293,7 +316,8 @@ export interface IStorage {
   updateOrganizationSettings(id: string, updates: Partial<InsertOrganization>): Promise<Organization | undefined>;
 
   getPlatformSettings(): Promise<PlatformSettings>;
-  updatePlatformSettings(patch: { defaultSignupPlan: string; updatedBy?: string | null }): Promise<PlatformSettings>;
+  updatePlatformSettings(patch: { defaultSignupPlan?: string; plannerPlanId?: string | null; plannerBucketId?: string | null; updatedBy?: string | null }): Promise<PlatformSettings>;
+  setSupportTicketPlannerTaskId(id: string, plannerTaskId: string): Promise<void>;
 
   // Teams recordings discovery
   upsertTeamsRecording(data: InsertTeamsRecording): Promise<TeamsRecording>;
@@ -313,6 +337,8 @@ export interface IStorage {
   upsertChannelsInventory(data: InsertChannelsInventory): Promise<ChannelsInventoryItem>;
   getChannelsInventory(tenantConnectionId: string, teamId?: string): Promise<ChannelsInventoryItem[]>;
   getTeamsInventorySummary(tenantConnectionIds?: string[]): Promise<TeamsChannelsSummary[]>;
+  markMissingTeamsInventoryAsDeleted(tenantConnectionId: string, runStartedAt: Date): Promise<number>;
+  markMissingChannelsInventoryAsDeleted(tenantConnectionId: string, runStartedAt: Date): Promise<number>;
 
   // OneDrive inventory
   upsertOnedriveInventory(data: InsertOnedriveInventory): Promise<OnedriveInventoryItem>;
@@ -322,7 +348,7 @@ export interface IStorage {
   bulkExcludeNoDriveAccounts(tenantConnectionId: string, exclusionReason?: string): Promise<number>;
 
   // Support tickets
-  createSupportTicket(data: Omit<SupportTicket, 'id' | 'createdAt' | 'updatedAt' | 'resolvedAt' | 'resolvedBy' | 'assignedTo'>): Promise<SupportTicket>;
+  createSupportTicket(data: Omit<SupportTicket, 'id' | 'createdAt' | 'updatedAt' | 'resolvedAt' | 'resolvedBy' | 'assignedTo' | 'plannerTaskId'>): Promise<SupportTicket>;
   getSupportTickets(orgId: string | null, userId: string, isAdmin: boolean): Promise<SupportTicket[]>;
   getSupportTicket(id: string, orgId: string | null, userId?: string): Promise<SupportTicket | null>;
   getTicketReplies(ticketId: string, includeInternal: boolean): Promise<SupportTicketReply[]>;
@@ -373,9 +399,19 @@ export interface IStorage {
 
   // Content Governance - sharing links inventory
   upsertSharingLink(data: InsertSharingLink): Promise<SharingLink>;
+  getSharingLinkSummary(tenantConnectionId: string): Promise<Array<{
+    resourceId: string;
+    resourceName: string | null;
+    resourceType: string;
+    totalLinks: number;
+    anonymousLinks: number;
+    organizationLinks: number;
+    specificLinks: number;
+  }>>;
   getSharingLinksPaginated(params: {
     tenantConnectionId: string;
     resourceType?: string;
+    resourceId?: string;
     linkType?: string;
     page: number;
     pageSize: number;
@@ -438,6 +474,11 @@ export interface IStorage {
   getUserInventoryRuns(tenantConnectionId: string, limit?: number): Promise<UserInventoryRun[]>;
   purgeUserInventory(tenantConnectionId: string): Promise<number>;
 
+  // ── AI Agent Skills ───────────────────────────────────────────────────────
+  getAiAgentSkills(organizationId: string): Promise<AiAgentSkill[]>;
+  upsertAiAgentSkill(organizationId: string, skillKey: string, isEnabled: boolean, updatedBy?: string): Promise<AiAgentSkill>;
+  isAiSkillEnabled(organizationId: string, skillKey: string): Promise<boolean>;
+
   // ── Email Content Storage Report ─────────────────────────────────────────
   createEmailStorageReport(data: InsertEmailStorageReport): Promise<EmailStorageReport>;
   updateEmailStorageReport(
@@ -445,11 +486,72 @@ export interface IStorage {
     updates: Partial<InsertEmailStorageReport> & { completedAt?: Date | null },
   ): Promise<EmailStorageReport | undefined>;
   getEmailStorageReport(id: string): Promise<EmailStorageReport | undefined>;
+  deleteEmailStorageReport(id: string): Promise<boolean>;
   getEmailStorageReports(
     tenantConnectionId: string,
     limit?: number,
   ): Promise<EmailStorageReport[]>;
   getLatestEmailStorageReport(tenantConnectionId: string): Promise<EmailStorageReport | undefined>;
+
+  // ── AI Grounding Documents ────────────────────────────────────────────────
+  getGroundingDocuments(scope: 'system' | 'org', orgId?: string): Promise<AiGroundingDocument[]>;
+  getGroundingDocument(id: string): Promise<AiGroundingDocument | undefined>;
+  createGroundingDocument(data: InsertAiGroundingDocument): Promise<AiGroundingDocument>;
+  updateGroundingDocument(id: string, updates: Partial<InsertAiGroundingDocument>): Promise<AiGroundingDocument | undefined>;
+  deleteGroundingDocument(id: string): Promise<void>;
+
+  // Copilot Prompt Intelligence
+  getUnanalyzedCopilotInteractionIds(tenantConnectionId: string, limit?: number): Promise<string[]>;
+  updateCopilotInteractionAnalysis(id: string, analysis: { qualityScore: number; qualityTier: string; riskLevel: string; flags: CopilotPromptFlag[]; recommendation: string | null }): Promise<void>;
+  getCopilotInteractionsForTenant(tenantConnectionId: string, options?: { limit?: number; offset?: number; includePromptText?: boolean }): Promise<{ rows: Array<Omit<CopilotInteraction, 'promptText'> & { promptText?: string }>; total: number }>;
+  loadCopilotInteractionsForAnalysis(tenantConnectionId: string): Promise<CopilotInteraction[]>;
+  purgeCopilotInteractions(tenantConnectionId: string): Promise<number>;
+  getLatestCopilotInteractionDateForUser(tenantConnectionId: string, userPrincipalName: string): Promise<Date | null>;
+  getLatestCopilotInteractionDateByUserId(tenantConnectionId: string, entraUserId: string): Promise<Date | null>;
+  getCopilotPromptAssessment(id: string): Promise<CopilotPromptAssessment | undefined>;
+  getLatestCopilotPromptAssessment(tenantConnectionId: string): Promise<CopilotPromptAssessment | undefined>;
+  listCopilotPromptAssessmentsForOrg(organizationId: string, opts?: { tenantConnectionId?: string; limit?: number; offset?: number }): Promise<{ rows: CopilotPromptAssessment[]; total: number }>;
+  listCopilotPromptAssessmentsByTenant(tenantConnectionId: string, opts?: { limit?: number; offset?: number }): Promise<{ rows: CopilotPromptAssessment[]; total: number }>;
+  createCopilotPromptAssessment(data: InsertCopilotPromptAssessment): Promise<CopilotPromptAssessment>;
+  updateCopilotPromptAssessment(id: string, updates: Partial<InsertCopilotPromptAssessment>): Promise<CopilotPromptAssessment | undefined>;
+  failStaleCopilotAssessments(tenantConnectionId: string): Promise<void>;
+  findRunningCopilotAssessment(tenantConnectionId: string): Promise<string | null>;
+  // Copilot Sync Runs
+  createCopilotSyncRun(data: InsertCopilotSyncRun): Promise<CopilotSyncRun>;
+  updateCopilotSyncRun(id: string, updates: Partial<InsertCopilotSyncRun>): Promise<CopilotSyncRun | undefined>;
+  getCopilotSyncRun(id: string): Promise<CopilotSyncRun | undefined>;
+  getLatestCopilotSyncRun(tenantConnectionId: string): Promise<CopilotSyncRun | undefined>;
+  listCopilotSyncRuns(tenantConnectionId: string, opts?: { limit?: number; offset?: number }): Promise<{ rows: CopilotSyncRun[]; total: number }>;
+  failStaleCopilotSyncRuns(tenantConnectionId: string): Promise<void>;
+
+  // ── BL-039: Scheduled Job Runs (unified job audit trail) ──────────────────
+  createScheduledJobRun(data: InsertScheduledJobRun): Promise<ScheduledJobRun>;
+  updateScheduledJobRun(
+    id: string,
+    updates: Partial<InsertScheduledJobRun> & { completedAt?: Date | null; status?: JobStatus },
+  ): Promise<ScheduledJobRun | undefined>;
+  getScheduledJobRun(id: string): Promise<ScheduledJobRun | undefined>;
+  listScheduledJobRuns(filters: {
+    organizationId?: string | null;
+    tenantConnectionId?: string | null;
+    tenantConnectionIds?: string[];
+    jobType?: JobType;
+    status?: JobStatus;
+    from?: Date;
+    to?: Date;
+    limit?: number;
+    offset?: number;
+  }): Promise<{ rows: ScheduledJobRun[]; total: number }>;
+  getLatestCompletedJobRun(
+    tenantConnectionId: string,
+    jobType: JobType,
+  ): Promise<Date | null>;
+  /**
+   * Marks any scheduled_job_runs rows in `running` state with `started_at`
+   * older than `maxAgeMs` as `failed`. Used on process startup to clean up
+   * runs orphaned by a previous crash/restart.
+   */
+  reconcileOrphanedJobRuns(maxAgeMs?: number): Promise<number>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -470,8 +572,36 @@ export class DatabaseStorage implements IStorage {
     return buffer;
   }
 
+  /**
+   * Like getKeyBufferForTenant but used for READ (decrypt) paths only.
+   * Returns the key even when dataMaskingEnabled is currently false — because
+   * data encrypted during a prior masking-on period must still be decryptable
+   * after masking is toggled off, otherwise MASKED: values bleed through to the UI.
+   * Writes still go through getKeyBufferForTenant and respect the flag.
+   */
+  private async getKeyBufferForDecrypt(tenantConnectionId: string): Promise<Buffer | null> {
+    const cacheKey = `decrypt:${tenantConnectionId}`;
+    const cached = this.keyCache.get(cacheKey);
+    if (cached && cached.expiry > Date.now()) return cached.buffer;
+
+    const keyRecord = await this.getTenantEncryptionKey(tenantConnectionId);
+    if (!keyRecord) return null;
+
+    try {
+      const buffer = getTenantKeyBuffer(keyRecord.encryptedKey);
+      this.keyCache.set(cacheKey, { buffer, expiry: Date.now() + 60000 });
+      return buffer;
+    } catch (err: any) {
+      // Master ENCRYPTION_KEY may have changed — per-tenant key can't be unwrapped.
+      // Log so this is visible in server logs and return null (data will show as MASKED:).
+      console.error(`[data-masking] Failed to unwrap tenant key for tenantConnectionId="${tenantConnectionId}": ${err?.message ?? err}`);
+      return null;
+    }
+  }
+
   invalidateKeyCache(tenantConnectionId: string): void {
     this.keyCache.delete(tenantConnectionId);
+    this.keyCache.delete(`decrypt:${tenantConnectionId}`);
   }
 
   private async encryptForTenant<T extends Record<string, any>>(data: T, tableName: string, tenantConnectionId: string): Promise<T> {
@@ -487,7 +617,10 @@ export class DatabaseStorage implements IStorage {
     const keyMap = new Map<string, Buffer>();
 
     for (const tid of tenantIds) {
-      const buf = await this.getKeyBufferForTenant(tid);
+      // Use the decrypt-specific key fetch: decrypts MASKED: values even when
+      // dataMaskingEnabled is currently false (data encrypted during a prior on-period
+      // must still be readable after toggling masking off).
+      const buf = await this.getKeyBufferForDecrypt(tid);
       if (buf) keyMap.set(tid, buf);
     }
 
@@ -503,6 +636,10 @@ export class DatabaseStorage implements IStorage {
 
   async getWorkspaces(search?: string, tenantConnectionId?: string, organizationId?: string): Promise<Workspace[]> {
     const conditions = [];
+
+    // Always exclude soft-deleted and M365-archived sites from the governance inventory
+    conditions.push(eq(workspaces.isDeleted, false));
+    conditions.push(eq(workspaces.isArchived, false));
 
     if (search) {
       conditions.push(
@@ -533,18 +670,17 @@ export class DatabaseStorage implements IStorage {
       conditions.push(sql`${workspaces.tenantConnectionId} = ANY(ARRAY[${sql.join(orgConnectionIds.map(id => sql`${id}`), sql`, `)}]::text[])`);
     }
 
-    let rows: Workspace[];
-    if (conditions.length > 0) {
-      rows = await db.select().from(workspaces).where(and(...conditions)).orderBy(desc(workspaces.createdAt));
-    } else {
-      rows = await db.select().from(workspaces).orderBy(desc(workspaces.createdAt));
-    }
+    const rows = await db.select().from(workspaces).where(and(...conditions)).orderBy(desc(workspaces.createdAt));
     return this.decryptRows(rows, "workspaces") as Promise<Workspace[]>;
   }
 
   async getWorkspacesPaginated(params: { page: number; pageSize: number; search?: string; tenantConnectionId?: string; tenantConnectionIds?: string[]; organizationId?: string }): Promise<{ items: Workspace[]; total: number }> {
     const { page, pageSize, search, tenantConnectionId, tenantConnectionIds, organizationId } = params;
     const conditions = [];
+
+    // Always exclude soft-deleted and M365-archived sites from the governance inventory
+    conditions.push(eq(workspaces.isDeleted, false));
+    conditions.push(eq(workspaces.isArchived, false));
 
     if (search) {
       conditions.push(
@@ -596,6 +732,8 @@ export class DatabaseStorage implements IStorage {
       .where(
         and(
           eq(workspaces.tenantConnectionId, tenantConnectionId),
+          eq(workspaces.isDeleted, false),
+          eq(workspaces.isArchived, false),
           or(
             isNull(workspaces.sensitivityLabelId),
             eq(workspaces.retentionPolicy, ""),
@@ -614,6 +752,8 @@ export class DatabaseStorage implements IStorage {
       .where(
         and(
           eq(workspaces.tenantConnectionId, tenantConnectionId),
+          eq(workspaces.isDeleted, false),
+          eq(workspaces.isArchived, false),
           sql`${workspaces.owners} < 2`,
         ),
       );
@@ -703,13 +843,13 @@ export class DatabaseStorage implements IStorage {
     }
   }
 
-  async getProvisioningRequests(orgId: string | null): Promise<ProvisioningRequest[]> {
-    if (orgId) {
-      return db.select().from(provisioningRequests)
-        .where(eq(provisioningRequests.organizationId, orgId))
-        .orderBy(desc(provisioningRequests.createdAt));
-    }
-    return db.select().from(provisioningRequests).orderBy(desc(provisioningRequests.createdAt));
+  async getProvisioningRequests(orgId: string | null, tenantConnectionId?: string): Promise<ProvisioningRequest[]> {
+    const conditions: any[] = [];
+    if (orgId) conditions.push(eq(provisioningRequests.organizationId, orgId));
+    if (tenantConnectionId) conditions.push(eq(provisioningRequests.tenantConnectionId, tenantConnectionId));
+    const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
+    const query = db.select().from(provisioningRequests).orderBy(desc(provisioningRequests.createdAt));
+    return whereClause ? query.where(whereClause) : query;
   }
 
   async getProvisioningRequest(id: string): Promise<ProvisioningRequest | undefined> {
@@ -1245,7 +1385,11 @@ export class DatabaseStorage implements IStorage {
 
   async getAuditLog(filters: {
     orgId?: string;
+    tenantConnectionId?: string;
+    tenantConnectionIds?: string[];
+    onlyNullTenant?: boolean;
     action?: string;
+    resource?: string;
     userId?: string;
     userEmail?: string;
     result?: string;
@@ -1254,11 +1398,25 @@ export class DatabaseStorage implements IStorage {
     limit?: number;
     offset?: number;
   } = {}): Promise<{ rows: AuditLog[]; total: number }> {
-    const { orgId, action, userId, userEmail, result, startDate, endDate, limit = 100, offset = 0 } = filters;
+    const { orgId, tenantConnectionId, tenantConnectionIds, onlyNullTenant, action, resource, userId, userEmail, result, startDate, endDate, limit = 100, offset = 0 } = filters;
     const conditions: any[] = [];
 
     if (orgId) conditions.push(eq(auditLog.organizationId, orgId));
+    if (tenantConnectionId) {
+      conditions.push(eq(auditLog.tenantConnectionId, tenantConnectionId));
+    } else if (onlyNullTenant) {
+      // Caller has no tenants in their allow-list — only show org-level events.
+      conditions.push(sql`${auditLog.tenantConnectionId} IS NULL`);
+    } else if (tenantConnectionIds && tenantConnectionIds.length > 0) {
+      // Widen visibility to ANY tenant in the caller's allow-list (own org +
+      // MSP-granted tenants). Rows with NULL tenantConnectionId (org-level
+      // events) are still included.
+      conditions.push(
+        sql`(${auditLog.tenantConnectionId} IS NULL OR ${auditLog.tenantConnectionId} = ANY(${tenantConnectionIds}))`,
+      );
+    }
     if (action) conditions.push(eq(auditLog.action, action));
+    if (resource) conditions.push(eq(auditLog.resource, resource));
     if (userId) conditions.push(eq(auditLog.userId, userId));
     if (userEmail) conditions.push(ilike(auditLog.userEmail, `%${userEmail}%`));
     if (result) conditions.push(eq(auditLog.result, result));
@@ -1397,8 +1555,9 @@ export class DatabaseStorage implements IStorage {
     const connIds = conns.map(c => c.id);
     if (connIds.length === 0) return [];
 
-    const results = await db.select({
+    const rows = await db.select({
       workspaceId: workspaces.id,
+      tenantConnectionId: workspaces.tenantConnectionId,
       displayName: workspaces.displayName,
       siteUrl: workspaces.siteUrl,
       sensitivityLabelId: workspaces.sensitivityLabelId,
@@ -1409,10 +1568,13 @@ export class DatabaseStorage implements IStorage {
         connIds.length === 1
           ? eq(workspaces.tenantConnectionId, connIds[0])
           : sql`${workspaces.tenantConnectionId} IN (${sql.join(connIds.map(id => sql`${id}`), sql`, `)})`
-      )
-      .orderBy(workspaces.displayName);
+      );
 
-    return results;
+    // Decrypt masked fields (displayName, siteUrl) before sorting/returning so the
+    // Purview coverage view shows clear-text site names rather than MASKED:... blobs.
+    const decrypted = await this.decryptRows(rows, "workspaces");
+    decrypted.sort((a, b) => (a.displayName ?? "").localeCompare(b.displayName ?? ""));
+    return decrypted.map(({ tenantConnectionId, ...rest }) => rest);
   }
 
   async getOrgMembership(userId: string, organizationId: string): Promise<OrganizationUser | undefined> {
@@ -1526,6 +1688,11 @@ export class DatabaseStorage implements IStorage {
           hidden: data.hidden,
           lastModifiedAt: data.lastModifiedAt,
           lastSyncAt: data.lastSyncAt,
+          m365DriveId: data.m365DriveId,
+          maxFolderDepth: data.maxFolderDepth,
+          totalFolderCount: data.totalFolderCount,
+          customViewCount: data.customViewCount,
+          totalViewCount: data.totalViewCount,
         },
       })
       .returning();
@@ -1633,10 +1800,14 @@ export class DatabaseStorage implements IStorage {
     return created;
   }
 
-  async updatePlatformSettings(patch: { defaultSignupPlan: string; updatedBy?: string | null }): Promise<PlatformSettings> {
+  async updatePlatformSettings(patch: { defaultSignupPlan?: string; plannerPlanId?: string | null; plannerBucketId?: string | null; updatedBy?: string | null }): Promise<PlatformSettings> {
     const existing = await this.getPlatformSettings();
+    const updates: Record<string, any> = { updatedAt: new Date(), updatedBy: patch.updatedBy ?? null };
+    if (patch.defaultSignupPlan !== undefined) updates.defaultSignupPlan = patch.defaultSignupPlan;
+    if (patch.plannerPlanId !== undefined) updates.plannerPlanId = patch.plannerPlanId;
+    if (patch.plannerBucketId !== undefined) updates.plannerBucketId = patch.plannerBucketId;
     const [updated] = await db.update(platformSettings)
-      .set({ defaultSignupPlan: patch.defaultSignupPlan, updatedAt: new Date(), updatedBy: patch.updatedBy ?? null })
+      .set(updates)
       .where(eq(platformSettings.id, existing.id))
       .returning();
     return updated;
@@ -1772,6 +1943,7 @@ export class DatabaseStorage implements IStorage {
     }
 
     const rows = await db.select({
+      tenantConnectionId: teamsRecordings.tenantConnectionId,
       teamId: teamsRecordings.teamId,
       teamDisplayName: sql<string | null>`max(${teamsRecordings.teamDisplayName})`,
       channelId: teamsRecordings.channelId,
@@ -1784,20 +1956,33 @@ export class DatabaseStorage implements IStorage {
       .from(teamsRecordings)
       .where(and(...conditions))
       .groupBy(
+        teamsRecordings.tenantConnectionId,
         teamsRecordings.teamId,
         teamsRecordings.channelId,
       );
 
+    // Decrypt the aggregated MASKED: display names per-tenant. The encrypted
+    // ciphertext is selected straight through max(), so we have to run it back
+    // through the tenant-aware decrypt step the same way other inventory paths do.
+    const decryptedRows = await this.decryptRows(rows, "teams_recordings");
+
     // Aggregate into team → channels hierarchy
     const teamMap = new Map<string, TeamsChannelsSummary>();
 
-    for (const row of rows) {
+    const safeName = (value: string | null | undefined, fallback: string): string => {
+      if (!value) return fallback;
+      // Guard: if decryption failed (e.g. tenant key rotated), don't leak ciphertext to UI.
+      if (isMaskedValue(value)) return fallback;
+      return value;
+    };
+
+    for (const row of decryptedRows) {
       if (!row.teamId) continue;
       let team = teamMap.get(row.teamId);
       if (!team) {
         team = {
           teamId: row.teamId,
-          teamDisplayName: row.teamDisplayName ?? row.teamId,
+          teamDisplayName: safeName(row.teamDisplayName, row.teamId),
           channelCount: 0,
           recordingCount: 0,
           channels: [],
@@ -1810,7 +1995,7 @@ export class DatabaseStorage implements IStorage {
         team.channelCount++;
         team.channels.push({
           channelId: row.channelId,
-          channelDisplayName: row.channelDisplayName ?? row.channelId,
+          channelDisplayName: safeName(row.channelDisplayName, row.channelId),
           channelType: row.channelType ?? "standard",
           recordingCount: row.recordingCount,
           lastActivity: row.lastActivity,
@@ -2015,11 +2200,15 @@ export class DatabaseStorage implements IStorage {
       );
     }
 
-    const inventoryTeams = await db.select().from(teamsInventory)
+    const inventoryTeamsRaw = await db.select().from(teamsInventory)
       .where(and(...teamConditions))
       .orderBy(teamsInventory.displayName);
 
-    if (inventoryTeams.length === 0) return [];
+    if (inventoryTeamsRaw.length === 0) return [];
+
+    // Decrypt team display names per-tenant so MASKED: ciphertext doesn't bleed
+    // through to the API response.
+    const inventoryTeams = await this.decryptRows(inventoryTeamsRaw, "teams_inventory");
 
     // Fetch all inventory channels for these tenant connections
     const channelConditions = [eq(channelsInventory.discoveryStatus, "ACTIVE")];
@@ -2032,9 +2221,12 @@ export class DatabaseStorage implements IStorage {
       );
     }
 
-    const inventoryChannels = await db.select().from(channelsInventory)
+    const inventoryChannelsRaw = await db.select().from(channelsInventory)
       .where(and(...channelConditions))
       .orderBy(channelsInventory.displayName);
+
+    // Decrypt channel display names per-tenant.
+    const inventoryChannels = await this.decryptRows(inventoryChannelsRaw, "channels_inventory");
 
     // Fetch recording counts per team+channel for enrichment
     const recConditions = [
@@ -2081,6 +2273,14 @@ export class DatabaseStorage implements IStorage {
       channelsByTeam.set(key, list);
     }
 
+    // Guard: if a value is still MASKED: after the decrypt attempt (e.g. tenant
+    // key was rotated), fall back to the id rather than leaking ciphertext.
+    const safeName = (value: string | null | undefined, fallback: string): string => {
+      if (!value) return fallback;
+      if (isMaskedValue(value)) return fallback;
+      return value;
+    };
+
     // Assemble summary
     const result: TeamsChannelsSummary[] = [];
     for (const team of inventoryTeams) {
@@ -2090,7 +2290,7 @@ export class DatabaseStorage implements IStorage {
         const recInfo = recByChannel.get(`${team.tenantConnectionId}:${team.teamId}:${ch.channelId}`);
         return {
           channelId: ch.channelId,
-          channelDisplayName: ch.displayName,
+          channelDisplayName: safeName(ch.displayName, ch.channelId),
           channelType: ch.membershipType ?? "standard",
           recordingCount: recInfo?.count ?? 0,
           lastActivity: recInfo?.lastActivity ?? null,
@@ -2105,7 +2305,7 @@ export class DatabaseStorage implements IStorage {
 
       result.push({
         teamId: team.teamId,
-        teamDisplayName: team.displayName,
+        teamDisplayName: safeName(team.displayName, team.teamId),
         channelCount: teamChannels.length,
         recordingCount: recByTeam.get(teamKey) ?? 0,
         channels,
@@ -2113,6 +2313,36 @@ export class DatabaseStorage implements IStorage {
     }
 
     return result;
+  }
+
+  async markMissingTeamsInventoryAsDeleted(
+    tenantConnectionId: string,
+    runStartedAt: Date,
+  ): Promise<number> {
+    const result = await db.update(teamsInventory)
+      .set({ discoveryStatus: "DELETED" })
+      .where(and(
+        eq(teamsInventory.tenantConnectionId, tenantConnectionId),
+        eq(teamsInventory.discoveryStatus, "ACTIVE"),
+        lt(teamsInventory.lastDiscoveredAt, runStartedAt),
+      ))
+      .returning({ id: teamsInventory.id });
+    return result.length;
+  }
+
+  async markMissingChannelsInventoryAsDeleted(
+    tenantConnectionId: string,
+    runStartedAt: Date,
+  ): Promise<number> {
+    const result = await db.update(channelsInventory)
+      .set({ discoveryStatus: "DELETED" })
+      .where(and(
+        eq(channelsInventory.tenantConnectionId, tenantConnectionId),
+        eq(channelsInventory.discoveryStatus, "ACTIVE"),
+        lt(channelsInventory.lastDiscoveredAt, runStartedAt),
+      ))
+      .returning({ id: channelsInventory.id });
+    return result.length;
   }
 
   // ── OneDrive Inventory ──────────────────────────────────────────────────────
@@ -2244,16 +2474,56 @@ export class DatabaseStorage implements IStorage {
     return decrypted as SharingLink;
   }
 
+  async getSharingLinkSummary(tenantConnectionId: string): Promise<Array<{
+    resourceId: string;
+    resourceName: string | null;
+    resourceType: string;
+    totalLinks: number;
+    anonymousLinks: number;
+    organizationLinks: number;
+    specificLinks: number;
+  }>> {
+    const rows = await db
+      .select({
+        resourceId: sharingLinksInventory.resourceId,
+        resourceName: sql<string>`max(${sharingLinksInventory.resourceName})`,
+        resourceType: sharingLinksInventory.resourceType,
+        totalLinks: sql<number>`count(*)::int`,
+        anonymousLinks: sql<number>`count(*) filter (where ${sharingLinksInventory.linkType} = 'anonymous')::int`,
+        organizationLinks: sql<number>`count(*) filter (where ${sharingLinksInventory.linkType} = 'organization')::int`,
+        specificLinks: sql<number>`count(*) filter (where ${sharingLinksInventory.linkType} = 'specific')::int`,
+      })
+      .from(sharingLinksInventory)
+      .where(
+        and(
+          eq(sharingLinksInventory.tenantConnectionId, tenantConnectionId),
+          eq(sharingLinksInventory.isActive, true),
+        ),
+      )
+      .groupBy(
+        sharingLinksInventory.resourceId,
+        sharingLinksInventory.resourceType,
+      )
+      .orderBy(sql`count(*) desc`);
+
+    return rows;
+  }
+
   async getSharingLinksPaginated(params: {
     tenantConnectionId: string;
     resourceType?: string;
+    resourceId?: string;
     linkType?: string;
     page: number;
     pageSize: number;
   }): Promise<{ items: SharingLink[]; total: number }> {
-    const { tenantConnectionId, resourceType, linkType, page, pageSize } = params;
-    const conditions = [eq(sharingLinksInventory.tenantConnectionId, tenantConnectionId)];
+    const { tenantConnectionId, resourceType, resourceId, linkType, page, pageSize } = params;
+    const conditions = [
+      eq(sharingLinksInventory.tenantConnectionId, tenantConnectionId),
+      eq(sharingLinksInventory.isActive, true),
+    ];
     if (resourceType) conditions.push(eq(sharingLinksInventory.resourceType, resourceType));
+    if (resourceId) conditions.push(eq(sharingLinksInventory.resourceId, resourceId));
     if (linkType) conditions.push(eq(sharingLinksInventory.linkType, linkType));
     const where = and(...conditions);
 
@@ -2344,7 +2614,7 @@ export class DatabaseStorage implements IStorage {
       .orderBy(desc(governanceReviewFindings.createdAt));
 
     if (!task?.tenantConnectionId || rows.length === 0) return rows;
-    const buf = await this.getKeyBufferForTenant(task.tenantConnectionId);
+    const buf = await this.getKeyBufferForDecrypt(task.tenantConnectionId);
     if (!buf) return rows;
     return rows.map((row) => decryptRecord(row as Record<string, any>, "governance_review_findings", buf) as GovernanceReviewFinding);
   }
@@ -2357,7 +2627,7 @@ export class DatabaseStorage implements IStorage {
     return (result?.maxNum ?? 0) + 1;
   }
 
-  async createSupportTicket(data: Omit<SupportTicket, 'id' | 'createdAt' | 'updatedAt' | 'resolvedAt' | 'resolvedBy' | 'assignedTo'>): Promise<SupportTicket> {
+  async createSupportTicket(data: Omit<SupportTicket, 'id' | 'createdAt' | 'updatedAt' | 'resolvedAt' | 'resolvedBy' | 'assignedTo' | 'plannerTaskId'>): Promise<SupportTicket> {
     const [ticket] = await db.insert(supportTickets).values(data).returning();
     return ticket;
   }
@@ -2422,6 +2692,13 @@ export class DatabaseStorage implements IStorage {
       .where(eq(supportTickets.id, id))
       .returning();
     return ticket;
+  }
+
+  async setSupportTicketPlannerTaskId(id: string, plannerTaskId: string): Promise<void> {
+    await db
+      .update(supportTickets)
+      .set({ plannerTaskId, updatedAt: new Date() })
+      .where(eq(supportTickets.id, id));
   }
 
   // ── Content Types ──────────────────────────────────────────────────────────
@@ -2490,6 +2767,8 @@ export class DatabaseStorage implements IStorage {
           isReadOnly: data.isReadOnly,
           isIndexed: data.isIndexed,
           isRequired: data.isRequired,
+          fillRatePct: data.fillRatePct,
+          fillRateSampleSize: data.fillRateSampleSize,
           lastSyncAt: new Date(),
         },
       })
@@ -3130,6 +3409,12 @@ export class DatabaseStorage implements IStorage {
     return this.unmaskEmailReportRows(rows as EmailStorageReport[]);
   }
 
+  async deleteEmailStorageReport(id: string): Promise<boolean> {
+    const result = await db.delete(emailStorageReports)
+      .where(eq(emailStorageReports.id, id));
+    return (result.rowCount ?? 0) > 0;
+  }
+
   async getLatestEmailStorageReport(
     tenantConnectionId: string,
   ): Promise<EmailStorageReport | undefined> {
@@ -3140,6 +3425,47 @@ export class DatabaseStorage implements IStorage {
     if (!row) return undefined;
     const [out] = await this.unmaskEmailReportRows([row as EmailStorageReport]);
     return out;
+  }
+
+  // ── AI Agent Skills ───────────────────────────────────────────────────────
+
+  async getAiAgentSkills(organizationId: string): Promise<AiAgentSkill[]> {
+    const existing = await db.select().from(aiAgentSkills)
+      .where(eq(aiAgentSkills.organizationId, organizationId));
+
+    const existingKeys = new Set(existing.map(s => s.skillKey));
+    const toSeed = AI_SKILL_KEYS.filter(k => !existingKeys.has(k));
+
+    if (toSeed.length > 0) {
+      const inserts = toSeed.map(k => ({
+        organizationId,
+        skillKey: k,
+        isEnabled: true,
+        updatedBy: null as string | null,
+      }));
+      await db.insert(aiAgentSkills).values(inserts).onConflictDoNothing();
+      return db.select().from(aiAgentSkills).where(eq(aiAgentSkills.organizationId, organizationId));
+    }
+
+    return existing;
+  }
+
+  async upsertAiAgentSkill(organizationId: string, skillKey: string, isEnabled: boolean, updatedBy?: string): Promise<AiAgentSkill> {
+    const [row] = await db.insert(aiAgentSkills)
+      .values({ organizationId, skillKey, isEnabled, updatedBy: updatedBy ?? null })
+      .onConflictDoUpdate({
+        target: [aiAgentSkills.organizationId, aiAgentSkills.skillKey],
+        set: { isEnabled, updatedBy: updatedBy ?? null, updatedAt: new Date() },
+      })
+      .returning();
+    return row;
+  }
+
+  async isAiSkillEnabled(organizationId: string, skillKey: string): Promise<boolean> {
+    const [row] = await db.select({ isEnabled: aiAgentSkills.isEnabled })
+      .from(aiAgentSkills)
+      .where(and(eq(aiAgentSkills.organizationId, organizationId), eq(aiAgentSkills.skillKey, skillKey)));
+    return row?.isEnabled ?? true;
   }
 
   private async maskEmailReportForWrite<T extends Record<string, any>>(
@@ -3168,7 +3494,7 @@ export class DatabaseStorage implements IStorage {
       }
     }
     for (const tid of tenantIds) {
-      const buf = await this.getKeyBufferForTenant(tid);
+      const buf = await this.getKeyBufferForDecrypt(tid);
       if (buf) keyMap.set(tid, buf);
     }
     if (keyMap.size === 0) return rows;
@@ -3177,6 +3503,534 @@ export class DatabaseStorage implements IStorage {
       if (!key || !row.summary) return row;
       return { ...row, summary: unmaskEmailReportSummary(row.summary as any, key) };
     });
+  }
+
+  // ── AI Grounding Documents ────────────────────────────────────────────────
+  async getGroundingDocuments(scope: 'system' | 'org', orgId?: string): Promise<AiGroundingDocument[]> {
+    const conditions = [eq(aiGroundingDocuments.scope, scope)];
+    if (scope === 'org' && orgId) {
+      conditions.push(eq(aiGroundingDocuments.orgId, orgId));
+    } else if (scope === 'system') {
+      conditions.push(isNull(aiGroundingDocuments.orgId));
+    }
+    return db
+      .select()
+      .from(aiGroundingDocuments)
+      .where(and(...conditions))
+      .orderBy(desc(aiGroundingDocuments.createdAt));
+  }
+
+  async getGroundingDocument(id: string): Promise<AiGroundingDocument | undefined> {
+    const [row] = await db.select().from(aiGroundingDocuments).where(eq(aiGroundingDocuments.id, id));
+    return row;
+  }
+
+  async createGroundingDocument(data: InsertAiGroundingDocument): Promise<AiGroundingDocument> {
+    const [row] = await db.insert(aiGroundingDocuments).values(data).returning();
+    return row;
+  }
+
+  async updateGroundingDocument(id: string, updates: Partial<InsertAiGroundingDocument>): Promise<AiGroundingDocument | undefined> {
+    const [row] = await db
+      .update(aiGroundingDocuments)
+      .set(updates)
+      .where(eq(aiGroundingDocuments.id, id))
+      .returning();
+    return row;
+  }
+
+  async deleteGroundingDocument(id: string): Promise<void> {
+    await db.delete(aiGroundingDocuments).where(eq(aiGroundingDocuments.id, id));
+  }
+
+  // ── Copilot Prompt Intelligence ───────────────────────────────────────────
+
+  /** Number of days a captured interaction is retained before purging. */
+  private static readonly COPILOT_RETENTION_DAYS = 30;
+
+  async getUnanalyzedCopilotInteractionIds(
+    tenantConnectionId: string,
+    limit = 1000,
+  ): Promise<string[]> {
+    const rows = await db
+      .select({ id: copilotInteractions.id })
+      .from(copilotInteractions)
+      .where(
+        and(
+          eq(copilotInteractions.tenantConnectionId, tenantConnectionId),
+          isNull(copilotInteractions.analyzedAt),
+          eq(copilotInteractions.interactionType, "userPrompt"),
+          isNotNull(copilotInteractions.promptText),
+        ),
+      )
+      .orderBy(desc(copilotInteractions.interactionAt))
+      .limit(limit);
+    return rows.map(r => r.id);
+  }
+
+  async updateCopilotInteractionAnalysis(
+    id: string,
+    analysis: {
+      qualityScore: number;
+      qualityTier: string;
+      riskLevel: string;
+      flags: CopilotPromptFlag[];
+      recommendation: string | null;
+    },
+  ): Promise<void> {
+    await db
+      .update(copilotInteractions)
+      .set({
+        qualityScore: analysis.qualityScore,
+        qualityTier: analysis.qualityTier,
+        riskLevel: analysis.riskLevel,
+        flags: analysis.flags as CopilotPromptFlag[],
+        recommendation: analysis.recommendation,
+        analyzedAt: new Date(),
+      })
+      .where(eq(copilotInteractions.id, id));
+  }
+
+  async getCopilotInteractionsForTenant(
+    tenantConnectionId: string,
+    options: { limit?: number; offset?: number; includePromptText?: boolean } = {},
+  ): Promise<{ rows: Array<Omit<CopilotInteraction, 'promptText'> & { promptText?: string }>; total: number }> {
+    const limit = Math.min(options.limit ?? 200, 1000);
+    const offset = options.offset ?? 0;
+    const includePromptText = options.includePromptText === true;
+    const whereClause = eq(copilotInteractions.tenantConnectionId, tenantConnectionId);
+
+    const [countResult] = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(copilotInteractions)
+      .where(whereClause);
+
+    // Conditionally include prompt_text. Explicitly enumerating columns avoids
+    // accidentally returning sensitive fields when includePromptText is false.
+    const baseColumns = {
+      id: copilotInteractions.id,
+      tenantConnectionId: copilotInteractions.tenantConnectionId,
+      organizationId: copilotInteractions.organizationId,
+      graphInteractionId: copilotInteractions.graphInteractionId,
+      requestId: copilotInteractions.requestId,
+      sessionId: copilotInteractions.sessionId,
+      interactionType: copilotInteractions.interactionType,
+      userId: copilotInteractions.userId,
+      userPrincipalName: copilotInteractions.userPrincipalName,
+      userDisplayName: copilotInteractions.userDisplayName,
+      userDepartment: copilotInteractions.userDepartment,
+      appClass: copilotInteractions.appClass,
+      interactionAt: copilotInteractions.interactionAt,
+      qualityTier: copilotInteractions.qualityTier,
+      qualityScore: copilotInteractions.qualityScore,
+      riskLevel: copilotInteractions.riskLevel,
+      flags: copilotInteractions.flags,
+      recommendation: copilotInteractions.recommendation,
+      analyzedAt: copilotInteractions.analyzedAt,
+      capturedAt: copilotInteractions.capturedAt,
+    };
+
+    const rows = await db
+      .select(
+        includePromptText
+          ? { ...baseColumns, promptText: copilotInteractions.promptText }
+          : baseColumns,
+      )
+      .from(copilotInteractions)
+      .where(whereClause)
+      .orderBy(desc(copilotInteractions.interactionAt))
+      .limit(limit)
+      .offset(offset);
+
+    return {
+      rows: rows as Array<Omit<CopilotInteraction, 'promptText'> & { promptText?: string }>,
+      total: countResult?.count ?? 0,
+    };
+  }
+
+  async loadCopilotInteractionsForAnalysis(
+    tenantConnectionId: string,
+  ): Promise<CopilotInteraction[]> {
+    return db
+      .select()
+      .from(copilotInteractions)
+      .where(
+        and(
+          eq(copilotInteractions.tenantConnectionId, tenantConnectionId),
+          gte(
+            copilotInteractions.interactionAt,
+            sql`now() - make_interval(days => ${DatabaseStorage.COPILOT_RETENTION_DAYS})`,
+          ),
+        ),
+      )
+      .orderBy(desc(copilotInteractions.interactionAt));
+  }
+
+  async purgeCopilotInteractions(tenantConnectionId: string): Promise<number> {
+    const result = await db
+      .delete(copilotInteractions)
+      .where(
+        and(
+          eq(copilotInteractions.tenantConnectionId, tenantConnectionId),
+          lt(
+            copilotInteractions.interactionAt,
+            sql`now() - make_interval(days => ${DatabaseStorage.COPILOT_RETENTION_DAYS})`,
+          ),
+        ),
+      );
+    return result.rowCount ?? 0;
+  }
+
+  async getLatestCopilotInteractionDateForUser(
+    tenantConnectionId: string,
+    userPrincipalName: string,
+  ): Promise<Date | null> {
+    const [result] = await db
+      .select({ maxDate: sql<Date | null>`max(${copilotInteractions.interactionAt})` })
+      .from(copilotInteractions)
+      .where(
+        and(
+          eq(copilotInteractions.tenantConnectionId, tenantConnectionId),
+          eq(copilotInteractions.userPrincipalName, userPrincipalName),
+        ),
+      );
+    return result?.maxDate ?? null;
+  }
+
+  async getLatestCopilotInteractionDateByUserId(
+    tenantConnectionId: string,
+    entraUserId: string,
+  ): Promise<Date | null> {
+    const [result] = await db
+      .select({ maxDate: sql<Date | null>`max(${copilotInteractions.interactionAt})` })
+      .from(copilotInteractions)
+      .where(
+        and(
+          eq(copilotInteractions.tenantConnectionId, tenantConnectionId),
+          eq(copilotInteractions.userId, entraUserId),
+        ),
+      );
+    return result?.maxDate ?? null;
+  }
+
+  async getCopilotPromptAssessment(id: string): Promise<CopilotPromptAssessment | undefined> {
+    const [row] = await db
+      .select()
+      .from(copilotPromptAssessments)
+      .where(eq(copilotPromptAssessments.id, id));
+    return row;
+  }
+
+  async getLatestCopilotPromptAssessment(
+    tenantConnectionId: string,
+  ): Promise<CopilotPromptAssessment | undefined> {
+    const [row] = await db
+      .select()
+      .from(copilotPromptAssessments)
+      .where(
+        and(
+          eq(copilotPromptAssessments.tenantConnectionId, tenantConnectionId),
+          eq(copilotPromptAssessments.status, 'COMPLETED'),
+        ),
+      )
+      .orderBy(desc(copilotPromptAssessments.createdAt))
+      .limit(1);
+    return row;
+  }
+
+  async listCopilotPromptAssessmentsForOrg(
+    organizationId: string,
+    opts: { tenantConnectionId?: string; limit?: number; offset?: number } = {},
+  ): Promise<{ rows: CopilotPromptAssessment[]; total: number }> {
+    const limit = opts.limit ?? 20;
+    const offset = opts.offset ?? 0;
+
+    const conditions = [eq(copilotPromptAssessments.organizationId, organizationId)];
+    if (opts.tenantConnectionId) {
+      conditions.push(eq(copilotPromptAssessments.tenantConnectionId, opts.tenantConnectionId));
+    }
+    const whereClause = and(...conditions);
+
+    const [[countResult], rows] = await Promise.all([
+      db.select({ count: sql<number>`count(*)::int` }).from(copilotPromptAssessments).where(whereClause),
+      db.select().from(copilotPromptAssessments)
+        .where(whereClause)
+        .orderBy(desc(copilotPromptAssessments.createdAt))
+        .limit(limit)
+        .offset(offset),
+    ]);
+
+    return { rows, total: countResult?.count ?? 0 };
+  }
+
+  async listCopilotPromptAssessmentsByTenant(
+    tenantConnectionId: string,
+    opts: { limit?: number; offset?: number } = {},
+  ): Promise<{ rows: CopilotPromptAssessment[]; total: number }> {
+    const limit = opts.limit ?? 20;
+    const offset = opts.offset ?? 0;
+    const whereClause = eq(copilotPromptAssessments.tenantConnectionId, tenantConnectionId);
+
+    const [[countResult], rows] = await Promise.all([
+      db.select({ count: sql<number>`count(*)::int` }).from(copilotPromptAssessments).where(whereClause),
+      db.select().from(copilotPromptAssessments)
+        .where(whereClause)
+        .orderBy(desc(copilotPromptAssessments.createdAt))
+        .limit(limit)
+        .offset(offset),
+    ]);
+
+    return { rows, total: countResult?.count ?? 0 };
+  }
+
+  async createCopilotPromptAssessment(
+    data: InsertCopilotPromptAssessment,
+  ): Promise<CopilotPromptAssessment> {
+    const [row] = await db.insert(copilotPromptAssessments).values(data).returning();
+    return row;
+  }
+
+  async updateCopilotPromptAssessment(
+    id: string,
+    updates: Partial<InsertCopilotPromptAssessment>,
+  ): Promise<CopilotPromptAssessment | undefined> {
+    const [row] = await db
+      .update(copilotPromptAssessments)
+      .set(updates)
+      .where(eq(copilotPromptAssessments.id, id))
+      .returning();
+    return row;
+  }
+
+  async failStaleCopilotAssessments(tenantConnectionId: string): Promise<void> {
+    await db
+      .update(copilotPromptAssessments)
+      .set({
+        status: 'FAILED',
+        error: 'Assessment timed out (stale RUNNING state)',
+        completedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(copilotPromptAssessments.tenantConnectionId, tenantConnectionId),
+          eq(copilotPromptAssessments.status, 'RUNNING'),
+          lt(copilotPromptAssessments.startedAt, sql`now() - interval '2 hours'`),
+        ),
+      );
+  }
+
+  async findRunningCopilotAssessment(tenantConnectionId: string): Promise<string | null> {
+    const [row] = await db
+      .select({ id: copilotPromptAssessments.id })
+      .from(copilotPromptAssessments)
+      .where(
+        and(
+          eq(copilotPromptAssessments.tenantConnectionId, tenantConnectionId),
+          eq(copilotPromptAssessments.status, 'RUNNING'),
+        ),
+      )
+      .limit(1);
+    return row?.id ?? null;
+  }
+
+  // ── Copilot Sync Runs ─────────────────────────────────────────────────────
+
+  async createCopilotSyncRun(data: InsertCopilotSyncRun): Promise<CopilotSyncRun> {
+    const [row] = await db.insert(copilotSyncRuns).values(data).returning();
+    return row;
+  }
+
+  async updateCopilotSyncRun(
+    id: string,
+    updates: Partial<InsertCopilotSyncRun>,
+  ): Promise<CopilotSyncRun | undefined> {
+    const [row] = await db
+      .update(copilotSyncRuns)
+      .set(updates)
+      .where(eq(copilotSyncRuns.id, id))
+      .returning();
+    return row;
+  }
+
+  async getCopilotSyncRun(id: string): Promise<CopilotSyncRun | undefined> {
+    const [row] = await db
+      .select()
+      .from(copilotSyncRuns)
+      .where(eq(copilotSyncRuns.id, id))
+      .limit(1);
+    return row;
+  }
+
+  async getLatestCopilotSyncRun(
+    tenantConnectionId: string,
+  ): Promise<CopilotSyncRun | undefined> {
+    const [row] = await db
+      .select()
+      .from(copilotSyncRuns)
+      .where(eq(copilotSyncRuns.tenantConnectionId, tenantConnectionId))
+      .orderBy(desc(copilotSyncRuns.createdAt))
+      .limit(1);
+    return row;
+  }
+
+  async listCopilotSyncRuns(
+    tenantConnectionId: string,
+    opts: { limit?: number; offset?: number } = {},
+  ): Promise<{ rows: CopilotSyncRun[]; total: number }> {
+    const limit = opts.limit ?? 20;
+    const offset = opts.offset ?? 0;
+    const whereClause = eq(copilotSyncRuns.tenantConnectionId, tenantConnectionId);
+
+    const [[countResult], rows] = await Promise.all([
+      db.select({ count: sql<number>`count(*)::int` }).from(copilotSyncRuns).where(whereClause),
+      db.select().from(copilotSyncRuns)
+        .where(whereClause)
+        .orderBy(desc(copilotSyncRuns.createdAt))
+        .limit(limit)
+        .offset(offset),
+    ]);
+
+    return { rows, total: countResult?.count ?? 0 };
+  }
+
+  async failStaleCopilotSyncRuns(tenantConnectionId: string): Promise<void> {
+    await db
+      .update(copilotSyncRuns)
+      .set({
+        status: 'FAILED',
+        error: 'Sync timed out (stale RUNNING state)',
+        completedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(copilotSyncRuns.tenantConnectionId, tenantConnectionId),
+          eq(copilotSyncRuns.status, 'RUNNING'),
+          lt(copilotSyncRuns.startedAt, sql`now() - interval '30 minutes'`),
+        ),
+      );
+  }
+
+  // ── BL-039: Scheduled Job Runs ───────────────────────────────────────────
+
+  async createScheduledJobRun(data: InsertScheduledJobRun): Promise<ScheduledJobRun> {
+    const [row] = await db.insert(scheduledJobRuns).values(data).returning();
+    return row;
+  }
+
+  async updateScheduledJobRun(
+    id: string,
+    updates: Partial<InsertScheduledJobRun> & { completedAt?: Date | null; status?: JobStatus },
+  ): Promise<ScheduledJobRun | undefined> {
+    const [row] = await db
+      .update(scheduledJobRuns)
+      .set(updates as Partial<InsertScheduledJobRun>)
+      .where(eq(scheduledJobRuns.id, id))
+      .returning();
+    return row;
+  }
+
+  async getScheduledJobRun(id: string): Promise<ScheduledJobRun | undefined> {
+    const [row] = await db
+      .select()
+      .from(scheduledJobRuns)
+      .where(eq(scheduledJobRuns.id, id))
+      .limit(1);
+    return row;
+  }
+
+  async listScheduledJobRuns(filters: {
+    organizationId?: string | null;
+    tenantConnectionId?: string | null;
+    tenantConnectionIds?: string[];
+    jobType?: JobType;
+    status?: JobStatus;
+    from?: Date;
+    to?: Date;
+    limit?: number;
+    offset?: number;
+  }): Promise<{ rows: ScheduledJobRun[]; total: number }> {
+    const conds = [] as any[];
+    if (filters.organizationId) {
+      conds.push(eq(scheduledJobRuns.organizationId, filters.organizationId));
+    }
+    if (filters.tenantConnectionId) {
+      conds.push(eq(scheduledJobRuns.tenantConnectionId, filters.tenantConnectionId));
+    }
+    if (filters.tenantConnectionIds && filters.tenantConnectionIds.length > 0) {
+      conds.push(inArray(scheduledJobRuns.tenantConnectionId, filters.tenantConnectionIds));
+    }
+    if (filters.jobType) {
+      conds.push(eq(scheduledJobRuns.jobType, filters.jobType));
+    }
+    if (filters.status) {
+      conds.push(eq(scheduledJobRuns.status, filters.status));
+    }
+    if (filters.from) {
+      conds.push(gte(scheduledJobRuns.startedAt, filters.from));
+    }
+    if (filters.to) {
+      conds.push(lte(scheduledJobRuns.startedAt, filters.to));
+    }
+    const whereClause = conds.length > 0 ? and(...conds) : undefined;
+
+    const limit = Math.min(filters.limit ?? 50, 500);
+    const offset = filters.offset ?? 0;
+
+    const [[countResult], rows] = await Promise.all([
+      whereClause
+        ? db
+            .select({ count: sql<number>`count(*)::int` })
+            .from(scheduledJobRuns)
+            .where(whereClause)
+        : db.select({ count: sql<number>`count(*)::int` }).from(scheduledJobRuns),
+      (whereClause
+        ? db.select().from(scheduledJobRuns).where(whereClause)
+        : db.select().from(scheduledJobRuns)
+      )
+        .orderBy(desc(scheduledJobRuns.startedAt))
+        .limit(limit)
+        .offset(offset),
+    ]);
+
+    return { rows, total: countResult?.count ?? 0 };
+  }
+
+  async getLatestCompletedJobRun(
+    tenantConnectionId: string,
+    jobType: JobType,
+  ): Promise<Date | null> {
+    const [row] = await db
+      .select({ completedAt: scheduledJobRuns.completedAt })
+      .from(scheduledJobRuns)
+      .where(
+        and(
+          eq(scheduledJobRuns.tenantConnectionId, tenantConnectionId),
+          eq(scheduledJobRuns.jobType, jobType),
+          eq(scheduledJobRuns.status, 'completed'),
+        ),
+      )
+      .orderBy(desc(scheduledJobRuns.completedAt))
+      .limit(1);
+    return row?.completedAt ?? null;
+  }
+
+  async reconcileOrphanedJobRuns(maxAgeMs: number = 60 * 60 * 1000): Promise<number> {
+    const cutoff = new Date(Date.now() - maxAgeMs);
+    const result = await db
+      .update(scheduledJobRuns)
+      .set({
+        status: 'failed',
+        errorMessage: 'Process restarted — job orphaned',
+        completedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(scheduledJobRuns.status, 'running'),
+          lt(scheduledJobRuns.startedAt, cutoff),
+        ),
+      )
+      .returning({ id: scheduledJobRuns.id });
+    return result.length;
   }
 }
 

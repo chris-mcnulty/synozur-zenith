@@ -50,6 +50,7 @@ export const workspaces = pgTable("workspaces", {
   reportRefreshDate: text("report_refresh_date"),
   propertyBag: jsonb("property_bag").$type<Record<string, string>>(),
   siteOwners: jsonb("site_owners").$type<Array<{ id?: string; displayName: string; mail?: string; userPrincipalName?: string }>>(),
+  siteMembers: jsonb("site_members").$type<Array<{ id?: string; displayName: string; mail?: string; userPrincipalName?: string }>>(),
   customFields: jsonb("custom_fields").$type<Record<string, any>>(),
   spoSyncHash: text("spo_sync_hash"),
   localHash: text("local_hash"),
@@ -367,6 +368,7 @@ export const PLAN_FEATURES = {
   TRIAL: {
     label: "Trial",
     m365WriteBack: false,
+    ownershipManagement: false,
     provisioning: true,
     inventorySync: true,
     copilotReadiness: false,
@@ -382,6 +384,10 @@ export const PLAN_FEATURES = {
     licensingDashboard: false as false | "readonly" | "full",
     licensingOptimization: false as false | "basic" | "full",
     emailContentStorageReport: false,
+    iaAssessment: false,
+    contentIntensityHeatmap: false,
+    copilotPromptIntelligence: false,
+    m365OverviewReport: false,
     trendRetentionDays: 0,
     maxUsers: 25,
     maxTenants: 1,
@@ -391,6 +397,7 @@ export const PLAN_FEATURES = {
   STANDARD: {
     label: "Standard",
     m365WriteBack: true,
+    ownershipManagement: true,
     provisioning: true,
     inventorySync: true,
     copilotReadiness: false,
@@ -406,6 +413,10 @@ export const PLAN_FEATURES = {
     licensingDashboard: "readonly" as false | "readonly" | "full",
     licensingOptimization: false as false | "basic" | "full",
     emailContentStorageReport: false,
+    iaAssessment: false,
+    contentIntensityHeatmap: false,
+    copilotPromptIntelligence: false,
+    m365OverviewReport: false,
     trendRetentionDays: 0,
     maxUsers: 500,
     maxTenants: 2,
@@ -415,6 +426,7 @@ export const PLAN_FEATURES = {
   PROFESSIONAL: {
     label: "Professional",
     m365WriteBack: true,
+    ownershipManagement: true,
     provisioning: true,
     inventorySync: true,
     copilotReadiness: true,
@@ -430,6 +442,10 @@ export const PLAN_FEATURES = {
     licensingDashboard: "full" as false | "readonly" | "full",
     licensingOptimization: "basic" as false | "basic" | "full",
     emailContentStorageReport: false,
+    iaAssessment: false,
+    contentIntensityHeatmap: false,
+    copilotPromptIntelligence: true,
+    m365OverviewReport: false,
     trendRetentionDays: 30,
     maxUsers: 5000,
     maxTenants: 10,
@@ -439,6 +455,7 @@ export const PLAN_FEATURES = {
   ENTERPRISE: {
     label: "Unlimited Enterprise",
     m365WriteBack: true,
+    ownershipManagement: true,
     provisioning: true,
     inventorySync: true,
     copilotReadiness: true,
@@ -454,6 +471,10 @@ export const PLAN_FEATURES = {
     licensingDashboard: "full" as false | "readonly" | "full",
     licensingOptimization: "full" as false | "basic" | "full",
     emailContentStorageReport: true,
+    iaAssessment: true,
+    contentIntensityHeatmap: true,
+    copilotPromptIntelligence: true,
+    m365OverviewReport: true,
     trendRetentionDays: -1,
     maxUsers: -1,
     maxTenants: -1,
@@ -632,6 +653,11 @@ export const documentLibraries = pgTable("document_libraries", {
   lastSyncAt: timestamp("last_sync_at"),
   flaggedLargeItems: boolean("flagged_large_items").default(false),
   flaggedVersionSprawl: boolean("flagged_version_sprawl").default(false),
+  m365DriveId: text("m365_drive_id"),
+  maxFolderDepth: integer("max_folder_depth"),
+  totalFolderCount: integer("total_folder_count"),
+  customViewCount: integer("custom_view_count"),
+  totalViewCount: integer("total_view_count"),
   createdAt: timestamp("created_at").defaultNow(),
 }, (table) => [
   unique("uq_workspace_list").on(table.workspaceId, table.m365ListId),
@@ -745,9 +771,16 @@ export type InsertSpeContainerUsage = z.infer<typeof insertSpeContainerUsageSche
 export type SpeContainerUsage = typeof speContainerUsage.$inferSelect;
 
 // ── Platform Settings ────────────────────────────────────────────────────────
+// System-level configuration shared across the entire Zenith deployment.
+// Planner integration fields (plannerPlanId/plannerBucketId) are stored here
+// rather than as environment variables so platform owners can target a
+// specific Planner bucket within a shared plan that also contains tickets
+// from other Synozur products (Constellation, Vega, etc.).
 export const platformSettings = pgTable("platform_settings", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   defaultSignupPlan: text("default_signup_plan").notNull().default("TRIAL"),
+  plannerPlanId: text("planner_plan_id"),
+  plannerBucketId: text("planner_bucket_id"),
   updatedAt: timestamp("updated_at").defaultNow(),
   updatedBy: varchar("updated_by"),
 });
@@ -1030,6 +1063,7 @@ export const supportTickets = pgTable("support_tickets", {
   status: text("status").notNull().default("open"),
   assignedTo: varchar("assigned_to").references(() => users.id, { onDelete: 'set null' }),
   applicationSource: text("application_source").notNull().default("Zenith"),
+  plannerTaskId: text("planner_task_id"),
   resolvedAt: timestamp("resolved_at"),
   resolvedBy: varchar("resolved_by").references(() => users.id, { onDelete: 'set null' }),
   createdAt: timestamp("created_at").default(sql`now()`).notNull(),
@@ -1043,6 +1077,7 @@ export const insertSupportTicketSchema = createInsertSchema(supportTickets).omit
   resolvedAt: true,
   resolvedBy: true,
   assignedTo: true,
+  plannerTaskId: true,
 });
 
 export type InsertSupportTicket = z.infer<typeof insertSupportTicketSchema>;
@@ -1148,6 +1183,8 @@ export const libraryColumns = pgTable("library_columns", {
   isReadOnly: boolean("is_read_only").notNull().default(false),
   isIndexed: boolean("is_indexed").notNull().default(false),
   isRequired: boolean("is_required").notNull().default(false),
+  fillRatePct: integer("fill_rate_pct"),
+  fillRateSampleSize: integer("fill_rate_sample_size"),
   lastSyncAt: timestamp("last_sync_at").defaultNow(),
 }, (table) => [
   unique("uq_library_column").on(table.documentLibraryId, table.columnInternalName),
@@ -1624,3 +1661,419 @@ export const insertEmailStorageReportSchema = createInsertSchema(emailStorageRep
 });
 export type InsertEmailStorageReport = z.infer<typeof insertEmailStorageReportSchema>;
 export type EmailStorageReport = typeof emailStorageReports.$inferSelect;
+
+// ── M365 30-Day Overview Report (premium) ───────────────────────────────────
+//
+// A periodic executive-style snapshot combining 30-day change deltas across
+// sites, Teams channels, document libraries, and sharing links with an
+// LLM-authored narrative plus prioritized recommendations derived from
+// Copilot prompt intelligence, IA scoring, and sharing posture.
+
+export const M365_OVERVIEW_STATUSES = ["RUNNING", "COMPLETED", "FAILED"] as const;
+export type M365OverviewStatus = (typeof M365_OVERVIEW_STATUSES)[number];
+
+export interface M365OverviewKpi {
+  label: string;
+  value: number;
+  previousValue: number | null;
+  deltaPct: number | null;
+  unit?: "count" | "bytes" | "percent";
+}
+
+export interface M365OverviewSiteChanges {
+  newSites: number;
+  archivedSites: number;
+  deletedSites: number;
+  /** Sum of current storageUsedBytes for the top-10 largest sites (proxy; true 30-day delta not available). */
+  storageTop10Bytes: number;
+  topGrowth: Array<{
+    workspaceId: string;
+    displayName: string;
+    siteUrl: string | null;
+    storageUsedBytes: number;
+  }>;
+  newlyInactive: number;
+}
+
+export interface M365OverviewTeamsChanges {
+  newTeams: number;
+  newChannels: number;
+  // "Remixed" = created, renamed membership-type, archived/restored, or
+  // visibility flipped within the window.
+  remixedChannels: number;
+  privateChannels: number;
+  sharedChannels: number;
+  topActiveTeams: Array<{
+    teamId: string;
+    displayName: string;
+    channelCount: number;
+    memberCount: number | null;
+  }>;
+}
+
+export interface M365OverviewLibraryChanges {
+  newLibraries: number;
+  versionSprawlFlagged: number;
+  deepFolderFlagged: number;
+  averageMaxFolderDepth: number | null;
+  unlabeledLibraries: number;
+}
+
+export interface M365OverviewSharingChanges {
+  newExternalLinks: number;
+  anonymousLinks: number;
+  activeLinks: number;
+  expiringSoon: number;
+}
+
+export interface M365OverviewCopilotSignals {
+  totalInteractions: number;
+  uniqueUsers: number;
+  averageQualityScore: number | null;
+  problematicShare: number; // 0..1
+  topFlags: Array<{ signal: string; count: number }>;
+  topDepartments: Array<{ department: string; interactions: number; avgQuality: number | null }>;
+}
+
+export interface M365OverviewIASignals {
+  librariesAssessed: number;
+  versionSprawlCount: number;
+  deepHierarchyCount: number;
+  missingSensitivityLabelsCount: number;
+}
+
+export interface M365OverviewSnapshot {
+  generatedAt: string;
+  windowStart: string;
+  windowEnd: string;
+  priorWindowStart: string;
+  priorWindowEnd: string;
+  kpis: M365OverviewKpi[];
+  sites: M365OverviewSiteChanges;
+  teams: M365OverviewTeamsChanges;
+  libraries: M365OverviewLibraryChanges;
+  sharing: M365OverviewSharingChanges;
+  copilot: M365OverviewCopilotSignals;
+  ia: M365OverviewIASignals;
+  dataCaveats: string[];
+}
+
+export interface M365OverviewRecommendation {
+  rank: number;
+  title: string;
+  rationale: string;
+  impact: "HIGH" | "MEDIUM" | "LOW";
+  effort: "HIGH" | "MEDIUM" | "LOW";
+  category: "SITES" | "TEAMS" | "IA" | "COPILOT" | "SHARING" | "LIFECYCLE" | "LABELING";
+  evidenceRefs?: string[];
+}
+
+export const m365OverviewReports = pgTable("m365_overview_reports", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  organizationId: varchar("organization_id").notNull(),
+  tenantConnectionId: varchar("tenant_connection_id").notNull(),
+
+  status: text("status").notNull().default("RUNNING"),
+  windowStart: timestamp("window_start").notNull(),
+  windowEnd: timestamp("window_end").notNull(),
+
+  snapshot: jsonb("snapshot").$type<M365OverviewSnapshot>(),
+  narrative: text("narrative"),
+  recommendations: jsonb("recommendations").$type<M365OverviewRecommendation[]>(),
+
+  modelUsed: text("model_used"),
+  tokensUsed: integer("tokens_used"),
+
+  triggeredByUserId: varchar("triggered_by_user_id"),
+
+  startedAt: timestamp("started_at").defaultNow().notNull(),
+  completedAt: timestamp("completed_at"),
+  error: text("error"),
+
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertM365OverviewReportSchema = createInsertSchema(m365OverviewReports).omit({
+  id: true,
+  createdAt: true,
+  startedAt: true,
+});
+export type InsertM365OverviewReport = z.infer<typeof insertM365OverviewReportSchema>;
+export type M365OverviewReport = typeof m365OverviewReports.$inferSelect;
+
+export const aiAgentSkills = pgTable("ai_agent_skills", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  organizationId: varchar("organization_id").notNull(),
+  skillKey: text("skill_key").notNull(),
+  isEnabled: boolean("is_enabled").notNull().default(true),
+  updatedBy: varchar("updated_by"),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (t) => ({
+  uqOrgSkill: unique("uq_org_skill").on(t.organizationId, t.skillKey),
+}));
+
+export const insertAiAgentSkillSchema = createInsertSchema(aiAgentSkills).omit({
+  id: true,
+  updatedAt: true,
+});
+export type InsertAiAgentSkill = z.infer<typeof insertAiAgentSkillSchema>;
+export type AiAgentSkill = typeof aiAgentSkills.$inferSelect;
+
+export const AI_SKILL_KEYS = ["provision", "validate", "explain", "report_and_recommend"] as const;
+export type AiSkillKey = typeof AI_SKILL_KEYS[number];
+
+// ── AI Grounding Documents ────────────────────────────────────────────────────
+export const aiGroundingDocuments = pgTable("ai_grounding_documents", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  scope: text("scope").notNull(), // 'system' | 'org'
+  orgId: varchar("org_id"), // nullable — only set for org-scoped docs
+  name: text("name").notNull(),
+  description: text("description"),
+  contentText: text("content_text").notNull(),
+  fileType: text("file_type").notNull(), // 'pdf' | 'docx' | 'txt' | 'md'
+  fileSizeBytes: integer("file_size_bytes").notNull().default(0),
+  isActive: boolean("is_active").notNull().default(true),
+  uploadedBy: varchar("uploaded_by"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertAiGroundingDocumentSchema = createInsertSchema(aiGroundingDocuments).omit({
+  id: true,
+  createdAt: true,
+});
+export type InsertAiGroundingDocument = z.infer<typeof insertAiGroundingDocumentSchema>;
+export type AiGroundingDocument = typeof aiGroundingDocuments.$inferSelect;
+
+// ── Copilot Prompt Intelligence (BL-038) ──────────────────────────────────────
+//
+// Captures user-initiated Microsoft 365 Copilot interactions on a rolling
+// 30-day window, scores each prompt against a 5-category quality & safety
+// framework, and aggregates the results into on-demand assessment reports.
+
+export const COPILOT_QUALITY_TIERS = ["GREAT", "GOOD", "WEAK", "PROBLEMATIC"] as const;
+export type CopilotQualityTier = typeof COPILOT_QUALITY_TIERS[number];
+
+export const COPILOT_RISK_LEVELS = ["NONE", "LOW", "MEDIUM", "HIGH", "CRITICAL"] as const;
+export type CopilotRiskLevel = typeof COPILOT_RISK_LEVELS[number];
+
+export const COPILOT_FLAG_CATEGORIES = [
+  "CONTENT_SAFETY",
+  "MISUSE",
+  "SENSITIVE_DATA",
+  "QUALITY",
+  "FEASIBILITY",
+] as const;
+export type CopilotFlagCategory = typeof COPILOT_FLAG_CATEGORIES[number];
+
+export interface CopilotPromptFlag {
+  category: CopilotFlagCategory;
+  signal: string;
+  severity: CopilotRiskLevel;
+  detail?: string;
+}
+
+export const copilotInteractions = pgTable("copilot_interactions", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantConnectionId: varchar("tenant_connection_id").notNull(),
+  organizationId: varchar("organization_id").notNull(),
+  graphInteractionId: text("graph_interaction_id").notNull(),
+  requestId: text("request_id"),
+  sessionId: text("session_id"),
+  interactionType: text("interaction_type").notNull().default("userPrompt"),
+  userId: text("user_id").notNull(),
+  userPrincipalName: text("user_principal_name").notNull(),
+  userDisplayName: text("user_display_name"),
+  userDepartment: text("user_department"),
+  appClass: text("app_class"),
+  promptText: text("prompt_text"),
+  bodyContent: text("body_content"),
+  bodyContentType: text("body_content_type"),
+  contexts: jsonb("contexts").$type<any[]>(),
+  attachments: jsonb("attachments").$type<any[]>(),
+  links: jsonb("links").$type<any[]>(),
+  mentions: jsonb("mentions").$type<any[]>(),
+  rawData: jsonb("raw_data").$type<Record<string, any>>(),
+  interactionAt: timestamp("interaction_at").notNull(),
+  qualityTier: text("quality_tier"),
+  qualityScore: integer("quality_score"),
+  riskLevel: text("risk_level"),
+  flags: jsonb("flags").$type<CopilotPromptFlag[]>().notNull().default(sql`'[]'::jsonb`),
+  recommendation: text("recommendation"),
+  analyzedAt: timestamp("analyzed_at"),
+  capturedAt: timestamp("captured_at").defaultNow(),
+}, (t) => [
+  unique("uq_copilot_interactions_tenant_graph").on(t.tenantConnectionId, t.graphInteractionId),
+]);
+
+export const insertCopilotInteractionSchema = createInsertSchema(copilotInteractions).omit({
+  id: true,
+  capturedAt: true,
+});
+export type InsertCopilotInteraction = z.infer<typeof insertCopilotInteractionSchema>;
+export type CopilotInteraction = typeof copilotInteractions.$inferSelect;
+
+export const COPILOT_ASSESSMENT_STATUSES = ["PENDING", "RUNNING", "COMPLETED", "FAILED"] as const;
+export type CopilotAssessmentStatus = typeof COPILOT_ASSESSMENT_STATUSES[number];
+
+export interface CopilotOrgSummary {
+  totalInteractions: number;
+  uniqueUsers: number;
+  dateRange: { start: string; end: string };
+  qualityDistribution: Record<CopilotQualityTier, number>;
+  averageQualityScore: number;
+  riskDistribution: Record<CopilotRiskLevel, number>;
+  appClassBreakdown: Record<string, number>;
+  topFlags: Array<{ category: CopilotFlagCategory; signal: string; count: number }>;
+}
+
+export interface CopilotDepartmentBreakdown {
+  department: string;
+  userCount: number;
+  interactionCount: number;
+  averageQualityScore: number;
+  qualityDistribution: Record<CopilotQualityTier, number>;
+  riskDistribution: Record<CopilotRiskLevel, number>;
+  topFlags: Array<{ category: CopilotFlagCategory; signal: string; count: number }>;
+}
+
+export interface CopilotUserBreakdown {
+  userId: string;
+  userPrincipalName: string;
+  displayName: string | null;
+  department: string | null;
+  interactionCount: number;
+  averageQualityScore: number;
+  qualityDistribution: Record<CopilotQualityTier, number>;
+  criticalFlags: number;
+  topRecommendation?: string | null;
+}
+
+export interface CopilotRecommendation {
+  rank: number;
+  title: string;
+  rationale: string;
+  impact: "HIGH" | "MEDIUM" | "LOW";
+  targetScope?: "ORGANIZATION" | "DEPARTMENT" | "USER";
+  targetName?: string;
+}
+
+export const copilotPromptAssessments = pgTable("copilot_prompt_assessments", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  organizationId: varchar("organization_id").notNull(),
+  tenantConnectionId: varchar("tenant_connection_id").notNull(),
+  status: text("status").notNull().default("PENDING"),
+  triggeredBy: varchar("triggered_by"),
+  interactionCount: integer("interaction_count"),
+  userCount: integer("user_count"),
+  dateRangeStart: timestamp("date_range_start"),
+  dateRangeEnd: timestamp("date_range_end"),
+  orgSummary: jsonb("org_summary").$type<CopilotOrgSummary>(),
+  departmentBreakdown: jsonb("department_breakdown").$type<CopilotDepartmentBreakdown[]>(),
+  userBreakdown: jsonb("user_breakdown").$type<CopilotUserBreakdown[]>(),
+  executiveSummary: text("executive_summary"),
+  recommendations: jsonb("recommendations").$type<CopilotRecommendation[]>(),
+  modelUsed: text("model_used"),
+  tokensUsed: integer("tokens_used"),
+  startedAt: timestamp("started_at"),
+  completedAt: timestamp("completed_at"),
+  error: text("error"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertCopilotPromptAssessmentSchema = createInsertSchema(copilotPromptAssessments).omit({
+  id: true,
+  createdAt: true,
+});
+export type InsertCopilotPromptAssessment = z.infer<typeof insertCopilotPromptAssessmentSchema>;
+export type CopilotPromptAssessment = typeof copilotPromptAssessments.$inferSelect;
+
+// ── Copilot Sync Runs (BL-038 — progress tracking for interaction syncs) ──────
+//
+// Tracks each triggered Graph interaction sync so callers can poll the run
+// status via GET /api/copilot-prompt-intelligence/sync/:syncRunId, mirroring
+// the assessments polling pattern.
+
+export const copilotSyncRuns = pgTable("copilot_sync_runs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantConnectionId: varchar("tenant_connection_id").notNull(),
+  organizationId: varchar("organization_id").notNull(),
+  status: text("status").notNull().default("RUNNING"), // RUNNING | COMPLETED | FAILED
+  triggeredBy: varchar("triggered_by"),
+  usersScanned: integer("users_scanned"),
+  interactionsCaptured: integer("interactions_captured"),
+  interactionsSkipped: integer("interactions_skipped"),
+  interactionsPurged: integer("interactions_purged"),
+  errorCount: integer("error_count"),
+  errors: jsonb("errors").$type<Array<{ userId?: string; context: string; message: string }>>(),
+  startedAt: timestamp("started_at"),
+  completedAt: timestamp("completed_at"),
+  error: text("error"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertCopilotSyncRunSchema = createInsertSchema(copilotSyncRuns).omit({
+  id: true,
+  createdAt: true,
+});
+export type InsertCopilotSyncRun = z.infer<typeof insertCopilotSyncRunSchema>;
+export type CopilotSyncRun = typeof copilotSyncRuns.$inferSelect;
+
+// ── BL-039: Scheduled Job Runs (cross-cutting job audit trail) ───────────────
+//
+// Single unified tracking table for every background data-gathering job on
+// the platform. The existing per-service "runs" tables remain for service-
+// specific detail; this table powers the Job Monitor admin page and the
+// Dataset Freshness Registry.
+
+/** Canonical job types tracked in scheduled_job_runs. */
+export const JOB_TYPES = {
+  tenantSync:           { label: "Tenant Sync",                 dataset: "workspaces" },
+  sharingLinkDiscovery: { label: "Sharing Link Discovery",      dataset: "sharingLinks" },
+  oneDriveInventory:    { label: "OneDrive Inventory",          dataset: "onedriveInventory" },
+  teamsInventory:       { label: "Teams & Channels Inventory",  dataset: "teamsInventory" },
+  teamsRecordings:      { label: "Recordings Discovery",        dataset: "recordings" },
+  userInventory:        { label: "User Inventory",              dataset: "userInventory" },
+  copilotSync:          { label: "Copilot Interaction Sync",    dataset: "copilotInteractions" },
+  copilotAssessment:    { label: "Copilot Prompt Assessment",   dataset: "copilotAssessments" },
+  iaAssessment:         { label: "IA Health Assessment",        dataset: "iaAssessment" },
+  emailStorageReport:   { label: "Email Storage Report",        dataset: "emailStorageReport" },
+  governanceSnapshot:   { label: "Governance Snapshot",         dataset: "governanceSnapshot" },
+  licenseSync:          { label: "License Sync",                dataset: "licenses" },
+  iaSync:               { label: "IA Column Sync",              dataset: "iaColumns" },
+} as const;
+
+export type JobType = keyof typeof JOB_TYPES;
+
+export const JOB_STATUSES = ["running", "completed", "failed", "cancelled"] as const;
+export type JobStatus = (typeof JOB_STATUSES)[number];
+
+export const JOB_TRIGGER_SOURCES = ["manual", "system", "scheduled"] as const;
+export type JobTriggerSource = (typeof JOB_TRIGGER_SOURCES)[number];
+
+export const scheduledJobRuns = pgTable("scheduled_job_runs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  organizationId: varchar("organization_id"),
+  tenantConnectionId: varchar("tenant_connection_id"),
+  jobType: text("job_type").notNull(),
+  status: text("status").notNull().default("running"),
+  startedAt: timestamp("started_at").notNull().defaultNow(),
+  completedAt: timestamp("completed_at"),
+  durationMs: integer("duration_ms"),
+  result: jsonb("result").$type<Record<string, unknown>>(),
+  errorMessage: text("error_message"),
+  triggeredBy: text("triggered_by").notNull().default("manual"),
+  triggeredByUserId: varchar("triggered_by_user_id"),
+  targetId: text("target_id"),
+  targetName: text("target_name"),
+  itemsTotal: integer("items_total"),
+  itemsProcessed: integer("items_processed"),
+  progressLabel: text("progress_label"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+export const insertScheduledJobRunSchema = createInsertSchema(scheduledJobRuns).omit({
+  id: true,
+  createdAt: true,
+});
+export type InsertScheduledJobRun = z.infer<typeof insertScheduledJobRunSchema>;
+export type ScheduledJobRun = typeof scheduledJobRuns.$inferSelect;

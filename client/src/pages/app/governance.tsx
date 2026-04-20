@@ -5,6 +5,7 @@ import type { Workspace } from "@shared/schema";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useTenant } from "@/lib/tenant-context";
+import { DatasetFreshnessBanner } from "@/components/datasets";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { GovernanceRiskTab, GovernanceOwnershipTab, GovernanceStorageTab, GovernanceSharingTab, GovernanceReviewsTab } from "./governance-tabs";
 import { 
@@ -91,6 +92,16 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { useServicePlan } from "@/hooks/use-service-plan";
 import { UpgradeGate } from "@/components/upgrade-gate";
 
@@ -642,6 +653,12 @@ export default function GovernancePage() {
         case "fileCount":
           cmp = (a.fileCount ?? 0) - (b.fileCount ?? 0);
           break;
+        case "siteMembers": {
+          const ma = Array.isArray(a.siteMembers) ? a.siteMembers.length : 0;
+          const mb = Array.isArray(b.siteMembers) ? b.siteMembers.length : 0;
+          cmp = ma - mb;
+          break;
+        }
         case "lastActivityDate": {
           const da = a.lastActivityDate ? new Date(a.lastActivityDate).getTime() : 0;
           const db = b.lastActivityDate ? new Date(b.lastActivityDate).getTime() : 0;
@@ -768,6 +785,36 @@ export default function GovernancePage() {
     },
   });
 
+  const [confirmAction, setConfirmAction] = useState<{ kind: "archive" | "unarchive" | "delete"; ws: Workspace } | null>(null);
+
+  const lifecycleMutation = useMutation({
+    mutationFn: async ({ id, kind }: { id: string; kind: "archive" | "unarchive" | "delete" }) => {
+      if (kind === "archive") {
+        const res = await apiRequest("POST", `/api/workspaces/${id}/archive`);
+        return res.json();
+      }
+      if (kind === "unarchive") {
+        const res = await apiRequest("POST", `/api/workspaces/${id}/unarchive`);
+        return res.json();
+      }
+      const res = await apiRequest("DELETE", `/api/workspaces/${id}/m365`);
+      return res.json();
+    },
+    onSuccess: (_data, vars) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/workspaces"] });
+      setConfirmAction(null);
+      const messages = {
+        archive: { title: "Site archived", description: "The site is now read-only in Microsoft 365." },
+        unarchive: { title: "Site unarchived", description: "The site is writable again in Microsoft 365." },
+        delete: { title: "Site deleted in Microsoft 365", description: "Recoverable from the SharePoint Recycle Bin for 93 days." },
+      } as const;
+      toast(messages[vars.kind]);
+    },
+    onError: (err: any) => {
+      toast({ title: "Action failed", description: err?.message || "The operation could not be completed.", variant: "destructive" });
+    },
+  });
+
   const openHubAssignDialog = (targetIds: string[]) => {
     setHubAssignTargetIds(targetIds);
     const selectedSites = targetIds.map(id => workspaces.find(ws => ws.id === id)).filter(Boolean);
@@ -863,6 +910,17 @@ export default function GovernancePage() {
           ) : (
             <span className="text-xs text-muted-foreground">{"—"}</span>
           )}
+        </TableCell>
+        <TableCell className="relative z-10">
+          {(() => {
+            const memberCount = Array.isArray(ws.siteMembers) ? ws.siteMembers.length : 0;
+            return (
+              <div className="flex items-center gap-1.5" data-testid={`text-members-${ws.id}`}>
+                <Users className="w-3.5 h-3.5 text-muted-foreground" />
+                <span className="text-sm font-medium">{memberCount.toLocaleString()}</span>
+              </div>
+            );
+          })()}
         </TableCell>
         <TableCell className="relative z-10">
           <div className="flex flex-col gap-1 min-w-[120px]">
@@ -984,7 +1042,31 @@ export default function GovernancePage() {
               )}
               <DropdownMenuSeparator />
               <DropdownMenuItem>Request Attestation</DropdownMenuItem>
-              <DropdownMenuItem className="text-destructive">Archive Workspace</DropdownMenuItem>
+              {!ws.isArchived && !ws.isDeleted && (
+                <DropdownMenuItem
+                  onClick={() => setConfirmAction({ kind: "archive", ws })}
+                  data-testid={`button-archive-${ws.id}`}
+                >
+                  Archive Workspace
+                </DropdownMenuItem>
+              )}
+              {ws.isArchived && !ws.isDeleted && (
+                <DropdownMenuItem
+                  onClick={() => setConfirmAction({ kind: "unarchive", ws })}
+                  data-testid={`button-unarchive-${ws.id}`}
+                >
+                  Unarchive Workspace
+                </DropdownMenuItem>
+              )}
+              {!ws.isDeleted && (
+                <DropdownMenuItem
+                  className="text-destructive"
+                  onClick={() => setConfirmAction({ kind: "delete", ws })}
+                  data-testid={`button-delete-m365-${ws.id}`}
+                >
+                  Delete in Microsoft 365
+                </DropdownMenuItem>
+              )}
             </DropdownMenuContent>
           </DropdownMenu>
         </TableCell>
@@ -1018,6 +1100,14 @@ export default function GovernancePage() {
           <p className="text-muted-foreground mt-1">Enumerate and inspect SharePoint sites across your tenant</p>
         </div>
       </div>
+
+      {/* BL-039: dataset freshness nudge — sites + sharing links underpin every tab */}
+      {tenantConnectionId && (
+        <DatasetFreshnessBanner
+          tenantConnectionId={tenantConnectionId}
+          datasets={["workspaces", "sharingLinks"]}
+        />
+      )}
 
       <Tabs defaultValue="sites" className="w-full">
         <TabsList className="grid w-full grid-cols-6 max-w-2xl">
@@ -1146,7 +1236,7 @@ export default function GovernancePage() {
             <p className="text-sm font-semibold text-amber-700 dark:text-amber-400">Trial Plan Site Limit Reached</p>
             <p className="text-xs text-amber-600/80 dark:text-amber-400/70">
               Showing {maxSites.toLocaleString()} of {lastSyncDiscovered.toLocaleString()} sites — your Trial plan limits inventory to {maxSites.toLocaleString()} sites.{" "}
-              <Link href="/app/admin/service-plans" className="underline font-medium hover:no-underline">Upgrade your plan</Link> to see all sites.
+              <a href="https://www.synozur.com/contact" className="underline font-medium hover:no-underline" target="_blank" rel="noopener noreferrer">Contact us to upgrade</a> and see all sites.
             </p>
           </div>
         </div>
@@ -1338,6 +1428,9 @@ export default function GovernancePage() {
                       <span className="inline-flex items-center">Site{getSortIcon("displayName")}</span>
                     </TableHead>
                     <TableHead className="min-w-[160px]">Owner</TableHead>
+                    <TableHead className="min-w-[100px] cursor-pointer select-none" onClick={() => handleSort("siteMembers")} data-testid="sort-header-members">
+                      <div className="flex items-center">Members {getSortIcon("siteMembers")}</div>
+                    </TableHead>
                     <TableHead className="min-w-[160px] cursor-pointer select-none" onClick={() => handleSort("storageUsedBytes")} data-testid="sort-header-storage">
                       <span className="inline-flex items-center">Storage{getSortIcon("storageUsedBytes")}</span>
                     </TableHead>
@@ -1377,7 +1470,7 @@ export default function GovernancePage() {
                                 />
                               )}
                             </TableCell>
-                            <TableCell colSpan={8 + columnOutcomes.length} onClick={() => toggleHubCollapse(group.hubId)}>
+                            <TableCell colSpan={9 + columnOutcomes.length} onClick={() => toggleHubCollapse(group.hubId)}>
                               <div className="flex items-center gap-2">
                                 {isCollapsed ? <ChevronRight className="w-4 h-4 text-muted-foreground" /> : <ChevronDown className="w-4 h-4 text-muted-foreground" />}
                                 {group.hubId === "__standalone__" ? (
@@ -1970,6 +2063,54 @@ export default function GovernancePage() {
       </Dialog>
         </TabsContent>
       </Tabs>
+
+      <AlertDialog open={!!confirmAction} onOpenChange={(open) => !open && setConfirmAction(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {confirmAction?.kind === "archive" && "Archive site in Microsoft 365?"}
+              {confirmAction?.kind === "unarchive" && "Unarchive site in Microsoft 365?"}
+              {confirmAction?.kind === "delete" && "Delete site in Microsoft 365?"}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {confirmAction?.kind === "archive" && (
+                <>
+                  <strong>{confirmAction.ws.displayName}</strong> will be archived in Microsoft 365 and become read-only.
+                  Storage cost is reduced and content remains discoverable. The action is reversible via Unarchive.
+                </>
+              )}
+              {confirmAction?.kind === "unarchive" && (
+                <>
+                  <strong>{confirmAction.ws.displayName}</strong> will be unarchived in Microsoft 365 and become writable again.
+                </>
+              )}
+              {confirmAction?.kind === "delete" && (
+                <>
+                  <strong>{confirmAction.ws.displayName}</strong> will be deleted in Microsoft 365.
+                  The site moves to the SharePoint Recycle Bin and is recoverable for <strong>93 days</strong>;
+                  after that it is permanently destroyed. Type-confirm not required, but this action affects real M365 data.
+                </>
+              )}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel data-testid="button-cancel-lifecycle">Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={lifecycleMutation.isPending}
+              className={confirmAction?.kind === "delete" ? "bg-destructive text-destructive-foreground hover:bg-destructive/90" : undefined}
+              onClick={(e) => {
+                e.preventDefault();
+                if (confirmAction) {
+                  lifecycleMutation.mutate({ id: confirmAction.ws.id, kind: confirmAction.kind });
+                }
+              }}
+              data-testid="button-confirm-lifecycle"
+            >
+              {lifecycleMutation.isPending ? "Working…" : confirmAction?.kind === "delete" ? "Delete in M365" : confirmAction?.kind === "unarchive" ? "Unarchive" : "Archive"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

@@ -220,6 +220,19 @@ export default function LoginPage() {
           </button>
         </CardFooter>
       </Card>
+
+      <p className="mt-6 max-w-md text-center text-xs text-muted-foreground/70 relative z-10 leading-relaxed" data-testid="text-legal-disclaimer">
+        By using Zenith you agree to Synozur's{" "}
+        <a href="https://www.synozur.com/privacy" target="_blank" rel="noopener noreferrer" className="underline underline-offset-2 hover:text-muted-foreground transition-colors">
+          Privacy Policy
+        </a>{" "}
+        and{" "}
+        <a href="https://www.synozur.com/terms" target="_blank" rel="noopener noreferrer" className="underline underline-offset-2 hover:text-muted-foreground transition-colors">
+          Terms of Service
+        </a>
+        . Continued use of this application constitutes acceptance of those terms.{" "}
+        Synozur does not sell your data, period.
+      </p>
     </div>
   );
 }

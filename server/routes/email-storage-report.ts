@@ -25,6 +25,9 @@ import {
   renderReportCsv,
   requestEmailReportCancellation,
 } from "../services/email-content-storage-report";
+import { trackJobRun, DuplicateJobError } from "../services/job-tracking";
+import { jobRegistry } from "../services/job-registry";
+import { getActiveOrgId } from "./scope-helpers";
 
 const router = Router();
 
@@ -92,15 +95,34 @@ router.post(
     const options: { maxUsers?: number; minRefreshIntervalMinutes?: number } = {};
     if (Number.isFinite(maxUsersRaw) && maxUsersRaw > 0) options.maxUsers = maxUsersRaw;
 
+    // BL-039: refuse duplicate launches early so the caller gets 409 instead
+    // of a stranded fire-and-forget that never executes.
+    if (jobRegistry.isRunning("userInventory", access.conn.id)) {
+      return res.status(409).json({ message: "User inventory refresh is already running" });
+    }
+
     res.status(202).json({ message: "User inventory refresh started" });
 
-    runUserInventoryRefresh(
-      access.conn.id,
-      access.conn.tenantId,
-      clientId,
-      clientSecret,
-      options,
-    ).catch(err => {
+    const orgId = getActiveOrgId(req) ?? access.conn.organizationId ?? null;
+    void trackJobRun(
+      {
+        jobType: "userInventory",
+        organizationId: orgId,
+        tenantConnectionId: access.conn.id,
+        triggeredBy: "manual",
+        triggeredByUserId: req.user?.id ?? null,
+        targetName: access.conn.tenantName ?? access.conn.tenantId,
+      },
+      (signal) =>
+        runUserInventoryRefresh(
+          access.conn.id,
+          access.conn.tenantId,
+          clientId,
+          clientSecret,
+          { ...options, signal },
+        ),
+    ).catch((err) => {
+      if (err instanceof DuplicateJobError) return; // already 202'd above; race-loser
       console.error("[user-inventory] refresh failed:", err);
     });
   },
@@ -208,32 +230,51 @@ router.post(
     const clientSecret = getEffectiveClientSecret(access.conn);
     const body = parseResult.data;
 
+    // BL-039: pre-check the job registry so duplicate launches return 409
+    // immediately rather than queuing behind an existing run.
+    if (jobRegistry.isRunning("emailStorageReport", access.conn.id)) {
+      return res.status(409).json({ message: "An email storage report run is already in progress" });
+    }
+
+    const orgId = getActiveOrgId(req) ?? access.conn.organizationId ?? null;
+
     // Wait for the report row to be created (synchronous DB work only),
-    // then fire the execution in the background so the response returns quickly.
+    // then let the execution continue in the background. trackJobRun adds
+    // the unified scheduled_job_runs row + registry entry; the legacy
+    // email_storage_reports row remains the public handle for polling.
     const reportId = await new Promise<string>((resolveId, rejectId) => {
-      runEmailContentStorageReport(
-        access.conn.id,
-        access.conn.tenantId,
-        clientId,
-        clientSecret,
+      void trackJobRun(
         {
-          mode: body.mode,
-          triggeredByUserId: req.user?.id ?? undefined,
-          onReportCreated: resolveId,
-          limits: {
-            windowDays: body.windowDays,
-            maxUsers: body.maxUsers,
-            maxMessagesPerUser: body.maxMessagesPerUser,
-            maxTotalMessages: body.maxTotalMessages,
-            attachmentMetadataEnabled: body.attachmentMetadataEnabled,
-            maxMessagesWithMetadata: body.maxMessagesWithMetadata,
-            minMessageSizeKBForMetadata: body.minMessageSizeKBForMetadata,
-            maxAttachmentsPerMessage: body.maxAttachmentsPerMessage,
-          },
+          jobType: "emailStorageReport",
+          organizationId: orgId,
+          tenantConnectionId: access.conn.id,
+          triggeredBy: "manual",
+          triggeredByUserId: req.user?.id ?? null,
+          targetName: access.conn.tenantName ?? access.conn.tenantId,
         },
-      ).catch(err => {
-        // If execution fails before onReportCreated fires (e.g. DB error
-        // during row creation), surface the error to the caller.
+        () =>
+          runEmailContentStorageReport(
+            access.conn.id,
+            access.conn.tenantId,
+            clientId,
+            clientSecret,
+            {
+              mode: body.mode,
+              triggeredByUserId: req.user?.id ?? undefined,
+              onReportCreated: resolveId,
+              limits: {
+                windowDays: body.windowDays,
+                maxUsers: body.maxUsers,
+                maxMessagesPerUser: body.maxMessagesPerUser,
+                maxTotalMessages: body.maxTotalMessages,
+                attachmentMetadataEnabled: body.attachmentMetadataEnabled,
+                maxMessagesWithMetadata: body.maxMessagesWithMetadata,
+                minMessageSizeKBForMetadata: body.minMessageSizeKBForMetadata,
+                maxAttachmentsPerMessage: body.maxAttachmentsPerMessage,
+              },
+            },
+          ),
+      ).catch((err) => {
         if (!res.headersSent) rejectId(err);
         else console.error("[email-storage-report] run failed:", err);
       });
@@ -355,6 +396,41 @@ router.post(
       runId,
       status: "RUNNING",
     });
+  },
+);
+
+/**
+ * DELETE /api/admin/tenants/:id/email-storage-report/runs/:runId
+ *
+ * Delete a report run. Only terminal-state runs (COMPLETED, PARTIAL, FAILED,
+ * CANCELLED) can be deleted — a RUNNING report must be cancelled first.
+ */
+router.delete(
+  "/api/admin/tenants/:id/email-storage-report/runs/:runId",
+  requireAuth(),
+  requireRole("tenant_admin"),
+  requireFeature("emailContentStorageReport"),
+  async (req: AuthenticatedRequest, res) => {
+    const access = await assertTenantAccess(req, req.params.id);
+    if (!access.ok) return res.status(access.status).json({ message: access.message });
+
+    const runId = asStringParam(req.params.runId);
+    if (!runId) return res.status(400).json({ message: "runId is required" });
+
+    const report = await storage.getEmailStorageReport(runId);
+    if (!report || report.tenantConnectionId !== access.conn.id) {
+      return res.status(404).json({ message: "Report run not found" });
+    }
+
+    if (report.status === "RUNNING") {
+      return res.status(409).json({
+        message: "Cannot delete a running report. Cancel it first.",
+        status: report.status,
+      });
+    }
+
+    await storage.deleteEmailStorageReport(runId);
+    res.status(200).json({ message: "Report deleted", runId });
   },
 );
 
@@ -510,6 +586,39 @@ router.post(
 
     requestEmailReportCancellation(access.conn.id, runId);
     res.status(202).json({ message: "Cancellation requested", runId, status: "RUNNING" });
+  },
+);
+
+/**
+ * DELETE /api/admin/tenants/:id/email-storage-report/:reportId
+ * Alias for DELETE /api/admin/tenants/:id/email-storage-report/runs/:runId
+ */
+router.delete(
+  "/api/admin/tenants/:id/email-storage-report/:reportId",
+  requireAuth(),
+  requireRole("tenant_admin"),
+  requireFeature("emailContentStorageReport"),
+  async (req: AuthenticatedRequest, res) => {
+    const access = await assertTenantAccess(req, req.params.id);
+    if (!access.ok) return res.status(access.status).json({ message: access.message });
+
+    const runId = asStringParam(req.params.reportId);
+    if (!runId) return res.status(400).json({ message: "reportId is required" });
+
+    const report = await storage.getEmailStorageReport(runId);
+    if (!report || report.tenantConnectionId !== access.conn.id) {
+      return res.status(404).json({ message: "Report run not found" });
+    }
+
+    if (report.status === "RUNNING") {
+      return res.status(409).json({
+        message: "Cannot delete a running report. Cancel it first.",
+        status: report.status,
+      });
+    }
+
+    await storage.deleteEmailStorageReport(runId);
+    res.status(200).json({ message: "Report deleted", runId });
   },
 );
 

@@ -30,7 +30,14 @@ import {
   AlertTriangle,
   BarChart2,
   Lock,
+  Trash2,
 } from "lucide-react";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 
 // ── Formatters ────────────────────────────────────────────────────────────────
 
@@ -115,11 +122,58 @@ function RunResults({ report }: { report: EmailStorageReport }) {
   const classicPct = totalAttachments > 0 ? classicCount / totalAttachments : 0;
   const referencePct = totalAttachments > 0 ? referenceCount / totalAttachments : 0;
 
+  const errors = (report.errors ?? []) as Array<{ context: string; message: string }>;
+
+  if (report.status === "FAILED") {
+    const analyzedAny = (report.messagesAnalyzed ?? 0) > 0;
+    return (
+      <div className="space-y-4 mt-2" data-testid="section-run-results">
+        <div className="rounded-lg border border-red-300 bg-red-50/50 px-4 py-3 space-y-2">
+          <p className="text-sm font-semibold text-red-700 flex items-center gap-1.5">
+            <XCircle className="h-4 w-4" /> {analyzedAny
+              ? `Report failed after analyzing ${(report.messagesAnalyzed ?? 0).toLocaleString()} messages`
+              : "Report failed — no messages were analyzed"}
+          </p>
+          {errors.length > 0 && (
+            <div className="space-y-1">
+              <p className="text-xs text-muted-foreground">{errors.length} error(s) encountered:</p>
+              <div className="max-h-40 overflow-y-auto text-xs font-mono space-y-0.5">
+                {errors.slice(0, 30).map((e, i) => (
+                  <div key={i} className="text-red-700">
+                    <span className="text-muted-foreground">[{e.context}]</span> {e.message.substring(0, 200)}
+                  </div>
+                ))}
+                {errors.length > 30 && (
+                  <div className="text-muted-foreground">…and {errors.length - 30} more</div>
+                )}
+              </div>
+            </div>
+          )}
+          <p className="text-xs text-muted-foreground">
+            Common causes: missing Mail.Read permission, users without mailboxes, or token issues. You can delete this run and try again after resolving the issue.
+          </p>
+        </div>
+        {report.accuracyCaveats && report.accuracyCaveats.length > 0 && (
+          <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 px-4 py-3 space-y-1" data-testid="section-accuracy-caveats">
+            <p className="text-xs font-semibold text-amber-700 dark:text-amber-400 flex items-center gap-1.5">
+              <AlertTriangle className="h-3.5 w-3.5" /> Accuracy Notes
+            </p>
+            <ul className="space-y-0.5">
+              {report.accuracyCaveats.map((c, i) => (
+                <li key={i} className="text-xs text-muted-foreground">• {c}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-4 mt-2" data-testid="section-run-results">
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <StatCard
-          label="Messages Analysed"
+          label="Messages Analyzed"
           value={(report.messagesAnalyzed ?? 0).toLocaleString()}
           icon={<Mail className="h-4 w-4 text-blue-500" />}
         />
@@ -359,6 +413,24 @@ function RunResults({ report }: { report: EmailStorageReport }) {
         </div>
       )}
 
+      {errors.length > 0 && (
+        <details className="rounded-lg border border-red-200 bg-red-50/30 px-4 py-3">
+          <summary className="text-xs font-semibold text-red-700 cursor-pointer flex items-center gap-1.5">
+            <AlertCircle className="h-3.5 w-3.5" /> {errors.length} error(s) during scan — click to expand
+          </summary>
+          <div className="mt-2 max-h-40 overflow-y-auto text-xs font-mono space-y-0.5">
+            {errors.slice(0, 50).map((e, i) => (
+              <div key={i} className="text-red-700">
+                <span className="text-muted-foreground">[{e.context}]</span> {e.message.substring(0, 200)}
+              </div>
+            ))}
+            {errors.length > 50 && (
+              <div className="text-muted-foreground">…and {errors.length - 50} more</div>
+            )}
+          </div>
+        </details>
+      )}
+
       {(report.status === "COMPLETED" || report.status === "PARTIAL") && (
         <div className="flex justify-end">
           <a href={csvHref} download data-testid="link-export-csv">
@@ -524,6 +596,28 @@ export default function EmailStorageReportPage() {
     },
     onError: (err: any) => {
       toast({ title: "Cancel failed", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const deleteReportMutation = useMutation({
+    mutationFn: async (runId: string) => {
+      const res = await fetch(`/api/admin/tenants/${tenantId}/email-storage-report/runs/${runId}`, {
+        method: "DELETE",
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        throw new Error(j.message ?? "Failed to delete report");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Report deleted" });
+      setExpandedRunId(null);
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/tenants", tenantId, "email-storage-report-runs"] });
+    },
+    onError: (err: any) => {
+      toast({ title: "Delete failed", description: err.message, variant: "destructive" });
     },
   });
 
@@ -812,11 +906,22 @@ export default function EmailStorageReportPage() {
                       <TableHead className="text-right">Messages</TableHead>
                       <TableHead className="text-right">Est. Storage</TableHead>
                       <TableHead>Status</TableHead>
+                      <TableHead></TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {reportRuns.map((run) => {
                       const isExpanded = expandedRunId === run.id;
+                      const isDeletable = run.status !== "RUNNING";
+                      const statusHint = run.status === "PARTIAL"
+                        ? run.accuracyCaveats?.filter(c =>
+                            c.includes("cap reached") || c.includes("stale") || c.includes("sampling")
+                          ).map(c => c.split(".")[0]).join("; ") || "Completed with limitations — expand for details"
+                        : run.status === "FAILED"
+                          ? run.errors?.length
+                            ? `${run.errors.length} error(s) — expand for details`
+                            : "Report failed — expand for details"
+                          : undefined;
                       return (
                         <>
                           <TableRow
@@ -847,13 +952,45 @@ export default function EmailStorageReportPage() {
                               {formatBytes(run.estimatedAttachmentBytes ?? 0)}
                             </TableCell>
                             <TableCell>
-                              <RunStatusBadge status={run.status} />
+                              {statusHint ? (
+                                <TooltipProvider>
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <span><RunStatusBadge status={run.status} /></span>
+                                    </TooltipTrigger>
+                                    <TooltipContent side="left" className="max-w-xs text-xs">
+                                      {statusHint}
+                                    </TooltipContent>
+                                  </Tooltip>
+                                </TooltipProvider>
+                              ) : (
+                                <RunStatusBadge status={run.status} />
+                              )}
+                            </TableCell>
+                            <TableCell className="pr-4">
+                              {isDeletable && (
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-7 w-7 p-0 text-muted-foreground hover:text-red-600"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    if (confirm("Delete this report run? This cannot be undone.")) {
+                                      deleteReportMutation.mutate(run.id);
+                                    }
+                                  }}
+                                  disabled={deleteReportMutation.isPending}
+                                  data-testid={`button-delete-run-${run.id}`}
+                                >
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                </Button>
+                              )}
                             </TableCell>
                           </TableRow>
 
                           {isExpanded && (
                             <TableRow key={`${run.id}-detail`} className="bg-muted/5 hover:bg-muted/5">
-                              <TableCell colSpan={8} className="px-4 pb-6 pt-2">
+                              <TableCell colSpan={9} className="px-4 pb-6 pt-2">
                                 {run.status === "RUNNING" ? (
                                   <div className="flex items-center gap-3 text-sm text-muted-foreground py-4">
                                     <Loader2 className="h-4 w-4 animate-spin text-blue-500" />

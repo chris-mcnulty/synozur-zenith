@@ -6,6 +6,9 @@ Zenith is an MVP Microsoft 365 governance platform designed for The Synozur Alli
 ## User Preferences
 I prefer clear and direct communication. When making changes, please explain the reasoning and impact before proceeding. I value iterative development and would like to be involved in key decision points. Do not make changes to the `shared/schema.ts` file without explicit approval. Always keep the Entra App Registration permissions documented in this file.
 
+## Related Codebases
+- **Orbit**: https://github.com/chris-mcnulty/synozur-orbit — full read access granted. This is a separate Synozur product in the same family as Zenith.
+
 ## System Architecture
 
 ### UI/UX Decisions
@@ -19,6 +22,11 @@ The frontend utilizes React, Vite, TanStack Query, shadcn/ui, and wouter to deli
 - **Multi-Tenancy**: Organization-level multi-tenancy, allowing organizations to manage multiple M365 tenants. Data isolation is enforced at the organization level.
 - **Security Model**: Zenith provides authorization and RBAC, while Entra ID handles authentication. It implements a four-layer separation: Entra ID (authentication), Zenith Control Plane (authorization), Zenith Data Plane (inventory), and Zenith RBAC (permissions). Client secrets for tenant connections are encrypted at rest using AES-256-GCM.
 - **Tenant Ownership & MSP Access**: M365 tenants are owned by Zenith organizations with defined types (MSP, Customer, Hybrid). A consent mechanism allows MSP organizations to access customer tenants, controlled by generated access codes.
+- **Tenant Scope Helpers (server/routes/scope-helpers.ts)**: Two canonical scope helpers split the difference between an org's OWN tenants and tenants it can REACH (own + MSP-granted):
+  - **Owned helpers** (`getOwnedTenantConnectionIds`, `getOwnedTenantConnectionIdsForOrg`) — use for **default-aggregate** views (dashboard, site inventory, audit log, provisioning requests, Copilot Readiness, AI chat workspace context, workspaces writeback-pending, jobs list). MSP-granted (managed) tenants are intentionally EXCLUDED from these aggregates.
+  - **Accessible helpers** (`getAccessibleTenantConnectionIds`, `getAccessibleTenantConnectionIdsForOrg`) — use for **selector validation** (`?tenantConnectionId=X`) and **per-resource access checks** (`isWorkspaceInScope`, mutations on a specific workspace/container/tenant). MSP-granted tenants must remain reachable here so an MSP user picking a managed tenant from the selector can drill in and operate on it.
+  - **Backwards-compat aliases** (`getOrgTenantConnectionIds`, `getTenantConnectionIdsForOrg`) point to the Accessible variants. Un-migrated call sites stay safely broad. New code should use the explicit `Owned` / `Accessible` names.
+  - The default surfaces an MSP-managed tenant's data ONLY via the explicit tenant selector; a dedicated MSP overview surface for the union view is a future feature, not the default behaviour of org-context pages.
 - **RBAC**: A robust Role-Based Access Control system (Platform Owner, Tenant Admin, Governance Admin, Operator, Viewer, Read-Only Auditor) controls access and operations.
 - **Service Plan Gating**: Features are gated by service plans (TRIAL, STANDARD, PROFESSIONAL, ENTERPRISE) on both client and server sides.
 - **Tenant Database Masking**: Optional per-tenant AES-256-GCM encryption for sensitive text fields in the database, ensuring data privacy at rest.
@@ -30,12 +38,19 @@ The frontend utilizes React, Vite, TanStack Query, shadcn/ui, and wouter to deli
 - **Key Design Decisions**: SharePoint sites are primary managed workspaces, with automated naming prefixes. Enforces "Highly Confidential" sensitivity labels. Tracks site owners and detects Hub site hierarchy.
 - **Workspace Telemetry**: Captures point-in-time snapshots of site storage, content, and activity.
 - **SharePoint Embedded (SPE)**: Provides full inventory of SPE containers (e.g., Loop, Whiteboard, Copilot) including usage, labels, and owner details, synced via Graph API.
+- **Copilot Prompt Intelligence (BL-038)**: Syncs ALL Copilot interactions (both `userPrompt` AND `aiResponse`) via `/beta/copilot/users/{userId}/interactionHistory/getAllEnterpriseInteractions` per-user endpoint. Uses `$filter=createdDateTime gt {lastDate}` for incremental collection (with automatic fallback to unfiltered paging if $filter is rejected). Stores `requestId` (prompt↔response pairing), `sessionId` (conversation thread), `interactionType`, `bodyContent`, `contexts`, `attachments`, `links`, `mentions`, and `rawData`. DB unique constraint on `graphInteractionId` for idempotent re-runs. 429 retried with Retry-After back-off (up to 3 retries per user). UPN fallback on first-page 404. Graceful 403/404 skip for unlicensed users. User list from `license_assignments` filtered by Copilot SKU. Prompt analyzer filters to `interactionType='userPrompt'` for scoring.
+- **AI Model Defaults**: All AI features (Copilot Assessment, Prompt Intelligence, IA Assessment, Governance Narrative) default to GPT-5.2 via Replit OpenAI. Workspace Insight defaults to GPT-5 Mini. Configurable per-feature via Admin → AI Settings → Feature Assignments tab.
+- **Tailwind Typography**: `@tailwindcss/typography` plugin enabled for proper Markdown rendering in prose-styled components (Executive Summary narrative).
 - **Feature Toggle and Data Purge**: Per-tenant opt-in feature toggles for various data-gathering modules (e.g., OneDrive, Recordings, Teams, Telemetry, SPE), with options for data purging and in-memory cancellation of discovery processes.
 - **Traffic Analytics**: Tracks anonymous page views for public and login pages, providing aggregated usage statistics for platform owners.
 - **Support Ticket System**: In-app help desk with org-scoped support tickets, threaded replies (internal notes supported), and status management.
 - **System Design Choices**: Custom field definitions are tenant-owned. Document libraries are first-class inventory entities. A multi-policy engine evaluates workspaces. All significant actions are logged. Comprehensive RESTful APIs are provided.
 - **CSV Export/Import**: Allows exporting workspace data to CSV (including custom fields) and importing updates for editable fields based on Site URL.
 - **Document Library Detail View**: Provides detailed views of content types, custom columns, and Syntex/AI models for document libraries, fetched live from Graph API.
+- **AI Agent Skills**: Per-org agent skill toggles (Provision, Validate, Explain, Report & Recommend) persisted in `ai_agent_skills` table. Governance Admins+ can toggle via `PATCH /api/ai/agent-skills/:skillKey`. Defaults all skills to enabled on first access.
+- **AI Connection Status**: `GET /api/ai/connection-status` returns live signals: Entra App Registration configured, last sync time, workspace count, active policy count, sensitivity label count. Powers the Governance Context Sources display.
+- **AI Chat GPT Fallback**: GENERAL intent in the chat route optionally calls `completeForFeature('WORKSPACE_INSIGHT', ...)` from `server/services/ai-provider.ts` with workspace summary context. Falls back gracefully to static help text if OpenAI is not configured.
+- **AI Assistant Nav**: Removed `isMock: true` flag from the "AI Assistant" nav item — the feature is now backed by real APIs.
 
 ## Entra App Registration — Required Permissions (v4)
 
@@ -52,6 +67,7 @@ The frontend utilizes React, Vite, TanStack Query, shadcn/ui, and wouter to deli
 | Mail.Read | Email Storage Report | Yes |
 | InformationProtectionPolicy.Read.All | Purview Sensitivity Labels | Yes |
 | RecordsManagement.Read.All | Purview Retention Labels | Yes (requires M365 E5 Compliance) |
+| AiEnterpriseInteraction.Read.All | Copilot Prompt Intelligence | Yes (requires M365 Copilot) |
 | AuditLog.Read.All | License Sign-In Activity | No (optional) |
 
 ### Delegated Permissions (Microsoft Graph)
@@ -62,6 +78,29 @@ openid, profile, email, User.Read, offline_access, RecordsManagement.Read.All, G
 |---|---|---|
 | AllSites.FullControl | Delegated | SPE container management |
 | Sites.FullControl.All | Application | SPE container management |
+
+## AI Provider Environment Variables
+
+The following environment variables are required for the AI Provider Foundation (Task 50):
+
+| Variable | Required | Description |
+|---|---|---|
+| `AZURE_CLIENT_ID` | Yes (Azure Foundry) | Azure Entra App Registration client ID for managed identity auth |
+| `AZURE_CLIENT_SECRET` | Yes (Azure Foundry) | Azure Entra App Registration client secret for managed identity auth |
+| `AZURE_TENANT_ID` | Yes (Azure Foundry) | Azure tenant ID for Entra token acquisition |
+| `AZURE_FOUNDRY_OPENAI_ENDPOINT` | Yes (Azure Foundry) | Base URL of the Azure OpenAI endpoint, e.g. `https://<resource>.openai.azure.com` |
+| `AZURE_FOUNDRY_API_KEY` | Optional | Fallback API key if Entra credentials are not configured |
+| `AZURE_FOUNDRY_PROJECT_ENDPOINT` | Optional | For Inference endpoint models (non-AOAI Azure Foundry deployments) |
+| `OPENAI_API_KEY` | Optional (fallback) | OpenAI key for fallback provider |
+| `ANTHROPIC_API_KEY` | Optional (fallback) | Anthropic key for fallback provider |
+
+Azure AI Foundry is the primary/default provider, using managed identity (client credentials flow to Entra) as the preferred auth method. If `AZURE_CLIENT_ID / AZURE_CLIENT_SECRET / AZURE_TENANT_ID` are set, a Bearer token is acquired from `https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token` with the `https://cognitiveservices.azure.com/.default` scope and cached with a 60-second refresh buffer. If Entra creds are absent, `AZURE_FOUNDRY_API_KEY` is used as a fallback auth method. Calls via Azure Foundry incur $0 estimated cost in the usage log (billed to the org's own Azure subscription). Replit OpenAI and Anthropic are available as fallback providers.
+
+## Deployment
+
+The deployment build runs `npm run db:push -- --force && npm run build` so the production database schema is synced from `shared/schema.ts` on every publish. This is required because Drizzle issues `SELECT *`-style queries that include every column declared in the schema; if a newly added column is missing from the production DB the entire query throws (`column "<name>" does not exist`) and breaks downstream features (dashboard, site inventory, onboarding, Copilot Readiness, etc.). Keeping the push in the build step prevents schema drift between dev and prod.
+
+If you ever need to redeploy without the push (rare — e.g. the prod DB is intentionally pinned to an older shape), edit the deployment build command in `.replit` / via `deployConfig`.
 
 ## External Dependencies
 - **Microsoft 365 / SharePoint**: Core platform for M365 governance.

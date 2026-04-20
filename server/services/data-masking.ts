@@ -32,7 +32,7 @@ export function decryptField(value: string, keyBuffer: Buffer): string {
 
   const iv = Buffer.from(ivHex, "hex");
   const authTag = Buffer.from(authTagHex, "hex");
-  const decipher = crypto.createDecipheriv(ALGORITHM, keyBuffer, iv);
+  const decipher = crypto.createDecipheriv(ALGORITHM, keyBuffer, iv, { authTagLength: 16 });
   decipher.setAuthTag(authTag);
   let decrypted = decipher.update(encrypted, "hex", "utf8");
   decrypted += decipher.final("utf8");
@@ -76,6 +76,9 @@ export const SENSITIVE_FIELDS: Record<string, string[]> = {
   governance_review_findings: [
     "resourceName", "description", "recommendedAction",
   ],
+  copilot_interactions: [
+    "userPrincipalName", "userDisplayName", "promptText", "bodyContent", "recommendation",
+  ],
 };
 
 export function encryptRecord<T extends Record<string, any>>(
@@ -110,8 +113,12 @@ export function decryptRecord<T extends Record<string, any>>(
     if (typeof value === "string" && isMaskedValue(value)) {
       try {
         (result as any)[field] = decryptField(value, keyBuffer);
-      } catch {
-        // leave as-is if decryption fails
+      } catch (err: any) {
+        // Decryption failed — most common cause: the tenant encryption key was
+        // regenerated after this value was written (key mismatch). The MASKED:
+        // value is left in place so data isn't silently lost, but we log so the
+        // issue is visible in server logs.
+        console.error(`[data-masking] decryptField failed for table="${tableName}" field="${field}": ${err?.message ?? err}`);
       }
     }
   }

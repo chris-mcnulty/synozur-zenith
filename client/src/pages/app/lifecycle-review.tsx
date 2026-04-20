@@ -32,6 +32,7 @@ import {
   Share2,
 } from "lucide-react";
 import { useTenant } from "@/lib/tenant-context";
+import { DatasetFreshnessBanner } from "@/components/datasets";
 
 type Workspace = {
   id: string;
@@ -182,6 +183,14 @@ export default function LifecycleReviewHub() {
           </Button>
         </div>
       </div>
+
+      {/* BL-039: dataset freshness nudge */}
+      {tenantConnectionId && (
+        <DatasetFreshnessBanner
+          tenantConnectionId={tenantConnectionId}
+          datasets={["workspaces"]}
+        />
+      )}
 
       <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
         <Card className="glass-panel border-red-500/20 shadow-red-500/5">

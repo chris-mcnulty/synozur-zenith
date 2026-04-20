@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { Fragment, useState, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -7,9 +7,10 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Download, Filter, RefreshCw, ChevronLeft, ChevronRight, ShieldAlert, Lock } from "lucide-react";
+import { Download, Filter, RefreshCw, ChevronLeft, ChevronRight, ShieldAlert, Lock, ChevronDown, FileJson } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { UpgradeGate } from "@/components/upgrade-gate";
+import { useTenant } from "@/lib/tenant-context";
 
 type AuditLogEntry = {
   id: string;
@@ -46,9 +47,12 @@ const ACTION_LABELS: Record<string, string> = {
   WORKSPACE_PROVISIONED: "Workspace Provisioned",
   PROVISIONING_REJECTED: "Provisioning Rejected",
   PROVISIONING_FAILED: "Provisioning Failed",
+  PROVISIONING_REQUEST_UPDATED: "Provisioning Updated",
   LABEL_ASSIGNED: "Label Assigned",
   METADATA_UPDATED: "Metadata Updated",
   SHARING_CHANGED: "Sharing Changed",
+  SENSITIVITY_CHANGED: "Sensitivity Changed",
+  SENSITIVITY_POLICY_VIOLATION: "Sensitivity Policy Violation",
   SITE_ARCHIVED: "Site Archived",
   TENANT_REGISTERED: "Tenant Registered",
   TENANT_SUSPENDED: "Tenant Suspended",
@@ -65,10 +69,22 @@ const ACTION_LABELS: Record<string, string> = {
   ORG_SWITCHED: "Organization Switched",
   ORG_SETTINGS_UPDATED: "Org Settings Updated",
   ORG_DELETED_BY_ADMIN: "Organization Deleted",
+  ORG_PLAN_CHANGED_BY_ADMIN: "Plan Changed",
   ORG_CANCELLED: "Organization Cancelled",
   TENANT_DELETED: "Tenant Deleted",
   ACCESS_DENIED: "Access Denied",
 };
+
+const RESOURCE_TYPES = [
+  "workspace",
+  "provisioning_request",
+  "tenant_connection",
+  "organization",
+  "user",
+  "policy",
+  "governance_policy",
+  "auth",
+];
 
 const ACTION_TYPES = Object.keys(ACTION_LABELS);
 
@@ -123,34 +139,51 @@ function downloadCsv(rows: AuditLogEntry[]) {
   URL.revokeObjectURL(url);
 }
 
+function downloadJson(rows: AuditLogEntry[]) {
+  const blob = new Blob([JSON.stringify(rows, null, 2)], { type: "application/json;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `audit-log-${new Date().toISOString().slice(0, 10)}.json`;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
 export default function AuditLogPage() {
   const [page, setPage] = useState(1);
   const [limit] = useState(50);
   const [filters, setFilters] = useState({
     action: "",
+    resource: "",
     userEmail: "",
     result: "",
     startDate: "",
     endDate: "",
   });
   const [applied, setApplied] = useState(filters);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
 
-  const buildQuery = useCallback((f: typeof filters, p: number) => {
+  const { selectedTenant } = useTenant();
+  const tenantConnectionId = selectedTenant?.id ?? "";
+
+  const buildQuery = useCallback((f: typeof filters, p: number, tid: string) => {
     const params = new URLSearchParams();
     params.set("page", String(p));
     params.set("limit", String(limit));
     if (f.action && f.action !== "ALL") params.set("action", f.action);
+    if (f.resource && f.resource !== "ALL") params.set("resource", f.resource);
     if (f.userEmail) params.set("userEmail", f.userEmail);
     if (f.result && f.result !== "ALL") params.set("result", f.result);
     if (f.startDate) params.set("startDate", f.startDate);
     if (f.endDate) params.set("endDate", f.endDate);
+    if (tid) params.set("tenantConnectionId", tid);
     return `/api/audit-log?${params.toString()}`;
   }, [limit]);
 
   const { data, isLoading, refetch } = useQuery<AuditLogResponse>({
-    queryKey: ["audit-log", applied, page],
+    queryKey: ["audit-log", applied, page, tenantConnectionId],
     queryFn: async () => {
-      const res = await fetch(buildQuery(applied, page), { credentials: "include" });
+      const res = await fetch(buildQuery(applied, page, tenantConnectionId), { credentials: "include" });
       if (!res.ok) throw new Error("Failed to fetch audit log");
       return res.json();
     },
@@ -162,10 +195,14 @@ export default function AuditLogPage() {
   }
 
   function resetFilters() {
-    const empty = { action: "", userEmail: "", result: "", startDate: "", endDate: "" };
+    const empty = { action: "", resource: "", userEmail: "", result: "", startDate: "", endDate: "" };
     setFilters(empty);
     setApplied(empty);
     setPage(1);
+  }
+
+  function toggleExpanded(id: string) {
+    setExpandedId(prev => (prev === id ? null : id));
   }
 
   const rows = data?.rows ?? [];
@@ -221,6 +258,38 @@ export default function AuditLogPage() {
               Export CSV
             </Button>
           </UpgradeGate>
+          <UpgradeGate
+            feature="csvExport"
+            fallback={
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="gap-2 opacity-60"
+                    disabled
+                    data-testid="button-export-json-locked"
+                  >
+                    <Lock className="w-4 h-4" />
+                    Export JSON
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>JSON Export requires Standard plan or higher. Upgrade to enable.</TooltipContent>
+              </Tooltip>
+            }
+          >
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-2"
+              disabled={rows.length === 0}
+              onClick={() => downloadJson(rows)}
+              data-testid="button-export-json"
+            >
+              <FileJson className="w-4 h-4" />
+              Export JSON
+            </Button>
+          </UpgradeGate>
         </div>
       </div>
 
@@ -232,7 +301,7 @@ export default function AuditLogPage() {
           </CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
             <div className="space-y-1.5">
               <Label htmlFor="filter-action">Action Type</Label>
               <Select
@@ -246,6 +315,24 @@ export default function AuditLogPage() {
                   <SelectItem value="ALL">All actions</SelectItem>
                   {ACTION_TYPES.map(a => (
                     <SelectItem key={a} value={a}>{ACTION_LABELS[a]}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="filter-resource">Resource Type</Label>
+              <Select
+                value={filters.resource || "ALL"}
+                onValueChange={(v) => setFilters(f => ({ ...f, resource: v === "ALL" ? "" : v }))}
+              >
+                <SelectTrigger id="filter-resource" data-testid="select-filter-resource">
+                  <SelectValue placeholder="All resources" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="ALL">All resources</SelectItem>
+                  {RESOURCE_TYPES.map(r => (
+                    <SelectItem key={r} value={r}>{r}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
@@ -324,7 +411,8 @@ export default function AuditLogPage() {
             <Table>
               <TableHeader>
                 <TableRow className="border-b border-border/50 bg-muted/20">
-                  <TableHead className="pl-6 w-40">Timestamp</TableHead>
+                  <TableHead className="pl-6 w-10"></TableHead>
+                  <TableHead className="w-40">Timestamp</TableHead>
                   <TableHead className="w-44">Action</TableHead>
                   <TableHead className="w-24">Result</TableHead>
                   <TableHead>User</TableHead>
@@ -335,49 +423,94 @@ export default function AuditLogPage() {
               <TableBody>
                 {isLoading ? (
                   <TableRow>
-                    <TableCell colSpan={6} className="text-center text-muted-foreground py-12">
+                    <TableCell colSpan={7} className="text-center text-muted-foreground py-12">
                       Loading audit log entries...
                     </TableCell>
                   </TableRow>
                 ) : rows.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={6} className="text-center text-muted-foreground py-12">
+                    <TableCell colSpan={7} className="text-center text-muted-foreground py-12">
                       No audit log entries found for the selected filters.
                     </TableCell>
                   </TableRow>
-                ) : rows.map((entry) => (
-                  <TableRow
-                    key={entry.id}
-                    className="hover:bg-muted/10 transition-colors border-b border-border/30"
-                    data-testid={`row-audit-${entry.id}`}
-                  >
-                    <TableCell className="pl-6 font-mono text-xs text-muted-foreground whitespace-nowrap">
-                      {formatDate(entry.createdAt)}
-                    </TableCell>
-                    <TableCell>
-                      <span className="text-sm font-medium" data-testid={`text-action-${entry.id}`}>
-                        {humaniseAction(entry.action)}
-                      </span>
-                    </TableCell>
-                    <TableCell data-testid={`cell-result-${entry.id}`}>
-                      {resultBadge(entry.result)}
-                    </TableCell>
-                    <TableCell className="text-sm text-muted-foreground" data-testid={`text-user-${entry.id}`}>
-                      {entry.userEmail ?? <span className="italic opacity-50">system</span>}
-                    </TableCell>
-                    <TableCell className="text-sm" data-testid={`text-resource-${entry.id}`}>
-                      <span className="text-muted-foreground">{entry.resource}</span>
-                      {entry.resourceId && (
-                        <span className="ml-1 font-mono text-xs text-muted-foreground/60">
-                          /{entry.resourceId.slice(0, 8)}…
-                        </span>
+                ) : rows.map((entry) => {
+                  const isExpanded = expandedId === entry.id;
+                  const hasDetails = entry.details && Object.keys(entry.details).length > 0;
+                  return (
+                    <Fragment key={entry.id}>
+                      <TableRow
+                        className={`hover:bg-muted/10 transition-colors border-b border-border/30 ${hasDetails ? "cursor-pointer" : ""}`}
+                        onClick={() => hasDetails && toggleExpanded(entry.id)}
+                        data-testid={`row-audit-${entry.id}`}
+                      >
+                        <TableCell className="pl-6 w-10">
+                          {hasDetails ? (
+                            <ChevronDown
+                              className={`w-4 h-4 text-muted-foreground transition-transform ${isExpanded ? "rotate-180" : ""}`}
+                            />
+                          ) : null}
+                        </TableCell>
+                        <TableCell className="font-mono text-xs text-muted-foreground whitespace-nowrap">
+                          {formatDate(entry.createdAt)}
+                        </TableCell>
+                        <TableCell>
+                          <span className="text-sm font-medium" data-testid={`text-action-${entry.id}`}>
+                            {humaniseAction(entry.action)}
+                          </span>
+                        </TableCell>
+                        <TableCell data-testid={`cell-result-${entry.id}`}>
+                          {resultBadge(entry.result)}
+                        </TableCell>
+                        <TableCell className="text-sm text-muted-foreground" data-testid={`text-user-${entry.id}`}>
+                          {entry.userEmail ?? <span className="italic opacity-50">system</span>}
+                        </TableCell>
+                        <TableCell className="text-sm" data-testid={`text-resource-${entry.id}`}>
+                          <span className="text-muted-foreground">{entry.resource}</span>
+                          {entry.resourceId && (
+                            <span className="ml-1 font-mono text-xs text-muted-foreground/60">
+                              /{entry.resourceId.slice(0, 8)}…
+                            </span>
+                          )}
+                        </TableCell>
+                        <TableCell className="pr-6 font-mono text-xs text-muted-foreground">
+                          {entry.ipAddress ?? "—"}
+                        </TableCell>
+                      </TableRow>
+                      {isExpanded && hasDetails && (
+                        <TableRow
+                          className="bg-muted/10 border-b border-border/30"
+                          data-testid={`row-audit-details-${entry.id}`}
+                        >
+                          <TableCell colSpan={7} className="pl-16 pr-6 py-4">
+                            <div className="space-y-3">
+                              <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                                <span>
+                                  Audit record ID: <span className="font-mono">{entry.id}</span>
+                                </span>
+                                {entry.resourceId && (
+                                  <span>
+                                    Resource ID: <span className="font-mono">{entry.resourceId}</span>
+                                  </span>
+                                )}
+                                {entry.tenantConnectionId && (
+                                  <span>
+                                    Tenant: <span className="font-mono">{entry.tenantConnectionId.slice(0, 8)}…</span>
+                                  </span>
+                                )}
+                              </div>
+                              <pre
+                                className="text-xs bg-background/60 border border-border/50 rounded-lg p-3 overflow-x-auto max-h-72 font-mono"
+                                data-testid={`text-details-${entry.id}`}
+                              >
+                                {JSON.stringify(entry.details, null, 2)}
+                              </pre>
+                            </div>
+                          </TableCell>
+                        </TableRow>
                       )}
-                    </TableCell>
-                    <TableCell className="pr-6 font-mono text-xs text-muted-foreground">
-                      {entry.ipAddress ?? "—"}
-                    </TableCell>
-                  </TableRow>
-                ))}
+                    </Fragment>
+                  );
+                })}
               </TableBody>
             </Table>
           </div>

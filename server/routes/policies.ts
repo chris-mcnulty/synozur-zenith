@@ -3,10 +3,61 @@ import { requireAuth, requireRole, type AuthenticatedRequest } from "../middlewa
 import { ZENITH_ROLES, insertGovernancePolicySchema, insertPolicyOutcomeSchema, type PolicyRuleDefinition, type GovernancePolicy } from "@shared/schema";
 import { storage } from "../storage";
 import { evaluatePolicy, evaluationResultsToCopilotRules, formatPolicyBagValue, type EvaluationContext } from "../services/policy-engine";
-import { getOrgTenantConnectionIds, isWorkspaceInScope } from "./scope-helpers";
+import { getOrgTenantConnectionIds, getTenantConnectionIdsForOrg, getOwnedTenantConnectionIdsForOrg, getOwnedTenantConnectionIds, isWorkspaceInScope } from "./scope-helpers";
 import { requireFeature } from "../services/feature-gate";
+import { scoreWorkspaces, scoreWorkspace } from "../services/copilot-scoring";
+import { buildRequiredFieldsByTenantId, getRequiredFieldsForWorkspace } from "../services/metadata-completeness";
+import {
+  runCopilotReadinessAssessment,
+  getAssessmentRun,
+  getLatestAssessmentRun,
+  getLegacyOrgWideAssessmentRuns,
+  deleteAssessmentRun,
+  getWorkspaceNarrative,
+  getAssessmentRunHistory,
+} from "../services/copilot-assessment-service";
 
 const router = Router();
+
+/**
+ * Resolve the SELECTOR-VALIDATION allow-list (own + MSP grants) for a request
+ * scoped to a specific target organization. Use this for `?tenantConnectionId=`
+ * checks so MSP-managed tenants remain reachable when a Synozur user picks
+ * one explicitly.
+ *
+ * - Platform Owner: returns the target org's accessible connections.
+ * - Other roles: returns the caller's accessible set (own + grants) via
+ *   getOrgTenantConnectionIds; for non-PO users the active org matches the
+ *   target org so this stays correct.
+ */
+async function resolveAllowedTenantIdsForOrg(
+  req: AuthenticatedRequest,
+  isPlatformOwner: boolean,
+  targetOrgId: string,
+): Promise<string[]> {
+  if (isPlatformOwner) {
+    return getTenantConnectionIdsForOrg(targetOrgId);
+  }
+  const allowed = await getOrgTenantConnectionIds(req);
+  return allowed ?? (await getTenantConnectionIdsForOrg(targetOrgId));
+}
+
+/**
+ * Resolve the DEFAULT-AGGREGATE tenant-connection IDs for a request scoped to a
+ * specific target organization — own tenants only. MSP-granted tenants are
+ * intentionally excluded; pick them via the tenant selector to drill in.
+ */
+async function resolveOwnedTenantIdsForOrg(
+  req: AuthenticatedRequest,
+  isPlatformOwner: boolean,
+  targetOrgId: string,
+): Promise<string[]> {
+  if (isPlatformOwner) {
+    return getOwnedTenantConnectionIdsForOrg(targetOrgId);
+  }
+  const owned = await getOwnedTenantConnectionIds(req);
+  return owned ?? (await getOwnedTenantConnectionIdsForOrg(targetOrgId));
+}
 
 const RESERVED_PROPERTY_BAG_PREFIXES = ['vti_', 'ows_', 'docid_', '_vti_', '__', 'ecm_', 'ir_'];
 
@@ -501,6 +552,396 @@ router.get("/api/workspaces/:id/policy-results", requireAuth(), requireFeature("
     passCount: allResults.filter(r => r.ruleResult === "PASS").length,
     failCount: allResults.filter(r => r.ruleResult === "FAIL").length,
   });
+});
+
+// ── Copilot Readiness Dashboard (BL-006) ──
+
+/**
+ * Org-wide Copilot readiness dashboard — summary, full workspace list, and
+ * remediation queue. Service-plan gated (Professional+).
+ */
+router.get("/api/copilot-readiness", requireAuth(), requireFeature("copilotReadiness"), async (req: AuthenticatedRequest, res) => {
+  try {
+    const isPlatformOwner = req.user?.role === ZENITH_ROLES.PLATFORM_OWNER;
+    const orgId = isPlatformOwner
+      ? ((req.query.orgId as string | undefined) || req.activeOrganizationId || req.user?.organizationId)
+      : (req.activeOrganizationId || req.user?.organizationId);
+
+    if (!orgId) {
+      return res.json({
+        summary: {
+          totalWorkspaces: 0,
+          evaluated: 0,
+          excluded: 0,
+          ready: 0,
+          nearlyReady: 0,
+          atRisk: 0,
+          blocked: 0,
+          averageScore: 0,
+          readinessPercent: 0,
+          blockerBreakdown: [],
+        },
+        workspaces: [],
+        remediationQueue: [],
+      });
+    }
+
+    const tenantFilter = typeof req.query.tenantConnectionId === "string" && req.query.tenantConnectionId
+      ? req.query.tenantConnectionId
+      : undefined;
+
+    let allWorkspaces: Awaited<ReturnType<typeof storage.getWorkspaces>> = [];
+    if (tenantFilter) {
+      // Selector pick — validate against the broader accessible set (own +
+      // MSP grants) so MSP users can drill into managed tenants.
+      const accessibleIdsForOrg = await resolveAllowedTenantIdsForOrg(req, isPlatformOwner, orgId);
+      if (!accessibleIdsForOrg.includes(tenantFilter)) {
+        return res.status(403).json({ message: "Tenant connection is not in scope for this organization." });
+      }
+      allWorkspaces = await storage.getWorkspaces(undefined, tenantFilter);
+    } else {
+      // Default aggregate — own tenants only.
+      const ownedIdsForOrg = await resolveOwnedTenantIdsForOrg(req, isPlatformOwner, orgId);
+      if (ownedIdsForOrg.length > 0) {
+        const perTenantResults = await Promise.all(
+          ownedIdsForOrg.map(tid => storage.getWorkspaces(undefined, tid)),
+        );
+        allWorkspaces = perTenantResults.flat();
+      }
+    }
+
+    const requiredFieldsByTenantId = await buildRequiredFieldsByTenantId(allWorkspaces);
+    const result = scoreWorkspaces(allWorkspaces, requiredFieldsByTenantId);
+    res.json(result);
+  } catch (err: any) {
+    console.error("[copilot-readiness] Error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * Per-workspace readiness breakdown — criteria, score, and remediation steps
+ * for a single workspace.
+ */
+router.get("/api/workspaces/:id/copilot-readiness", requireAuth(), requireFeature("copilotReadiness"), async (req: AuthenticatedRequest, res) => {
+  if (!(await isWorkspaceInScope(req, req.params.id))) {
+    return res.status(404).json({ message: "Workspace not found" });
+  }
+  const workspace = await storage.getWorkspace(req.params.id);
+  if (!workspace) return res.status(404).json({ message: "Workspace not found" });
+  const requiredFields = await getRequiredFieldsForWorkspace(workspace);
+  res.json(scoreWorkspace(workspace, requiredFields));
+});
+
+/**
+ * Toggle the explicit Copilot-exclusion flag on a workspace. The value lives
+ * inside the existing `customFields` jsonb column to avoid a schema change.
+ */
+router.patch("/api/workspaces/:id/copilot-exclusion", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN), requireFeature("copilotReadiness"), async (req: AuthenticatedRequest, res) => {
+  if (!(await isWorkspaceInScope(req, req.params.id))) {
+    return res.status(404).json({ message: "Workspace not found" });
+  }
+  const workspace = await storage.getWorkspace(req.params.id);
+  if (!workspace) return res.status(404).json({ message: "Workspace not found" });
+
+  const { excluded, reason } = req.body as { excluded?: boolean; reason?: string };
+  if (typeof excluded !== "boolean") {
+    return res.status(400).json({ message: "Body must include `excluded: boolean`." });
+  }
+
+  const existingFields = (workspace.customFields as Record<string, any>) || {};
+  const nextFields: Record<string, any> = { ...existingFields };
+  if (excluded) {
+    nextFields.copilot_excluded = true;
+    if (reason) nextFields.copilot_exclusion_reason = reason;
+  } else {
+    delete nextFields.copilot_excluded;
+    delete nextFields.copilot_exclusion_reason;
+  }
+
+  const updated = await storage.updateWorkspace(req.params.id, { customFields: nextFields } as any);
+
+  await storage.createAuditEntry({
+    userId: req.user?.id || null,
+    userEmail: req.user?.email || null,
+    action: excluded ? 'COPILOT_EXCLUDED' : 'COPILOT_EXCLUSION_REMOVED',
+    resource: 'workspace',
+    resourceId: req.params.id,
+    organizationId: req.user?.organizationId || null,
+    tenantConnectionId: workspace.tenantConnectionId || null,
+    details: {
+      workspaceName: workspace.displayName,
+      excluded,
+      reason: reason || null,
+    },
+    result: 'SUCCESS',
+    ipAddress: req.ip || null,
+  });
+
+  const requiredFields = updated ? await getRequiredFieldsForWorkspace(updated) : [];
+  res.json(updated ? scoreWorkspace(updated, requiredFields) : null);
+});
+
+// ── AI Copilot Readiness Assessment Routes (Task #52) ──
+
+/**
+ * Trigger a background AI assessment for the org.
+ * Returns a runId that can be polled via GET /api/copilot-readiness/assessment/:runId
+ */
+router.post("/api/copilot-readiness/assessment", requireAuth(), requireFeature("copilotReadiness"), async (req: AuthenticatedRequest, res) => {
+  try {
+    const isPlatformOwner = req.user?.role === ZENITH_ROLES.PLATFORM_OWNER;
+    const orgId = isPlatformOwner
+      ? ((req.body.orgId as string | undefined) || req.activeOrganizationId || req.user?.organizationId)
+      : (req.activeOrganizationId || req.user?.organizationId);
+
+    if (!orgId) {
+      return res.status(400).json({ message: "Organization context required" });
+    }
+
+    const tenantConnectionId = typeof req.body.tenantConnectionId === "string" && req.body.tenantConnectionId
+      ? req.body.tenantConnectionId
+      : null;
+
+    if (tenantConnectionId) {
+      const allowedIds = await resolveAllowedTenantIdsForOrg(req, isPlatformOwner, orgId);
+      if (!allowedIds.includes(tenantConnectionId)) {
+        return res.status(403).json({ message: "Tenant connection is not in scope for this organization." });
+      }
+    }
+
+    const triggeredBy = req.user?.id || req.user?.email || null;
+    const runId = await runCopilotReadinessAssessment(orgId, triggeredBy, tenantConnectionId);
+    res.status(202).json({ runId, status: "PENDING" });
+  } catch (err: any) {
+    console.error("[AI Assessment] Error triggering assessment:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * Get the latest completed assessment for the org.
+ */
+router.get("/api/copilot-readiness/assessment/latest", requireAuth(), requireFeature("copilotReadiness"), async (req: AuthenticatedRequest, res) => {
+  try {
+    const isPlatformOwner = req.user?.role === ZENITH_ROLES.PLATFORM_OWNER;
+    const orgId = isPlatformOwner
+      ? ((req.query.orgId as string | undefined) || req.activeOrganizationId || req.user?.organizationId)
+      : (req.activeOrganizationId || req.user?.organizationId);
+
+    if (!orgId) {
+      return res.json(null);
+    }
+
+    const tenantConnectionId = typeof req.query.tenantConnectionId === "string" && req.query.tenantConnectionId
+      ? req.query.tenantConnectionId
+      : null;
+
+    if (tenantConnectionId) {
+      const allowedIds = await resolveAllowedTenantIdsForOrg(req, isPlatformOwner, orgId);
+      if (!allowedIds.includes(tenantConnectionId)) {
+        return res.status(403).json({ message: "Tenant connection is not in scope for this organization." });
+      }
+    }
+
+    const run = await getLatestAssessmentRun(orgId, 'copilot_readiness', tenantConnectionId);
+    res.json(run);
+  } catch (err: any) {
+    console.error("[AI Assessment] Error fetching latest:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * List "legacy" org-wide Copilot Readiness assessment runs — completed
+ * runs that pre-date tenant scoping (Task #57) and weren't safely
+ * attributable to a single tenant by the Task #58 backfill (i.e. the
+ * org has multiple tenant connections). Surfaced behind a "View
+ * previous org-wide runs" affordance so historical executive summaries
+ * and roadmaps stay visible instead of looking deleted.
+ */
+router.get("/api/copilot-readiness/assessment/legacy", requireAuth(), requireFeature("copilotReadiness"), async (req: AuthenticatedRequest, res) => {
+  try {
+    const isPlatformOwner = req.user?.role === ZENITH_ROLES.PLATFORM_OWNER;
+    const orgId = isPlatformOwner
+      ? ((req.query.orgId as string | undefined) || req.activeOrganizationId || req.user?.organizationId)
+      : (req.activeOrganizationId || req.user?.organizationId);
+
+    if (!orgId) {
+      return res.json([]);
+    }
+
+    const runs = await getLegacyOrgWideAssessmentRuns(orgId, 'copilot_readiness');
+    res.json(runs);
+  } catch (err: any) {
+    console.error("[AI Assessment] Error fetching legacy runs:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * Paginated history of past Copilot Readiness assessments for the active tenant
+ * within the active organization. Newest first.
+ */
+router.get("/api/copilot-readiness/assessment/history", requireAuth(), requireFeature("copilotReadiness"), async (req: AuthenticatedRequest, res) => {
+  try {
+    const isPlatformOwner = req.user?.role === ZENITH_ROLES.PLATFORM_OWNER;
+    const orgId = isPlatformOwner
+      ? ((req.query.orgId as string | undefined) || req.activeOrganizationId || req.user?.organizationId)
+      : (req.activeOrganizationId || req.user?.organizationId);
+
+    if (!orgId) {
+      return res.status(400).json({ message: "Organization context required" });
+    }
+
+    const tenantConnectionId = typeof req.query.tenantConnectionId === "string" && req.query.tenantConnectionId
+      ? req.query.tenantConnectionId
+      : null;
+
+    if (tenantConnectionId) {
+      const allowedIds = await resolveAllowedTenantIdsForOrg(req, isPlatformOwner, orgId);
+      if (!allowedIds.includes(tenantConnectionId)) {
+        return res.status(403).json({ message: "Tenant connection is not in scope for this organization." });
+      }
+    }
+
+    const limit = Math.min(Math.max(parseInt(String(req.query.limit ?? "20"), 10) || 20, 1), 100);
+    const offset = Math.max(parseInt(String(req.query.offset ?? "0"), 10) || 0, 0);
+
+    const { runs, total } = await getAssessmentRunHistory(
+      orgId,
+      'copilot_readiness',
+      tenantConnectionId,
+      limit,
+      offset,
+    );
+    res.json({ runs, total, limit, offset });
+  } catch (err: any) {
+    console.error("[AI Assessment] Error fetching history:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * Poll the status and result of a specific assessment run.
+ */
+router.get("/api/copilot-readiness/assessment/:runId", requireAuth(), requireFeature("copilotReadiness"), async (req: AuthenticatedRequest, res) => {
+  try {
+    const run = await getAssessmentRun(req.params.runId);
+    if (!run) {
+      return res.status(404).json({ message: "Assessment run not found" });
+    }
+
+    const isPlatformOwner = req.user?.role === ZENITH_ROLES.PLATFORM_OWNER;
+    const orgId = isPlatformOwner
+      ? run.orgId
+      : (req.activeOrganizationId || req.user?.organizationId);
+
+    if (!isPlatformOwner && run.orgId !== orgId) {
+      return res.status(404).json({ message: "Assessment run not found" });
+    }
+
+    const tenantConnectionId = typeof req.query.tenantConnectionId === "string" && req.query.tenantConnectionId
+      ? req.query.tenantConnectionId
+      : null;
+
+    if (!isPlatformOwner && tenantConnectionId && run.tenantConnectionId !== tenantConnectionId) {
+      return res.status(404).json({ message: "Assessment run not found" });
+    }
+
+    res.json(run);
+  } catch (err: any) {
+    console.error("[AI Assessment] Error fetching run:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * Delete a Copilot Readiness assessment run. Governance admins only.
+ * Refuses to delete RUNNING runs. Enforces tenant + org scope.
+ */
+router.delete(
+  "/api/copilot-readiness/assessment/:runId",
+  requireAuth(),
+  requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN),
+  requireFeature("copilotReadiness"),
+  async (req: AuthenticatedRequest, res) => {
+    try {
+      const run = await getAssessmentRun(req.params.runId);
+      if (!run) {
+        return res.status(404).json({ message: "Assessment run not found" });
+      }
+
+      const isPlatformOwner = req.user?.role === ZENITH_ROLES.PLATFORM_OWNER;
+      const orgId = isPlatformOwner
+        ? run.orgId
+        : (req.activeOrganizationId || req.user?.organizationId);
+
+      if (!orgId || (!isPlatformOwner && run.orgId !== orgId)) {
+        return res.status(404).json({ message: "Assessment run not found" });
+      }
+
+      const tenantConnectionId = typeof req.query.tenantConnectionId === "string" && req.query.tenantConnectionId
+        ? req.query.tenantConnectionId
+        : null;
+
+      if (!isPlatformOwner && tenantConnectionId && run.tenantConnectionId !== tenantConnectionId) {
+        return res.status(404).json({ message: "Assessment run not found" });
+      }
+
+      if (run.status === "RUNNING") {
+        return res.status(409).json({ message: "Cannot delete a run that is still in progress" });
+      }
+
+      const deleted = await deleteAssessmentRun(req.params.runId, run.orgId);
+      if (!deleted) {
+        return res.status(404).json({ message: "Assessment run not found or already deleted" });
+      }
+
+      return res.status(204).end();
+    } catch (err: any) {
+      console.error("[AI Assessment] Error deleting run:", err);
+      res.status(500).json({ error: err.message });
+    }
+  },
+);
+
+/**
+ * Per-workspace AI remediation narrative — fetched on demand, cached 1 hour.
+ */
+router.get("/api/workspaces/:id/copilot-readiness/narrative", requireAuth(), requireFeature("copilotReadiness"), async (req: AuthenticatedRequest, res) => {
+  try {
+    if (!(await isWorkspaceInScope(req, req.params.id))) {
+      return res.status(404).json({ message: "Workspace not found" });
+    }
+
+    const isPlatformOwner = req.user?.role === ZENITH_ROLES.PLATFORM_OWNER;
+    const orgId = isPlatformOwner
+      ? ((req.query.orgId as string | undefined) || req.activeOrganizationId || req.user?.organizationId)
+      : (req.activeOrganizationId || req.user?.organizationId);
+
+    if (!orgId) {
+      return res.status(400).json({ message: "Organization context required" });
+    }
+
+    // If the caller has an active tenant scope, ensure the workspace belongs
+    // to that tenant — prevents cross-tenant lookup by guessed workspace id.
+    const tenantConnectionId = typeof req.query.tenantConnectionId === "string" && req.query.tenantConnectionId
+      ? req.query.tenantConnectionId
+      : null;
+    if (tenantConnectionId) {
+      const ws = await storage.getWorkspace(req.params.id);
+      if (!ws || ws.tenantConnectionId !== tenantConnectionId) {
+        return res.status(404).json({ message: "Workspace not found" });
+      }
+    }
+
+    const narrative = await getWorkspaceNarrative(req.params.id, orgId);
+    res.json({ narrative });
+  } catch (err: any) {
+    console.error("[AI Assessment] Error fetching workspace narrative:", err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 export default router;

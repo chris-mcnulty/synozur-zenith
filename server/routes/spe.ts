@@ -16,7 +16,24 @@ function getEffectiveClientSecret(conn: { clientSecret?: string | null }): strin
   return process.env.AZURE_CLIENT_SECRET!;
 }
 
+/**
+ * Default-aggregate scope: tenants this caller's org OWNS.
+ * Managed (MSP-granted) tenants are intentionally excluded from default views;
+ * use {@link getAccessibleIds} to validate selector picks for those.
+ */
 async function getOrgTenantConnectionIds(user: AuthenticatedRequest["user"]): Promise<string[] | null> {
+  if (!user?.organizationId) return null;
+  if (user.role === ZENITH_ROLES.PLATFORM_OWNER) return null;
+  const connections = await storage.getTenantConnectionsByOrganization(user.organizationId);
+  return connections.map(c => c.id);
+}
+
+/**
+ * Selector-validation scope: own + MSP-granted tenants. Use this to verify
+ * a caller-supplied tenantConnectionId is reachable, even when it's only
+ * managed (not owned). Per-resource access checks should use the same set.
+ */
+async function getAccessibleIds(user: AuthenticatedRequest["user"]): Promise<string[] | null> {
   if (!user?.organizationId) return null;
   if (user.role === ZENITH_ROLES.PLATFORM_OWNER) return null;
   const connections = await storage.getTenantConnectionsByOrganization(user.organizationId);
@@ -27,17 +44,18 @@ async function getOrgTenantConnectionIds(user: AuthenticatedRequest["user"]): Pr
 
 router.get("/api/spe/container-types", requireAuth(), async (req: AuthenticatedRequest, res) => {
   const tenantConnectionId = req.query.tenantConnectionId as string | undefined;
-  const allowedIds = await getOrgTenantConnectionIds(req.user);
 
   if (tenantConnectionId) {
-    if (allowedIds && !allowedIds.includes(tenantConnectionId)) return res.json([]);
+    const accessible = await getAccessibleIds(req.user);
+    if (accessible && !accessible.includes(tenantConnectionId)) return res.json([]);
     const types = await storage.getSpeContainerTypes(tenantConnectionId);
     return res.json(types);
   }
 
-  if (allowedIds) {
+  const ownedIds = await getOrgTenantConnectionIds(req.user);
+  if (ownedIds) {
     let all: any[] = [];
-    for (const id of allowedIds) {
+    for (const id of ownedIds) {
       const types = await storage.getSpeContainerTypes(id);
       all = all.concat(types);
     }
@@ -51,31 +69,32 @@ router.get("/api/spe/container-types", requireAuth(), async (req: AuthenticatedR
 router.get("/api/spe/containers", requireAuth(), async (req: AuthenticatedRequest, res) => {
   const search = req.query.search as string | undefined;
   const tenantConnectionId = req.query.tenantConnectionId as string | undefined;
-  const allowedIds = await getOrgTenantConnectionIds(req.user);
 
   if (tenantConnectionId) {
-    if (allowedIds && !allowedIds.includes(tenantConnectionId)) return res.json([]);
+    const accessible = await getAccessibleIds(req.user);
+    if (accessible && !accessible.includes(tenantConnectionId)) return res.json([]);
     const containers = await storage.getSpeContainers(search, tenantConnectionId);
     return res.json(containers);
   }
 
-  if (allowedIds) {
+  const ownedIds = await getOrgTenantConnectionIds(req.user);
+  if (ownedIds) {
     let all: any[] = [];
-    for (const id of allowedIds) {
+    for (const id of ownedIds) {
       const containers = await storage.getSpeContainers(search, id);
       all = all.concat(containers);
     }
     return res.json(all);
   }
 
-  const containers = await storage.getSpeContainers(search, tenantConnectionId);
+  const containers = await storage.getSpeContainers(search);
   res.json(containers);
 });
 
 router.get("/api/spe/containers/:id", requireAuth(), async (req: AuthenticatedRequest, res) => {
   const container = await storage.getSpeContainer(req.params.id);
   if (!container) return res.status(404).json({ message: "Container not found" });
-  const allowedIds = await getOrgTenantConnectionIds(req.user);
+  const allowedIds = await getAccessibleIds(req.user);
   if (allowedIds && !allowedIds.includes(container.tenantConnectionId)) {
     return res.status(404).json({ message: "Container not found" });
   }
@@ -85,7 +104,7 @@ router.get("/api/spe/containers/:id", requireAuth(), async (req: AuthenticatedRe
 router.patch("/api/spe/containers/:id", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN), async (req: AuthenticatedRequest, res) => {
   const existing = await storage.getSpeContainer(req.params.id);
   if (!existing) return res.status(404).json({ message: "Container not found" });
-  const allowedIds = await getOrgTenantConnectionIds(req.user);
+  const allowedIds = await getAccessibleIds(req.user);
   if (allowedIds && !allowedIds.includes(existing.tenantConnectionId)) {
     return res.status(404).json({ message: "Container not found" });
   }
@@ -131,7 +150,7 @@ router.patch("/api/spe/containers/:id", requireRole(ZENITH_ROLES.GOVERNANCE_ADMI
 router.get("/api/spe/containers/:id/usage", requireAuth(), async (req: AuthenticatedRequest, res) => {
   const container = await storage.getSpeContainer(req.params.id);
   if (!container) return res.status(404).json({ message: "Container not found" });
-  const allowedIds = await getOrgTenantConnectionIds(req.user);
+  const allowedIds = await getAccessibleIds(req.user);
   if (allowedIds && !allowedIds.includes(container.tenantConnectionId)) {
     return res.status(404).json({ message: "Container not found" });
   }
@@ -154,7 +173,7 @@ router.post("/api/spe/container-types", requireRole(ZENITH_ROLES.TENANT_ADMIN), 
       return res.status(400).json({ error: "azureAppId must be a valid GUID" });
     }
 
-    const allowedIds = await getOrgTenantConnectionIds(req.user);
+    const allowedIds = await getAccessibleIds(req.user);
     if (allowedIds && !allowedIds.includes(tenantConnectionId)) {
       return res.status(404).json({ error: "Tenant connection not found" });
     }
@@ -185,7 +204,7 @@ router.delete("/api/spe/container-types/:id", requireRole(ZENITH_ROLES.TENANT_AD
   try {
     const ct = (await storage.getSpeContainerTypes()).find(t => t.id === req.params.id);
     if (!ct) return res.status(404).json({ error: "Container type not found" });
-    const allowedIds = await getOrgTenantConnectionIds(req.user);
+    const allowedIds = await getAccessibleIds(req.user);
     if (allowedIds && !allowedIds.includes(ct.tenantConnectionId)) {
       return res.status(404).json({ error: "Container type not found" });
     }
@@ -204,7 +223,7 @@ router.post("/api/spe/tenants/:id/sync", requireRole(ZENITH_ROLES.TENANT_ADMIN),
     return res.status(403).json({ message: "SPE Container Discovery is disabled for this tenant. Enable it in Feature Settings before running a sync." });
   }
 
-  const allowedIds = await getOrgTenantConnectionIds(req.user);
+  const allowedIds = await getAccessibleIds(req.user);
   if (allowedIds && !allowedIds.includes(conn.id)) {
     return res.status(404).json({ message: "Tenant connection not found" });
   }
@@ -258,9 +277,24 @@ router.post("/api/spe/tenants/:id/sync", requireRole(ZENITH_ROLES.TENANT_ADMIN),
 
     const typeIdMap = new Map<string, string>();
 
+    // Microsoft uses 00000000-0000-0000-0000-000000000000 for all Microsoft-managed container
+    // types (Designer, Teams, Clipchamp, etc.). Multiple apps share this GUID, so we can't
+    // use it as the unique key. Store null instead (PostgreSQL allows multiple NULLs in
+    // unique columns) and match by displayName for these types.
+    const NULL_GUID = "00000000-0000-0000-0000-000000000000";
+    const isNullGuid = (id: string | null | undefined) => !id || id === NULL_GUID;
+
     for (const gct of containerTypes) {
-      const existing = (await storage.getSpeContainerTypes(conn.id))
-        .find(ct => ct.containerTypeId === gct.containerTypeId);
+      const existingList = await storage.getSpeContainerTypes(conn.id);
+      const existing = existingList.find(ct => {
+        if (isNullGuid(gct.containerTypeId)) {
+          // MS-managed types: match by display name since they share the zero GUID
+          return isNullGuid(ct.containerTypeId) && ct.displayName === gct.displayName;
+        }
+        return ct.containerTypeId === gct.containerTypeId;
+      });
+
+      const storedContainerTypeId = isNullGuid(gct.containerTypeId) ? null : gct.containerTypeId;
 
       if (existing) {
         await storage.updateSpeContainerType(existing.id, {
@@ -268,17 +302,38 @@ router.post("/api/spe/tenants/:id/sync", requireRole(ZENITH_ROLES.TENANT_ADMIN),
           description: gct.description || existing.description,
           azureAppId: gct.owningAppId || existing.azureAppId,
         });
-        typeIdMap.set(gct.containerTypeId, existing.id);
+        if (!isNullGuid(gct.containerTypeId)) {
+          typeIdMap.set(gct.containerTypeId, existing.id);
+        }
       } else {
-        const created = await storage.createSpeContainerType({
-          tenantConnectionId: conn.id,
-          containerTypeId: gct.containerTypeId,
-          displayName: gct.displayName || `Type ${gct.containerTypeId}`,
-          description: gct.description,
-          azureAppId: gct.owningAppId,
-          status: "ACTIVE",
-        });
-        typeIdMap.set(gct.containerTypeId, created.id);
+        try {
+          const created = await storage.createSpeContainerType({
+            tenantConnectionId: conn.id,
+            containerTypeId: storedContainerTypeId,
+            displayName: gct.displayName || `Type ${gct.containerTypeId}`,
+            description: gct.description,
+            azureAppId: gct.owningAppId,
+            status: "ACTIVE",
+          });
+          if (!isNullGuid(gct.containerTypeId)) {
+            typeIdMap.set(gct.containerTypeId, created.id);
+          }
+        } catch (err: any) {
+          if (err.message?.includes("duplicate key") || err.message?.includes("unique")) {
+            // Race condition or re-sync — look up the existing row and continue
+            const refreshed = await storage.getSpeContainerTypes(conn.id);
+            const found = refreshed.find(ct => isNullGuid(gct.containerTypeId)
+              ? isNullGuid(ct.containerTypeId) && ct.displayName === gct.displayName
+              : ct.containerTypeId === gct.containerTypeId
+            );
+            if (found && !isNullGuid(gct.containerTypeId)) {
+              typeIdMap.set(gct.containerTypeId, found.id);
+            }
+            console.warn(`[spe-sync] Duplicate container type skipped: ${gct.displayName} (${gct.containerTypeId})`);
+          } else {
+            throw err;
+          }
+        }
       }
     }
 

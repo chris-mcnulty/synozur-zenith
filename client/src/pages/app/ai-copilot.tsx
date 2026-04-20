@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 import { Link } from "wouter";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -13,15 +14,18 @@ import {
   Settings2, 
   Send,
   Globe,
-  Lock,
   Search,
   CheckCircle2,
   FileSearch,
   LayoutTemplate,
   Loader2,
+  AlertCircle,
+  KeyRound,
+  ExternalLink,
 } from "lucide-react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useTenant } from "@/lib/tenant-context";
+import { useToast } from "@/hooks/use-toast";
 
 type ChatMessage = {
   role: "assistant" | "user";
@@ -56,18 +60,118 @@ const INITIAL_MESSAGE: ChatMessage = {
   time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
 };
 
+const SKILL_DEFINITIONS = [
+  {
+    skillKey: "provision",
+    icon: <LayoutTemplate className="w-4 h-4 text-blue-500" />,
+    name: "Provision",
+    desc: `Allows agents to interpret user requests like "create a project team" and map them to Zenith provisioning templates and naming policies.`,
+  },
+  {
+    skillKey: "validate",
+    icon: <ShieldCheck className="w-4 h-4 text-emerald-500" />,
+    name: "Validate",
+    desc: "Checks if a requested action (e.g., adding an external guest) violates any declarative governance policies before execution.",
+  },
+  {
+    skillKey: "explain",
+    icon: <FileSearch className="w-4 h-4 text-purple-500" />,
+    name: "Explain",
+    desc: `Translates complex Purview rules or Zenith policies into natural language when a user asks "Why can't I share this?" or "Why is this blocked?".`,
+  },
+  {
+    skillKey: "report_and_recommend",
+    icon: <Search className="w-4 h-4 text-amber-500" />,
+    name: "Report & Recommend",
+    desc: `Allows querying of lifecycle states ("Which sites are up for renewal?") and surfacing of governance narratives.`,
+  },
+];
+
+type AgentSkill = {
+  id: string;
+  skillKey: string;
+  isEnabled: boolean;
+};
+
+type ConnectionStatus = {
+  entraConfigured: boolean;
+  m365CopilotConnected: boolean;
+  vegaAgentConnected: boolean;
+  workspaceCount: number;
+  activePolicyCount: number;
+  sensitivityLabelCount: number;
+  lastSyncHoursAgo: number | null;
+  sources: {
+    workspaceInventory: { active: boolean; detail: string; hoursAgo?: number | null };
+    governancePolicies: { active: boolean; detail: string };
+    sensitivityLabels: { active: boolean; detail: string };
+    graphConnectivity: { active: boolean; detail: string };
+  };
+};
+
 export default function AICopilotIntegration() {
   const [message, setMessage] = useState("");
   const [chatHistory, setChatHistory] = useState<ChatMessage[]>([INITIAL_MESSAGE]);
   const [isSending, setIsSending] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const { selectedTenant } = useTenant();
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
 
   useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
   }, [chatHistory]);
+
+  const { data: skillsData, isLoading: skillsLoading } = useQuery<{ skills: AgentSkill[] }>({
+    queryKey: ["/api/ai/agent-skills"],
+    queryFn: async () => {
+      const res = await fetch("/api/ai/agent-skills", { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch skills");
+      return res.json();
+    },
+    staleTime: 30 * 1000,
+  });
+
+  const { data: connectionStatus } = useQuery<ConnectionStatus>({
+    queryKey: ["/api/ai/connection-status"],
+    queryFn: async () => {
+      const res = await fetch("/api/ai/connection-status", { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch connection status");
+      return res.json();
+    },
+    staleTime: 60 * 1000,
+  });
+
+  const toggleSkillMutation = useMutation({
+    mutationFn: async ({ skillKey, isEnabled }: { skillKey: string; isEnabled: boolean }) => {
+      const res = await fetch(`/api/ai/agent-skills/${skillKey}`, {
+        method: "PATCH",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ isEnabled }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error ?? "Failed to update skill");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/ai/agent-skills"] });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+      queryClient.invalidateQueries({ queryKey: ["/api/ai/agent-skills"] });
+    },
+  });
+
+  const getSkillEnabled = (skillKey: string): boolean => {
+    if (!skillsData?.skills) return true;
+    const skill = skillsData.skills.find(s => s.skillKey === skillKey);
+    return skill?.isEnabled ?? true;
+  };
 
   const sendMessage = async (text: string) => {
     if (!text.trim() || isSending) return;
@@ -131,6 +235,45 @@ export default function AICopilotIntegration() {
     sendMessage(message);
   };
 
+  const formatSyncTime = (hoursAgo: number | null | undefined): string => {
+    if (hoursAgo === null || hoursAgo === undefined) return "Never synced";
+    if (hoursAgo < 1) return "Synced recently";
+    if (hoursAgo < 24) return `Last synced ${hoursAgo}h ago`;
+    const days = Math.floor(hoursAgo / 24);
+    return `Last synced ${days}d ago`;
+  };
+
+  const contextSources = connectionStatus ? [
+    {
+      label: "Live workspace inventory",
+      description: connectionStatus.sources.workspaceInventory.detail,
+      active: connectionStatus.sources.workspaceInventory.active,
+      syncLabel: connectionStatus.sources.workspaceInventory.active
+        ? formatSyncTime(connectionStatus.sources.workspaceInventory.hoursAgo)
+        : undefined,
+    },
+    {
+      label: "Active governance policies",
+      description: connectionStatus.sources.governancePolicies.detail,
+      active: connectionStatus.sources.governancePolicies.active,
+    },
+    {
+      label: "Sensitivity label metadata",
+      description: connectionStatus.sources.sensitivityLabels.detail,
+      active: connectionStatus.sources.sensitivityLabels.active,
+    },
+    {
+      label: "Microsoft Graph / Entra ID",
+      description: connectionStatus.sources.graphConnectivity.detail,
+      active: connectionStatus.sources.graphConnectivity.active,
+    },
+  ] : [
+    { label: "Live workspace inventory", description: "Loading...", active: false },
+    { label: "Active governance policies", description: "Loading...", active: false },
+    { label: "Sensitivity label metadata", description: "Loading...", active: false },
+    { label: "Microsoft Graph / Entra ID", description: "Loading...", active: false },
+  ];
+
   return (
     <div className="space-y-6 animate-in fade-in duration-500 pb-12 max-w-6xl mx-auto">
       <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
@@ -157,46 +300,34 @@ export default function AICopilotIntegration() {
             </CardHeader>
             <CardContent className="p-0">
               <div className="divide-y divide-border/40">
-                {[
-                  {
-                    icon: <LayoutTemplate className="w-4 h-4 text-blue-500" />,
-                    name: "Provision",
-                    desc: `Allows agents to interpret user requests like "create a project team" and map them to Zenith provisioning templates and naming policies.`,
-                    enabled: true,
-                  },
-                  {
-                    icon: <ShieldCheck className="w-4 h-4 text-emerald-500" />,
-                    name: "Validate",
-                    desc: "Checks if a requested action (e.g., adding an external guest) violates any declarative governance policies before execution.",
-                    enabled: true,
-                  },
-                  {
-                    icon: <FileSearch className="w-4 h-4 text-purple-500" />,
-                    name: "Explain",
-                    desc: `Translates complex Purview rules or Zenith policies into natural language when a user asks "Why can't I share this?" or "Why is this blocked?".`,
-                    enabled: true,
-                  },
-                  {
-                    icon: <Search className="w-4 h-4 text-amber-500" />,
-                    name: "Report & Recommend",
-                    desc: `Allows querying of lifecycle states ("Which sites are up for renewal?") and surfacing of governance narratives.`,
-                    enabled: false,
-                  },
-                ].map((skill) => (
-                  <div key={skill.name} className="p-4 flex items-start justify-between hover:bg-muted/5 transition-colors">
-                    <div className="space-y-1 pr-6">
-                      <div className="flex items-center gap-2">
-                        {skill.icon}
-                        <h3 className="font-semibold text-sm">{skill.name}</h3>
-                        <Badge variant="outline" className={`text-[10px] ${skill.enabled ? "bg-emerald-500/10 text-emerald-500 border-emerald-500/20" : "bg-muted text-muted-foreground border-border"}`}>
-                          {skill.enabled ? "Active" : "Disabled"}
-                        </Badge>
+                {SKILL_DEFINITIONS.map((skill) => {
+                  const enabled = getSkillEnabled(skill.skillKey);
+                  const isPending = toggleSkillMutation.isPending && toggleSkillMutation.variables?.skillKey === skill.skillKey;
+                  return (
+                    <div key={skill.skillKey} className="p-4 flex items-start justify-between hover:bg-muted/5 transition-colors">
+                      <div className="space-y-1 pr-6">
+                        <div className="flex items-center gap-2">
+                          {skill.icon}
+                          <h3 className="font-semibold text-sm">{skill.name}</h3>
+                          <Badge variant="outline" className={`text-[10px] ${enabled ? "bg-emerald-500/10 text-emerald-500 border-emerald-500/20" : "bg-muted text-muted-foreground border-border"}`}>
+                            {enabled ? "Active" : "Disabled"}
+                          </Badge>
+                        </div>
+                        <p className="text-xs text-muted-foreground leading-relaxed">{skill.desc}</p>
                       </div>
-                      <p className="text-xs text-muted-foreground leading-relaxed">{skill.desc}</p>
+                      {skillsLoading ? (
+                        <Loader2 className="w-4 h-4 animate-spin text-muted-foreground mt-1 shrink-0" />
+                      ) : (
+                        <Switch
+                          checked={enabled}
+                          disabled={isPending}
+                          onCheckedChange={(checked) => toggleSkillMutation.mutate({ skillKey: skill.skillKey, isEnabled: checked })}
+                          data-testid={`switch-skill-${skill.name.toLowerCase().replace(/\s+/g, "-")}`}
+                        />
+                      )}
                     </div>
-                    <Switch defaultChecked={skill.enabled} data-testid={`switch-skill-${skill.name.toLowerCase()}`} />
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </CardContent>
           </Card>
@@ -208,8 +339,22 @@ export default function AICopilotIntegration() {
                   <Bot className="w-5 h-5 text-blue-500" />
                 </div>
                 <div>
-                  <div className="text-sm font-bold">M365 Copilot</div>
-                  <div className="text-xs text-emerald-500 flex items-center gap-1"><CheckCircle2 className="w-3 h-3" /> Connected</div>
+                  <div className="text-sm font-bold" data-testid="text-m365-copilot-label">M365 Copilot</div>
+                  {connectionStatus ? (
+                    connectionStatus.m365CopilotConnected ? (
+                      <div className="text-xs text-emerald-500 flex items-center gap-1" data-testid="status-m365-copilot">
+                        <CheckCircle2 className="w-3 h-3" /> Connected
+                      </div>
+                    ) : (
+                      <div className="text-xs text-amber-500 flex items-center gap-1" data-testid="status-m365-copilot">
+                        <AlertCircle className="w-3 h-3" /> Not configured
+                      </div>
+                    )
+                  ) : (
+                    <div className="text-xs text-muted-foreground flex items-center gap-1">
+                      <Loader2 className="w-3 h-3 animate-spin" /> Checking...
+                    </div>
+                  )}
                 </div>
               </CardContent>
             </Card>
@@ -219,15 +364,33 @@ export default function AICopilotIntegration() {
                   <Sparkles className="w-5 h-5 text-purple-500" />
                 </div>
                 <div>
-                  <div className="text-sm font-bold">Vega Agent</div>
-                  <div className="text-xs text-emerald-500 flex items-center gap-1"><CheckCircle2 className="w-3 h-3" /> Connected</div>
+                  <div className="text-sm font-bold" data-testid="text-vega-label">Vega Agent</div>
+                  {connectionStatus ? (
+                    connectionStatus.vegaAgentConnected ? (
+                      <div className="text-xs text-emerald-500 flex items-center gap-1" data-testid="status-vega-agent">
+                        <CheckCircle2 className="w-3 h-3" /> Connected
+                      </div>
+                    ) : (
+                      <div className="text-xs text-muted-foreground flex items-center gap-1" data-testid="status-vega-agent">
+                        <AlertCircle className="w-3 h-3" /> Not configured
+                      </div>
+                    )
+                  ) : (
+                    <div className="text-xs text-muted-foreground flex items-center gap-1">
+                      <Loader2 className="w-3 h-3 animate-spin" /> Checking...
+                    </div>
+                  )}
                 </div>
               </CardContent>
             </Card>
-            <Card className="glass-panel border-border/50 border-dashed bg-muted/5">
+            <Card className="glass-panel border-border/50 hover:border-primary/30 transition-colors">
               <CardContent className="p-4 flex items-center justify-center h-full">
-                <Button variant="ghost" className="text-muted-foreground text-sm gap-2" disabled>
-                  <Lock className="w-4 h-4" /> API Keys
+                <Button variant="ghost" className="text-sm gap-2 text-muted-foreground hover:text-primary" asChild>
+                  <Link href="/app/admin/entra" data-testid="link-api-keys-entra">
+                    <KeyRound className="w-4 h-4" />
+                    Entra Setup
+                    <ExternalLink className="w-3 h-3 opacity-50" />
+                  </Link>
                 </Button>
               </CardContent>
             </Card>
@@ -237,28 +400,31 @@ export default function AICopilotIntegration() {
             <CardHeader className="pb-3">
               <CardTitle className="text-base flex items-center gap-2">
                 <Globe className="w-4 h-4 text-primary" />
-                Governance Context Source
+                Governance Context Sources
               </CardTitle>
               <CardDescription className="text-xs">
                 All AI responses are grounded in live Zenith workspace inventory — not external knowledge bases.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-2">
-              {[
-                { label: "Live workspace inventory", description: "Real-time from connected tenants", active: true },
-                { label: "Active governance policies", description: "Evaluated policy definitions", active: true },
-                { label: "Sensitivity label metadata", description: "From SharePoint + Purview", active: true },
-                { label: "Microsoft Graph / Entra ID", description: "Owner and group membership", active: true },
-              ].map(item => (
-                <div key={item.label} className="flex items-center justify-between p-2 rounded-lg bg-muted/30 border border-border/40">
+              {contextSources.map(item => (
+                <div key={item.label} className="flex items-center justify-between p-2 rounded-lg bg-muted/30 border border-border/40" data-testid={`source-${item.label.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "")}`}>
                   <div className="flex items-center gap-2">
-                    <div className={`w-2 h-2 rounded-full ${item.active ? "bg-emerald-500" : "bg-muted"}`} />
+                    <div className={`w-2 h-2 rounded-full shrink-0 ${item.active ? "bg-emerald-500" : "bg-muted-foreground/30"}`} />
                     <div>
                       <p className="text-sm font-medium">{item.label}</p>
                       <p className="text-xs text-muted-foreground">{item.description}</p>
                     </div>
                   </div>
-                  {item.active && <Badge variant="outline" className="text-[10px] bg-emerald-500/10 text-emerald-500 border-emerald-500/20">Active</Badge>}
+                  <div className="flex items-center gap-2 shrink-0">
+                    {(item as any).syncLabel && (
+                      <span className="text-[10px] text-muted-foreground hidden sm:block">{(item as any).syncLabel}</span>
+                    )}
+                    {item.active
+                      ? <Badge variant="outline" className="text-[10px] bg-emerald-500/10 text-emerald-500 border-emerald-500/20">Active</Badge>
+                      : <Badge variant="outline" className="text-[10px] text-muted-foreground">Inactive</Badge>
+                    }
+                  </div>
                 </div>
               ))}
             </CardContent>
@@ -302,7 +468,7 @@ export default function AICopilotIntegration() {
                   {msg.isLoading ? (
                     <div className="p-3 rounded-2xl bg-background border border-border/50 rounded-bl-none shadow-sm flex items-center gap-2 text-muted-foreground text-sm">
                       <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                      Analysing governance data...
+                      Analyzing governance data...
                     </div>
                   ) : (
                     <div className={`p-3 rounded-2xl text-sm shadow-sm ${

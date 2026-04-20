@@ -359,6 +359,7 @@ export async function leaveHubSite(spoToken: string, siteUrl: string): Promise<{
 export async function fetchSiteArchiveStatus(token: string, graphSiteId: string): Promise<{
   isArchived: boolean;
   archiveStatus: string | null;
+  httpStatus: number | null;
   error?: string;
 }> {
   try {
@@ -367,7 +368,12 @@ export async function fetchSiteArchiveStatus(token: string, graphSiteId: string)
     });
 
     if (!res.ok) {
-      return { isArchived: false, archiveStatus: null, error: `Graph API ${res.status}` };
+      return {
+        isArchived: false,
+        archiveStatus: null,
+        httpStatus: res.status,
+        error: `Graph API ${res.status}`,
+      };
     }
 
     const data = await res.json();
@@ -378,9 +384,9 @@ export async function fetchSiteArchiveStatus(token: string, graphSiteId: string)
       console.log(`[archive-status] ${graphSiteId} → ${archiveStatus} (isArchived=${isArchived})`);
     }
 
-    return { isArchived, archiveStatus };
+    return { isArchived, archiveStatus, httpStatus: 200 };
   } catch (err: any) {
-    return { isArchived: false, archiveStatus: null, error: err.message };
+    return { isArchived: false, archiveStatus: null, httpStatus: null, error: err.message };
   }
 }
 
@@ -407,6 +413,22 @@ export async function unarchiveSite(token: string, graphSiteId: string): Promise
       headers: { Authorization: `Bearer ${token}` },
     });
     if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      return { success: false, error: `Graph API ${res.status}: ${body}` };
+    }
+    return { success: true };
+  } catch (err: any) {
+    return { success: false, error: err.message };
+  }
+}
+
+export async function deleteSiteFromGraph(token: string, graphSiteId: string): Promise<{ success: boolean; error?: string }> {
+  try {
+    const res = await fetch(`https://graph.microsoft.com/v1.0/sites/${graphSiteId}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok && res.status !== 204) {
       const body = await res.text().catch(() => '');
       return { success: false, error: `Graph API ${res.status}: ${body}` };
     }
@@ -1635,6 +1657,40 @@ export async function fetchSitePropertyBag(
   }
 }
 
+/**
+ * Fetch the SharePoint web template identifier (e.g. "GROUP#0",
+ * "SITEPAGEPUBLISHING#0", "STS#3") from the site's root web. Microsoft Graph
+ * does not expose this directly, so we read it from the SPO REST
+ * `/_api/site/rootweb` endpoint. Used as a fallback when the SharePoint usage
+ * report does not include `rootWebTemplate` for a given site (common for
+ * newly-created sites and sites without recent activity).
+ */
+export async function fetchSiteWebTemplate(
+  spoToken: string,
+  siteUrl: string,
+): Promise<{ webTemplate: string | null; error?: string }> {
+  const url = `${siteUrl.replace(/\/+$/, '')}/_api/site/rootweb?$select=WebTemplate,Configuration`;
+  try {
+    const res = await fetch(url, {
+      headers: {
+        Authorization: `Bearer ${spoToken}`,
+        Accept: "application/json;odata=nometadata",
+      },
+    });
+    if (!res.ok) {
+      return { webTemplate: null, error: `API ${res.status}: ${res.statusText}` };
+    }
+    const data: any = await res.json();
+    const tpl = typeof data?.WebTemplate === "string" ? data.WebTemplate : null;
+    if (!tpl) return { webTemplate: null };
+    const cfg = data?.Configuration;
+    const combined = cfg !== undefined && cfg !== null ? `${tpl}#${cfg}` : tpl;
+    return { webTemplate: combined };
+  } catch (err: any) {
+    return { webTemplate: null, error: err.message };
+  }
+}
+
 const PROPERTY_BAG_BLOCKED_PREFIXES = ['vti_', 'ows_', 'docid_', '_vti_', '__', 'ecm_', 'ir_'];
 
 function sanitizePropertyBagKeys(properties: Record<string, string>): { safe: Record<string, string>; blocked: string[] } {
@@ -2720,6 +2776,166 @@ export async function fetchLibraryDetails(
   }
 }
 
+// ── Extended IA Metrics ─────────────────────────────────────────────────────────
+
+/**
+ * Recursively measures the maximum folder depth and total folder count in a
+ * document library's drive. Caps traversal at MAX_DEPTH levels and MAX_FOLDERS
+ * total to avoid runaway API calls on very large or deeply nested libraries.
+ */
+export async function fetchLibraryFolderDepth(
+  token: string,
+  driveId: string,
+): Promise<{ maxDepth: number; folderCount: number; error?: string }> {
+  if (!driveId) {
+    return { maxDepth: 0, folderCount: 0, error: "No driveId provided" };
+  }
+
+  const MAX_DEPTH = 10;
+  const MAX_FOLDERS = 500;
+  let folderCount = 0;
+  let maxDepth = 0;
+  let traversalError: string | undefined;
+
+  async function crawl(parentPath: string, currentDepth: number): Promise<void> {
+    if (currentDepth > MAX_DEPTH || folderCount >= MAX_FOLDERS) return;
+
+    let nextLink: string | null =
+      `https://graph.microsoft.com/v1.0/drives/${driveId}/${parentPath}/children?$select=id,name,folder&$top=200`;
+
+    while (nextLink && folderCount < MAX_FOLDERS) {
+      try {
+        const res = await fetch(nextLink, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!res.ok) {
+          const body = await res.text().catch(() => "");
+          const msg = `Graph returned ${res.status} for drive=${driveId} path=${parentPath}: ${body.substring(0, 200)}`;
+          console.warn(`[graph] fetchLibraryFolderDepth ${msg}`);
+          traversalError = traversalError ?? msg;
+          break;
+        }
+        const data = await res.json();
+        const items: any[] = data.value || [];
+
+        for (const item of items) {
+          if (!item.folder) continue;
+          folderCount++;
+          if (currentDepth > maxDepth) maxDepth = currentDepth;
+          if (folderCount >= MAX_FOLDERS) break;
+          await crawl(`items/${item.id}`, currentDepth + 1);
+        }
+
+        nextLink = data["@odata.nextLink"] || null;
+      } catch {
+        break;
+      }
+    }
+  }
+
+  try {
+    await crawl("root", 1);
+    return { maxDepth, folderCount, error: traversalError };
+  } catch (err: any) {
+    console.error(`[graph] fetchLibraryFolderDepth error:`, err.message);
+    return { maxDepth: 0, folderCount: 0, error: err.message };
+  }
+}
+
+/**
+ * Fetches the views defined on a document library and counts custom vs total.
+ */
+export async function fetchLibraryViews(
+  token: string,
+  graphSiteId: string,
+  listId: string,
+): Promise<{ totalViews: number; customViews: number; error?: string }> {
+  try {
+    let nextLink: string | null =
+      `https://graph.microsoft.com/v1.0/sites/${graphSiteId}/lists/${listId}/views?$select=id,displayName,viewType&$top=100`;
+    const views: any[] = [];
+
+    while (nextLink) {
+      const res = await fetch(nextLink, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) {
+        return { totalViews: 0, customViews: 0, error: `Views API returned ${res.status}` };
+      }
+
+      const data = await res.json();
+      views.push(...(data.value || []));
+      nextLink = data["@odata.nextLink"] || null;
+    }
+    const totalViews = views.length;
+
+    // Default views typically: "All Documents", "All Items", or viewType "NONE"
+    const DEFAULT_VIEW_NAMES = new Set([
+      "all documents", "all items", "all events", "all links",
+    ]);
+    const customViews = views.filter(
+      (v) => !DEFAULT_VIEW_NAMES.has((v.displayName || "").toLowerCase()),
+    ).length;
+
+    return { totalViews, customViews };
+  } catch (err: any) {
+    console.error(`[graph] fetchLibraryViews error:`, err.message);
+    return { totalViews: 0, customViews: 0, error: err.message };
+  }
+}
+
+/**
+ * Samples up to 50 items from a document library and computes the fill rate
+ * (percentage of non-null/non-empty values) for each of the given custom
+ * column internal names.
+ */
+export async function fetchLibraryItemFillRates(
+  token: string,
+  graphSiteId: string,
+  listId: string,
+  customColumnNames: string[],
+): Promise<{ fillRates: Map<string, number>; sampleSize: number; error?: string }> {
+  if (customColumnNames.length === 0) {
+    return { fillRates: new Map(), sampleSize: 0 };
+  }
+
+  try {
+    // Request specific fields to minimize payload
+    const fieldSelect = customColumnNames.join(",");
+    const res = await fetch(
+      `https://graph.microsoft.com/v1.0/sites/${graphSiteId}/lists/${listId}/items?$top=50&$expand=fields($select=${encodeURIComponent(fieldSelect)})&$select=id`,
+      { headers: { Authorization: `Bearer ${token}`, ConsistencyLevel: "eventual" } },
+    );
+    if (!res.ok) {
+      return { fillRates: new Map(), sampleSize: 0, error: `Items API returned ${res.status}` };
+    }
+    const data = await res.json();
+    const items: any[] = data.value || [];
+    const sampleSize = items.length;
+
+    if (sampleSize === 0) {
+      return { fillRates: new Map(), sampleSize: 0 };
+    }
+
+    const fillRates = new Map<string, number>();
+    for (const colName of customColumnNames) {
+      let filled = 0;
+      for (const item of items) {
+        const val = item.fields?.[colName];
+        if (val !== null && val !== undefined && val !== "") {
+          filled++;
+        }
+      }
+      fillRates.set(colName, Math.round((filled / sampleSize) * 100));
+    }
+
+    return { fillRates, sampleSize };
+  } catch (err: any) {
+    console.error(`[graph] fetchLibraryItemFillRates error:`, err.message);
+    return { fillRates: new Map(), sampleSize: 0, error: err.message };
+  }
+}
+
 // ── Teams & Channels Inventory Discovery ──────────────────────────────────────
 // Rich team properties for full inventory (not just recordings).
 export interface TeamInventoryInfo {
@@ -3773,6 +3989,237 @@ export async function resolveOwnerIds(
 }
 
 // ---------------------------------------------------------------------------
+// Group owner management (add / remove / search)
+// ---------------------------------------------------------------------------
+
+export type AddOwnerErrorCode = "ALREADY_OWNER" | "USER_NOT_FOUND" | "FORBIDDEN" | "OTHER";
+export type RemoveOwnerErrorCode = "USER_NOT_FOUND" | "NOT_AN_OWNER" | "LAST_OWNER" | "FORBIDDEN" | "OTHER";
+export type AddMemberErrorCode = "ALREADY_MEMBER" | "USER_NOT_FOUND" | "FORBIDDEN" | "OTHER";
+export type RemoveMemberErrorCode = "USER_NOT_FOUND" | "NOT_A_MEMBER" | "FORBIDDEN" | "OTHER";
+
+export async function fetchSiteGroupMembers(
+  token: string,
+  graphSiteId: string,
+): Promise<{ members: SiteGroupOwner[]; groupId?: string; error?: string }> {
+  try {
+    let groupId: string | undefined;
+    const driveRes = await fetch(
+      `https://graph.microsoft.com/v1.0/sites/${graphSiteId}/drive`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    if (driveRes.ok) {
+      const driveData = await driveRes.json();
+      const ownerGroup = driveData?.owner?.group;
+      if (ownerGroup?.id) groupId = ownerGroup.id;
+    }
+    if (!groupId) {
+      return { members: [], error: "No M365 Group associated with this site" };
+    }
+
+    const membersRes = await fetch(
+      `https://graph.microsoft.com/v1.0/groups/${groupId}/members/microsoft.graph.user?$select=id,displayName,mail,userPrincipalName&$top=999`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    if (!membersRes.ok) {
+      const errText = await membersRes.text();
+      return { members: [], groupId, error: `Group members API error ${membersRes.status}: ${errText}` };
+    }
+    const data = await membersRes.json();
+    const members: SiteGroupOwner[] = (data.value || []).map((m: any) => ({
+      id: m.id,
+      displayName: m.displayName || '',
+      mail: m.mail,
+      userPrincipalName: m.userPrincipalName,
+    }));
+    return { members, groupId };
+  } catch (err: any) {
+    return { members: [], error: err.message };
+  }
+}
+
+export async function addGroupMember(
+  graphToken: string,
+  groupId: string,
+  userId: string,
+): Promise<{ success: boolean; errorCode?: AddMemberErrorCode; error?: string }> {
+  try {
+    const res = await fetch(`https://graph.microsoft.com/v1.0/groups/${groupId}/members/$ref`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${graphToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        "@odata.id": `https://graph.microsoft.com/v1.0/users/${userId}`,
+      }),
+    });
+
+    if (res.ok || res.status === 204) {
+      return { success: true };
+    }
+
+    const errText = await res.text();
+    const lower = errText.toLowerCase();
+    let errorCode: AddMemberErrorCode = "OTHER";
+    if (lower.includes("already exist") || lower.includes("one or more added object references already exist")) {
+      errorCode = "ALREADY_MEMBER";
+    } else if (res.status === 404 || lower.includes("does not exist") || lower.includes("resource not found")) {
+      errorCode = "USER_NOT_FOUND";
+    } else if (res.status === 401 || res.status === 403) {
+      errorCode = "FORBIDDEN";
+    }
+    return { success: false, errorCode, error: `Graph add member ${res.status}: ${errText.substring(0, 400)}` };
+  } catch (err: any) {
+    return { success: false, errorCode: "OTHER", error: err.message };
+  }
+}
+
+export async function removeGroupMember(
+  graphToken: string,
+  groupId: string,
+  userId: string,
+): Promise<{ success: boolean; errorCode?: RemoveMemberErrorCode; error?: string }> {
+  try {
+    const res = await fetch(`https://graph.microsoft.com/v1.0/groups/${groupId}/members/${userId}/$ref`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${graphToken}` },
+    });
+
+    if (res.ok || res.status === 204) {
+      return { success: true };
+    }
+
+    const errText = await res.text();
+    const lower = errText.toLowerCase();
+    let errorCode: RemoveMemberErrorCode = "OTHER";
+    if (res.status === 404 || lower.includes("does not exist") || lower.includes("resource not found")) {
+      errorCode = "NOT_A_MEMBER";
+    } else if (res.status === 401 || res.status === 403) {
+      errorCode = "FORBIDDEN";
+    }
+    return { success: false, errorCode, error: `Graph remove member ${res.status}: ${errText.substring(0, 400)}` };
+  } catch (err: any) {
+    return { success: false, errorCode: "OTHER", error: err.message };
+  }
+}
+
+export async function addGroupOwner(
+  graphToken: string,
+  groupId: string,
+  userId: string,
+): Promise<{ success: boolean; errorCode?: AddOwnerErrorCode; error?: string }> {
+  try {
+    const res = await fetch(`https://graph.microsoft.com/v1.0/groups/${groupId}/owners/$ref`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${graphToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        "@odata.id": `https://graph.microsoft.com/v1.0/users/${userId}`,
+      }),
+    });
+
+    if (res.ok || res.status === 204) {
+      return { success: true };
+    }
+
+    const errText = await res.text();
+    const lower = errText.toLowerCase();
+    let errorCode: AddOwnerErrorCode = "OTHER";
+    if (lower.includes("already exist") || lower.includes("one or more added object references already exist")) {
+      errorCode = "ALREADY_OWNER";
+    } else if (res.status === 404 || lower.includes("does not exist") || lower.includes("resource not found")) {
+      errorCode = "USER_NOT_FOUND";
+    } else if (res.status === 401 || res.status === 403) {
+      errorCode = "FORBIDDEN";
+    }
+    return { success: false, errorCode, error: `Graph add owner ${res.status}: ${errText.substring(0, 400)}` };
+  } catch (err: any) {
+    return { success: false, errorCode: "OTHER", error: err.message };
+  }
+}
+
+export async function removeGroupOwner(
+  graphToken: string,
+  groupId: string,
+  userId: string,
+): Promise<{ success: boolean; errorCode?: RemoveOwnerErrorCode; error?: string }> {
+  try {
+    const res = await fetch(`https://graph.microsoft.com/v1.0/groups/${groupId}/owners/${userId}/$ref`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${graphToken}` },
+    });
+
+    if (res.ok || res.status === 204) {
+      return { success: true };
+    }
+
+    const errText = await res.text();
+    const lower = errText.toLowerCase();
+    let errorCode: RemoveOwnerErrorCode = "OTHER";
+    if (lower.includes("last owner") || lower.includes("at least one owner")) {
+      errorCode = "LAST_OWNER";
+    } else if (res.status === 404 || lower.includes("does not exist") || lower.includes("resource not found")) {
+      errorCode = "NOT_AN_OWNER";
+    } else if (res.status === 401 || res.status === 403) {
+      errorCode = "FORBIDDEN";
+    }
+    return { success: false, errorCode, error: `Graph remove owner ${res.status}: ${errText.substring(0, 400)}` };
+  } catch (err: any) {
+    return { success: false, errorCode: "OTHER", error: err.message };
+  }
+}
+
+export interface TenantUserSearchResult {
+  id: string;
+  displayName: string;
+  mail?: string;
+  userPrincipalName?: string;
+}
+
+export async function searchTenantUsers(
+  graphToken: string,
+  query: string,
+  limit: number = 20,
+): Promise<{ users: TenantUserSearchResult[]; error?: string }> {
+  const trimmed = query.trim();
+  if (!trimmed) return { users: [] };
+  const top = Math.min(Math.max(1, limit), 25);
+  const select = "id,displayName,mail,userPrincipalName";
+
+  try {
+    const escaped = trimmed.replace(/'/g, "''");
+    const filter = encodeURIComponent(
+      `startswith(displayName,'${escaped}') or startswith(mail,'${escaped}') or startswith(userPrincipalName,'${escaped}')`
+    );
+    const url = `https://graph.microsoft.com/v1.0/users?$filter=${filter}&$top=${top}&$select=${select}`;
+    const res = await fetch(url, {
+      headers: {
+        Authorization: `Bearer ${graphToken}`,
+        ConsistencyLevel: "eventual",
+      },
+    });
+
+    if (!res.ok) {
+      const errText = await res.text();
+      return { users: [], error: `Graph user search ${res.status}: ${errText.substring(0, 300)}` };
+    }
+
+    const data = await res.json();
+    const users: TenantUserSearchResult[] = (data.value || []).map((u: any) => ({
+      id: u.id,
+      displayName: u.displayName || "",
+      mail: u.mail || undefined,
+      userPrincipalName: u.userPrincipalName || undefined,
+    })).filter((u: TenantUserSearchResult) => !!u.id);
+    return { users };
+  } catch (err: any) {
+    return { users: [], error: err.message };
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Sharing Links
 // ---------------------------------------------------------------------------
 
@@ -3799,18 +4246,34 @@ export interface DriveItemSharingResult {
   errors: Array<{ context: string; message: string }>;
 }
 
-async function fetchAllPages<T>(url: string, token: string): Promise<{ items: T[]; error?: string }> {
+async function fetchAllPages<T>(url: string, token: string, maxRetries = 3): Promise<{ items: T[]; error?: string }> {
   const items: T[] = [];
   let nextUrl: string | null = url;
   while (nextUrl) {
-    const res = await fetch(nextUrl, { headers: { Authorization: `Bearer ${token}` } });
-    if (!res.ok) {
+    let lastError = "";
+    let success = false;
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      const res = await fetch(nextUrl, { headers: { Authorization: `Bearer ${token}` } });
+      if (res.ok) {
+        const data = await res.json();
+        items.push(...(data.value || []));
+        nextUrl = data["@odata.nextLink"] || null;
+        success = true;
+        break;
+      }
+      if (res.status === 429 && attempt < maxRetries) {
+        const retryAfter = parseInt(res.headers.get("Retry-After") || "10", 10);
+        const waitMs = Math.min(retryAfter, 30) * 1000;
+        await new Promise(r => setTimeout(r, waitMs));
+        continue;
+      }
       const errText = await res.text();
-      return { items, error: `Graph API error ${res.status}: ${errText.substring(0, 300)}` };
+      lastError = `Graph API error ${res.status}: ${errText.substring(0, 300)}`;
+      break;
     }
-    const data = await res.json();
-    items.push(...(data.value || []));
-    nextUrl = data["@odata.nextLink"] || null;
+    if (!success) {
+      return { items, error: lastError };
+    }
   }
   return { items };
 }
@@ -3834,40 +4297,7 @@ function mapPermissionToLink(p: any, item?: { id: string; name: string; path: st
   };
 }
 
-async function collectAllDriveItems(
-  token: string,
-  driveBaseUrl: string,
-  contextLabel: string,
-): Promise<{ items: Array<{ id: string; name: string; path: string; isFolder: boolean }>; errors: Array<{ context: string; message: string }> }> {
-  const allItems: Array<{ id: string; name: string; path: string; isFolder: boolean }> = [];
-  const errors: Array<{ context: string; message: string }> = [];
-
-  const queue: Array<{ folderId: string | null; folderPath: string }> = [{ folderId: null, folderPath: "" }];
-
-  while (queue.length > 0) {
-    const { folderId, folderPath } = queue.shift()!;
-    const url = folderId
-      ? `${driveBaseUrl}/items/${folderId}/children?$select=id,name,folder,file&$top=200`
-      : `${driveBaseUrl}/root/children?$select=id,name,folder,file&$top=200`;
-    const { items: children, error } = await fetchAllPages<any>(url, token);
-    if (error) {
-      errors.push({ context: `${contextLabel}:list:${folderPath || "/"}`, message: error });
-      continue;
-    }
-    for (const child of children) {
-      const childPath = `${folderPath}/${child.name}`;
-      const isFolder = !!child.folder;
-      allItems.push({ id: child.id, name: child.name, path: childPath, isFolder });
-      if (isFolder) {
-        queue.push({ folderId: child.id, folderPath: childPath });
-      }
-    }
-  }
-
-  return { items: allItems, errors };
-}
-
-async function scanDriveItemsForLinks(
+async function scanDriveForSharedItems(
   token: string,
   driveBaseUrl: string,
   contextLabel: string,
@@ -3887,28 +4317,45 @@ async function scanDriveItemsForLinks(
   }
   itemsScanned++;
 
-  const { items: allItems, errors: listErrors } = await collectAllDriveItems(token, driveBaseUrl, contextLabel);
-  errors.push(...listErrors);
+  const queue: Array<{ folderId: string | null; folderPath: string }> = [{ folderId: null, folderPath: "" }];
 
-  for (const item of allItems) {
-    try {
-      const { items: perms, error: permError } = await fetchAllPages<any>(
-        `${driveBaseUrl}/items/${item.id}/permissions`,
-        token,
-      );
-      if (permError) {
-        errors.push({ context: `${contextLabel}:item:${item.name}`, message: permError });
+  while (queue.length > 0) {
+    const { folderId, folderPath } = queue.shift()!;
+    const url = folderId
+      ? `${driveBaseUrl}/items/${folderId}/children?$select=id,name,folder,shared&$top=200`
+      : `${driveBaseUrl}/root/children?$select=id,name,folder,shared&$top=200`;
+    const { items: children, error } = await fetchAllPages<any>(url, token);
+    if (error) {
+      errors.push({ context: `${contextLabel}:list:${folderPath || "/"}`, message: error });
+      continue;
+    }
+    for (const child of children) {
+      const childPath = `${folderPath}/${child.name}`;
+      const isFolder = !!child.folder;
+      itemsScanned++;
+      if (isFolder) {
+        queue.push({ folderId: child.id, folderPath: childPath });
       }
-
-      for (const p of perms) {
-        if (p.link) {
-          permissions.push(mapPermissionToLink(p, { id: item.id, name: item.name, path: item.path }));
+      if (child.shared) {
+        try {
+          const { items: perms, error: permError } = await fetchAllPages<any>(
+            `${driveBaseUrl}/items/${child.id}/permissions`,
+            token,
+          );
+          if (permError) {
+            errors.push({ context: `${contextLabel}:perm:${child.name}`, message: permError });
+            continue;
+          }
+          for (const p of perms) {
+            if (p.link) {
+              permissions.push(mapPermissionToLink(p, { id: child.id, name: child.name, path: childPath }));
+            }
+          }
+        } catch (err: any) {
+          errors.push({ context: `${contextLabel}:perm:${child.name}`, message: err.message });
         }
       }
-    } catch (err: any) {
-      errors.push({ context: `${contextLabel}:item:${item.name}`, message: err.message });
     }
-    itemsScanned++;
   }
 
   return { permissions, itemsScanned, errors };
@@ -3918,29 +4365,63 @@ export async function getSharingLinks(
   token: string,
   siteId: string,
 ): Promise<DriveItemSharingResult> {
+  const allPermissions: SharingLinkPermission[] = [];
+  const allErrors: Array<{ context: string; message: string }> = [];
+  let totalItemsScanned = 0;
+
   try {
-    return await scanDriveItemsForLinks(
+    const drivesResult = await fetchAllPages<any>(
+      `https://graph.microsoft.com/v1.0/sites/${siteId}/drives?$select=id,name`,
       token,
-      `https://graph.microsoft.com/v1.0/sites/${siteId}/drive`,
-      `sp:${siteId}`,
     );
+    if (drivesResult.error) {
+      allErrors.push({ context: `sp:${siteId}:drives`, message: drivesResult.error });
+      return { permissions: allPermissions, itemsScanned: totalItemsScanned, errors: allErrors };
+    }
+
+    const drives = drivesResult.items;
+    if (drives.length === 0) {
+      const fallback = await scanDriveForSharedItems(
+        token,
+        `https://graph.microsoft.com/v1.0/sites/${siteId}/drive`,
+        `sp:${siteId}:default`,
+      );
+      return fallback;
+    }
+
+    for (const drive of drives) {
+      try {
+        const result = await scanDriveForSharedItems(
+          token,
+          `https://graph.microsoft.com/v1.0/drives/${drive.id}`,
+          `sp:${siteId}:${drive.name}`,
+        );
+        allPermissions.push(...result.permissions);
+        allErrors.push(...result.errors);
+        totalItemsScanned += result.itemsScanned;
+      } catch (err: any) {
+        allErrors.push({ context: `sp:${siteId}:${drive.name}`, message: err.message });
+      }
+    }
   } catch (err: any) {
-    return { permissions: [], itemsScanned: 0, errors: [{ context: `sp:${siteId}`, message: err.message }] };
+    allErrors.push({ context: `sp:${siteId}`, message: err.message });
   }
+
+  return { permissions: allPermissions, itemsScanned: totalItemsScanned, errors: allErrors };
 }
 
 export async function getOneDriveSharingLinks(
   token: string,
-  userId: string,
+  driveId: string,
 ): Promise<DriveItemSharingResult> {
   try {
-    return await scanDriveItemsForLinks(
+    return await scanDriveForSharedItems(
       token,
-      `https://graph.microsoft.com/v1.0/users/${userId}/drive`,
-      `od:${userId}`,
+      `https://graph.microsoft.com/v1.0/drives/${driveId}`,
+      `od:${driveId}`,
     );
   } catch (err: any) {
-    return { permissions: [], itemsScanned: 0, errors: [{ context: `od:${userId}`, message: err.message }] };
+    return { permissions: [], itemsScanned: 0, errors: [{ context: `od:${driveId}`, message: err.message }] };
   }
 }
 
@@ -4439,7 +4920,7 @@ export async function fetchMessageAttachmentsMeta(
   const url =
     `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(userId)}` +
     `/messages/${encodeURIComponent(messageId)}/attachments` +
-    `?$select=name,contentType,size,isInline&$top=${top}`;
+    `?$top=${top}`;
 
   const res = await graphFetchWithRetry(url, {
     headers: { Authorization: `Bearer ${token}` },

@@ -32,7 +32,7 @@ export function encryptToken(plaintext: string): string {
   const iv = crypto.randomBytes(IV_LENGTH);
   const key = getEncryptionKey();
 
-  const cipher = crypto.createCipheriv(ALGORITHM, key, iv);
+  const cipher = crypto.createCipheriv(ALGORITHM, key, iv, { authTagLength: AUTH_TAG_LENGTH });
 
   let encrypted = cipher.update(plaintext, 'utf8', 'hex');
   encrypted += cipher.final('hex');
@@ -57,7 +57,7 @@ export function decryptToken(ciphertext: string): string {
   const authTag = Buffer.from(authTagHex, 'hex');
   const key = getEncryptionKey();
 
-  const decipher = crypto.createDecipheriv(ALGORITHM, key, iv);
+  const decipher = crypto.createDecipheriv(ALGORITHM, key, iv, { authTagLength: AUTH_TAG_LENGTH });
   decipher.setAuthTag(authTag);
 
   let decrypted = decipher.update(encrypted, 'hex', 'utf8');

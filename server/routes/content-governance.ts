@@ -11,7 +11,8 @@ import {
 } from "@shared/schema";
 import { requireAuth, type AuthenticatedRequest } from "../middleware/rbac";
 import { computeGovernanceSnapshot } from "../services/governance-snapshot";
-import { getOrgTenantConnectionIds } from "./scope-helpers";
+import { trackJobRun, DuplicateJobError } from "../services/job-tracking";
+import { getOrgTenantConnectionIds, getActiveOrgId } from "./scope-helpers";
 import { storage } from "../storage";
 
 const router = Router();
@@ -149,6 +150,25 @@ router.get("/api/content-governance/storage", requireAuth(), async (req: Authent
   }
 });
 
+// ── GET /api/content-governance/sharing/summary ─────────────────────────────
+router.get("/api/content-governance/sharing/summary", requireAuth(), async (req: AuthenticatedRequest, res) => {
+  try {
+    const tenantConnectionId = req.query.tenantConnectionId as string;
+    if (!tenantConnectionId) return res.status(400).json({ error: "tenantConnectionId is required" });
+
+    const allowedTenantConnectionIds = await getOrgTenantConnectionIds(req);
+    if (allowedTenantConnectionIds !== null && !allowedTenantConnectionIds.includes(tenantConnectionId)) {
+      return res.status(403).json({ error: "Forbidden" });
+    }
+
+    const summary = await storage.getSharingLinkSummary(tenantConnectionId);
+    res.json(summary);
+  } catch (err: any) {
+    console.error("[content-governance] sharing summary error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── GET /api/content-governance/sharing/links ──────────────────────────────
 router.get("/api/content-governance/sharing/links", requireAuth(), async (req: AuthenticatedRequest, res) => {
   try {
@@ -161,6 +181,7 @@ router.get("/api/content-governance/sharing/links", requireAuth(), async (req: A
     }
 
     const resourceType = req.query.resourceType as string | undefined;
+    const resourceId = req.query.resourceId as string | undefined;
     const linkType = req.query.linkType as string | undefined;
     const page = Math.max(1, parseInt(req.query.page as string || "1", 10));
     const pageSize = Math.min(200, Math.max(1, parseInt(req.query.pageSize as string || "50", 10)));
@@ -168,6 +189,7 @@ router.get("/api/content-governance/sharing/links", requireAuth(), async (req: A
     const { items: links, total } = await storage.getSharingLinksPaginated({
       tenantConnectionId,
       resourceType,
+      resourceId,
       linkType,
       page,
       pageSize,
@@ -217,8 +239,27 @@ router.post("/api/content-governance/snapshot", requireAuth(), async (req: Authe
     const tenantConnectionId = (req.body?.tenantConnectionId ?? req.query.tenantConnectionId) as string;
     if (!tenantConnectionId) return res.status(400).json({ error: "tenantConnectionId is required" });
 
-    await computeGovernanceSnapshot(tenantConnectionId);
-    res.json({ success: true });
+    // BL-039: route through trackJobRun so the snapshot run shows up in the
+    // unified Job Monitor and feeds the Dataset Freshness Registry.
+    const orgId = getActiveOrgId(req);
+    try {
+      await trackJobRun(
+        {
+          jobType: "governanceSnapshot",
+          organizationId: orgId,
+          tenantConnectionId,
+          triggeredBy: "manual",
+          triggeredByUserId: req.user?.id ?? null,
+        },
+        () => computeGovernanceSnapshot(tenantConnectionId),
+      );
+      return res.json({ success: true });
+    } catch (err: any) {
+      if (err instanceof DuplicateJobError) {
+        return res.status(409).json({ error: err.message, code: err.code });
+      }
+      throw err;
+    }
   } catch (err: any) {
     console.error("[content-governance] snapshot error:", err);
     res.status(500).json({ error: err.message });

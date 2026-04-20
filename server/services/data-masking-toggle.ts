@@ -10,6 +10,7 @@ import {
   sharingLinksInventory,
   governanceReviewFindings,
   governanceReviewTasks,
+  copilotInteractions,
 } from "@shared/schema";
 import { eq, inArray, type SQL } from "drizzle-orm";
 import type { PgTable } from "drizzle-orm/pg-core";
@@ -66,6 +67,10 @@ const TABLE_MAP: Record<string, TableMapEntry> = {
         .where(eq(governanceReviewTasks.tenantConnectionId, t));
       return inArray(governanceReviewFindings.reviewTaskId, sq);
     },
+  },
+  copilot_interactions: {
+    table: copilotInteractions,
+    getWhere: async (t) => eq(copilotInteractions.tenantConnectionId, t),
   },
 };
 

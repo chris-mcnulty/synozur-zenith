@@ -1,7 +1,9 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { useTheme } from "next-themes";
 import { Aurora } from "@/components/aurora";
 import { Link, useLocation, Redirect } from "wouter";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { CommandPalette, useCommandPaletteShortcut, type PaletteItem } from "@/components/command-palette";
 import { 
   LayoutDashboard, 
   FolderPlus, 
@@ -18,6 +20,7 @@ import {
   Building2,
   Menu,
   ChevronRight,
+  ChevronUp,
   LogOut,
   User,
   SunMoon,
@@ -30,21 +33,27 @@ import {
   CreditCard,
   Cloud,
   Users as UsersIcon,
-  MessagesSquare,
   MonitorPlay,
   Server,
   CheckCircle2,
   KeyRound,
   BookMarked,
   FlaskConical,
-  HardDrive,
   ClipboardList,
   Loader2,
   KeySquare,
   Lock,
-  Mail,
   Network,
+  Flame,
+  Activity,
 } from "lucide-react";
+import {
+  SharePointIcon,
+  TeamsIcon,
+  OneDriveIcon,
+  OutlookIcon,
+  CopilotIcon,
+} from "@/components/icons/microsoft";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -94,17 +103,61 @@ type NavItem = {
   featureToggle?: "onedriveInventory" | "recordingsDiscovery" | "teamsDiscovery" | "telemetry" | "speDiscovery" | "contentGovernance" | "licensing";
 };
 
-type NavGroup = {
-  label: string;
-  minRole?: string;
+type NavSubGroup = {
+  subLabel: string;
   items: NavItem[];
 };
 
+type NavGroup = {
+  label: string;
+  minRole?: string;
+  collapsible?: boolean;
+  items?: NavItem[];
+  subGroups?: NavSubGroup[];
+};
+
+// ── Sidebar collapse persistence ──────────────────────────────────────
+const SIDEBAR_COLLAPSED_KEY = "zenith_sidebar_collapsed";
+
+function isCollapsedState(value: unknown): value is Record<string, boolean> {
+  if (
+    value === null ||
+    typeof value !== "object" ||
+    Array.isArray(value) ||
+    Object.getPrototypeOf(value) !== Object.prototype
+  ) {
+    return false;
+  }
+
+  return Object.values(value).every((entry) => typeof entry === "boolean");
+}
+
+function loadCollapsedState(): Record<string, boolean> {
+  try {
+    const raw = localStorage.getItem(SIDEBAR_COLLAPSED_KEY);
+    if (!raw) return {};
+
+    const parsed: unknown = JSON.parse(raw);
+    return isCollapsedState(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveCollapsedState(state: Record<string, boolean>) {
+  try {
+    localStorage.setItem(SIDEBAR_COLLAPSED_KEY, JSON.stringify(state));
+  } catch { /* quota exceeded – ignore */ }
+}
+
+// ── Navigation structure (Enhancement 1, 2, 3) ───────────────────────
 const navGroups: NavGroup[] = [
   {
     label: "Overview",
+    collapsible: true,
     items: [
       { name: "Dashboard", href: "/app/dashboard", icon: LayoutDashboard },
+      { name: "Data Freshness", href: "/app/admin/job-monitor", icon: Activity, minRole: "governance_admin" },
       { name: "Approvals", href: "/app/approvals", icon: CheckCircle2, badge: "3", minRole: "operator", isMock: true },
       { name: "Provision", href: "/app/provision", icon: FolderPlus, minRole: "operator", isMock: true },
     ]
@@ -112,39 +165,142 @@ const navGroups: NavGroup[] = [
   {
     label: "Management",
     minRole: "operator",
-    items: [
-      { name: "SharePoint Sites", href: "/app/governance", icon: ShieldCheck },
-      { name: "Policy Builder", href: "/app/admin/policies", icon: ShieldCheck, badge: "Ent+", minRole: "governance_admin" },
-      { name: "What-If Planner", href: "/app/admin/policy-whatif", icon: FlaskConical, badge: "Ent+", minRole: "governance_admin" },
-      { name: "Teams & Channels", href: "/app/teams-channels", icon: MessagesSquare, featureToggle: "teamsDiscovery" },
-      { name: "OneDrive Inventory", href: "/app/onedrive-inventory", icon: HardDrive, featureToggle: "onedriveInventory" },
-      { name: "Recordings Discovery", href: "/app/recordings", icon: MonitorPlay, featureToggle: "recordingsDiscovery" },
-      { name: "Email Content Report", href: "/app/email-storage-report", icon: Mail, badge: "Ent+" },
-      { name: "Structures", href: "/app/structures", icon: Layers },
-      { name: "Information Architecture", href: "/app/information-architecture", icon: Network },
-      { name: "Embedded Containers", href: "/app/embedded-containers", icon: Box, featureToggle: "speDiscovery" },
-      { name: "Discover & Migrate", href: "/app/discover", icon: Search, badge: "Ent+", isMock: true },
-      { name: "Archive & Backup", href: "/app/archive-backup", icon: Archive },
-      { name: "Lifecycle", href: "/app/lifecycle", icon: Clock, isMock: true },
-      { name: "Purview", href: "/app/purview", icon: Fingerprint },
+    collapsible: true,
+    subGroups: [
+      {
+        subLabel: "Inventory",
+        items: [
+          { name: "SharePoint Sites", href: "/app/governance", icon: SharePointIcon },
+          { name: "Teams & Channels", href: "/app/teams-channels", icon: TeamsIcon, featureToggle: "teamsDiscovery" },
+          { name: "OneDrive Inventory", href: "/app/onedrive-inventory", icon: OneDriveIcon, featureToggle: "onedriveInventory" },
+          { name: "Recordings Discovery", href: "/app/recordings", icon: MonitorPlay, featureToggle: "recordingsDiscovery" },
+          { name: "Email Content Report", href: "/app/email-storage-report", icon: OutlookIcon, badge: "Ent+" },
+          { name: "Embedded Containers", href: "/app/embedded-containers", icon: Box, featureToggle: "speDiscovery" },
+        ]
+      },
+      {
+        subLabel: "Governance",
+        items: [
+          { name: "Policy Builder", href: "/app/admin/policies", icon: ShieldCheck, badge: "Ent+", minRole: "governance_admin" },
+          { name: "What-If Planner", href: "/app/admin/policy-whatif", icon: FlaskConical, badge: "Ent+", minRole: "governance_admin" },
+          { name: "Structures", href: "/app/structures", icon: Layers },
+          { name: "Information Architecture", href: "/app/information-architecture", icon: Network },
+          { name: "Purview", href: "/app/purview", icon: Fingerprint },
+        ]
+      },
+      {
+        subLabel: "Operations",
+        items: [
+          { name: "Discover & Migrate", href: "/app/discover", icon: Search, badge: "Ent+", isMock: true },
+          { name: "Archive & Backup", href: "/app/archive-backup", icon: Archive },
+          { name: "Lifecycle", href: "/app/lifecycle", icon: Clock, isMock: true },
+        ]
+      },
     ]
   },
   {
-    label: "Cost & Licensing",
-    minRole: "operator",
+    label: "Insights & Licensing",
+    collapsible: true,
     items: [
-      { name: "License Overview", href: "/app/licensing", icon: CreditCard, featureToggle: "licensing" },
-    ]
-  },
-  {
-    label: "Insights & Intelligence",
-    items: [
-      { name: "AI & Copilot", href: "/app/ai-copilot", icon: BrainCircuit, isMock: true },
+      { name: "Copilot Readiness", href: "/app/copilot-readiness", icon: CopilotIcon, badge: "Pro+" },
+      { name: "Copilot Prompt Intelligence", href: "/app/copilot-prompt-intelligence", icon: CopilotIcon, badge: "Pro+" },
+      { name: "IA Assessment", href: "/app/ia-assessment", icon: BarChart3, badge: "Ent+" },
+      { name: "Content Intensity Heat Map", href: "/app/content-intensity-heatmap", icon: Flame, badge: "Ent+" },
+      { name: "AI Assistant", href: "/app/ai-copilot", icon: BrainCircuit },
+      { name: "License Overview", href: "/app/licensing", icon: CreditCard, featureToggle: "licensing", minRole: "operator" },
       { name: "Reports", href: "/app/reports", icon: BarChart3, isMock: true },
     ]
   }
 ];
 
+
+// ── BL-034: Breadcrumb helpers ─────────────────────────────────────────
+type BreadcrumbSegment = { label: string; href?: string };
+type AdminSubGroupLike = { subLabel: string; items: Array<{ name: string; href: string; matchExact?: boolean }> };
+
+function buildBreadcrumb(
+  location: string,
+  navGroups: NavGroup[],
+  adminSubGroups: AdminSubGroupLike[],
+  platformAdminItems: Array<{ name: string; href: string }>,
+): BreadcrumbSegment[] {
+  // Dashboard: no breadcrumb
+  if (location === "/app/dashboard" || location === "/app" || location === "/app/") {
+    return [];
+  }
+
+  // Workspace detail: /app/governance/workspaces/:id
+  if (/^\/app\/governance\/workspaces\/[^/]+/.test(location)) {
+    return [
+      { label: "Management" },
+      { label: "Inventory" },
+      { label: "SharePoint Sites", href: "/app/governance" },
+      { label: "Workspace" },
+    ];
+  }
+
+  // Walk navGroups
+  for (const group of navGroups) {
+    if (group.items) {
+      const match = group.items.find(i => location.startsWith(i.href));
+      if (match) return [{ label: group.label }, { label: match.name }];
+    }
+    if (group.subGroups) {
+      for (const sg of group.subGroups) {
+        const match = sg.items.find(i => location.startsWith(i.href));
+        if (match) return [
+          { label: group.label },
+          { label: sg.subLabel },
+          { label: match.name },
+        ];
+      }
+    }
+  }
+
+  // Walk adminSubGroups
+  for (const sg of adminSubGroups) {
+    const match = sg.items.find(i => (i.matchExact ? location === i.href : location.startsWith(i.href)));
+    if (match) return [
+      { label: "Administration" },
+      { label: sg.subLabel },
+      { label: match.name },
+    ];
+  }
+
+  // Platform admin items
+  const platformMatch = platformAdminItems.find(i => location.startsWith(i.href));
+  if (platformMatch) {
+    return [
+      { label: "Administration" },
+      { label: "Platform", },
+      { label: platformMatch.name },
+    ];
+  }
+
+  // Support page fallback
+  if (location.startsWith("/app/support")) {
+    return [{ label: "Support & About" }];
+  }
+
+  return [];
+}
+
+// ── BL-031: Sync status dot helper ─────────────────────────────────────
+function syncStatusFromTenant(tenant: { lastSyncAt?: string | null; lastSyncStatus?: string | null } | undefined):
+  { color: string; label: string } {
+  if (!tenant) return { color: "bg-muted", label: "No tenant selected" };
+  if (!tenant.lastSyncAt) return { color: "bg-muted", label: "Never synced" };
+  if (tenant.lastSyncStatus && tenant.lastSyncStatus.startsWith("ERROR")) {
+    return { color: "bg-red-500", label: "Last sync failed" };
+  }
+  const syncedAt = new Date(tenant.lastSyncAt).getTime();
+  if (Number.isNaN(syncedAt)) return { color: "bg-muted", label: "Unknown sync time" };
+  const ageHours = (Date.now() - syncedAt) / (1000 * 60 * 60);
+  if (ageHours > 72) return { color: "bg-red-500", label: `Stale (>${Math.floor(ageHours / 24)}d old)` };
+  if (ageHours > 24) return { color: "bg-amber-500", label: `Synced ${Math.floor(ageHours)}h ago` };
+  if (ageHours >= 1) return { color: "bg-emerald-500", label: `Synced ${Math.floor(ageHours)}h ago` };
+  return { color: "bg-emerald-500", label: "Synced recently" };
+}
 
 export default function AppShell({ children }: AppShellProps) {
   const [location] = useLocation();
@@ -199,10 +355,6 @@ export default function AppShell({ children }: AppShellProps) {
   });
 
 
-  if (!authLoading && !authData?.user) {
-    return <Redirect to="/login" />;
-  }
-
   const currentUser = authData?.user;
   const activeOrg = authData?.organization;
   const userInitials = currentUser?.name
@@ -210,124 +362,399 @@ export default function AppShell({ children }: AppShellProps) {
     : currentUser?.email?.[0]?.toUpperCase() || "?";
 
   const effectiveRole = currentUser?.effectiveRole || currentUser?.role || "viewer";
+  const isMac = typeof navigator !== "undefined" && (
+    // userAgentData is available in modern Chromium-based browsers
+    (navigator as any).userAgentData?.platform?.toLowerCase().startsWith("mac") ??
+    /Mac|iPhone|iPad|iPod/.test(navigator.platform)
+  );
 
-  const adminItems: Array<{ name: string; href: string; icon: any; matchExact?: boolean; minRole: string }> = [
-    { name: "Provisioning Templates", href: "/app/admin", icon: LayoutTemplate, matchExact: true, minRole: "tenant_admin" },
-    { name: "User Management", href: "/app/admin/users", icon: UsersIcon, minRole: "tenant_admin" },
-    { name: "Organization Settings", href: "/app/admin/organization", icon: Building2, minRole: "tenant_admin" },
-    { name: "Tenant Connections", href: "/app/admin/tenants", icon: Cloud, minRole: "tenant_admin" },
-    { name: "Data Dictionaries", href: "/app/admin/data-dictionaries", icon: BookMarked, minRole: "tenant_admin" },
-    { name: "Custom Fields", href: "/app/admin/custom-fields", icon: Settings, minRole: "tenant_admin" },
-    { name: "Service Plans", href: "/app/admin/plans", icon: CreditCard, minRole: "tenant_admin" },
+  // Enhancement 3: Grouped admin sub-sections
+  type AdminSubGroup = { subLabel: string; items: Array<{ name: string; href: string; icon: any; matchExact?: boolean; minRole: string }> };
+
+  const adminSubGroups: AdminSubGroup[] = [
+    {
+      subLabel: "Configuration",
+      items: [
+        { name: "Organization Settings", href: "/app/admin/organization", icon: Building2, minRole: "tenant_admin" },
+        { name: "Tenant Connections", href: "/app/admin/tenants", icon: Cloud, minRole: "tenant_admin" },
+        { name: "Entra ID Setup", href: "/app/admin/entra", icon: KeyRound, minRole: "tenant_admin" },
+      ]
+    },
+    {
+      subLabel: "Content & Metadata",
+      items: [
+        { name: "Provisioning Templates", href: "/app/admin", icon: LayoutTemplate, matchExact: true, minRole: "tenant_admin" },
+        { name: "Data Dictionaries", href: "/app/admin/data-dictionaries", icon: BookMarked, minRole: "tenant_admin" },
+        { name: "Custom Fields", href: "/app/admin/custom-fields", icon: Settings, minRole: "tenant_admin" },
+      ]
+    },
+    {
+      subLabel: "Access & Audit",
+      items: [
+        { name: "User Management", href: "/app/admin/users", icon: UsersIcon, minRole: "tenant_admin" },
+        { name: "Audit Log", href: "/app/admin/audit-log", icon: ClipboardList, minRole: "read_only_auditor" },
+      ]
+    },
+    {
+      subLabel: "Operations",
+      items: [
+        { name: "Job Monitor", href: "/app/admin/job-monitor", icon: Activity, minRole: "governance_admin" },
+      ]
+    },
   ];
 
   const platformAdminItems: Array<{ name: string; href: string; icon: any; minRole: string }> = [
     { name: "System Administration", href: "/app/admin/system", icon: Server, minRole: "platform_owner" },
-    { name: "Entra ID Setup", href: "/app/admin/entra", icon: KeyRound, minRole: "tenant_admin" },
-    { name: "Audit Log", href: "/app/admin/audit-log", icon: ClipboardList, minRole: "read_only_auditor" },
+    { name: "Plan Management", href: "/app/admin/plan-management", icon: CreditCard, minRole: "platform_owner" },
+    { name: "AI Settings", href: "/app/admin/ai-settings", icon: BrainCircuit, minRole: "platform_owner" },
   ];
 
+  // Enhancement 5: collapsible sidebar state with localStorage persistence
+  const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>(loadCollapsedState);
+
+  const toggleSection = useCallback((key: string) => {
+    setCollapsedSections(prev => {
+      const next = { ...prev, [key]: !prev[key] };
+      saveCollapsedState(next);
+      return next;
+    });
+  }, []);
+
+  // BL-032: Auto-expand nav sections containing the active route.
+  // This only opens sections — it never collapses currently-open sections.
+  useEffect(() => {
+    const keysToOpen: string[] = [];
+
+    for (const group of navGroups) {
+      const groupKey = `nav_${group.label}`;
+      if (group.items && group.items.some(i => location.startsWith(i.href))) {
+        keysToOpen.push(groupKey);
+      }
+      if (group.subGroups) {
+        for (const sg of group.subGroups) {
+          if (sg.items.some(i => location.startsWith(i.href))) {
+            keysToOpen.push(groupKey);
+            keysToOpen.push(`nav_${group.label}_${sg.subLabel}`);
+          }
+        }
+      }
+    }
+
+    // Admin routes auto-expand the Administration section and the matching sub-group
+    for (const sg of adminSubGroups) {
+      if (sg.items.some(i => (i.matchExact ? location === i.href : location.startsWith(i.href)))) {
+        keysToOpen.push("nav_admin");
+        keysToOpen.push(`nav_admin_${sg.subLabel}`);
+      }
+    }
+    if (platformAdminItems.some(i => location.startsWith(i.href))) {
+      keysToOpen.push("nav_admin");
+    }
+
+    if (keysToOpen.length > 0) {
+      setCollapsedSections(prev => {
+        let changed = false;
+        const updated = { ...prev };
+        for (const key of keysToOpen) {
+          if (updated[key]) {
+            updated[key] = false;
+            changed = true;
+          }
+        }
+        if (!changed) return prev;
+        saveCollapsedState(updated);
+        return updated;
+      });
+    }
+  }, [location]);
+
+  // BL-036: Global command palette state + ⌘K / Ctrl+K shortcut
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  useCommandPaletteShortcut(setPaletteOpen);
+
+  // Shared nav-item renderer (BL-033: tooltips on plan/mock badges)
+  const renderNavItem = (item: NavItem, opts?: { matchExact?: boolean }) => {
+    const isActive = opts?.matchExact ? location === item.href : location.startsWith(item.href);
+
+    const planTooltipText =
+      item.badge === "Pro+" ? "Available on the Professional plan and above. Contact Synozur to upgrade."
+      : item.badge === "Ent+" ? "Available on the Enterprise plan. Contact Synozur to upgrade."
+      : null;
+
+    const mockBadge = item.isMock ? (
+      <Tooltip delayDuration={300}>
+        <TooltipTrigger asChild>
+          <span className="flex h-4 items-center justify-center rounded px-1.5 text-[9px] font-semibold bg-amber-100/80 text-amber-600/80 dark:bg-amber-900/30 dark:text-amber-400/70 opacity-75 tracking-wide cursor-help">
+            MOCK
+          </span>
+        </TooltipTrigger>
+        <TooltipContent side="right" className="max-w-xs">
+          This feature is in active development and will be available in a future release.
+        </TooltipContent>
+      </Tooltip>
+    ) : null;
+
+    const badgeEl = item.badge ? (
+      <span className={`flex h-5 items-center justify-center rounded-full px-2 text-[10px] font-bold ${isActive ? 'bg-primary text-primary-foreground' : 'bg-primary/20 text-primary'}`}>
+        {item.badge}
+      </span>
+    ) : null;
+
+    const wrappedBadge = item.badge && planTooltipText ? (
+      <Tooltip delayDuration={300}>
+        <TooltipTrigger asChild>
+          <span className="cursor-help">{badgeEl}</span>
+        </TooltipTrigger>
+        <TooltipContent side="right" className="max-w-xs">
+          {planTooltipText}
+        </TooltipContent>
+      </Tooltip>
+    ) : badgeEl;
+
+    return (
+      <Link key={item.name} href={item.href} className={`flex items-center justify-between px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
+        isActive
+          ? "bg-primary/10 text-primary shadow-sm shadow-primary/5"
+          : "text-muted-foreground hover:bg-muted/80 hover:text-foreground"
+      }`}>
+        <div className="flex items-center gap-3">
+          <item.icon className={`w-5 h-5 ${isActive ? "text-primary" : "text-muted-foreground/70"}`} />
+          {item.name}
+        </div>
+        <div className="flex items-center gap-1">
+          {mockBadge}
+          {wrappedBadge}
+        </div>
+      </Link>
+    );
+  };
+
+  // BL-036: Build flat list of nav items visible to the current user for the palette
+  const paletteItems = useMemo((): PaletteItem[] => {
+    const itemFilter = (item: NavItem) => {
+      if (item.minRole && !hasMinRole(effectiveRole, item.minRole)) return false;
+      if (item.featureToggle && !isFeatureEnabled(item.featureToggle)) return false;
+      return true;
+    };
+
+    const list: PaletteItem[] = [];
+
+    for (const group of navGroups) {
+      if (group.minRole && !hasMinRole(effectiveRole, group.minRole)) continue;
+      if (group.items) {
+        for (const item of group.items.filter(itemFilter)) {
+          list.push({
+            name: item.name,
+            href: item.href,
+            icon: item.icon,
+            sectionPath: group.label,
+            badge: item.badge,
+            isMock: item.isMock,
+          });
+        }
+      }
+      if (group.subGroups) {
+        for (const sg of group.subGroups) {
+          for (const item of sg.items.filter(itemFilter)) {
+            list.push({
+              name: item.name,
+              href: item.href,
+              icon: item.icon,
+              sectionPath: `${group.label} › ${sg.subLabel}`,
+              badge: item.badge,
+              isMock: item.isMock,
+            });
+          }
+        }
+      }
+    }
+
+    for (const sg of adminSubGroups) {
+      for (const item of sg.items.filter(i => hasMinRole(effectiveRole, i.minRole))) {
+        list.push({
+          name: item.name,
+          href: item.href,
+          icon: item.icon,
+          sectionPath: `Administration › ${sg.subLabel}`,
+        });
+      }
+    }
+
+    for (const item of platformAdminItems.filter(i => hasMinRole(effectiveRole, i.minRole))) {
+      list.push({
+        name: item.name,
+        href: item.href,
+        icon: item.icon,
+        sectionPath: "Administration › Platform",
+      });
+    }
+
+    // Support page is always available
+    list.push({
+      name: "Support & About",
+      href: "/app/support",
+      icon: BookOpen,
+      sectionPath: "Help",
+    });
+
+    return list;
+  }, [effectiveRole, isFeatureEnabled]);
+
+  // All hooks are above this line — early return is safe here
+  if (!authLoading && !authData?.user) {
+    return <Redirect to="/login" />;
+  }
+
   const NavLinks = () => {
+    const filterItem = (item: NavItem) => {
+      if (item.minRole && !hasMinRole(effectiveRole, item.minRole)) return false;
+      if (item.featureToggle && !isFeatureEnabled(item.featureToggle)) return false;
+      return true;
+    };
+
+    // Filter groups, handling both flat items and subGroups
     const filteredGroups = navGroups
       .filter(group => !group.minRole || hasMinRole(effectiveRole, group.minRole))
-      .map(group => ({
-        ...group,
-        items: group.items.filter(item => {
-          if (item.minRole && !hasMinRole(effectiveRole, item.minRole)) return false;
-          if (item.featureToggle && !isFeatureEnabled(item.featureToggle)) return false;
-          return true;
-        }),
-      }))
-      .filter(group => group.items.length > 0);
+      .map(group => {
+        if (group.subGroups) {
+          const filteredSubs = group.subGroups
+            .map(sg => ({ ...sg, items: sg.items.filter(filterItem) }))
+            .filter(sg => sg.items.length > 0);
+          return { ...group, subGroups: filteredSubs };
+        }
+        return { ...group, items: (group.items || []).filter(filterItem) };
+      })
+      .filter(group => (group.items?.length ?? 0) > 0 || (group.subGroups?.length ?? 0) > 0);
 
-    const visibleAdminItems = adminItems.filter(item => hasMinRole(effectiveRole, item.minRole));
+    // Filter admin sub-groups
+    const visibleAdminSubGroups = adminSubGroups
+      .map(sg => ({ ...sg, items: sg.items.filter(item => hasMinRole(effectiveRole, item.minRole)) }))
+      .filter(sg => sg.items.length > 0);
     const visiblePlatformItems = platformAdminItems.filter(item => hasMinRole(effectiveRole, item.minRole));
-    const showAdminSection = visibleAdminItems.length > 0 || visiblePlatformItems.length > 0;
+    const showAdminSection = visibleAdminSubGroups.length > 0 || visiblePlatformItems.length > 0;
 
     return (
       <div className="space-y-6 py-4">
-        {filteredGroups.map((group, i) => (
-          <div key={i} className="space-y-2">
-            <h4 className="px-4 text-xs font-bold text-muted-foreground uppercase tracking-widest mb-2">
-              {group.label}
-            </h4>
-            <div className="space-y-1">
-              {group.items.map((item) => {
-                const isActive = location.startsWith(item.href);
-                return (
-                  <Link key={item.name} href={item.href} className={`flex items-center justify-between px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
-                    isActive 
-                      ? "bg-primary/10 text-primary shadow-sm shadow-primary/5" 
-                      : "text-muted-foreground hover:bg-muted/80 hover:text-foreground"
-                  }`}>
-                    <div className="flex items-center gap-3">
-                      <item.icon className={`w-5 h-5 ${isActive ? "text-primary" : "text-muted-foreground/70"}`} />
-                      {item.name}
-                    </div>
-                    <div className="flex items-center gap-1">
-                      {item.isMock && (
-                        <span className="flex h-4 items-center justify-center rounded px-1.5 text-[9px] font-semibold bg-amber-100/80 text-amber-600/80 dark:bg-amber-900/30 dark:text-amber-400/70 opacity-75 tracking-wide">
-                          MOCK
-                        </span>
-                      )}
-                      {item.badge && (
-                        <span className={`flex h-5 items-center justify-center rounded-full px-2 text-[10px] font-bold ${isActive ? 'bg-primary text-primary-foreground' : 'bg-primary/20 text-primary'}`}>
-                          {item.badge}
-                        </span>
-                      )}
-                    </div>
-                  </Link>
-                );
-              })}
-            </div>
-          </div>
-        ))}
+        {filteredGroups.map((group, i) => {
+          const sectionKey = `nav_${group.label}`;
+          const isCollapsed = !!collapsedSections[sectionKey];
 
-        {showAdminSection && (
-          <div className="space-y-2 pt-4 border-t border-border/50">
-            <h4 className="px-4 text-xs font-bold text-muted-foreground uppercase tracking-widest mb-2">
-              Administration
-            </h4>
-            <div className="space-y-1">
-              {visibleAdminItems.map((item) => {
-                const isActive = item.matchExact ? location === item.href : location.startsWith(item.href);
-                return (
-                  <Link key={item.name} href={item.href} className={`flex items-center justify-between px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
-                    isActive 
-                      ? "bg-primary/10 text-primary shadow-sm shadow-primary/5" 
-                      : "text-muted-foreground hover:bg-muted/80 hover:text-foreground"
-                  }`}>
-                    <div className="flex items-center gap-3">
-                      <item.icon className={`w-5 h-5 ${isActive ? "text-primary" : "text-muted-foreground/70"}`} />
-                      {item.name}
-                    </div>
-                  </Link>
-                );
-              })}
+          return (
+            <div key={i} className="space-y-2">
+              {group.collapsible ? (
+                <button
+                  type="button"
+                  onClick={() => toggleSection(sectionKey)}
+                  aria-expanded={!isCollapsed}
+                  className="flex items-center justify-between w-full px-4 group cursor-pointer"
+                >
+                  <h4 className="text-xs font-bold text-muted-foreground uppercase tracking-widest">
+                    {group.label}
+                  </h4>
+                  {isCollapsed
+                    ? <ChevronRight className="w-3.5 h-3.5 text-muted-foreground/50 group-hover:text-muted-foreground transition-colors" />
+                    : <ChevronUp className="w-3.5 h-3.5 text-muted-foreground/50 group-hover:text-muted-foreground transition-colors" />
+                  }
+                </button>
+              ) : (
+                <h4 className="px-4 text-xs font-bold text-muted-foreground uppercase tracking-widest mb-2">
+                  {group.label}
+                </h4>
+              )}
 
-              {visiblePlatformItems.length > 0 && (
-                <div className="pt-2 mt-2 border-t border-border/50">
-                  <div className="px-3 pb-1 flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest text-primary/70">
-                    <ShieldCheck className="w-3 h-3" /> Platform Admin Only
-                  </div>
-                  {visiblePlatformItems.map((item) => {
-                    const isActive = location.startsWith(item.href);
+              {!isCollapsed && (
+                <>
+                  {/* Flat items */}
+                  {group.items && group.items.length > 0 && (
+                    <div className="space-y-1">
+                      {group.items.map(item => renderNavItem(item))}
+                    </div>
+                  )}
+
+                  {/* Sub-groups (Enhancement 1) */}
+                  {group.subGroups && group.subGroups.map((sg, j) => {
+                    const subKey = `nav_${group.label}_${sg.subLabel}`;
+                    const subCollapsed = !!collapsedSections[subKey];
                     return (
-                      <Link key={item.name} href={item.href} className={`flex items-center justify-between px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
-                        isActive 
-                          ? "bg-primary/10 text-primary shadow-sm shadow-primary/5" 
-                          : "text-muted-foreground hover:bg-muted/80 hover:text-foreground"
-                      }`}>
-                        <div className="flex items-center gap-3">
-                          <item.icon className={`w-5 h-5 ${isActive ? "text-primary" : "text-muted-foreground/70"}`} />
-                          {item.name}
-                        </div>
-                      </Link>
+                      <div key={j} className="space-y-1">
+                        <button
+                          type="button"
+                          onClick={() => toggleSection(subKey)}
+                          aria-expanded={!subCollapsed}
+                          className="flex items-center justify-between w-full pl-5 pr-4 py-1 group cursor-pointer"
+                        >
+                          <span className="text-[10px] font-semibold text-muted-foreground/70 uppercase tracking-wider">
+                            {sg.subLabel}
+                          </span>
+                          {subCollapsed
+                            ? <ChevronRight className="w-3 h-3 text-muted-foreground/40 group-hover:text-muted-foreground transition-colors" />
+                            : <ChevronUp className="w-3 h-3 text-muted-foreground/40 group-hover:text-muted-foreground transition-colors" />
+                          }
+                        </button>
+                        {!subCollapsed && sg.items.map(item => renderNavItem(item))}
+                      </div>
                     );
                   })}
-                </div>
+                </>
               )}
             </div>
+          );
+        })}
+
+        {/* Administration (Enhancement 3: sub-grouped) */}
+        {showAdminSection && (
+          <div className="space-y-2 pt-4 border-t border-border/50">
+            <button
+              type="button"
+              onClick={() => toggleSection("nav_admin")}
+              aria-expanded={!collapsedSections["nav_admin"]}
+              className="flex items-center justify-between w-full px-4 group cursor-pointer"
+            >
+              <h4 className="text-xs font-bold text-muted-foreground uppercase tracking-widest">
+                Administration
+              </h4>
+              {collapsedSections["nav_admin"]
+                ? <ChevronRight className="w-3.5 h-3.5 text-muted-foreground/50 group-hover:text-muted-foreground transition-colors" />
+                : <ChevronUp className="w-3.5 h-3.5 text-muted-foreground/50 group-hover:text-muted-foreground transition-colors" />
+              }
+            </button>
+
+            {!collapsedSections["nav_admin"] && (
+              <div className="space-y-3">
+                {visibleAdminSubGroups.map((sg, j) => {
+                  const subKey = `nav_admin_${sg.subLabel}`;
+                  const subCollapsed = !!collapsedSections[subKey];
+                  return (
+                    <div key={j} className="space-y-1">
+                      <button
+                        type="button"
+                        onClick={() => toggleSection(subKey)}
+                        aria-expanded={!subCollapsed}
+                        className="flex items-center justify-between w-full pl-5 pr-4 py-1 group cursor-pointer"
+                      >
+                        <span className="text-[10px] font-semibold text-muted-foreground/70 uppercase tracking-wider">
+                          {sg.subLabel}
+                        </span>
+                        {subCollapsed
+                          ? <ChevronRight className="w-3 h-3 text-muted-foreground/40 group-hover:text-muted-foreground transition-colors" />
+                          : <ChevronUp className="w-3 h-3 text-muted-foreground/40 group-hover:text-muted-foreground transition-colors" />
+                        }
+                      </button>
+                      {!subCollapsed && sg.items.map(item => renderNavItem(item, { matchExact: item.matchExact }))}
+                    </div>
+                  );
+                })}
+
+                {visiblePlatformItems.length > 0 && (
+                  <div className="pt-2 mt-2 border-t border-border/50">
+                    <div className="px-3 pb-1 flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest text-primary/70">
+                      <ShieldCheck className="w-3 h-3" /> Platform Admin Only
+                    </div>
+                    {visiblePlatformItems.map(item => renderNavItem(item))}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -344,7 +771,67 @@ export default function AppShell({ children }: AppShellProps) {
             <img src="/images/brand/zenith-logo-white.png" alt="Zenith" className="h-8 transition-transform group-hover:scale-105" />
           </Link>
         </div>
-        
+
+        {/* BL-031: Sidebar Tenant Context Card */}
+        <div className="px-4 pt-4">
+          {selectedTenant ? (
+            (() => {
+              const { color: dotColor, label: dotLabel } = syncStatusFromTenant(selectedTenant);
+              const displayName = selectedTenant.tenantName || selectedTenant.domain || "Active tenant";
+              const secondary = selectedTenant.domain && selectedTenant.domain !== displayName ? selectedTenant.domain : selectedTenant.isDemo ? "Demo tenant" : "";
+              // Route the Switch pill to the tenant-switcher flow (all users); only deep-link to
+              // Manage Connections for tenant_admin+ who can actually manage that page.
+              const isTenantAdmin = hasMinRole(effectiveRole, "tenant_admin");
+              const tenantCardHref = tenants.length > 1
+                ? "/app/select-tenant"
+                : isTenantAdmin ? "/app/admin/tenants" : "/app/select-tenant";
+              return (
+                <Link
+                  href={tenantCardHref}
+                  className="flex items-center gap-2.5 px-3 py-2 rounded-xl bg-primary/5 border border-primary/10 hover:bg-primary/10 transition-colors group"
+                  data-testid="sidebar-tenant-card"
+                >
+                  <Tooltip delayDuration={300}>
+                    <TooltipTrigger asChild>
+                      <span className={`w-2 h-2 rounded-full shrink-0 ${dotColor}`} aria-hidden="true" />
+                    </TooltipTrigger>
+                    <TooltipContent side="right" className="max-w-xs">{dotLabel}</TooltipContent>
+                  </Tooltip>
+                  <span className="sr-only">Sync status: {dotLabel}</span>
+                  <div className="flex flex-col min-w-0 flex-1 -space-y-0.5">
+                    <span className="text-[9px] font-bold text-muted-foreground uppercase tracking-widest leading-none">Active tenant</span>
+                    <span className="text-sm font-semibold truncate leading-tight" data-testid="sidebar-tenant-name">{displayName}</span>
+                    {secondary && (
+                      <span className="text-xs text-muted-foreground truncate leading-tight">{secondary}</span>
+                    )}
+                  </div>
+                  {tenants.length > 1 ? (
+                    <span className="flex items-center gap-1 shrink-0 rounded-full bg-primary/10 text-primary text-[10px] font-semibold px-2 py-0.5">
+                      {tenants.length}
+                      <span className="opacity-80">Switch</span>
+                    </span>
+                  ) : (
+                    <Settings className="w-3.5 h-3.5 text-muted-foreground/60 group-hover:text-foreground shrink-0" />
+                  )}
+                </Link>
+              );
+            })()
+          ) : (
+            <Link
+              href={hasMinRole(effectiveRole, "tenant_admin") ? "/app/admin/tenants" : "/app/select-tenant"}
+              className="flex items-center gap-2.5 px-3 py-2 rounded-xl bg-muted/30 border border-dashed border-border/60 hover:bg-muted/50 transition-colors"
+              data-testid="sidebar-tenant-card-empty"
+            >
+              <Cloud className="w-4 h-4 text-muted-foreground shrink-0" />
+              <div className="flex flex-col min-w-0 flex-1 -space-y-0.5">
+                <span className="text-[9px] font-bold text-muted-foreground uppercase tracking-widest leading-none">M365 Tenant</span>
+                <span className="text-xs font-medium text-muted-foreground leading-tight">No tenant selected</span>
+              </div>
+              <ChevronRight className="w-3.5 h-3.5 text-muted-foreground/60 shrink-0" />
+            </Link>
+          )}
+        </div>
+
         <div className="flex-1 overflow-y-auto px-4 py-4 scrollbar-hide">
           <NavLinks />
         </div>
@@ -366,9 +853,44 @@ export default function AppShell({ children }: AppShellProps) {
       <main className="flex-1 flex flex-col min-w-0">
         {/* Top Header */}
         <header className="h-16 border-b border-border/40 bg-background/80 backdrop-blur-md flex items-center justify-between px-4 lg:px-8 sticky top-0 z-30">
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-4 min-w-0">
             <SynozurAppSwitcher currentApp="zenith" />
             <div className="w-px h-6 bg-border/40 hidden sm:block" />
+            {/* BL-034: Contextual Page Breadcrumb */}
+            {(() => {
+              const crumbs = buildBreadcrumb(location, navGroups, adminSubGroups, platformAdminItems);
+              if (crumbs.length === 0) return null;
+              return (
+                <nav
+                  aria-label="Breadcrumb"
+                  className="hidden lg:flex items-center gap-1 text-sm min-w-0 max-w-md"
+                  data-testid="header-breadcrumb"
+                >
+                  {crumbs.map((seg, idx) => {
+                    const isLast = idx === crumbs.length - 1;
+                    return (
+                      <span key={idx} className="flex items-center gap-1 min-w-0">
+                        {idx > 0 && (
+                          <ChevronRight className="w-3 h-3 text-muted-foreground/40 shrink-0" />
+                        )}
+                        {seg.href && !isLast ? (
+                          <Link
+                            href={seg.href}
+                            className="text-muted-foreground hover:text-foreground transition-colors truncate"
+                          >
+                            {seg.label}
+                          </Link>
+                        ) : (
+                          <span className={`${isLast ? "text-foreground font-medium" : "text-muted-foreground"} truncate`}>
+                            {seg.label}
+                          </span>
+                        )}
+                      </span>
+                    );
+                  })}
+                </nav>
+              );
+            })()}
             <Sheet>
               <SheetTrigger asChild>
                 <Button variant="ghost" size="icon" className="lg:hidden -ml-2">
@@ -543,19 +1065,39 @@ export default function AppShell({ children }: AppShellProps) {
           </div>
 
           <div className="flex items-center gap-2 sm:gap-4">
-            <div className="relative hidden md:block w-72">
+            {/* BL-036: Clicking the search bar opens the Command Palette */}
+            <button
+              type="button"
+              onClick={() => setPaletteOpen(true)}
+              aria-label="Open command palette"
+              className="relative hidden md:flex items-center w-72 h-10 pl-9 pr-12 bg-muted/40 border border-border/50 rounded-full hover:border-primary/40 focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:border-primary/50 transition-all text-left"
+              data-testid="button-open-command-palette"
+            >
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-              <Input
-                type="search"
-                placeholder="Search resources..."
-                className="h-10 pl-9 pr-12 bg-muted/40 border-border/50 rounded-full focus-visible:ring-primary/30 focus-visible:border-primary/50 transition-all"
-              />
+              <span className="text-sm text-muted-foreground truncate">Search features, pages...</span>
               <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-1">
-                <kbd className="inline-flex h-5 items-center gap-1 rounded border border-border bg-background px-1.5 font-mono text-[10px] font-medium text-muted-foreground">
-                  <span className="text-xs">⌘</span>K
-                </kbd>
+                {isMac ? (
+                  <kbd className="inline-flex h-5 items-center gap-1 rounded border border-border bg-background px-1.5 font-mono text-[10px] font-medium text-muted-foreground">
+                    <kbd className="text-xs not-italic">⌘</kbd>K
+                  </kbd>
+                ) : (
+                  <span className="inline-flex h-5 items-center gap-0.5">
+                    <kbd className="inline-flex h-5 items-center rounded border border-border bg-background px-1.5 font-mono text-[10px] font-medium text-muted-foreground">Ctrl</kbd>
+                    <kbd className="inline-flex h-5 items-center rounded border border-border bg-background px-1.5 font-mono text-[10px] font-medium text-muted-foreground">K</kbd>
+                  </span>
+                )}
               </div>
-            </div>
+            </button>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="md:hidden rounded-full"
+              onClick={() => setPaletteOpen(true)}
+              aria-label="Open command palette"
+              data-testid="button-open-command-palette-mobile"
+            >
+              <Search className="w-5 h-5 text-muted-foreground" />
+            </Button>
 
             <Button variant="ghost" size="icon" className="rounded-full relative hover:bg-muted">
               <Bell className="w-5 h-5 text-muted-foreground" />
@@ -630,6 +1172,9 @@ export default function AppShell({ children }: AppShellProps) {
           </Button>
         </div>
       </main>
+
+      {/* BL-036: Global Command Palette (⌘K / Ctrl+K) */}
+      <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} items={paletteItems} />
 
       {/* MSP Access Code Dialog */}
       <Dialog open={mspDialogOpen} onOpenChange={(open) => { setMspDialogOpen(open); if (!open) { setMspCode(""); setMspError(null); } }}>

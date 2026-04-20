@@ -22,6 +22,7 @@ export function requireFeature(feature: keyof typeof PLAN_FEATURES.TRIAL) {
     if (!features[feature]) {
       const featureLabels: Record<string, string> = {
         m365WriteBack: "Microsoft 365 write-back",
+        ownershipManagement: "site owner management",
         copilotReadiness: "Copilot readiness analysis",
         lifecycleAutomation: "lifecycle automation",
         selfServicePortal: "self-service portal",
@@ -30,6 +31,10 @@ export function requireFeature(feature: keyof typeof PLAN_FEATURES.TRIAL) {
         mspAccess: "MSP access code management",
         csvExport: "CSV export",
         emailContentStorageReport: "Email Content Storage Report",
+        iaAssessment: "IA Assessment",
+        contentIntensityHeatmap: "Content Intensity Heat Map",
+        copilotPromptIntelligence: "Copilot Prompt Intelligence",
+        m365OverviewReport: "M365 30-Day Overview Report",
       };
       const label = featureLabels[feature] || feature;
       return res.status(403).json({

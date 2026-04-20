@@ -22,7 +22,6 @@ import {
   Settings2,
   FileJson,
   Save,
-  Wand2,
   CheckCircle2,
   Activity,
   Loader2,
@@ -44,9 +43,24 @@ import {
   Trash2,
   RefreshCw,
   Archive,
-  Library
+  Library,
+  UserPlus,
+  X as XIcon,
+  Search as SearchIcon
 } from "lucide-react";
 import { useServicePlan } from "@/hooks/use-service-plan";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 
 type DataDictEntry = { id: string; tenantId: string; category: string; value: string; createdAt: string };
 type SensitivityLabelEntry = { id: string; tenantId: string; labelId: string; name: string; description: string | null; color: string | null; tooltip: string | null; sensitivity: number | null; isActive: boolean; contentFormats: string[] | null; hasProtection: boolean; parentLabelId: string | null; appliesToGroupsSites: boolean; syncedAt: string | null };
@@ -139,7 +153,6 @@ export default function WorkspaceDetailsPage() {
     sensitivityLabelId: "",
     externalSharing: false,
     teamsConnected: false,
-    type: "",
     projectType: "",
   });
   const [customFieldValues, setCustomFieldValues] = useState<Record<string, any>>({});
@@ -156,7 +169,6 @@ export default function WorkspaceDetailsPage() {
 
         externalSharing: workspace.externalSharing,
         teamsConnected: workspace.teamsConnected,
-        type: workspace.type || "",
         projectType: workspace.projectType || "",
       });
       const existingCustom = workspace.customFields || {};
@@ -252,6 +264,143 @@ export default function WorkspaceDetailsPage() {
     },
   });
 
+  // ── Site Owner Management ──
+  const { data: meData } = useQuery<{ user: { effectiveRole?: string; role?: string } } >({
+    queryKey: ["/api/auth/me"],
+    queryFn: () => fetch("/api/auth/me", { credentials: "include" }).then(r => r.json()),
+    staleTime: 60_000,
+  });
+  const effectiveRole = (meData?.user?.effectiveRole || meData?.user?.role || "").toLowerCase();
+  const canManageOwners =
+    effectiveRole === "platform_owner" ||
+    effectiveRole === "tenant_admin" ||
+    effectiveRole === "governance_admin";
+  const { isFeatureEnabled } = useServicePlan();
+  const ownershipFeatureOn = isFeatureEnabled("ownershipManagement" as any);
+
+  const [ownerSearchOpen, setOwnerSearchOpen] = useState(false);
+  const [ownerSearch, setOwnerSearch] = useState("");
+  const [debouncedOwnerSearch, setDebouncedOwnerSearch] = useState("");
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedOwnerSearch(ownerSearch.trim()), 300);
+    return () => clearTimeout(t);
+  }, [ownerSearch]);
+
+  const { data: ownerSearchResults, isFetching: ownerSearchLoading } = useQuery<{ users: Array<{ id: string; displayName: string; mail?: string; userPrincipalName?: string }> }>({
+    queryKey: ["/api/tenants", workspace?.tenantConnectionId, "users/search", debouncedOwnerSearch],
+    queryFn: async () => {
+      const r = await fetch(`/api/tenants/${workspace?.tenantConnectionId}/users/search?q=${encodeURIComponent(debouncedOwnerSearch)}`, { credentials: "include" });
+      if (!r.ok) return { users: [] };
+      return r.json();
+    },
+    enabled: !!workspace?.tenantConnectionId && ownerSearchOpen && debouncedOwnerSearch.length >= 2,
+  });
+
+  const parseErrorMessage = (err: any, fallback: string): string => {
+    if (!err?.message) return fallback;
+    const match = err.message.match(/^\d+:\s*([\s\S]+)$/);
+    if (match) {
+      try {
+        const body = JSON.parse(match[1]);
+        return body?.message || fallback;
+      } catch {
+        return match[1];
+      }
+    }
+    return err.message || fallback;
+  };
+
+  const addOwnerMutation = useMutation({
+    mutationFn: async (user: { id: string; userPrincipalName?: string; displayName: string }) => {
+      const res = await apiRequest("POST", `/api/workspaces/${id}/owners`, { userId: user.id });
+      return res.json();
+    },
+    onSuccess: (_data, user) => {
+      queryClient.invalidateQueries({ queryKey: [`/api/workspaces/${id}`] });
+      queryClient.invalidateQueries({ queryKey: [`/api/workspaces/${id}/policy-results`] });
+      queryClient.invalidateQueries({ queryKey: ["/api/workspaces"] });
+      setOwnerSearch("");
+      setOwnerSearchOpen(false);
+      toast({ title: "Owner added", description: `${user.displayName} is now an owner of this site.` });
+    },
+    onError: (err: any) => {
+      toast({ title: "Could not add owner", description: parseErrorMessage(err, "Failed to add owner."), variant: "destructive" });
+    },
+  });
+
+  const [confirmRemoveOwner, setConfirmRemoveOwner] = useState<{ id: string; displayName: string } | null>(null);
+  const removeOwnerMutation = useMutation({
+    mutationFn: async (owner: { id: string; displayName: string }) => {
+      const res = await apiRequest("DELETE", `/api/workspaces/${id}/owners/${owner.id}`);
+      return res.json();
+    },
+    onSuccess: (_data, owner) => {
+      queryClient.invalidateQueries({ queryKey: [`/api/workspaces/${id}`] });
+      queryClient.invalidateQueries({ queryKey: [`/api/workspaces/${id}/policy-results`] });
+      queryClient.invalidateQueries({ queryKey: ["/api/workspaces"] });
+      setConfirmRemoveOwner(null);
+      toast({ title: "Owner removed", description: `${owner.displayName} is no longer an owner of this site.` });
+    },
+    onError: (err: any) => {
+      toast({ title: "Could not remove owner", description: parseErrorMessage(err, "Failed to remove owner."), variant: "destructive" });
+      setConfirmRemoveOwner(null);
+    },
+  });
+
+  // ── Site Member Management ──
+  const [memberSearchOpen, setMemberSearchOpen] = useState(false);
+  const [memberSearch, setMemberSearch] = useState("");
+  const [debouncedMemberSearch, setDebouncedMemberSearch] = useState("");
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedMemberSearch(memberSearch.trim()), 300);
+    return () => clearTimeout(t);
+  }, [memberSearch]);
+
+  const { data: memberSearchResults, isFetching: memberSearchLoading } = useQuery<{ users: Array<{ id: string; displayName: string; mail?: string; userPrincipalName?: string }> }>({
+    queryKey: ["/api/tenants", workspace?.tenantConnectionId, "users/search", debouncedMemberSearch, "members"],
+    queryFn: async () => {
+      const r = await fetch(`/api/tenants/${workspace?.tenantConnectionId}/users/search?q=${encodeURIComponent(debouncedMemberSearch)}`, { credentials: "include" });
+      if (!r.ok) return { users: [] };
+      return r.json();
+    },
+    enabled: !!workspace?.tenantConnectionId && memberSearchOpen && debouncedMemberSearch.length >= 2,
+  });
+
+  const addMemberMutation = useMutation({
+    mutationFn: async (user: { id: string; userPrincipalName?: string; displayName: string }) => {
+      const res = await apiRequest("POST", `/api/workspaces/${id}/members`, { userId: user.id });
+      return res.json();
+    },
+    onSuccess: (_data, user) => {
+      queryClient.invalidateQueries({ queryKey: [`/api/workspaces/${id}`] });
+      queryClient.invalidateQueries({ queryKey: ["/api/workspaces"] });
+      setMemberSearch("");
+      setMemberSearchOpen(false);
+      toast({ title: "Member added", description: `${user.displayName} is now a member of this site.` });
+    },
+    onError: (err: any) => {
+      toast({ title: "Could not add member", description: parseErrorMessage(err, "Failed to add member."), variant: "destructive" });
+    },
+  });
+
+  const [confirmRemoveMember, setConfirmRemoveMember] = useState<{ id: string; displayName: string } | null>(null);
+  const removeMemberMutation = useMutation({
+    mutationFn: async (member: { id: string; displayName: string }) => {
+      const res = await apiRequest("DELETE", `/api/workspaces/${id}/members/${member.id}`);
+      return res.json();
+    },
+    onSuccess: (_data, member) => {
+      queryClient.invalidateQueries({ queryKey: [`/api/workspaces/${id}`] });
+      queryClient.invalidateQueries({ queryKey: ["/api/workspaces"] });
+      setConfirmRemoveMember(null);
+      toast({ title: "Member removed", description: `${member.displayName} is no longer a member of this site.` });
+    },
+    onError: (err: any) => {
+      toast({ title: "Could not remove member", description: parseErrorMessage(err, "Failed to remove member."), variant: "destructive" });
+      setConfirmRemoveMember(null);
+    },
+  });
+
   const handleSave = () => {
     const missingCustomRequired = customFieldDefs
       .filter(f => f.required && (customFieldValues[f.fieldName] === undefined || customFieldValues[f.fieldName] === "" || customFieldValues[f.fieldName] === null))
@@ -275,7 +424,6 @@ export default function WorkspaceDetailsPage() {
 
         externalSharing: workspace.externalSharing,
         teamsConnected: workspace.teamsConnected,
-        type: workspace.type || "",
         projectType: workspace.projectType || "",
       });
       const existingCustom2 = workspace.customFields || {};
@@ -321,6 +469,20 @@ export default function WorkspaceDetailsPage() {
       case 'HUB_SITE': return 'Hub Site';
       default: return 'SharePoint Site';
     }
+  };
+
+  // Prefer the actual SharePoint web template ID when we have it (e.g. "GROUP#0",
+  // "SITEPAGEPUBLISHING#0"); fall back to the inferred type so newly-synced sites
+  // without a usage-report row still get a meaningful label.
+  const getResolvedTemplateLabel = (ws: { type: string; rootWebTemplate?: string | null }) => {
+    const t = (ws.rootWebTemplate || "").toUpperCase();
+    if (t.includes("SITEPAGEPUBLISHING")) return "Communication Site";
+    if (t.includes("GROUP")) return "Team Site (Group-connected)";
+    if (t.includes("STS#3")) return "Team Site (Modern)";
+    if (t.includes("STS#0")) return "Team Site (Classic)";
+    if (t.includes("STS")) return "Team Site";
+    if (t) return ws.rootWebTemplate || getSiteTypeLabel(ws.type);
+    return getSiteTypeLabel(ws.type);
   };
 
   const getSiteTypeColor = (type: string) => {
@@ -407,7 +569,7 @@ export default function WorkspaceDetailsPage() {
             </div>
             <div className="flex items-center gap-3 mt-1">
               <Globe className={`w-3.5 h-3.5 ${getSiteTypeColor(workspace.type)}`} />
-              <span className="text-muted-foreground text-xs">{getSiteTypeLabel(workspace.type)}</span>
+              <span className="text-muted-foreground text-xs">{getResolvedTemplateLabel(workspace)}</span>
               <span className="text-muted-foreground text-xs">|</span>
               {workspace.siteUrl ? (
                 <a href={workspace.siteUrl} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline font-mono text-xs flex items-center gap-1" data-testid="link-sharepoint-site">
@@ -443,9 +605,6 @@ export default function WorkspaceDetailsPage() {
               >
                 <RefreshCw className={`w-4 h-4 ${siteSyncMutation.isPending ? 'animate-spin' : ''}`} />
                 {siteSyncMutation.isPending ? "Refreshing..." : "Refresh from M365"}
-              </Button>
-              <Button variant="outline" className="gap-2 text-primary border-primary/30 hover:bg-primary/10" data-testid="button-apply-defaults">
-                <Wand2 className="w-4 h-4" /> Apply Defaults
               </Button>
               <Button onClick={() => setEditMode(true)} className="gap-2" data-testid="button-edit">
                 <Pencil className="w-4 h-4" /> Edit Properties
@@ -572,20 +731,21 @@ export default function WorkspaceDetailsPage() {
                     </div>
                     <div className="space-y-2">
                       <Label>Site Template</Label>
-                      {editMode ? (
-                        <Select value={form.type} onValueChange={(v) => setForm({...form, type: v})}>
-                          <SelectTrigger className="bg-background/50" data-testid="select-type"><SelectValue /></SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="TEAM_SITE">Team Site</SelectItem>
-                            <SelectItem value="COMMUNICATION_SITE">Communication Site</SelectItem>
-                            <SelectItem value="HUB_SITE">Hub Site</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      ) : (
-                        <div className="h-10 flex items-center gap-2 px-3 rounded-md bg-muted/50 text-sm">
-                          <Globe className={`w-4 h-4 ${getSiteTypeColor(workspace.type)}`} />
-                          {getSiteTypeLabel(workspace.type)}
-                        </div>
+                      {/*
+                        Site template is set when the SharePoint site is provisioned and
+                        cannot be changed afterwards via the Microsoft 365 APIs. We always
+                        render this as read-only so users don't believe a Zenith edit will
+                        reconfigure the site.
+                      */}
+                      <div className="h-10 flex items-center gap-2 px-3 rounded-md bg-muted/50 text-sm" data-testid="text-site-template">
+                        <Globe className={`w-4 h-4 ${getSiteTypeColor(workspace.type)}`} />
+                        {getResolvedTemplateLabel(workspace)}
+                        <Badge variant="outline" className="ml-auto text-[10px] font-medium text-muted-foreground border-border/50">Read-only</Badge>
+                      </div>
+                      {editMode && (
+                        <p className="text-[11px] text-muted-foreground">
+                          Set at site provisioning in Microsoft 365 and cannot be changed from Zenith.
+                        </p>
                       )}
                     </div>
                     <div className="space-y-2">
@@ -768,42 +928,320 @@ export default function WorkspaceDetailsPage() {
                   <Separator />
 
                   <div>
-                    <h3 className="text-sm font-semibold mb-4 flex items-center gap-2">
-                      <Users className="w-4 h-4 text-primary" />
-                      Ownership ({workspace.owners} {workspace.owners === 1 ? 'owner' : 'owners'})
-                    </h3>
-                    {(workspace as any).siteOwners && (workspace as any).siteOwners.length > 0 ? (
-                      <div className="space-y-2">
-                        {((workspace as any).siteOwners as Array<{ id?: string; displayName: string; mail?: string; userPrincipalName?: string }>).map((owner, idx) => {
-                          const initials = owner.displayName ? owner.displayName.split(" ").map((w: string) => w[0]).join("").toUpperCase().slice(0, 2) : "?";
-                          return (
-                            <div key={owner.id || idx} className="flex items-center gap-3 p-2 rounded-lg bg-muted/30" data-testid={`text-owner-${idx}`}>
-                              <div className="w-8 h-8 rounded-full bg-primary/20 flex items-center justify-center text-primary text-[10px] font-bold shrink-0">
-                                {initials}
-                              </div>
-                              <div className="min-w-0">
-                                <p className="text-sm font-medium truncate">{owner.displayName}</p>
-                                {owner.mail && <p className="text-[10px] text-muted-foreground truncate">{owner.mail}</p>}
+                    {(() => {
+                      const siteOwners = ((workspace as any).siteOwners || []) as Array<{ id?: string; displayName: string; mail?: string; userPrincipalName?: string }>;
+                      const isCommSite = workspace.type === "COMMUNICATION_SITE";
+                      const showAdminControls = canManageOwners && ownershipFeatureOn && !isCommSite;
+                      const onlyOneOwner = siteOwners.length <= 1;
+                      return (
+                        <>
+                          <div className="flex items-center justify-between mb-4 gap-2">
+                            <h3 className="text-sm font-semibold flex items-center gap-2">
+                              <Users className="w-4 h-4 text-primary" />
+                              Ownership ({workspace.owners} {workspace.owners === 1 ? 'owner' : 'owners'})
+                            </h3>
+                            {showAdminControls && (
+                              <Popover open={ownerSearchOpen} onOpenChange={(o) => { setOwnerSearchOpen(o); if (!o) setOwnerSearch(""); }}>
+                                <PopoverTrigger asChild>
+                                  <Button size="sm" variant="outline" className="h-7 gap-1.5 text-xs" data-testid="button-add-owner">
+                                    <UserPlus className="w-3.5 h-3.5" />
+                                    Add Owner
+                                  </Button>
+                                </PopoverTrigger>
+                                <PopoverContent className="w-80 p-0" align="end">
+                                  <div className="p-3 border-b border-border/50">
+                                    <div className="relative">
+                                      <SearchIcon className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
+                                      <Input
+                                        autoFocus
+                                        placeholder="Search by name or email..."
+                                        value={ownerSearch}
+                                        onChange={(e) => setOwnerSearch(e.target.value)}
+                                        className="h-8 pl-8 text-sm"
+                                        data-testid="input-owner-search"
+                                      />
+                                    </div>
+                                  </div>
+                                  <div className="max-h-64 overflow-y-auto">
+                                    {debouncedOwnerSearch.length < 2 ? (
+                                      <div className="p-4 text-xs text-muted-foreground text-center">Type at least 2 characters to search the directory.</div>
+                                    ) : ownerSearchLoading ? (
+                                      <div className="p-4 text-xs text-muted-foreground text-center flex items-center justify-center gap-2">
+                                        <Loader2 className="w-3.5 h-3.5 animate-spin" /> Searching…
+                                      </div>
+                                    ) : !ownerSearchResults?.users?.length ? (
+                                      <div className="p-4 text-xs text-muted-foreground text-center">No matching users found.</div>
+                                    ) : (
+                                      <div className="py-1">
+                                        {ownerSearchResults.users.map((u) => {
+                                          const alreadyOwner = siteOwners.some(o => o.id === u.id);
+                                          return (
+                                            <button
+                                              key={u.id}
+                                              type="button"
+                                              disabled={alreadyOwner || addOwnerMutation.isPending}
+                                              onClick={() => addOwnerMutation.mutate({ id: u.id, userPrincipalName: u.userPrincipalName, displayName: u.displayName })}
+                                              className="w-full flex items-center gap-3 px-3 py-2 hover:bg-muted/50 disabled:opacity-50 disabled:cursor-not-allowed text-left"
+                                              data-testid={`button-add-owner-result-${u.id}`}
+                                            >
+                                              <div className="min-w-0 flex-1">
+                                                <p className="text-sm font-medium truncate">{u.displayName}</p>
+                                                <p className="text-[10px] text-muted-foreground truncate">{u.mail || u.userPrincipalName}</p>
+                                              </div>
+                                              {alreadyOwner && <span className="text-[10px] text-muted-foreground shrink-0">Already owner</span>}
+                                            </button>
+                                          );
+                                        })}
+                                      </div>
+                                    )}
+                                  </div>
+                                </PopoverContent>
+                              </Popover>
+                            )}
+                          </div>
+
+                          {isCommSite && canManageOwners && (
+                            <div className="mb-3 p-3 rounded-lg bg-muted/30 border border-border/40 text-xs text-muted-foreground" data-testid="text-comm-site-owner-note">
+                              Communication Sites are not backed by a Microsoft 365 group, so their owners can't be edited from Zenith.
+                            </div>
+                          )}
+
+                          {siteOwners.length > 0 ? (
+                            <div className="space-y-2">
+                              <TooltipProvider>
+                                {siteOwners.map((owner, idx) => {
+                                  const initials = owner.displayName ? owner.displayName.split(" ").map((w: string) => w[0]).join("").toUpperCase().slice(0, 2) : "?";
+                                  const removeDisabled = onlyOneOwner || removeOwnerMutation.isPending || !owner.id;
+                                  return (
+                                    <div key={owner.id || idx} className="flex items-center gap-3 p-2 rounded-lg bg-muted/30" data-testid={`text-owner-${idx}`}>
+                                      <div className="w-8 h-8 rounded-full bg-primary/20 flex items-center justify-center text-primary text-[10px] font-bold shrink-0">
+                                        {initials}
+                                      </div>
+                                      <div className="min-w-0 flex-1">
+                                        <p className="text-sm font-medium truncate">{owner.displayName}</p>
+                                        {owner.mail && <p className="text-[10px] text-muted-foreground truncate">{owner.mail}</p>}
+                                      </div>
+                                      {showAdminControls && owner.id && (
+                                        <Tooltip>
+                                          <TooltipTrigger asChild>
+                                            <span>
+                                              <Button
+                                                variant="ghost"
+                                                size="sm"
+                                                className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive disabled:opacity-40"
+                                                disabled={removeDisabled}
+                                                onClick={() => setConfirmRemoveOwner({ id: owner.id!, displayName: owner.displayName })}
+                                                data-testid={`button-remove-owner-${owner.id}`}
+                                                aria-label={`Remove ${owner.displayName}`}
+                                              >
+                                                <XIcon className="w-3.5 h-3.5" />
+                                              </Button>
+                                            </span>
+                                          </TooltipTrigger>
+                                          {onlyOneOwner && (
+                                            <TooltipContent side="left">
+                                              <p className="text-xs max-w-[220px]">A site must always have at least one owner. Add another owner before removing this one.</p>
+                                            </TooltipContent>
+                                          )}
+                                        </Tooltip>
+                                      )}
+                                    </div>
+                                  );
+                                })}
+                              </TooltipProvider>
+                            </div>
+                          ) : (
+                            <div className="text-sm text-muted-foreground italic">
+                              {workspace.ownerDisplayName || "No owner data available. Run a sync to populate."}
+                            </div>
+                          )}
+                          {workspace.owners < 2 && (
+                            <div className="mt-3 p-3 rounded-lg bg-destructive/10 border border-destructive/20 flex items-start gap-3" data-testid="alert-policy-violation">
+                              <ShieldAlert className="w-4 h-4 text-destructive shrink-0 mt-0.5" />
+                              <div className="text-xs text-destructive">
+                                <span className="font-semibold block mb-0.5">Dual Ownership Policy Violation</span>
+                                This site has fewer than 2 owners. {showAdminControls ? "Use Add Owner above to add another owner and meet governance requirements." : "Add additional owners to meet governance requirements."}
                               </div>
                             </div>
-                          );
-                        })}
-                      </div>
-                    ) : (
-                      <div className="text-sm text-muted-foreground italic">
-                        {workspace.ownerDisplayName || "No owner data available. Run a sync to populate."}
-                      </div>
-                    )}
-                    {workspace.owners < 2 && (
-                      <div className="mt-3 p-3 rounded-lg bg-destructive/10 border border-destructive/20 flex items-start gap-3" data-testid="alert-policy-violation">
-                        <ShieldAlert className="w-4 h-4 text-destructive shrink-0 mt-0.5" />
-                        <div className="text-xs text-destructive">
-                          <span className="font-semibold block mb-0.5">Dual Ownership Policy Violation</span>
-                          This site has fewer than 2 owners. Add additional owners in SharePoint to meet governance requirements.
-                        </div>
-                      </div>
-                    )}
+                          )}
+                        </>
+                      );
+                    })()}
                   </div>
+
+                  <Separator />
+
+                  <div>
+                    {(() => {
+                      const siteMembers = ((workspace as any).siteMembers || []) as Array<{ id?: string; displayName: string; mail?: string; userPrincipalName?: string }>;
+                      const siteOwners = ((workspace as any).siteOwners || []) as Array<{ id?: string; displayName: string; mail?: string; userPrincipalName?: string }>;
+                      const isCommSite = workspace.type === "COMMUNICATION_SITE";
+                      const showAdminControls = canManageOwners && ownershipFeatureOn && !isCommSite;
+                      return (
+                        <>
+                          <div className="flex items-center justify-between mb-4 gap-2">
+                            <h3 className="text-sm font-semibold flex items-center gap-2">
+                              <Users className="w-4 h-4 text-primary" />
+                              Members ({siteMembers.length} {siteMembers.length === 1 ? 'member' : 'members'})
+                            </h3>
+                            {showAdminControls && (
+                              <Popover open={memberSearchOpen} onOpenChange={(o) => { setMemberSearchOpen(o); if (!o) setMemberSearch(""); }}>
+                                <PopoverTrigger asChild>
+                                  <Button size="sm" variant="outline" className="h-7 gap-1.5 text-xs" data-testid="button-add-member">
+                                    <UserPlus className="w-3.5 h-3.5" />
+                                    Add Member
+                                  </Button>
+                                </PopoverTrigger>
+                                <PopoverContent className="w-80 p-0" align="end">
+                                  <div className="p-3 border-b border-border/50">
+                                    <div className="relative">
+                                      <SearchIcon className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
+                                      <Input
+                                        autoFocus
+                                        placeholder="Search by name or email..."
+                                        value={memberSearch}
+                                        onChange={(e) => setMemberSearch(e.target.value)}
+                                        className="h-8 pl-8 text-sm"
+                                        data-testid="input-member-search"
+                                      />
+                                    </div>
+                                  </div>
+                                  <div className="max-h-64 overflow-y-auto">
+                                    {debouncedMemberSearch.length < 2 ? (
+                                      <div className="p-4 text-xs text-muted-foreground text-center">Type at least 2 characters to search the directory.</div>
+                                    ) : memberSearchLoading ? (
+                                      <div className="p-4 text-xs text-muted-foreground text-center flex items-center justify-center gap-2">
+                                        <Loader2 className="w-3.5 h-3.5 animate-spin" /> Searching…
+                                      </div>
+                                    ) : !memberSearchResults?.users?.length ? (
+                                      <div className="p-4 text-xs text-muted-foreground text-center">No matching users found.</div>
+                                    ) : (
+                                      <div className="py-1">
+                                        {memberSearchResults.users.map((u) => {
+                                          const alreadyMember = siteMembers.some(m => m.id === u.id);
+                                          const isOwner = siteOwners.some(o => o.id === u.id);
+                                          const disabled = alreadyMember || addMemberMutation.isPending;
+                                          return (
+                                            <button
+                                              key={u.id}
+                                              type="button"
+                                              disabled={disabled}
+                                              onClick={() => addMemberMutation.mutate({ id: u.id, userPrincipalName: u.userPrincipalName, displayName: u.displayName })}
+                                              className="w-full flex items-center gap-3 px-3 py-2 hover:bg-muted/50 disabled:opacity-50 disabled:cursor-not-allowed text-left"
+                                              data-testid={`button-add-member-result-${u.id}`}
+                                            >
+                                              <div className="min-w-0 flex-1">
+                                                <p className="text-sm font-medium truncate">{u.displayName}</p>
+                                                <p className="text-[10px] text-muted-foreground truncate">{u.mail || u.userPrincipalName}</p>
+                                              </div>
+                                              {alreadyMember && <span className="text-[10px] text-muted-foreground shrink-0">Already member</span>}
+                                              {!alreadyMember && isOwner && <span className="text-[10px] text-muted-foreground shrink-0">Owner</span>}
+                                            </button>
+                                          );
+                                        })}
+                                      </div>
+                                    )}
+                                  </div>
+                                </PopoverContent>
+                              </Popover>
+                            )}
+                          </div>
+
+                          {isCommSite && canManageOwners && (
+                            <div className="mb-3 p-3 rounded-lg bg-muted/30 border border-border/40 text-xs text-muted-foreground" data-testid="text-comm-site-member-note">
+                              Communication Sites are not backed by a Microsoft 365 group, so their members can't be edited from Zenith.
+                            </div>
+                          )}
+
+                          {siteMembers.length > 0 ? (
+                            <div className="space-y-2">
+                              {siteMembers.map((member, idx) => {
+                                const initials = member.displayName ? member.displayName.split(" ").map((w: string) => w[0]).join("").toUpperCase().slice(0, 2) : "?";
+                                return (
+                                  <div key={member.id || idx} className="flex items-center gap-3 p-2 rounded-lg bg-muted/30" data-testid={`text-member-${idx}`}>
+                                    <div className="w-8 h-8 rounded-full bg-primary/20 flex items-center justify-center text-primary text-[10px] font-bold shrink-0">
+                                      {initials}
+                                    </div>
+                                    <div className="min-w-0 flex-1">
+                                      <p className="text-sm font-medium truncate">{member.displayName}</p>
+                                      {member.mail && <p className="text-[10px] text-muted-foreground truncate">{member.mail}</p>}
+                                    </div>
+                                    {showAdminControls && member.id && (
+                                      <Button
+                                        variant="ghost"
+                                        size="sm"
+                                        className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive disabled:opacity-40"
+                                        disabled={removeMemberMutation.isPending}
+                                        onClick={() => setConfirmRemoveMember({ id: member.id!, displayName: member.displayName })}
+                                        data-testid={`button-remove-member-${member.id}`}
+                                        aria-label={`Remove ${member.displayName}`}
+                                      >
+                                        <XIcon className="w-3.5 h-3.5" />
+                                      </Button>
+                                    )}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          ) : (
+                            <div className="text-sm text-muted-foreground italic" data-testid="text-no-members">
+                              {isCommSite ? "Communication Sites do not have group members." : "No members yet. Use Add Member above to grant access."}
+                            </div>
+                          )}
+                        </>
+                      );
+                    })()}
+                  </div>
+
+                  <AlertDialog open={!!confirmRemoveMember} onOpenChange={(o) => { if (!o) setConfirmRemoveMember(null); }}>
+                    <AlertDialogContent data-testid="dialog-confirm-remove-member">
+                      <AlertDialogHeader>
+                        <AlertDialogTitle>Remove site member?</AlertDialogTitle>
+                        <AlertDialogDescription>
+                          {confirmRemoveMember ? (
+                            <>This will remove <strong>{confirmRemoveMember.displayName}</strong> as a member of this Microsoft 365 group and SharePoint site. They will lose member-level access immediately.</>
+                          ) : null}
+                        </AlertDialogDescription>
+                      </AlertDialogHeader>
+                      <AlertDialogFooter>
+                        <AlertDialogCancel data-testid="button-cancel-remove-member">Cancel</AlertDialogCancel>
+                        <AlertDialogAction
+                          className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                          disabled={removeMemberMutation.isPending}
+                          onClick={() => confirmRemoveMember && removeMemberMutation.mutate(confirmRemoveMember)}
+                          data-testid="button-confirm-remove-member"
+                        >
+                          {removeMemberMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1.5" /> : null}
+                          Remove member
+                        </AlertDialogAction>
+                      </AlertDialogFooter>
+                    </AlertDialogContent>
+                  </AlertDialog>
+
+                  <AlertDialog open={!!confirmRemoveOwner} onOpenChange={(o) => { if (!o) setConfirmRemoveOwner(null); }}>
+                    <AlertDialogContent data-testid="dialog-confirm-remove-owner">
+                      <AlertDialogHeader>
+                        <AlertDialogTitle>Remove site owner?</AlertDialogTitle>
+                        <AlertDialogDescription>
+                          {confirmRemoveOwner ? (
+                            <>This will remove <strong>{confirmRemoveOwner.displayName}</strong> as an owner of this Microsoft 365 group and SharePoint site. They will lose owner-level access immediately.</>
+                          ) : null}
+                        </AlertDialogDescription>
+                      </AlertDialogHeader>
+                      <AlertDialogFooter>
+                        <AlertDialogCancel data-testid="button-cancel-remove-owner">Cancel</AlertDialogCancel>
+                        <AlertDialogAction
+                          className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                          disabled={removeOwnerMutation.isPending}
+                          onClick={() => confirmRemoveOwner && removeOwnerMutation.mutate(confirmRemoveOwner)}
+                          data-testid="button-confirm-remove-owner"
+                        >
+                          {removeOwnerMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1.5" /> : null}
+                          Remove owner
+                        </AlertDialogAction>
+                      </AlertDialogFooter>
+                    </AlertDialogContent>
+                  </AlertDialog>
                 </CardContent>
               </Card>
             </TabsContent>
@@ -1394,7 +1832,7 @@ export default function WorkspaceDetailsPage() {
             <CardContent className="space-y-3 text-sm">
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Template</span>
-                <span className="font-medium">{getSiteTypeLabel(workspace.type)}</span>
+                <span className="font-medium">{getResolvedTemplateLabel(workspace)}</span>
               </div>
               <Separator />
               <div className="flex justify-between">
@@ -1419,7 +1857,7 @@ export default function WorkspaceDetailsPage() {
               <Separator />
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Created</span>
-                <span className="font-medium">{workspace.createdAt ? new Date(workspace.createdAt).toLocaleDateString() : "—"}</span>
+                <span className="font-medium">{workspace.siteCreatedDate ? new Date(workspace.siteCreatedDate).toLocaleDateString() : "—"}</span>
               </div>
             </CardContent>
           </Card>

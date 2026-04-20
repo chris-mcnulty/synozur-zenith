@@ -32,6 +32,7 @@ export async function runTeamsInventoryDiscovery(
   let teamsDiscovered = 0;
   let channelsDiscovered = 0;
   const errors: Array<{ context: string; message: string }> = [];
+  const runStartedAt = new Date();
 
   // Phase 1: Discover all teams with rich properties
   let teams: Awaited<ReturnType<typeof fetchAllTeamsInventory>> = [];
@@ -106,6 +107,17 @@ export async function runTeamsInventoryDiscovery(
     } catch (err: any) {
       errors.push({ context: `team-channels:${team.id}`, message: err.message });
     }
+  }
+
+  // Phase 3: Mark teams & channels not seen in this run as DELETED
+  try {
+    const staleTeams = await storage.markMissingTeamsInventoryAsDeleted(tenantConnectionId, runStartedAt);
+    const staleChannels = await storage.markMissingChannelsInventoryAsDeleted(tenantConnectionId, runStartedAt);
+    if (staleTeams > 0 || staleChannels > 0) {
+      console.log(`[teams-inventory] Marked ${staleTeams} stale teams and ${staleChannels} stale channels as DELETED`);
+    }
+  } catch (err: any) {
+    errors.push({ context: "markStaleAsDeleted", message: err.message });
   }
 
   console.log(`[teams-inventory] Discovered ${teamsDiscovered} teams, ${channelsDiscovered} channels, ${errors.length} errors`);

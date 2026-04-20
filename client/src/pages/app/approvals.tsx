@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Link } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import { useTenant } from "@/lib/tenant-context";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -66,8 +67,19 @@ export default function ApprovalsQueue() {
   const [actionNotes, setActionNotes] = useState("");
   const { toast } = useToast();
 
+  const { selectedTenant } = useTenant();
+  const tenantConnectionId = selectedTenant?.id ?? "";
+
   const { data: requests = [], isLoading } = useQuery<ProvisioningRequest[]>({
-    queryKey: ["/api/provisioning-requests"],
+    queryKey: ["/api/provisioning-requests", tenantConnectionId],
+    queryFn: async () => {
+      const url = tenantConnectionId
+        ? `/api/provisioning-requests?tenantConnectionId=${encodeURIComponent(tenantConnectionId)}`
+        : "/api/provisioning-requests";
+      const res = await fetch(url, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to load provisioning requests");
+      return res.json();
+    },
   });
 
   const pendingRequests = requests.filter(r => r.status === "PENDING");

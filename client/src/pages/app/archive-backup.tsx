@@ -251,7 +251,7 @@ export default function ArchiveBackupPage() {
                 {isLoading ? (
                   <div className="flex items-center justify-center py-16 gap-3 text-muted-foreground">
                     <Loader2 className="w-5 h-5 animate-spin" />
-                    Analysing workspace activity...
+                    Analyzing workspace activity...
                   </div>
                 ) : filtered.length === 0 ? (
                   <div className="flex flex-col items-center justify-center py-16 gap-3 text-center">

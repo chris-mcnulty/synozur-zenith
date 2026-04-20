@@ -243,6 +243,9 @@ async function ensureTenantConnectionsSchema() {
         resource_type text NOT NULL,
         resource_id text NOT NULL,
         resource_name text,
+        item_id text,
+        item_name text,
+        item_path text,
         link_id text NOT NULL,
         link_type text NOT NULL,
         link_scope text,
@@ -253,7 +256,24 @@ async function ensureTenantConnectionsSchema() {
         last_accessed_at timestamp,
         last_discovered_at timestamp DEFAULT now(),
         created_at timestamp DEFAULT now(),
-        CONSTRAINT uq_tenant_link UNIQUE (tenant_connection_id, link_id)
+        CONSTRAINT uq_tenant_item_link UNIQUE (tenant_connection_id, resource_id, item_id, link_id)
+      )
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS sharing_link_discovery_runs (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        tenant_connection_id varchar NOT NULL,
+        started_at timestamp NOT NULL DEFAULT now(),
+        completed_at timestamp,
+        status text NOT NULL DEFAULT 'RUNNING',
+        share_point_links_found integer DEFAULT 0,
+        one_drive_links_found integer DEFAULT 0,
+        sites_scanned integer DEFAULT 0,
+        users_scanned integer DEFAULT 0,
+        items_scanned integer DEFAULT 0,
+        errors jsonb,
+        created_at timestamp DEFAULT now()
       )
     `);
 
@@ -534,11 +554,32 @@ async function ensureTenantConnectionsSchema() {
       ALTER TABLE library_columns ADD COLUMN IF NOT EXISTS last_sync_at timestamp DEFAULT now();
     `);
 
+    // Backfill sharing_links_inventory columns added for per-item link tracking
+    await client.query(`
+      ALTER TABLE sharing_links_inventory ADD COLUMN IF NOT EXISTS item_id text;
+      ALTER TABLE sharing_links_inventory ADD COLUMN IF NOT EXISTS item_name text;
+      ALTER TABLE sharing_links_inventory ADD COLUMN IF NOT EXISTS item_path text;
+    `);
+    // Migrate unique constraint from old site-level to new item-level granularity
+    await client.query(`
+      DO $$
+      BEGIN
+        IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'uq_tenant_link') THEN
+          ALTER TABLE sharing_links_inventory DROP CONSTRAINT uq_tenant_link;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'uq_tenant_item_link') THEN
+          ALTER TABLE sharing_links_inventory
+            ADD CONSTRAINT uq_tenant_item_link UNIQUE (tenant_connection_id, resource_id, item_id, link_id);
+        END IF;
+      END $$;
+    `);
+
     await client.query(`
       CREATE INDEX IF NOT EXISTS idx_license_subs_tenant ON license_subscriptions(tenant_connection_id);
       CREATE INDEX IF NOT EXISTS idx_license_asgn_tenant ON license_assignments(tenant_connection_id);
       CREATE INDEX IF NOT EXISTS idx_cg_snapshots_tenant ON content_governance_snapshots(tenant_connection_id);
       CREATE INDEX IF NOT EXISTS idx_sharing_links_tenant ON sharing_links_inventory(tenant_connection_id);
+      CREATE INDEX IF NOT EXISTS idx_sharing_link_runs_tenant ON sharing_link_discovery_runs(tenant_connection_id, started_at DESC);
       CREATE INDEX IF NOT EXISTS idx_user_inventory_tenant ON user_inventory(tenant_connection_id);
       CREATE INDEX IF NOT EXISTS idx_user_inventory_tenant_status ON user_inventory(tenant_connection_id, discovery_status);
       CREATE INDEX IF NOT EXISTS idx_user_inventory_runs_tenant ON user_inventory_runs(tenant_connection_id, started_at DESC);
@@ -548,6 +589,308 @@ async function ensureTenantConnectionsSchema() {
       CREATE INDEX IF NOT EXISTS idx_lib_ct_tenant ON library_content_types(tenant_connection_id);
       CREATE INDEX IF NOT EXISTS idx_lib_col_doclib ON library_columns(document_library_id);
       CREATE INDEX IF NOT EXISTS idx_lib_col_tenant ON library_columns(tenant_connection_id);
+    `);
+
+    // ── AI Provider Foundation tables ─────────────────────────────────────────
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS ai_configuration (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        singleton_key text NOT NULL DEFAULT 'default',
+        default_provider text NOT NULL DEFAULT 'azure_foundry',
+        monthly_token_budget bigint,
+        alert_threshold_percent integer NOT NULL DEFAULT 80,
+        alert_email text,
+        updated_at timestamp DEFAULT now(),
+        CONSTRAINT uq_ai_configuration_singleton UNIQUE (singleton_key)
+      )
+    `);
+
+    await client.query(`
+      ALTER TABLE ai_configuration ADD COLUMN IF NOT EXISTS singleton_key text NOT NULL DEFAULT 'default';
+      DO $$ BEGIN
+        IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'uq_ai_configuration_singleton') THEN
+          ALTER TABLE ai_configuration ADD CONSTRAINT uq_ai_configuration_singleton UNIQUE (singleton_key);
+        END IF;
+      END $$;
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS ai_feature_model_assignments (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        feature text NOT NULL,
+        provider text NOT NULL,
+        model text NOT NULL,
+        is_active boolean NOT NULL DEFAULT true,
+        updated_at timestamp DEFAULT now(),
+        CONSTRAINT uq_ai_feature UNIQUE (feature)
+      )
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS ai_usage (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        org_id text,
+        feature text NOT NULL,
+        provider text NOT NULL,
+        model text NOT NULL,
+        input_tokens integer NOT NULL DEFAULT 0,
+        output_tokens integer NOT NULL DEFAULT 0,
+        estimated_cost_usd numeric(12,6) NOT NULL DEFAULT 0,
+        duration_ms integer NOT NULL DEFAULT 0,
+        success boolean NOT NULL DEFAULT true,
+        error_message text,
+        created_at timestamp NOT NULL DEFAULT now()
+      )
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS ai_usage_alerts (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        org_id text,
+        alert_type text NOT NULL,
+        threshold_percent integer,
+        tokens_at_alert bigint,
+        budget_tokens bigint,
+        notified_at timestamp NOT NULL DEFAULT now(),
+        acknowledged_at timestamp
+      )
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_ai_usage_created_at ON ai_usage(created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_ai_usage_org ON ai_usage(org_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_ai_usage_feature ON ai_usage(feature, created_at DESC);
+    `);
+
+    // ── AI Agent Skills table (Task #54) ──────────────────────────────────────
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS ai_agent_skills (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        organization_id varchar NOT NULL,
+        skill_key text NOT NULL,
+        is_enabled boolean NOT NULL DEFAULT true,
+        updated_by varchar,
+        updated_at timestamp DEFAULT now(),
+        CONSTRAINT uq_org_skill UNIQUE (organization_id, skill_key)
+      )
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_ai_agent_skills_org ON ai_agent_skills(organization_id);
+    `);
+
+    // ── AI Grounding Documents ──────────────────────────────────────────────
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS ai_grounding_documents (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        scope text NOT NULL,
+        org_id varchar,
+        name text NOT NULL,
+        description text,
+        content_text text NOT NULL,
+        file_type text NOT NULL,
+        file_size_bytes integer NOT NULL DEFAULT 0,
+        is_active boolean NOT NULL DEFAULT true,
+        uploaded_by varchar,
+        created_at timestamp DEFAULT now()
+      )
+    `);
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_ai_grounding_scope ON ai_grounding_documents(scope, org_id);
+    `);
+
+    // ── AI Assessment Runs table (Tasks #52 + #53 — unified superset) ───────
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS ai_assessment_runs (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        org_id varchar NOT NULL,
+        feature text NOT NULL DEFAULT 'copilot_readiness',
+        status text NOT NULL DEFAULT 'PENDING',
+        triggered_by varchar,
+        result_markdown text,
+        result_structured jsonb,
+        model_used text,
+        provider_used text,
+        tokens_used integer,
+        tenant_connection_id varchar,
+        overall_score integer,
+        executive_summary text,
+        dimensions jsonb,
+        roadmap jsonb,
+        raw_ai_response text,
+        total_sites integer,
+        evaluated_sites integer,
+        input_tokens integer NOT NULL DEFAULT 0,
+        output_tokens integer NOT NULL DEFAULT 0,
+        duration_ms integer NOT NULL DEFAULT 0,
+        error_message text,
+        completed_at timestamp,
+        created_at timestamp NOT NULL DEFAULT now()
+      )
+    `);
+    const iaAssessmentAlterStatements = [
+      "ALTER TABLE ai_assessment_runs ADD COLUMN IF NOT EXISTS tenant_connection_id varchar",
+      "ALTER TABLE ai_assessment_runs ADD COLUMN IF NOT EXISTS overall_score integer",
+      "ALTER TABLE ai_assessment_runs ADD COLUMN IF NOT EXISTS executive_summary text",
+      "ALTER TABLE ai_assessment_runs ADD COLUMN IF NOT EXISTS dimensions jsonb",
+      "ALTER TABLE ai_assessment_runs ADD COLUMN IF NOT EXISTS roadmap jsonb",
+      "ALTER TABLE ai_assessment_runs ADD COLUMN IF NOT EXISTS raw_ai_response text",
+      "ALTER TABLE ai_assessment_runs ADD COLUMN IF NOT EXISTS total_sites integer",
+      "ALTER TABLE ai_assessment_runs ADD COLUMN IF NOT EXISTS evaluated_sites integer",
+      "ALTER TABLE ai_assessment_runs ADD COLUMN IF NOT EXISTS input_tokens integer NOT NULL DEFAULT 0",
+      "ALTER TABLE ai_assessment_runs ADD COLUMN IF NOT EXISTS output_tokens integer NOT NULL DEFAULT 0",
+      "ALTER TABLE ai_assessment_runs ADD COLUMN IF NOT EXISTS duration_ms integer NOT NULL DEFAULT 0",
+      "ALTER TABLE ai_assessment_runs ADD COLUMN IF NOT EXISTS error_message text",
+    ];
+    for (const stmt of iaAssessmentAlterStatements) {
+      await client.query(stmt);
+    }
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_ai_assessment_runs_org ON ai_assessment_runs(org_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_ai_assessment_runs_feature ON ai_assessment_runs(org_id, feature, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_ia_assessment_runs_tenant ON ai_assessment_runs(tenant_connection_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_ia_assessment_runs_org ON ai_assessment_runs(org_id, created_at DESC);
+    `);
+
+    // ── BL-037: Microsoft Planner integration columns (migration 0011) ────────
+    await client.query(`
+      ALTER TABLE platform_settings ADD COLUMN IF NOT EXISTS planner_plan_id   text;
+      ALTER TABLE platform_settings ADD COLUMN IF NOT EXISTS planner_bucket_id text;
+      ALTER TABLE support_tickets   ADD COLUMN IF NOT EXISTS planner_task_id   text;
+    `);
+
+    // ── BL-038: Copilot Prompt Intelligence tables (migration 0012) ───────────
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS copilot_interactions (
+        id                    VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+        tenant_connection_id  VARCHAR NOT NULL,
+        organization_id       VARCHAR NOT NULL,
+        graph_interaction_id  TEXT NOT NULL,
+        user_id               TEXT NOT NULL,
+        user_principal_name   TEXT NOT NULL,
+        user_display_name     TEXT,
+        user_department       TEXT,
+        app_class             TEXT NOT NULL,
+        prompt_text           TEXT NOT NULL,
+        interaction_at        TIMESTAMP NOT NULL,
+        quality_tier          TEXT,
+        quality_score         INTEGER,
+        risk_level            TEXT,
+        flags                 JSONB NOT NULL DEFAULT '[]'::jsonb,
+        recommendation        TEXT,
+        analyzed_at           TIMESTAMP,
+        captured_at           TIMESTAMP DEFAULT now(),
+        UNIQUE (tenant_connection_id, graph_interaction_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_ci_tenant     ON copilot_interactions (tenant_connection_id);
+      CREATE INDEX IF NOT EXISTS idx_ci_org        ON copilot_interactions (organization_id);
+      CREATE INDEX IF NOT EXISTS idx_ci_user       ON copilot_interactions (tenant_connection_id, user_id);
+      CREATE INDEX IF NOT EXISTS idx_ci_date       ON copilot_interactions (tenant_connection_id, interaction_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_ci_quality    ON copilot_interactions (tenant_connection_id, quality_tier);
+      CREATE INDEX IF NOT EXISTS idx_ci_risk       ON copilot_interactions (tenant_connection_id, risk_level);
+    `);
+
+    await client.query(`
+      ALTER TABLE copilot_interactions ALTER COLUMN app_class DROP NOT NULL;
+      ALTER TABLE copilot_interactions ALTER COLUMN prompt_text DROP NOT NULL;
+      ALTER TABLE copilot_interactions ADD COLUMN IF NOT EXISTS request_id TEXT;
+      ALTER TABLE copilot_interactions ADD COLUMN IF NOT EXISTS session_id TEXT;
+      ALTER TABLE copilot_interactions ADD COLUMN IF NOT EXISTS interaction_type TEXT NOT NULL DEFAULT 'userPrompt';
+      ALTER TABLE copilot_interactions ADD COLUMN IF NOT EXISTS body_content TEXT;
+      ALTER TABLE copilot_interactions ADD COLUMN IF NOT EXISTS body_content_type TEXT;
+      ALTER TABLE copilot_interactions ADD COLUMN IF NOT EXISTS contexts JSONB;
+      ALTER TABLE copilot_interactions ADD COLUMN IF NOT EXISTS attachments JSONB;
+      ALTER TABLE copilot_interactions ADD COLUMN IF NOT EXISTS links JSONB;
+      ALTER TABLE copilot_interactions ADD COLUMN IF NOT EXISTS mentions JSONB;
+      ALTER TABLE copilot_interactions ADD COLUMN IF NOT EXISTS raw_data JSONB;
+      CREATE INDEX IF NOT EXISTS idx_ci_interaction_type ON copilot_interactions (tenant_connection_id, interaction_type);
+      CREATE INDEX IF NOT EXISTS idx_ci_session ON copilot_interactions (tenant_connection_id, session_id);
+      CREATE INDEX IF NOT EXISTS idx_ci_request ON copilot_interactions (tenant_connection_id, request_id);
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS copilot_prompt_assessments (
+        id                    VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+        organization_id       VARCHAR NOT NULL,
+        tenant_connection_id  VARCHAR NOT NULL,
+        status                TEXT NOT NULL DEFAULT 'PENDING',
+        triggered_by          VARCHAR,
+        interaction_count     INTEGER,
+        user_count            INTEGER,
+        date_range_start      TIMESTAMP,
+        date_range_end        TIMESTAMP,
+        org_summary           JSONB,
+        department_breakdown  JSONB,
+        user_breakdown        JSONB,
+        executive_summary     TEXT,
+        recommendations       JSONB,
+        model_used            TEXT,
+        tokens_used           INTEGER,
+        started_at            TIMESTAMP,
+        completed_at          TIMESTAMP,
+        error                 TEXT,
+        created_at            TIMESTAMP DEFAULT now()
+      );
+      CREATE INDEX IF NOT EXISTS idx_cpa_org        ON copilot_prompt_assessments (organization_id);
+      CREATE INDEX IF NOT EXISTS idx_cpa_tenant     ON copilot_prompt_assessments (tenant_connection_id);
+      CREATE INDEX IF NOT EXISTS idx_cpa_status     ON copilot_prompt_assessments (tenant_connection_id, status);
+      CREATE INDEX IF NOT EXISTS idx_cpa_created    ON copilot_prompt_assessments (created_at DESC);
+    `);
+
+    // ── BL-038 addendum: Copilot Sync Runs (migration 0013) ──────────────────
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS copilot_sync_runs (
+        id                    VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+        tenant_connection_id  VARCHAR NOT NULL,
+        organization_id       VARCHAR NOT NULL,
+        status                TEXT NOT NULL DEFAULT 'RUNNING',
+        triggered_by          VARCHAR,
+        users_scanned         INTEGER,
+        interactions_captured INTEGER,
+        interactions_skipped  INTEGER,
+        interactions_purged   INTEGER,
+        error_count           INTEGER,
+        errors                JSONB,
+        started_at            TIMESTAMP,
+        completed_at          TIMESTAMP,
+        error                 TEXT,
+        created_at            TIMESTAMP DEFAULT now()
+      );
+      CREATE INDEX IF NOT EXISTS idx_copilot_sync_runs_tenant  ON copilot_sync_runs (tenant_connection_id);
+      CREATE INDEX IF NOT EXISTS idx_copilot_sync_runs_org     ON copilot_sync_runs (organization_id);
+      CREATE INDEX IF NOT EXISTS idx_copilot_sync_runs_status  ON copilot_sync_runs (tenant_connection_id, status);
+      CREATE INDEX IF NOT EXISTS idx_copilot_sync_runs_created ON copilot_sync_runs (created_at DESC);
+    `);
+
+    // ── BL-039: Scheduled Job Runs (migration 0014) ──────────────────────────
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS scheduled_job_runs (
+        id                    VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+        organization_id       VARCHAR,
+        tenant_connection_id  VARCHAR,
+        job_type              TEXT NOT NULL,
+        status                TEXT NOT NULL DEFAULT 'running',
+        started_at            TIMESTAMP NOT NULL DEFAULT now(),
+        completed_at          TIMESTAMP,
+        duration_ms           INTEGER,
+        result                JSONB,
+        error_message         TEXT,
+        triggered_by          TEXT NOT NULL DEFAULT 'manual',
+        triggered_by_user_id  VARCHAR,
+        target_id             TEXT,
+        target_name           TEXT,
+        items_total           INTEGER,
+        items_processed       INTEGER,
+        progress_label        TEXT,
+        created_at            TIMESTAMP NOT NULL DEFAULT now()
+      );
+      CREATE INDEX IF NOT EXISTS idx_scheduled_job_runs_org                    ON scheduled_job_runs (organization_id);
+      CREATE INDEX IF NOT EXISTS idx_scheduled_job_runs_tenant                 ON scheduled_job_runs (tenant_connection_id);
+      CREATE INDEX IF NOT EXISTS idx_scheduled_job_runs_tenant_type            ON scheduled_job_runs (tenant_connection_id, job_type);
+      CREATE INDEX IF NOT EXISTS idx_scheduled_job_runs_tenant_type_status     ON scheduled_job_runs (tenant_connection_id, job_type, status);
+      CREATE INDEX IF NOT EXISTS idx_scheduled_job_runs_status                 ON scheduled_job_runs (status);
+      CREATE INDEX IF NOT EXISTS idx_scheduled_job_runs_started_desc           ON scheduled_job_runs (started_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_scheduled_job_runs_job_type_started_desc  ON scheduled_job_runs (job_type, started_at DESC);
     `);
 
     log('Schema migration ensureTenantConnectionsSchema completed');
@@ -683,6 +1026,17 @@ async function backfillOrgMemberships() {
   await backfillOrgMemberships();
   await seedBuiltInOutcomes();
   await migrateClientSecretsToEncrypted();
+
+  // BL-039: reconcile any scheduled_job_runs rows left in "running" by a
+  // previous process that crashed or was restarted mid-job. Marks anything
+  // older than 1 hour as failed so the concurrency guard doesn't block new
+  // runs forever.
+  try {
+    const orphaned = await storage.reconcileOrphanedJobRuns();
+    if (orphaned > 0) log(`Reconciled ${orphaned} orphaned scheduled_job_runs rows`);
+  } catch (err) {
+    console.error('[Startup] Failed to reconcile orphaned job runs:', err);
+  }
   try {
     await storage.getPlatformSettings();
     log('Platform settings initialized');
