@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -104,6 +104,11 @@ export default function PurviewConfigPage() {
   const [retentionSyncError, setRetentionSyncError] = useState<string | null>(null);
   const [coverageSearch, setCoverageSearch] = useState("");
   const [coverageFilter, setCoverageFilter] = useState<"all" | "labeled" | "unlabeled">("all");
+  const [resyncBannerDismissed, setResyncBannerDismissed] = useState(false);
+
+  useEffect(() => {
+    setResyncBannerDismissed(false);
+  }, [tenantConnectionId]);
 
   const { data: labels = [], isLoading, refetch, isRefetching } = useQuery<SensitivityLabel[]>({
     queryKey: ["/api/admin/tenants", tenantConnectionId, "sensitivity-labels"],
@@ -143,6 +148,7 @@ export default function PurviewConfigPage() {
   const handleSyncSensitivityLabels = async () => {
     if (!tenantConnectionId) return;
     setIsSyncingSensitivity(true);
+    setResyncBannerDismissed(true);
     setSyncError(null);
     try {
       const res = await fetch(`/api/admin/tenants/${tenantConnectionId}/sensitivity-labels/sync`, { method: "POST" });
@@ -494,7 +500,7 @@ export default function PurviewConfigPage() {
 
           {/* ── Site Sensitivity Labels Tab ── */}
           <TabsContent value="siteLabels" className="space-y-6 m-0 animate-in fade-in slide-in-from-bottom-4">
-            {needsSensitivityResync && (
+            {needsSensitivityResync && !resyncBannerDismissed && (
               <Card className="border-amber-500/30 bg-amber-500/5" data-testid="card-resync-banner">
                 <CardContent className="p-4 flex items-start gap-3">
                   <AlertCircle className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
@@ -687,7 +693,7 @@ export default function PurviewConfigPage() {
 
           {/* ── All Labels Tab ── */}
           <TabsContent value="allLabels" className="space-y-6 m-0 animate-in fade-in slide-in-from-bottom-4">
-            {needsSensitivityResync && (
+            {needsSensitivityResync && !resyncBannerDismissed && (
               <Card className="border-amber-500/30 bg-amber-500/5" data-testid="card-resync-banner-all">
                 <CardContent className="p-4 flex items-start gap-3">
                   <AlertCircle className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
