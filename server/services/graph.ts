@@ -2217,12 +2217,17 @@ export async function fetchSensitivityLabels(token: string): Promise<{
       // remains usable. Only mark false when contentFormats is explicitly
       // populated AND contains no site/group scope values.
       const hasScopeData = contentFormats.length > 0;
-      const appliesToGroupsSites =
+      // Use !! to guarantee a boolean. Without it, the last term
+      // `l.parent && ...` returns undefined (not false) when l.parent is
+      // absent, and false || undefined evaluates to undefined — which
+      // violates the NOT NULL constraint on the DB column.
+      const appliesToGroupsSites = !!(
         !hasScopeData || // no scope data → assume applicable
         contentFormats.includes("site") ||
         contentFormats.includes("unifiedgroup") ||
         contentFormats.includes("schematizeddata") ||
-        (l.parent && l.parent["@odata.type"]?.includes("group"));
+        (l.parent && l.parent["@odata.type"]?.includes("group"))
+      );
 
       return {
         id: l.id,
