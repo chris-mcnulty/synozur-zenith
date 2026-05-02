@@ -3,20 +3,59 @@ interface TokenCache {
   expiresAt: number;
 }
 
+// In-memory hot cache; graph_app_token_cache is the persistent source of
+// truth on cold start.
 const tokenCache = new Map<string, TokenCache>();
+const spoTokenCache = new Map<string, TokenCache>();
 
-export async function getAppToken(tenantId: string, clientId: string, clientSecret: string): Promise<string> {
-  const cacheKey = `${tenantId}:${clientId}`;
-  const cached = tokenCache.get(cacheKey);
-  if (cached && cached.expiresAt > Date.now() + 60000) {
-    return cached.accessToken;
+// Per-key promise locks coalesce concurrent acquisitions so only one Entra
+// round-trip happens per key at a time.
+const inflight = new Map<string, Promise<string>>();
+
+const GRAPH_SCOPE = "https://graph.microsoft.com/.default";
+const TOKEN_EXPIRY_SAFETY_MS = 60_000;
+
+function buildAppCacheKey(tenantId: string, clientId: string): string {
+  return `${tenantId}:${clientId}`;
+}
+
+function buildSpoCacheKey(tenantId: string, clientId: string, spoHost: string): string {
+  return `spo:${tenantId}:${clientId}:${spoHost}`;
+}
+
+async function loadFromPersistentCache(tenantId: string, clientId: string, scope: string): Promise<TokenCache | undefined> {
+  try {
+    const { storage } = await import("../storage");
+    const row = await storage.getAppTokenCacheEntry(tenantId, clientId, scope);
+    if (!row) return undefined;
+    return { accessToken: row.accessToken, expiresAt: row.expiresAt.getTime() };
+  } catch (err) {
+    console.warn("[graph-cache] Persistent cache read failed:", (err as any)?.message);
+    return undefined;
   }
+}
 
+async function writeToPersistentCache(tenantId: string, clientId: string, scope: string, accessToken: string, expiresAtMs: number): Promise<void> {
+  try {
+    const { storage } = await import("../storage");
+    await storage.upsertAppTokenCacheEntry({
+      tenantId,
+      clientId,
+      scope,
+      accessToken,
+      expiresAt: new Date(expiresAtMs),
+    });
+  } catch (err) {
+    console.warn("[graph-cache] Persistent cache write failed:", (err as any)?.message);
+  }
+}
+
+async function acquireClientCredentialToken(tenantId: string, clientId: string, clientSecret: string, scope: string, label: string): Promise<{ accessToken: string; expiresAtMs: number }> {
   const url = `https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/token`;
   const body = new URLSearchParams({
     client_id: clientId,
     client_secret: clientSecret,
-    scope: "https://graph.microsoft.com/.default",
+    scope,
     grant_type: "client_credentials",
   });
 
@@ -33,59 +72,87 @@ export async function getAppToken(tenantId: string, clientId: string, clientSecr
       const parsed = JSON.parse(errorText);
       errorDetail = parsed.error_description || parsed.error || errorText;
     } catch {}
-    throw new Error(`Token acquisition failed: ${errorDetail}`);
+    throw new Error(`${label} token acquisition failed: ${errorDetail}`);
   }
 
   const data = await res.json();
-  tokenCache.set(cacheKey, {
+  return {
     accessToken: data.access_token,
-    expiresAt: Date.now() + data.expires_in * 1000,
-  });
-
-  return data.access_token;
+    expiresAtMs: Date.now() + data.expires_in * 1000,
+  };
 }
 
-const spoTokenCache = new Map<string, TokenCache>();
+export async function getAppToken(tenantId: string, clientId: string, clientSecret: string): Promise<string> {
+  const cacheKey = buildAppCacheKey(tenantId, clientId);
+  const memCached = tokenCache.get(cacheKey);
+  if (memCached && memCached.expiresAt > Date.now() + TOKEN_EXPIRY_SAFETY_MS) {
+    return memCached.accessToken;
+  }
+
+  const inflightKey = `app:${cacheKey}`;
+  const existing = inflight.get(inflightKey);
+  if (existing) return existing;
+
+  const work = (async () => {
+    // Re-check in-memory in case another caller filled it while we were
+    // resolving the promise lock.
+    const fresh = tokenCache.get(cacheKey);
+    if (fresh && fresh.expiresAt > Date.now() + TOKEN_EXPIRY_SAFETY_MS) {
+      return fresh.accessToken;
+    }
+    const persistent = await loadFromPersistentCache(tenantId, clientId, GRAPH_SCOPE);
+    if (persistent && persistent.expiresAt > Date.now() + TOKEN_EXPIRY_SAFETY_MS) {
+      tokenCache.set(cacheKey, persistent);
+      return persistent.accessToken;
+    }
+
+    const acquired = await acquireClientCredentialToken(tenantId, clientId, clientSecret, GRAPH_SCOPE, "Graph");
+    tokenCache.set(cacheKey, { accessToken: acquired.accessToken, expiresAt: acquired.expiresAtMs });
+    await writeToPersistentCache(tenantId, clientId, GRAPH_SCOPE, acquired.accessToken, acquired.expiresAtMs);
+    return acquired.accessToken;
+  })().finally(() => {
+    inflight.delete(inflightKey);
+  });
+
+  inflight.set(inflightKey, work);
+  return work;
+}
 
 export async function getSpoToken(tenantId: string, clientId: string, clientSecret: string, domain: string): Promise<string> {
   const spoHost = domain.includes(".sharepoint.com") ? domain : `${domain.replace(/\..*$/, '')}.sharepoint.com`;
-  const cacheKey = `spo:${tenantId}:${clientId}:${spoHost}`;
-  const cached = spoTokenCache.get(cacheKey);
-  if (cached && cached.expiresAt > Date.now() + 60000) {
-    return cached.accessToken;
+  const cacheKey = buildSpoCacheKey(tenantId, clientId, spoHost);
+  const scope = `https://${spoHost}/.default`;
+
+  const memCached = spoTokenCache.get(cacheKey);
+  if (memCached && memCached.expiresAt > Date.now() + TOKEN_EXPIRY_SAFETY_MS) {
+    return memCached.accessToken;
   }
 
-  const url = `https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/token`;
-  const body = new URLSearchParams({
-    client_id: clientId,
-    client_secret: clientSecret,
-    scope: `https://${spoHost}/.default`,
-    grant_type: "client_credentials",
+  const inflightKey = `spo:${cacheKey}`;
+  const existing = inflight.get(inflightKey);
+  if (existing) return existing;
+
+  const work = (async () => {
+    const fresh = spoTokenCache.get(cacheKey);
+    if (fresh && fresh.expiresAt > Date.now() + TOKEN_EXPIRY_SAFETY_MS) {
+      return fresh.accessToken;
+    }
+    const persistent = await loadFromPersistentCache(tenantId, clientId, scope);
+    if (persistent && persistent.expiresAt > Date.now() + TOKEN_EXPIRY_SAFETY_MS) {
+      spoTokenCache.set(cacheKey, persistent);
+      return persistent.accessToken;
+    }
+
+    const acquired = await acquireClientCredentialToken(tenantId, clientId, clientSecret, scope, "SPO");
+    spoTokenCache.set(cacheKey, { accessToken: acquired.accessToken, expiresAt: acquired.expiresAtMs });
+    await writeToPersistentCache(tenantId, clientId, scope, acquired.accessToken, acquired.expiresAtMs);
+    return acquired.accessToken;
+  })().finally(() => {
+    inflight.delete(inflightKey);
   });
 
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: body.toString(),
-  });
-
-  if (!res.ok) {
-    const errorText = await res.text();
-    let errorDetail = errorText;
-    try {
-      const parsed = JSON.parse(errorText);
-      errorDetail = parsed.error_description || parsed.error || errorText;
-    } catch {}
-    throw new Error(`SPO token acquisition failed: ${errorDetail}`);
-  }
-
-  const data = await res.json();
-  spoTokenCache.set(cacheKey, {
-    accessToken: data.access_token,
-    expiresAt: Date.now() + data.expires_in * 1000,
-  });
-
-  return data.access_token;
+  inflight.set(inflightKey, work);
+  return work;
 }
 
 export interface HubSiteInfo {
@@ -2410,11 +2477,29 @@ export async function searchEntraUsers(token: string, query: string, limit: numb
   }
 }
 
-export function clearTokenCache(tenantId?: string, clientId?: string) {
+/**
+ * Clear cached Graph/SPO tokens for an app registration (or all of them).
+ * Returns a Promise so callers that require strict invalidation — e.g. after a
+ * client-secret rotation — can `await` the persistent-row delete before
+ * re-acquiring.
+ */
+export async function clearTokenCache(tenantId?: string, clientId?: string): Promise<void> {
   if (tenantId && clientId) {
     tokenCache.delete(`${tenantId}:${clientId}`);
+    for (const key of Array.from(spoTokenCache.keys())) {
+      if (key.startsWith(`spo:${tenantId}:${clientId}:`)) {
+        spoTokenCache.delete(key);
+      }
+    }
+    try {
+      const { storage } = await import("../storage");
+      await storage.deleteAppTokenCacheEntry(tenantId, clientId);
+    } catch (err) {
+      console.warn("[graph-cache] Failed to clear persistent cache row:", (err as any)?.message);
+    }
   } else {
     tokenCache.clear();
+    spoTokenCache.clear();
   }
 }
 

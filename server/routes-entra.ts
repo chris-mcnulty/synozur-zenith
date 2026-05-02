@@ -1,5 +1,5 @@
 import { Router, Request, Response } from 'express';
-import { ConfidentialClientApplication, CryptoProvider, AuthorizationCodeRequest } from '@azure/msal-node';
+import { ConfidentialClientApplication, CryptoProvider, AuthorizationCodeRequest, AuthenticationResult } from '@azure/msal-node';
 import { storage } from './storage';
 import { encryptToken, decryptToken, isEncryptionConfigured } from './utils/encryption';
 import type { AuthenticatedRequest } from './middleware/rbac';
@@ -54,45 +54,196 @@ function getMsalClient(): ConfidentialClientApplication | null {
   return msalClient;
 }
 
-export async function refreshDelegatedToken(userId: string): Promise<string | null> {
-  const client = getMsalClient();
-  if (!client) return null;
+export type UserTokenResult =
+  | { ok: true; token: string }
+  | { ok: false; reason: 'not_connected' | 'reauth_required' | 'transient' };
 
-  const tokenRecord = await storage.getGraphToken(userId, 'graph');
-  if (!tokenRecord?.refreshToken) return null;
+// Coalesces parallel refresh attempts per user so we never burn a refresh
+// token by racing two requests against Entra.
+const userTokenRefreshInflight = new Map<string, Promise<UserTokenResult>>();
 
+// If the cached access token will expire within this window, treat it as
+// already-expired and refresh proactively.
+export const USER_TOKEN_REFRESH_THRESHOLD_MS = 5 * 60 * 1000;
+
+// Errors that mean the refresh token itself is bad/revoked; anything else is
+// transient (network, throttling, etc.) and does not clear the stored row.
+const REAUTH_REQUIRED_ERROR_CODES = new Set([
+  'invalid_grant',
+  'AADSTS50173', // refresh token expired due to credential change
+  'AADSTS70008', // refresh token expired
+  'AADSTS700082', // refresh token expired (long inactivity)
+  'AADSTS50076', // MFA required
+  'interaction_required',
+  'consent_required',
+  'login_required',
+]);
+
+function isReauthRequiredError(err: any): boolean {
+  const msg: string = err?.errorCode || err?.message || '';
+  return Array.from(REAUTH_REQUIRED_ERROR_CODES).some(code => msg.includes(code));
+}
+
+async function emitGraphTokenAudit(
+  userId: string,
+  organizationId: string | null | undefined,
+  outcome: 'SUCCESS' | 'FAILURE',
+  details: Record<string, any>,
+): Promise<void> {
   try {
-    const { decryptToken } = await import('./utils/encryption');
-    const refreshToken = decryptToken(tokenRecord.refreshToken);
-
-    const result = await (client as any).acquireTokenByRefreshToken({
-      refreshToken,
-      scopes: SCOPES.filter(s => s !== 'openid' && s !== 'profile' && s !== 'email' && s !== 'offline_access'),
+    await storage.createAuditEntry({
+      userId,
+      userEmail: null,
+      action: outcome === 'SUCCESS' ? 'GRAPH_TOKEN_REFRESHED' : 'GRAPH_TOKEN_REFRESH_FAILED',
+      resource: 'graph_token',
+      resourceId: userId,
+      organizationId: organizationId || null,
+      tenantConnectionId: null,
+      result: outcome,
+      details,
+      ipAddress: null,
     });
+  } catch (err: any) {
+    console.warn(`[Entra] Failed to write audit entry for user ${userId}: ${err.message}`);
+  }
+}
 
-    if (result?.accessToken) {
-      const tokenToStore = encryptToken(result.accessToken);
-      const newRefreshToken = (result as any).refreshToken;
-      const refreshTokenToStore = newRefreshToken ? encryptToken(newRefreshToken) : tokenRecord.refreshToken;
+export async function refreshDelegatedTokenResult(userId: string): Promise<UserTokenResult> {
+  const existing = userTokenRefreshInflight.get(userId);
+  if (existing) return existing;
 
-      await storage.upsertGraphToken({
-        userId,
-        organizationId: tokenRecord.organizationId,
-        service: 'graph',
-        accessToken: tokenToStore,
-        refreshToken: refreshTokenToStore,
-        expiresAt: result.expiresOn || null,
-        scopes: result.scopes || SCOPES,
+  const work = (async (): Promise<UserTokenResult> => {
+    const client = getMsalClient();
+    if (!client) return { ok: false, reason: 'not_connected' };
+
+    const tokenRecord = await storage.getGraphToken(userId, 'graph');
+    if (!tokenRecord) return { ok: false, reason: 'not_connected' };
+    if (!tokenRecord.refreshToken) return { ok: false, reason: 'reauth_required' };
+
+    try {
+      const { decryptToken } = await import('./utils/encryption');
+      const refreshToken = decryptToken(tokenRecord.refreshToken);
+
+      const result: AuthenticationResult | null = await client.acquireTokenByRefreshToken({
+        refreshToken,
+        scopes: SCOPES.filter(s => s !== 'openid' && s !== 'profile' && s !== 'email' && s !== 'offline_access'),
       });
 
-      console.log(`[Entra] Refreshed delegated token for user ${userId}`);
-      return result.accessToken;
+      if (result?.accessToken) {
+        // MSAL Node does not surface the rotated refresh token on its public
+        // AuthenticationResult type — it caches it internally. We attempt to
+        // read it via an unchecked field for completeness; when absent we
+        // keep the prior refresh token stored.
+        const rotated = (result as unknown as { refreshToken?: string }).refreshToken;
+        const refreshTokenToStore = rotated ? encryptToken(rotated) : tokenRecord.refreshToken;
+
+        await storage.upsertGraphToken({
+          userId,
+          organizationId: tokenRecord.organizationId,
+          service: 'graph',
+          accessToken: encryptToken(result.accessToken),
+          refreshToken: refreshTokenToStore,
+          expiresAt: result.expiresOn || null,
+          scopes: result.scopes || SCOPES,
+        });
+
+        console.log(`[Entra] Refreshed delegated token for user ${userId}`);
+        await emitGraphTokenAudit(userId, tokenRecord.organizationId, 'SUCCESS', {
+          service: 'graph',
+          rotatedRefreshToken: !!rotated,
+          expiresAt: result.expiresOn?.toISOString() || null,
+        });
+        return { ok: true, token: result.accessToken };
+      }
+      // MSAL returned without an access token but did not throw. Treat as
+      // transient and emit a failure audit entry so the path is auditable.
+      console.warn(`[Entra] Token refresh for user ${userId} returned no access token`);
+      await emitGraphTokenAudit(userId, tokenRecord.organizationId, 'FAILURE', {
+        service: 'graph',
+        reauthRequired: false,
+        errorCode: 'no_access_token',
+        message: 'MSAL acquireTokenByRefreshToken returned without an access token',
+      });
+      return { ok: false, reason: 'transient' };
+    } catch (err: any) {
+      const reauthRequired = isReauthRequiredError(err);
+      console.warn(`[Entra] Token refresh failed for user ${userId}: ${err.message}${reauthRequired ? ' (reauth required)' : ''}`);
+
+      if (reauthRequired) {
+        // Null the stored credentials but keep the row so /me reports
+        // 'reauth_required' (a missing row reads as never-connected).
+        try {
+          await storage.markGraphTokenReauthRequired(userId, 'graph');
+        } catch (delErr: any) {
+          console.warn(`[Entra] Failed to mark graph token row for user ${userId} as reauth-required: ${delErr.message}`);
+        }
+      }
+
+      await emitGraphTokenAudit(userId, tokenRecord.organizationId, 'FAILURE', {
+        service: 'graph',
+        reauthRequired,
+        errorCode: err?.errorCode || null,
+        message: err?.message?.slice(0, 500) || null,
+      });
+      return { ok: false, reason: reauthRequired ? 'reauth_required' : 'transient' };
     }
-  } catch (err: any) {
-    console.warn(`[Entra] Token refresh failed for user ${userId}: ${err.message}`);
+  })().finally(() => {
+    userTokenRefreshInflight.delete(userId);
+  });
+
+  userTokenRefreshInflight.set(userId, work);
+  return work;
+}
+
+/** Backwards-compatible wrapper. Returns the access token, or null on any failure. */
+export async function refreshDelegatedToken(userId: string): Promise<string | null> {
+  const r = await refreshDelegatedTokenResult(userId);
+  return r.ok ? r.token : null;
+}
+
+/**
+ * Returns a valid user-delegated Graph access token, refreshing proactively
+ * when within the 5-minute expiry window. Server callers can branch on the
+ * typed result to distinguish "never connected", "reauth required", and
+ * "transient failure" without re-querying state.
+ */
+export async function getValidUserGraphTokenResult(userId: string): Promise<UserTokenResult> {
+  const tokenRecord = await storage.getGraphToken(userId, 'graph');
+  if (!tokenRecord) return { ok: false, reason: 'not_connected' };
+  if (!tokenRecord.refreshToken) return { ok: false, reason: 'reauth_required' };
+
+  const expiresAt = tokenRecord.expiresAt instanceof Date
+    ? tokenRecord.expiresAt
+    : tokenRecord.expiresAt ? new Date(tokenRecord.expiresAt) : null;
+
+  const stillFresh = expiresAt && expiresAt.getTime() > Date.now() + USER_TOKEN_REFRESH_THRESHOLD_MS;
+  if (stillFresh && tokenRecord.accessToken) {
+    try {
+      const { decryptToken } = await import('./utils/encryption');
+      return { ok: true, token: decryptToken(tokenRecord.accessToken) };
+    } catch (err: any) {
+      console.warn(`[Entra] Failed to decrypt access token for user ${userId}, falling through to refresh: ${err.message}`);
+    }
   }
 
-  return null;
+  return refreshDelegatedTokenResult(userId);
+}
+
+/** Backwards-compatible wrapper. Returns the access token, or null on any failure. */
+export async function getValidUserGraphToken(userId: string): Promise<string | null> {
+  const r = await getValidUserGraphTokenResult(userId);
+  return r.ok ? r.token : null;
+}
+
+/**
+ * Whether the user currently has a usable refresh token. Used by /api/auth/me
+ * so the UI can render a "reconnect Microsoft" banner.
+ */
+export async function getUserGraphTokenStatus(userId: string): Promise<'connected' | 'reauth_required' | 'none'> {
+  const tokenRecord = await storage.getGraphToken(userId, 'graph');
+  if (!tokenRecord) return 'none';
+  if (!tokenRecord.refreshToken) return 'reauth_required';
+  return 'connected';
 }
 
 export async function getDelegatedSpoToken(userId: string, spoHost: string): Promise<string | null> {

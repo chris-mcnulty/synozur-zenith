@@ -342,6 +342,7 @@ export default function AppShell({ children }: AppShellProps) {
     organization: { id: string; name: string } | null;
     activeOrganizationId: string | null;
     membershipCount: number;
+    graphTokenStatus?: 'connected' | 'reauth_required' | 'none';
   } | null>({
     queryKey: ["/api/auth/me"],
     queryFn: async () => {
@@ -1157,6 +1158,34 @@ export default function AppShell({ children }: AppShellProps) {
             </DropdownMenu>
           </div>
         </header>
+
+        {/* Reconnect banner shown when the delegated Graph refresh token has
+            been revoked or expired. */}
+        {authData?.graphTokenStatus === 'reauth_required' && (
+          <div
+            className="border-b border-amber-500/40 bg-amber-500/10 px-4 sm:px-6 lg:px-8 py-3 flex items-center justify-between gap-4 flex-wrap"
+            data-testid="banner-reauth-required"
+          >
+            <div className="flex items-center gap-3 min-w-0">
+              <KeyRound className="w-5 h-5 text-amber-600 dark:text-amber-400 shrink-0" />
+              <div className="min-w-0">
+                <p className="text-sm font-medium text-foreground" data-testid="text-reauth-banner-title">
+                  Your Microsoft sign-in has expired
+                </p>
+                <p className="text-xs text-muted-foreground truncate">
+                  Reconnect to keep SharePoint, Teams, and other delegated features working.
+                </p>
+              </div>
+            </div>
+            <Button
+              size="sm"
+              onClick={() => { window.location.href = '/auth/entra/login'; }}
+              data-testid="button-reconnect-microsoft"
+            >
+              Reconnect Microsoft
+            </Button>
+          </div>
+        )}
 
         {/* Page Content */}
         <div className="flex-1 overflow-auto bg-background/50 p-4 sm:p-6 lg:p-8">

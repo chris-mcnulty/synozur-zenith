@@ -11,6 +11,7 @@ import {
   users,
   organizationUsers,
   graphTokens,
+  graphAppTokenCache,
   auditLog,
   domainBlocklist,
   tenantDataDictionaries,
@@ -38,6 +39,8 @@ import {
   type InsertOrganizationUser,
   type GraphToken,
   type InsertGraphToken,
+  type GraphAppTokenCache,
+  type InsertGraphAppTokenCache,
   type AuditLog,
   type InsertAuditLog,
   type DomainBlocklist,
@@ -241,6 +244,13 @@ export interface IStorage {
   getGraphToken(userId: string, service?: string): Promise<GraphToken | undefined>;
   getDecryptedGraphToken(userId: string, service?: string): Promise<{ token: string; expiresAt: Date | null } | undefined>;
   getAnyValidDelegatedToken(service?: string, organizationId?: string): Promise<{ token: string; expiresAt: Date | null; userId: string } | undefined>;
+  deleteGraphToken(userId: string, service?: string): Promise<void>;
+  markGraphTokenReauthRequired(userId: string, service?: string): Promise<void>;
+
+  // Persistent app-only Graph token cache (SPEC_GAPS #15)
+  getAppTokenCacheEntry(tenantId: string, clientId: string, scope: string): Promise<{ accessToken: string; expiresAt: Date } | undefined>;
+  upsertAppTokenCacheEntry(entry: { tenantId: string; clientId: string; scope: string; accessToken: string; expiresAt: Date }): Promise<void>;
+  deleteAppTokenCacheEntry(tenantId: string, clientId: string, scope?: string): Promise<void>;
 
   createAuditEntry(entry: InsertAuditLog): Promise<AuditLog>;
   getAuditLog(filters?: {
@@ -1324,6 +1334,76 @@ export class DatabaseStorage implements IStorage {
 
   async getUsersByOrganization(orgId: string): Promise<User[]> {
     return db.select().from(users).where(eq(users.organizationId, orgId)).orderBy(users.createdAt);
+  }
+
+  async deleteGraphToken(userId: string, service: string = 'graph'): Promise<void> {
+    await db.delete(graphTokens)
+      .where(and(eq(graphTokens.userId, userId), eq(graphTokens.service, service)));
+  }
+
+  // Preserves the row so /api/auth/me can report 'reauth_required' (a missing
+  // row would otherwise be reported as 'none', which the UI treats as
+  // "user never connected"). Nulls out the credentials so no stale token can
+  // be used.
+  async markGraphTokenReauthRequired(userId: string, service: string = 'graph'): Promise<void> {
+    await db.update(graphTokens)
+      .set({ accessToken: null, refreshToken: null, expiresAt: null, updatedAt: new Date() })
+      .where(and(eq(graphTokens.userId, userId), eq(graphTokens.service, service)));
+  }
+
+  async getAppTokenCacheEntry(tenantId: string, clientId: string, scope: string): Promise<{ accessToken: string; expiresAt: Date } | undefined> {
+    const [row] = await db.select().from(graphAppTokenCache)
+      .where(and(
+        eq(graphAppTokenCache.tenantId, tenantId),
+        eq(graphAppTokenCache.clientId, clientId),
+        eq(graphAppTokenCache.scope, scope),
+      ));
+    if (!row) return undefined;
+    const { decryptToken } = await import('./utils/encryption');
+    try {
+      return { accessToken: decryptToken(row.accessToken), expiresAt: row.expiresAt };
+    } catch (err) {
+      console.warn('[graph-cache] Failed to decrypt cached app token, dropping row:', (err as any)?.message);
+      await this.deleteAppTokenCacheEntry(tenantId, clientId, scope);
+      return undefined;
+    }
+  }
+
+  async upsertAppTokenCacheEntry(entry: { tenantId: string; clientId: string; scope: string; accessToken: string; expiresAt: Date }): Promise<void> {
+    const { encryptToken, isEncryptionConfigured } = await import('./utils/encryption');
+    // Defense-in-depth: refuse to persist app-only bearer tokens when the
+    // encryption key isn't set, even though server/index.ts exits at startup
+    // when it's missing. We never want a high-privilege Graph token landing
+    // in the DB as plaintext.
+    if (!isEncryptionConfigured()) {
+      throw new Error('Refusing to persist Graph app token cache entry: TOKEN_ENCRYPTION_SECRET is not configured');
+    }
+    const encrypted = encryptToken(entry.accessToken);
+    await db.insert(graphAppTokenCache)
+      .values({
+        tenantId: entry.tenantId,
+        clientId: entry.clientId,
+        scope: entry.scope,
+        accessToken: encrypted,
+        expiresAt: entry.expiresAt,
+      })
+      .onConflictDoUpdate({
+        target: [graphAppTokenCache.tenantId, graphAppTokenCache.clientId, graphAppTokenCache.scope],
+        set: {
+          accessToken: encrypted,
+          expiresAt: entry.expiresAt,
+          updatedAt: new Date(),
+        },
+      });
+  }
+
+  async deleteAppTokenCacheEntry(tenantId: string, clientId: string, scope?: string): Promise<void> {
+    const conditions = [
+      eq(graphAppTokenCache.tenantId, tenantId),
+      eq(graphAppTokenCache.clientId, clientId),
+    ];
+    if (scope) conditions.push(eq(graphAppTokenCache.scope, scope));
+    await db.delete(graphAppTokenCache).where(and(...conditions));
   }
 
   async upsertGraphToken(token: InsertGraphToken): Promise<GraphToken> {

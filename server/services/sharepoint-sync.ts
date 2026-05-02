@@ -40,7 +40,7 @@ import {
   type EvaluationContext,
 } from "./policy-engine";
 import { storage } from "../storage";
-import { refreshDelegatedToken, getDelegatedSpoToken } from "../routes-entra";
+import { getDelegatedSpoToken, getValidUserGraphToken } from "../routes-entra";
 import type { ServicePlanTier, Workspace } from "@shared/schema";
 
 // ---------------------------------------------------------------------------
@@ -145,38 +145,29 @@ export async function getDelegatedTokenForRetention(
   currentUserId?: string,
   organizationId?: string,
 ): Promise<string | null> {
-  const tryUser = async (userId: string): Promise<string | null> => {
-    const delegated = await storage.getDecryptedGraphToken(userId, "graph");
-    if (delegated?.token && delegated.expiresAt && delegated.expiresAt > new Date()) {
-      return delegated.token;
-    }
-    const refreshed = await refreshDelegatedToken(userId);
-    if (refreshed) return refreshed;
-    return null;
-  };
-
+  // getValidUserGraphToken applies the 5-minute proactive refresh threshold
+  // and the per-user concurrency lock.
   if (currentUserId) {
-    const token = await tryUser(currentUserId);
+    const token = await getValidUserGraphToken(currentUserId);
     if (token) return token;
   }
 
   if (organizationId) {
-    const anyValid = await storage.getAnyValidDelegatedToken("graph", organizationId);
-    if (anyValid) return anyValid.token;
-
     const { db } = await import("../db");
     const { graphTokens } = await import("@shared/schema");
-    const { eq, and } = await import("drizzle-orm");
+    const { eq, and, isNotNull } = await import("drizzle-orm");
     const orgTokens = await db
       .select()
       .from(graphTokens)
-      .where(and(eq(graphTokens.organizationId, organizationId), eq(graphTokens.service, "graph")))
+      .where(and(
+        eq(graphTokens.organizationId, organizationId),
+        eq(graphTokens.service, "graph"),
+        isNotNull(graphTokens.refreshToken),
+      ))
       .limit(5);
     for (const t of orgTokens) {
-      if (t.refreshToken) {
-        const refreshed = await refreshDelegatedToken(t.userId);
-        if (refreshed) return refreshed;
-      }
+      const token = await getValidUserGraphToken(t.userId);
+      if (token) return token;
     }
   }
 

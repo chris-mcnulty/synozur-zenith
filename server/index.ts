@@ -893,6 +893,22 @@ async function ensureTenantConnectionsSchema() {
       CREATE INDEX IF NOT EXISTS idx_scheduled_job_runs_job_type_started_desc  ON scheduled_job_runs (job_type, started_at DESC);
     `);
 
+    // Persistent app-only Graph token cache. Encrypted at rest; survives
+    // cold starts so we don't refetch from Entra on every restart.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS graph_app_token_cache (
+        id            varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        tenant_id     text NOT NULL,
+        client_id     text NOT NULL,
+        scope         text NOT NULL,
+        access_token  text NOT NULL,
+        expires_at    timestamp NOT NULL,
+        updated_at    timestamp DEFAULT now(),
+        CONSTRAINT uq_app_token_cache_key UNIQUE (tenant_id, client_id, scope)
+      );
+      CREATE INDEX IF NOT EXISTS idx_graph_app_token_cache_expires_at ON graph_app_token_cache (expires_at);
+    `);
+
     log('Schema migration ensureTenantConnectionsSchema completed');
   } catch (err) {
     console.error('[Migration] Failed to ensure tenant_connections schema:', err);

@@ -224,11 +224,22 @@ router.get('/me', requireAuth(), async (req: AuthenticatedRequest, res) => {
       ? 'platform_owner'
       : (activeMembership?.role || user.role);
 
+    // Surface delegated-token status so the UI can render a Reconnect
+    // Microsoft banner when the refresh token has been revoked.
+    let graphTokenStatus: 'connected' | 'reauth_required' | 'none' = 'none';
+    try {
+      const { getUserGraphTokenStatus } = await import('./routes-entra');
+      graphTokenStatus = await getUserGraphTokenStatus(userId);
+    } catch (err: any) {
+      console.warn('[Auth] Failed to compute graph token status:', err.message);
+    }
+
     return res.json({
       user: { ...sanitizeUser(user), effectiveRole },
       organization,
       activeOrganizationId: activeOrgId,
       membershipCount: memberships.length,
+      graphTokenStatus,
     });
   } catch (error: any) {
     console.error('[Auth] Get current user error:', error);

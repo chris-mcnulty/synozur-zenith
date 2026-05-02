@@ -4,7 +4,7 @@ import { storage } from "../storage";
 import { testConnection, clearTokenCache, getAppToken, fetchSensitivityLabels, fetchRetentionLabels, fetchTenantVerifiedDomains } from "../services/graph";
 import { checkTenantPermissions, REQUIRED_PERMISSIONS, PERMISSIONS_VERSION } from "../services/permissions";
 import { METADATA_CATEGORIES, ZENITH_ROLES } from "@shared/schema";
-import { refreshDelegatedToken } from "../routes-entra";
+import { getValidUserGraphToken } from "../routes-entra";
 import { requireAuth, requireRole, requirePermission, type AuthenticatedRequest } from "../middleware/rbac";
 import { encryptToken, decryptToken, isEncryptionConfigured, isEncrypted } from "../utils/encryption";
 import { requireFeature } from "../services/feature-gate";
@@ -62,36 +62,27 @@ function getEffectiveClientSecret(conn: { clientSecret?: string | null }): strin
 }
 
 async function getDelegatedTokenForRetention(currentUserId?: string, organizationId?: string): Promise<string | null> {
-  const tryUser = async (userId: string): Promise<string | null> => {
-    const delegated = await storage.getDecryptedGraphToken(userId, "graph");
-    if (delegated?.token && delegated.expiresAt && delegated.expiresAt > new Date()) {
-      return delegated.token;
-    }
-    const refreshed = await refreshDelegatedToken(userId);
-    if (refreshed) return refreshed;
-    return null;
-  };
-
+  // getValidUserGraphToken applies the 5-minute proactive refresh threshold
+  // and the per-user concurrency lock.
   if (currentUserId) {
-    const token = await tryUser(currentUserId);
+    const token = await getValidUserGraphToken(currentUserId);
     if (token) return token;
   }
 
   if (organizationId) {
-    const anyValid = await storage.getAnyValidDelegatedToken("graph", organizationId);
-    if (anyValid) return anyValid.token;
-
     const { db } = await import("../db");
     const { graphTokens } = await import("@shared/schema");
-    const { eq, and } = await import("drizzle-orm");
+    const { eq, and, isNotNull } = await import("drizzle-orm");
     const orgTokens = await db.select().from(graphTokens)
-      .where(and(eq(graphTokens.organizationId, organizationId), eq(graphTokens.service, "graph")))
+      .where(and(
+        eq(graphTokens.organizationId, organizationId),
+        eq(graphTokens.service, "graph"),
+        isNotNull(graphTokens.refreshToken),
+      ))
       .limit(5);
     for (const t of orgTokens) {
-      if (t.refreshToken) {
-        const refreshed = await refreshDelegatedToken(t.userId);
-        if (refreshed) return refreshed;
-      }
+      const token = await getValidUserGraphToken(t.userId);
+      if (token) return token;
     }
   }
 

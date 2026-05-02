@@ -587,6 +587,29 @@ export const insertGraphTokenSchema = createInsertSchema(graphTokens).omit({
 export type InsertGraphToken = z.infer<typeof insertGraphTokenSchema>;
 export type GraphToken = typeof graphTokens.$inferSelect;
 
+// Persistent app-only Graph token cache. Keyed by tenantId, clientId, and
+// OAuth scope so the same app registration can hold separate tokens for Graph
+// and SharePoint. Access tokens are encrypted at rest.
+export const graphAppTokenCache = pgTable("graph_app_token_cache", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: text("tenant_id").notNull(),
+  clientId: text("client_id").notNull(),
+  scope: text("scope").notNull(),
+  accessToken: text("access_token").notNull(),
+  expiresAt: timestamp("expires_at").notNull(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (table) => [
+  unique("uq_app_token_cache_key").on(table.tenantId, table.clientId, table.scope),
+]);
+
+export const insertGraphAppTokenCacheSchema = createInsertSchema(graphAppTokenCache).omit({
+  id: true,
+  updatedAt: true,
+});
+
+export type InsertGraphAppTokenCache = z.infer<typeof insertGraphAppTokenCacheSchema>;
+export type GraphAppTokenCache = typeof graphAppTokenCache.$inferSelect;
+
 export const auditLog = pgTable("audit_log", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   userId: varchar("user_id"),
