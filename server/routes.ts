@@ -26,6 +26,7 @@ import contentIntensityHeatmapRouter from "./routes/content-intensity-heatmap";
 import copilotPromptIntelligenceRouter from "./routes/copilot-prompt-intelligence";
 import jobsRouter from "./routes/jobs";
 import savedViewsRouter from "./routes/saved-views";
+import lifecycleRouter from "./routes/lifecycle";
 
 export async function registerRoutes(
   httpServer: Server,
@@ -68,6 +69,7 @@ export async function registerRoutes(
   app.use(copilotPromptIntelligenceRouter);
   app.use(jobsRouter);
   app.use(savedViewsRouter);
+  app.use(lifecycleRouter);
 
   return httpServer;
 }

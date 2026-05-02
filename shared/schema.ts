@@ -385,6 +385,7 @@ export const PLAN_FEATURES = {
     dataMasking: false,
     csvExport: false,
     mspAccess: false,
+    lifecycleReview: false,
     contentGovernanceReporting: false as false | "readonly" | "full",
     sharingLinkManagement: false as false | "readonly" | "full",
     governanceReviews: false as false | "manual" | "full",
@@ -414,6 +415,7 @@ export const PLAN_FEATURES = {
     dataMasking: false,
     csvExport: true,
     mspAccess: false,
+    lifecycleReview: true,
     contentGovernanceReporting: "readonly" as false | "readonly" | "full",
     sharingLinkManagement: false as false | "readonly" | "full",
     governanceReviews: false as false | "manual" | "full",
@@ -443,6 +445,7 @@ export const PLAN_FEATURES = {
     dataMasking: true,
     csvExport: true,
     mspAccess: true,
+    lifecycleReview: true,
     contentGovernanceReporting: "full" as false | "readonly" | "full",
     sharingLinkManagement: "readonly" as false | "readonly" | "full",
     governanceReviews: "manual" as false | "manual" | "full",
@@ -472,6 +475,7 @@ export const PLAN_FEATURES = {
     dataMasking: true,
     csvExport: true,
     mspAccess: true,
+    lifecycleReview: true,
     contentGovernanceReporting: "full" as false | "readonly" | "full",
     sharingLinkManagement: "full" as false | "readonly" | "full",
     governanceReviews: "full" as false | "manual" | "full",
@@ -2274,3 +2278,59 @@ export const BUILT_IN_SAVED_VIEWS: BuiltInSavedView[] = [
     filterJson: { coverage: "labeled" },
   },
 ];
+
+
+// ─────────────────────────────────────────────────────────────────────────
+// BL-007 — Site Lifecycle Review Queue
+// ─────────────────────────────────────────────────────────────────────────
+
+export const workspaceComplianceScores = pgTable("workspace_compliance_scores", {
+  workspaceId: varchar("workspace_id").primaryKey(),
+  organizationId: varchar("organization_id"),
+  tenantConnectionId: varchar("tenant_connection_id"),
+  score: integer("score").notNull().default(0),
+  isStale: boolean("is_stale").notNull().default(false),
+  isOrphaned: boolean("is_orphaned").notNull().default(false),
+  missingLabel: boolean("missing_label").notNull().default(false),
+  missingMetadata: boolean("missing_metadata").notNull().default(false),
+  externallySharedUnclassified: boolean("externally_shared_unclassified").notNull().default(false),
+  daysSinceActivity: integer("days_since_activity"),
+  breakdown: jsonb("breakdown").$type<Array<{ key: string; label: string; weight: number; pass: boolean; remediation: string }>>(),
+  computedAt: timestamp("computed_at").notNull().defaultNow(),
+  scanRunId: varchar("scan_run_id"),
+});
+
+export const insertWorkspaceComplianceScoreSchema = createInsertSchema(workspaceComplianceScores);
+export type InsertWorkspaceComplianceScore = z.infer<typeof insertWorkspaceComplianceScoreSchema>;
+export type WorkspaceComplianceScore = typeof workspaceComplianceScores.$inferSelect;
+
+export const lifecycleScanRuns = pgTable("lifecycle_scan_runs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  organizationId: varchar("organization_id").notNull(),
+  tenantConnectionId: varchar("tenant_connection_id"),
+  status: text("status").notNull().default("running"), // running, completed, failed
+  startedAt: timestamp("started_at").notNull().defaultNow(),
+  completedAt: timestamp("completed_at"),
+  workspacesScanned: integer("workspaces_scanned").notNull().default(0),
+  averageScore: integer("average_score").notNull().default(0),
+  compliantCount: integer("compliant_count").notNull().default(0),
+  staleCount: integer("stale_count").notNull().default(0),
+  orphanedCount: integer("orphaned_count").notNull().default(0),
+  missingLabelCount: integer("missing_label_count").notNull().default(0),
+  externallySharedCount: integer("externally_shared_count").notNull().default(0),
+  errorMessage: text("error_message"),
+  triggeredBy: text("triggered_by"),
+});
+
+export const insertLifecycleScanRunSchema = createInsertSchema(lifecycleScanRuns).omit({
+  id: true,
+});
+export type InsertLifecycleScanRun = z.infer<typeof insertLifecycleScanRunSchema>;
+export type LifecycleScanRun = typeof lifecycleScanRuns.$inferSelect;
+
+export const LIFECYCLE_DETECTION_DEFAULTS = {
+  staleThresholdDays: 90,
+  orphanedThresholdDays: 30,
+  labelRequired: true,
+  metadataRequired: true,
+} as const;

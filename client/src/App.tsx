@@ -189,6 +189,7 @@ function AppRoutes() {
         <Route path="/app/embedded-containers" component={EmbeddedContainersPage} />
         <Route path="/app/archive-backup" component={ArchiveBackupPage} />
         <Route path="/app/lifecycle" component={LifecycleReviewHub} />
+        <Route path="/app/lifecycle/review" component={LifecycleReviewHub} />
         <Route path="/app/approvals" component={ApprovalsQueue} />
         <Route path="/app/ai-copilot" component={AICopilotIntegration} />
         <Route path="/app/copilot-readiness" component={CopilotReadinessPage} />

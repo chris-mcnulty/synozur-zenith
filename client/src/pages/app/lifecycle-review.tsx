@@ -1,11 +1,19 @@
 import { useState, useMemo } from "react";
 import { Link } from "wouter";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import {
   Table,
   TableBody,
@@ -14,54 +22,82 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { 
-  Clock, 
-  Search, 
-  Users, 
-  Globe, 
+import {
+  Clock,
+  Search,
+  Users,
+  Globe,
   FolderOpen,
   CheckCircle2,
   AlertCircle,
   Archive,
   CalendarDays,
   ShieldAlert,
-  ArrowRight,
   Building2,
   Loader2,
   UserX,
   Share2,
+  Mail,
+  Tag,
+  RefreshCw,
+  TrendingUp,
+  TrendingDown,
+  Minus,
 } from "lucide-react";
 import { useTenant } from "@/lib/tenant-context";
+import { useToast } from "@/hooks/use-toast";
 import { DatasetFreshnessBanner } from "@/components/datasets";
+import { apiRequest } from "@/lib/queryClient";
 
-type Workspace = {
+type FilterKey = "all" | "stale" | "orphaned" | "missingLabel" | "missingMetadata" | "externalUnclassified";
+type SortKey = "scoreAsc" | "scoreDesc" | "lastActivityAsc" | "lastActivityDesc";
+
+type ReviewItem = {
   id: string;
   displayName: string;
-  siteUrl: string | null;
   type: string;
-  projectType: string;
-  lastActivityDate: string | null;
+  siteUrl: string | null;
+  tenantConnectionId: string | null;
+  ownerDisplayName: string | null;
+  ownerCount: number;
+  sensitivity: string | null;
+  sensitivityLabelId: string | null;
+  retentionLabelId: string | null;
   externalSharing: boolean;
-  siteOwners: Array<{ id?: string; displayName: string; mail?: string }> | null;
-  department: string | null;
-  sensitivity: string;
+  lastActivityDate: string | null;
+  daysSinceActivity: number | null;
+  score: number;
+  compliant: boolean;
+  isStale: boolean;
+  isOrphaned: boolean;
+  missingLabel: boolean;
+  missingMetadata: boolean;
+  externallySharedUnclassified: boolean;
+  breakdown: Array<{ key: string; label: string; weight: number; pass: boolean; remediation: string }>;
 };
 
-const daysSince = (date: string | null): number => {
-  if (!date) return 9999;
-  return Math.floor((Date.now() - new Date(date).getTime()) / 86400000);
+type ReviewResponse = {
+  items: ReviewItem[];
+  total: number;
+  page: number;
+  pageSize: number;
+  rules: { staleThresholdDays: number; orphanedThresholdDays: number; labelRequired: boolean; metadataRequired: boolean };
 };
 
-const activityScore = (date: string | null): number => {
-  const d = daysSince(date);
-  if (d >= 365) return 0;
-  return Math.max(0, Math.round(100 - (d / 365) * 100));
-};
-
-const dueLabel = (d: number): string => {
-  if (d >= 180) return `${d - 180}d overdue`;
-  if (d >= 90) return `Due in ${180 - d}d`;
-  return "Active";
+type HealthResponse = {
+  summary: {
+    total: number;
+    compliant: number;
+    compliantPercent: number;
+    stale: number;
+    orphaned: number;
+    missingLabel: number;
+    externallyShared: number;
+    averageScore: number;
+    trendDelta: number;
+  };
+  trend: Array<{ date: string | null; averageScore: number; compliantCount: number; workspacesScanned: number }>;
+  latestScan: { id: string; completedAt: string | null; workspacesScanned: number; averageScore: number } | null;
 };
 
 const typeIcon = (type: string) => {
@@ -82,277 +118,410 @@ const typeLabel = (type: string): string => {
   }
 };
 
+const scoreBadgeColor = (score: number): string => {
+  if (score >= 80) return "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border-emerald-500/30";
+  if (score >= 50) return "bg-amber-500/15 text-amber-600 dark:text-amber-400 border-amber-500/30";
+  return "bg-red-500/15 text-red-600 dark:text-red-400 border-red-500/30";
+};
+
+const Sparkline = ({ data, height = 40 }: { data: number[]; height?: number }) => {
+  if (data.length === 0) {
+    return <div className="text-xs text-muted-foreground italic">No scan history yet</div>;
+  }
+  const min = Math.min(...data, 0);
+  const max = Math.max(...data, 100);
+  const range = max - min || 1;
+  const width = 200;
+  const step = data.length > 1 ? width / (data.length - 1) : 0;
+  const points = data.map((v, i) => `${i * step},${height - ((v - min) / range) * height}`).join(" ");
+  return (
+    <svg width={width} height={height} className="overflow-visible" data-testid="sparkline-trend">
+      <polyline fill="none" stroke="currentColor" strokeWidth="2" points={points} className="text-primary" />
+      {data.map((v, i) => (
+        <circle key={i} cx={i * step} cy={height - ((v - min) / range) * height} r="2" className="fill-primary" />
+      ))}
+    </svg>
+  );
+};
+
 export default function LifecycleReviewHub() {
-  const [searchTerm, setSearchTerm] = useState("");
   const { selectedTenant } = useTenant();
   const tenantConnectionId = selectedTenant?.id;
+  const { toast } = useToast();
+  const qc = useQueryClient();
 
-  const { data: workspaces = [], isLoading } = useQuery<Workspace[]>({
-    queryKey: ["/api/workspaces", tenantConnectionId, "lifecycle"],
+  const [searchTerm, setSearchTerm] = useState("");
+  const [filter, setFilter] = useState<FilterKey>("all");
+  const [sort, setSort] = useState<SortKey>("scoreAsc");
+  const [page, setPage] = useState(1);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const pageSize = 20;
+
+  const reviewKey = ["/api/lifecycle/review", tenantConnectionId, filter, sort, searchTerm, page];
+  const { data: review, isLoading } = useQuery<ReviewResponse>({
+    queryKey: reviewKey,
     queryFn: async () => {
       const params = new URLSearchParams();
       if (tenantConnectionId) params.set("tenantConnectionId", tenantConnectionId);
-      const res = await fetch(`/api/workspaces?${params}`, { credentials: "include" });
-      if (!res.ok) return [];
+      if (filter !== "all") params.set("filter", filter);
+      if (sort) params.set("sort", sort);
+      if (searchTerm) params.set("search", searchTerm);
+      params.set("page", String(page));
+      params.set("pageSize", String(pageSize));
+      const res = await fetch(`/api/lifecycle/review?${params}`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to load review queue");
       return res.json();
     },
-    enabled: true,
   });
 
-  const stats = useMemo(() => {
-    const overdue = workspaces.filter(w => daysSince(w.lastActivityDate) >= 180);
-    const atRisk = workspaces.filter(w => {
-      const d = daysSince(w.lastActivityDate);
-      return d >= 90 && d < 180;
-    });
-    const orphaned = workspaces.filter(w => {
-      const owners = Array.isArray(w.siteOwners) ? w.siteOwners : [];
-      return owners.length === 0;
-    });
-    const active = workspaces.filter(w => daysSince(w.lastActivityDate) < 90);
-    const rate = workspaces.length > 0
-      ? Math.round((active.length / workspaces.length) * 100)
-      : 0;
-    return { overdue: overdue.length, atRisk: atRisk.length, orphaned: orphaned.length, rate };
-  }, [workspaces]);
+  const { data: health } = useQuery<HealthResponse>({
+    queryKey: ["/api/lifecycle/health", tenantConnectionId],
+    queryFn: async () => {
+      const params = new URLSearchParams();
+      if (tenantConnectionId) params.set("tenantConnectionId", tenantConnectionId);
+      const res = await fetch(`/api/lifecycle/health?${params}`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to load health");
+      return res.json();
+    },
+  });
 
-  const reviewQueue = useMemo(() => {
-    return workspaces
-      .filter(w => daysSince(w.lastActivityDate) >= 90)
-      .sort((a, b) => daysSince(b.lastActivityDate) - daysSince(a.lastActivityDate))
-      .map(w => {
-        const d = daysSince(w.lastActivityDate);
-        const owners = Array.isArray(w.siteOwners) ? w.siteOwners : [];
-        const orphaned = owners.length === 0;
-        let reviewType = "Time-based Renewal";
-        if (orphaned) reviewType = "Ownership Confirmation";
-        else if (w.externalSharing) reviewType = "External Guest Review";
-        return {
-          ...w,
-          reviewType,
-          dueStr: dueLabel(d),
-          isOverdue: d >= 180,
-          ownerName: orphaned ? "No owner assigned" : owners[0]?.displayName ?? "Unknown",
-          orphaned,
-          score: activityScore(w.lastActivityDate),
-        };
-      });
-  }, [workspaces]);
+  const scanMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/lifecycle/review/scan", { tenantConnectionId });
+      return res.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Lifecycle scan complete", description: "Compliance scores have been refreshed." });
+      qc.invalidateQueries({ queryKey: ["/api/lifecycle/review"] });
+      qc.invalidateQueries({ queryKey: ["/api/lifecycle/health"] });
+    },
+    onError: (err: any) => {
+      toast({ title: "Scan failed", description: err.message ?? String(err), variant: "destructive" });
+    },
+  });
 
-  const filtered = searchTerm
-    ? reviewQueue.filter(r =>
-        r.displayName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        r.ownerName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        r.reviewType.toLowerCase().includes(searchTerm.toLowerCase())
-      )
-    : reviewQueue;
+  const emailOwnerMutation = useMutation({
+    mutationFn: async (workspaceId: string) => {
+      const res = await apiRequest("POST", `/api/lifecycle/review/${workspaceId}/email-owner`, {});
+      return res.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Owner notified", description: "An audit-logged remediation email has been queued." });
+    },
+    onError: (err: any) => {
+      toast({ title: "Action failed", description: err.message ?? String(err), variant: "destructive" });
+    },
+  });
 
-  if (!tenantConnectionId && !isLoading && workspaces.length === 0) {
-    return (
-      <div className="space-y-8 animate-in fade-in duration-500 pb-12">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight">Workspace Review Hub</h1>
-          <p className="text-muted-foreground mt-1">Manage lifecycle events, ownership confirmations, and retention policies.</p>
-        </div>
-        <Card className="glass-panel border-border/50">
-          <CardContent className="flex flex-col items-center justify-center py-16 text-center gap-4">
-            <Building2 className="w-12 h-12 text-muted-foreground/40" />
-            <div>
-              <p className="text-lg font-medium text-muted-foreground">No tenant selected</p>
-              <p className="text-sm text-muted-foreground/70 mt-1">Select a tenant to view workspaces requiring lifecycle review.</p>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-    );
-  }
+  const items = review?.items ?? [];
+  const total = review?.total ?? 0;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+
+  const allSelected = items.length > 0 && items.every(i => selected.has(i.id));
+  const toggleAll = () => {
+    if (allSelected) {
+      const next = new Set(selected);
+      items.forEach(i => next.delete(i.id));
+      setSelected(next);
+    } else {
+      const next = new Set(selected);
+      items.forEach(i => next.add(i.id));
+      setSelected(next);
+    }
+  };
+  const toggleOne = (id: string) => {
+    const next = new Set(selected);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    setSelected(next);
+  };
+
+  const summary = health?.summary;
+  const trendData = useMemo(() => (health?.trend ?? []).map(p => p.averageScore), [health?.trend]);
+
+  const handleBulkEmail = async () => {
+    if (selected.size === 0) return;
+    const ids = Array.from(selected);
+    let ok = 0;
+    for (const id of ids) {
+      try { await emailOwnerMutation.mutateAsync(id); ok++; } catch {}
+    }
+    toast({ title: "Bulk action complete", description: `${ok} of ${ids.length} owner emails queued.` });
+    setSelected(new Set());
+  };
 
   return (
-    <div className="space-y-6 animate-in fade-in duration-500 pb-12 max-w-6xl mx-auto">
-      <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight">Workspace Review Hub</h1>
-          <p className="text-muted-foreground mt-1 max-w-2xl">
-            Lifecycle reviews are triggered automatically by inactivity thresholds. No destructive actions occur without human confirmation.
-          </p>
+    <TooltipProvider>
+      <div className="space-y-6 animate-in fade-in duration-500 pb-12 max-w-7xl mx-auto">
+        <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
+          <div>
+            <h1 className="text-3xl font-bold tracking-tight" data-testid="text-page-title">Site Lifecycle Review Queue</h1>
+            <p className="text-muted-foreground mt-1 max-w-2xl">
+              Server-side compliance scoring across stewardship, classification, activity, and sharing posture.
+              No destructive actions occur without human confirmation.
+            </p>
+          </div>
+          <div className="flex gap-3">
+            <Button
+              onClick={() => scanMutation.mutate()}
+              disabled={scanMutation.isPending}
+              className="gap-2"
+              data-testid="button-run-scan"
+            >
+              {scanMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+              {scanMutation.isPending ? "Scanning..." : "Run Lifecycle Scan"}
+            </Button>
+          </div>
         </div>
-        <div className="flex gap-3">
-          <Button variant="outline" className="gap-2 shadow-sm" disabled>
-            <CalendarDays className="w-4 h-4 text-muted-foreground" />
-            Schedule Mass Review
-          </Button>
-        </div>
-      </div>
 
-      {/* BL-039: dataset freshness nudge */}
-      {tenantConnectionId && (
-        <DatasetFreshnessBanner
-          tenantConnectionId={tenantConnectionId}
-          datasets={["workspaces"]}
-        />
-      )}
+        {tenantConnectionId && (
+          <DatasetFreshnessBanner tenantConnectionId={tenantConnectionId} datasets={["workspaces"]} />
+        )}
 
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-        <Card className="glass-panel border-red-500/20 shadow-red-500/5">
-          <CardHeader className="pb-2 flex flex-row items-center justify-between">
-            <CardTitle className="text-sm font-medium text-red-500 uppercase tracking-wider">Overdue Reviews</CardTitle>
-            <AlertCircle className="w-4 h-4 text-red-500" />
-          </CardHeader>
-          <CardContent>
-            {isLoading
-              ? <div className="h-9 w-16 bg-muted/40 animate-pulse rounded" />
-              : <div className="text-3xl font-bold text-red-500" data-testid="stat-overdue">{stats.overdue}</div>}
-            <p className="text-xs text-red-500/80 mt-1">Inactive 180+ days</p>
-          </CardContent>
-        </Card>
-
-        <Card className="glass-panel border-border/50">
-          <CardHeader className="pb-2 flex flex-row items-center justify-between">
-            <CardTitle className="text-sm font-medium text-muted-foreground uppercase tracking-wider">At Risk</CardTitle>
-            <Clock className="w-4 h-4 text-amber-500" />
-          </CardHeader>
-          <CardContent>
-            {isLoading
-              ? <div className="h-9 w-16 bg-muted/40 animate-pulse rounded" />
-              : <div className="text-3xl font-bold" data-testid="stat-at-risk">{stats.atRisk}</div>}
-            <p className="text-xs text-muted-foreground mt-1">Inactive 90–180 days</p>
-          </CardContent>
-        </Card>
-
-        <Card className="glass-panel border-border/50">
-          <CardHeader className="pb-2 flex flex-row items-center justify-between">
-            <CardTitle className="text-sm font-medium text-muted-foreground uppercase tracking-wider">Orphaned</CardTitle>
-            <UserX className="w-4 h-4 text-indigo-500" />
-          </CardHeader>
-          <CardContent>
-            {isLoading
-              ? <div className="h-9 w-16 bg-muted/40 animate-pulse rounded" />
-              : <div className="text-3xl font-bold" data-testid="stat-orphaned">{stats.orphaned}</div>}
-            <p className="text-xs text-muted-foreground mt-1">No active owner in Entra ID</p>
-          </CardContent>
-        </Card>
-
-        <Card className="glass-panel border-emerald-500/20 bg-emerald-500/5">
-          <CardHeader className="pb-2 flex flex-row items-center justify-between">
-            <CardTitle className="text-sm font-medium text-emerald-600 dark:text-emerald-500 uppercase tracking-wider">Active Rate</CardTitle>
-            <CheckCircle2 className="w-4 h-4 text-emerald-500" />
-          </CardHeader>
-          <CardContent>
-            {isLoading
-              ? <div className="h-9 w-16 bg-muted/40 animate-pulse rounded" />
-              : (
-                <>
-                  <div className="text-3xl font-bold" data-testid="stat-active-rate">{stats.rate}%</div>
-                  <Progress value={stats.rate} className="h-1.5 bg-emerald-500/20 [&>div]:bg-emerald-500 mt-2" />
-                </>
-              )}
-            <p className="text-xs text-emerald-600/80 mt-1">Workspaces active within 90 days</p>
-          </CardContent>
-        </Card>
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <Card className="glass-panel border-border/50 shadow-xl lg:col-span-2 flex flex-col min-h-[500px]">
-          <CardHeader className="pb-4 border-b border-border/40 bg-muted/10 flex flex-row items-center justify-between">
-            <CardTitle className="text-lg flex items-center gap-2">
-              <Clock className="w-5 h-5 text-primary" />
-              Active Review Queue
-              {!isLoading && reviewQueue.length > 0 && (
-                <Badge variant="outline" className="ml-1 text-xs">{reviewQueue.length}</Badge>
-              )}
-            </CardTitle>
-            <div className="flex items-center gap-2">
-              <div className="relative w-full sm:w-64">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                <Input
-                  placeholder="Search workspaces or owners..."
-                  className="pl-9 h-9 bg-background/50 rounded-lg border-border/50 text-sm"
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  data-testid="input-search-reviews"
-                />
+        {/* Health summary card with sparkline */}
+        <Card className="glass-panel border-border/50 shadow-md" data-testid="card-health-summary">
+          <CardHeader className="pb-3 border-b border-border/40">
+            <div className="flex items-start justify-between flex-wrap gap-4">
+              <div>
+                <CardTitle className="flex items-center gap-2 text-lg">
+                  <ShieldAlert className="w-5 h-5 text-primary" />
+                  Lifecycle Health Summary
+                </CardTitle>
+                <CardDescription className="text-xs mt-1">
+                  Average compliance score across all in-scope workspaces, with the last 8 scan results.
+                </CardDescription>
               </div>
+              {health?.latestScan?.completedAt && (
+                <span className="text-xs text-muted-foreground">
+                  Last scan: {new Date(health.latestScan.completedAt).toLocaleString()}
+                </span>
+              )}
             </div>
           </CardHeader>
-          <CardContent className="p-0 flex-1">
+          <CardContent className="pt-5">
+            <div className="grid grid-cols-2 md:grid-cols-6 gap-6">
+              <div className="space-y-1">
+                <div className="text-xs text-muted-foreground uppercase tracking-wider">Avg Score</div>
+                <div className="flex items-baseline gap-2">
+                  <span className="text-3xl font-bold" data-testid="text-avg-score">{summary?.averageScore ?? 0}</span>
+                  <span className="text-sm text-muted-foreground">/100</span>
+                </div>
+                {summary && summary.trendDelta !== 0 && (
+                  <div className={`text-xs flex items-center gap-1 ${summary.trendDelta > 0 ? "text-emerald-500" : "text-red-500"}`}>
+                    {summary.trendDelta > 0 ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
+                    {summary.trendDelta > 0 ? "+" : ""}{summary.trendDelta} vs prev
+                  </div>
+                )}
+                {summary && summary.trendDelta === 0 && (
+                  <div className="text-xs text-muted-foreground flex items-center gap-1">
+                    <Minus className="w-3 h-3" /> No prior scan
+                  </div>
+                )}
+              </div>
+              <div className="space-y-1">
+                <div className="text-xs text-muted-foreground uppercase tracking-wider">Compliant</div>
+                <div className="text-2xl font-semibold text-emerald-500" data-testid="text-compliant">{summary?.compliant ?? 0}</div>
+                <div className="text-xs text-muted-foreground">{summary?.compliantPercent ?? 0}% of {summary?.total ?? 0}</div>
+              </div>
+              <div className="space-y-1">
+                <div className="text-xs text-muted-foreground uppercase tracking-wider">Stale</div>
+                <div className="text-2xl font-semibold text-amber-500" data-testid="text-stale-count">{summary?.stale ?? 0}</div>
+                <div className="text-xs text-muted-foreground">No recent activity</div>
+              </div>
+              <div className="space-y-1">
+                <div className="text-xs text-muted-foreground uppercase tracking-wider">Orphaned</div>
+                <div className="text-2xl font-semibold text-indigo-500" data-testid="text-orphaned-count">{summary?.orphaned ?? 0}</div>
+                <div className="text-xs text-muted-foreground">No primary steward</div>
+              </div>
+              <div className="space-y-1">
+                <div className="text-xs text-muted-foreground uppercase tracking-wider">Unlabeled</div>
+                <div className="text-2xl font-semibold text-rose-500" data-testid="text-unlabeled-count">{summary?.missingLabel ?? 0}</div>
+                <div className="text-xs text-muted-foreground">Missing sensitivity label</div>
+              </div>
+              <div className="space-y-1">
+                <div className="text-xs text-muted-foreground uppercase tracking-wider">8-Week Trend</div>
+                <Sparkline data={trendData} />
+                <div className="text-xs text-muted-foreground">{trendData.length} scan{trendData.length === 1 ? "" : "s"}</div>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Filters & queue */}
+        <Card className="glass-panel border-border/50 shadow-xl" data-testid="card-review-queue">
+          <CardHeader className="pb-3 border-b border-border/40 bg-muted/10">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <CardTitle className="text-lg flex items-center gap-2">
+                <Clock className="w-5 h-5 text-primary" />
+                Review Queue
+                <Badge variant="outline" className="ml-1 text-xs" data-testid="badge-total">{total}</Badge>
+              </CardTitle>
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                  <Input
+                    placeholder="Search workspaces or owners..."
+                    className="pl-9 h-9 w-64 bg-background/50"
+                    value={searchTerm}
+                    onChange={(e) => { setSearchTerm(e.target.value); setPage(1); }}
+                    data-testid="input-search"
+                  />
+                </div>
+                <Select value={filter} onValueChange={(v) => { setFilter(v as FilterKey); setPage(1); }}>
+                  <SelectTrigger className="w-[200px] h-9" data-testid="select-filter">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All workspaces</SelectItem>
+                    <SelectItem value="stale">Stale (no recent activity)</SelectItem>
+                    <SelectItem value="orphaned">Orphaned (no owner)</SelectItem>
+                    <SelectItem value="missingLabel">Missing sensitivity label</SelectItem>
+                    <SelectItem value="missingMetadata">Missing required metadata</SelectItem>
+                    <SelectItem value="externalUnclassified">External & unclassified</SelectItem>
+                  </SelectContent>
+                </Select>
+                <Select value={sort} onValueChange={(v) => setSort(v as SortKey)}>
+                  <SelectTrigger className="w-[180px] h-9" data-testid="select-sort">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="scoreAsc">Lowest score first</SelectItem>
+                    <SelectItem value="scoreDesc">Highest score first</SelectItem>
+                    <SelectItem value="lastActivityDesc">Oldest activity first</SelectItem>
+                    <SelectItem value="lastActivityAsc">Newest activity first</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            {selected.size > 0 && (
+              <div className="flex items-center gap-3 mt-3 p-2 rounded-lg bg-primary/5 border border-primary/20">
+                <span className="text-sm font-medium" data-testid="text-selection-count">{selected.size} selected</span>
+                <Button size="sm" variant="default" className="h-8 gap-1.5" onClick={handleBulkEmail} data-testid="button-bulk-email">
+                  <Mail className="w-3.5 h-3.5" /> Email owners
+                </Button>
+                <Button size="sm" variant="ghost" className="h-8" onClick={() => setSelected(new Set())} data-testid="button-clear-selection">
+                  Clear
+                </Button>
+              </div>
+            )}
+          </CardHeader>
+          <CardContent className="p-0">
             {isLoading ? (
               <div className="flex items-center justify-center py-16 gap-3 text-muted-foreground">
-                <Loader2 className="w-5 h-5 animate-spin" />
-                Loading workspace review queue...
+                <Loader2 className="w-5 h-5 animate-spin" /> Loading review queue...
               </div>
-            ) : filtered.length === 0 ? (
+            ) : items.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-16 gap-3 text-center">
                 <CheckCircle2 className="w-10 h-10 text-emerald-500/40" />
                 <p className="text-sm text-muted-foreground">
-                  {searchTerm ? "No matches found." : "No workspaces require review."}
+                  {searchTerm || filter !== "all" ? "No matches found." : "All workspaces are compliant — nothing in queue."}
                 </p>
-                <p className="text-xs text-muted-foreground/70">
-                  Workspaces inactive for 90+ days will appear here automatically.
-                </p>
+                {!health?.latestScan && (
+                  <p className="text-xs text-muted-foreground/70">Run a lifecycle scan to populate compliance scores.</p>
+                )}
               </div>
             ) : (
               <Table>
                 <TableHeader className="bg-muted/30">
                   <TableRow>
-                    <TableHead className="pl-6">Workspace</TableHead>
-                    <TableHead>Review Type</TableHead>
-                    <TableHead>Owner / Status</TableHead>
+                    <TableHead className="w-10 pl-6">
+                      <Checkbox checked={allSelected} onCheckedChange={toggleAll} data-testid="checkbox-select-all" />
+                    </TableHead>
+                    <TableHead>Workspace</TableHead>
+                    <TableHead>Score</TableHead>
+                    <TableHead>Issues</TableHead>
+                    <TableHead>Owner</TableHead>
                     <TableHead>Activity</TableHead>
-                    <TableHead className="text-right pr-6">Due</TableHead>
+                    <TableHead className="text-right pr-6">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {filtered.slice(0, 20).map((item) => (
-                    <TableRow key={item.id} className="hover:bg-muted/10 transition-colors group" data-testid={`row-review-${item.id}`}>
-                      <TableCell className="pl-6 py-4">
+                  {items.map((item) => (
+                    <TableRow key={item.id} className="hover:bg-muted/10" data-testid={`row-review-${item.id}`}>
+                      <TableCell className="pl-6">
+                        <Checkbox
+                          checked={selected.has(item.id)}
+                          onCheckedChange={() => toggleOne(item.id)}
+                          data-testid={`checkbox-row-${item.id}`}
+                        />
+                      </TableCell>
+                      <TableCell className="py-4">
                         <div className="flex items-center gap-3">
-                          <div className="w-8 h-8 rounded-lg bg-background border border-border/50 flex items-center justify-center shadow-sm shrink-0">
+                          <div className="w-8 h-8 rounded-lg bg-background border border-border/50 flex items-center justify-center shrink-0">
                             {typeIcon(item.type)}
                           </div>
                           <div className="flex flex-col min-w-0">
-                            <span className="font-semibold text-sm truncate" title={item.displayName}>{item.displayName}</span>
+                            <span className="font-semibold text-sm truncate max-w-[240px]" title={item.displayName} data-testid={`text-workspace-name-${item.id}`}>
+                              {item.displayName}
+                            </span>
                             <span className="text-xs text-muted-foreground">{typeLabel(item.type)}</span>
                           </div>
                         </div>
                       </TableCell>
                       <TableCell>
-                        <Badge variant="outline" className="bg-background font-normal text-xs whitespace-nowrap">
-                          {item.reviewType === "Ownership Confirmation" && <UserX className="w-3 h-3 mr-1" />}
-                          {item.reviewType === "External Guest Review" && <Share2 className="w-3 h-3 mr-1" />}
-                          {item.reviewType}
-                        </Badge>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Badge variant="outline" className={`${scoreBadgeColor(item.score)} font-semibold`} data-testid={`badge-score-${item.id}`}>
+                              {item.score}
+                            </Badge>
+                          </TooltipTrigger>
+                          <TooltipContent className="max-w-xs">
+                            <div className="space-y-1.5 text-xs">
+                              <div className="font-semibold mb-1">Compliance breakdown</div>
+                              {item.breakdown.map((c) => (
+                                <div key={c.key} className="flex items-start gap-2">
+                                  {c.pass ? (
+                                    <CheckCircle2 className="w-3 h-3 text-emerald-500 mt-0.5 shrink-0" />
+                                  ) : (
+                                    <AlertCircle className="w-3 h-3 text-amber-500 mt-0.5 shrink-0" />
+                                  )}
+                                  <div>
+                                    <div className="font-medium">{c.label} ({c.weight}pt)</div>
+                                    {!c.pass && <div className="text-muted-foreground">{c.remediation}</div>}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </TooltipContent>
+                        </Tooltip>
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex flex-wrap gap-1">
+                          {item.isStale && <Badge variant="outline" className="text-[10px] gap-1 bg-amber-500/10 text-amber-600 border-amber-500/30"><Clock className="w-2.5 h-2.5" />Stale</Badge>}
+                          {item.isOrphaned && <Badge variant="outline" className="text-[10px] gap-1 bg-indigo-500/10 text-indigo-600 border-indigo-500/30"><UserX className="w-2.5 h-2.5" />Orphaned</Badge>}
+                          {item.missingLabel && <Badge variant="outline" className="text-[10px] gap-1 bg-rose-500/10 text-rose-600 border-rose-500/30"><Tag className="w-2.5 h-2.5" />Unlabeled</Badge>}
+                          {item.missingMetadata && <Badge variant="outline" className="text-[10px] gap-1 bg-fuchsia-500/10 text-fuchsia-600 border-fuchsia-500/30">Missing meta</Badge>}
+                          {item.externallySharedUnclassified && <Badge variant="outline" className="text-[10px] gap-1 bg-red-500/10 text-red-600 border-red-500/30"><Share2 className="w-2.5 h-2.5" />Ext + unclassified</Badge>}
+                          {item.compliant && (
+                            <Badge variant="outline" className="text-[10px] gap-1 bg-emerald-500/10 text-emerald-600 border-emerald-500/30">
+                              <CheckCircle2 className="w-2.5 h-2.5" />Compliant
+                            </Badge>
+                          )}
+                        </div>
                       </TableCell>
                       <TableCell>
                         <div className="flex flex-col gap-0.5">
-                          <span className={`text-sm flex items-center gap-1 ${item.orphaned ? "text-red-500 font-medium" : ""}`}>
-                            {item.orphaned && <AlertCircle className="w-3 h-3 shrink-0" />}
-                            <span className="truncate max-w-[140px]" title={item.ownerName}>{item.ownerName}</span>
+                          <span className={`text-sm truncate max-w-[160px] ${item.isOrphaned ? "text-red-500 font-medium" : ""}`} title={item.ownerDisplayName ?? ""}>
+                            {item.ownerDisplayName ?? "No owner"}
                           </span>
-                          <span className={`text-[10px] font-medium uppercase tracking-wider ${
-                            item.isOverdue ? "text-red-500" : "text-amber-500"
-                          }`}>
-                            {item.isOverdue ? "Overdue" : "Pending"}
-                          </span>
+                          <span className="text-[10px] text-muted-foreground">{item.ownerCount} steward{item.ownerCount === 1 ? "" : "s"}</span>
                         </div>
                       </TableCell>
                       <TableCell>
-                        <div className="flex items-center gap-2">
-                          <div className="w-16 h-1.5 rounded-full bg-muted overflow-hidden">
-                            <div
-                              className={`h-full ${
-                                item.score > 70 ? "bg-emerald-500" :
-                                item.score > 30 ? "bg-amber-500" : "bg-red-500"
-                              }`}
-                              style={{ width: `${item.score}%` }}
-                            />
-                          </div>
-                          <span className="text-xs text-muted-foreground w-8">{item.score}%</span>
-                        </div>
+                        <span className="text-xs text-muted-foreground" data-testid={`text-activity-${item.id}`}>
+                          {item.daysSinceActivity == null ? "—" : `${item.daysSinceActivity}d ago`}
+                        </span>
                       </TableCell>
                       <TableCell className="text-right pr-6">
-                        <span className={`text-xs font-medium ${item.isOverdue ? "text-red-500" : "text-amber-500"}`}>
-                          {item.dueStr}
-                        </span>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-8 gap-1.5"
+                          disabled={!item.ownerDisplayName || emailOwnerMutation.isPending}
+                          onClick={() => emailOwnerMutation.mutate(item.id)}
+                          data-testid={`button-email-owner-${item.id}`}
+                        >
+                          <Mail className="w-3 h-3" /> Email owner
+                        </Button>
                       </TableCell>
                     </TableRow>
                   ))}
@@ -360,86 +529,30 @@ export default function LifecycleReviewHub() {
               </Table>
             )}
           </CardContent>
-          {!isLoading && reviewQueue.length > 0 && (
-            <CardFooter className="bg-muted/10 border-t border-border/40 p-3 flex justify-center text-xs text-muted-foreground rounded-b-xl">
-              Showing {Math.min(20, filtered.length)} of {reviewQueue.length} workspaces pending review
+          {!isLoading && total > 0 && (
+            <CardFooter className="bg-muted/10 border-t border-border/40 p-3 flex items-center justify-between text-xs text-muted-foreground">
+              <span>
+                Showing {(page - 1) * pageSize + 1}–{Math.min(page * pageSize, total)} of {total}
+              </span>
+              <div className="flex items-center gap-2">
+                <Button size="sm" variant="ghost" disabled={page <= 1} onClick={() => setPage(p => Math.max(1, p - 1))} data-testid="button-prev-page">
+                  Previous
+                </Button>
+                <span data-testid="text-page-indicator">Page {page} / {totalPages}</span>
+                <Button size="sm" variant="ghost" disabled={page >= totalPages} onClick={() => setPage(p => Math.min(totalPages, p + 1))} data-testid="button-next-page">
+                  Next
+                </Button>
+              </div>
             </CardFooter>
           )}
         </Card>
 
-        <div className="space-y-6">
-          <Card className="glass-panel border-primary/20 bg-gradient-to-br from-primary/5 to-background">
-            <CardHeader className="pb-3">
-              <CardTitle className="text-base flex items-center gap-2">
-                <ShieldAlert className="w-4 h-4 text-primary" />
-                Suggested Actions
-              </CardTitle>
-              <CardDescription className="text-xs">
-                Recommended next steps based on your workspace inventory
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="rounded-lg bg-background/60 p-3 border border-border/50 text-sm">
-                <p className="font-medium text-foreground mb-1 flex items-center justify-between">
-                  <span className="flex items-center gap-1.5"><Archive className="w-4 h-4 text-amber-500" /> Archive Candidates</span>
-                  {!isLoading && <Badge className="bg-primary text-primary-foreground text-[10px] h-5 px-1.5">{stats.overdue} Sites</Badge>}
-                </p>
-                <p className="text-muted-foreground text-xs leading-relaxed">
-                  These workspaces have been inactive for 180+ days. Review before archiving.
-                </p>
-                <Button size="sm" className="w-full mt-3 h-8 text-xs bg-primary/90" disabled>
-                  Review Archive Candidates
-                </Button>
-              </div>
-
-              <div className="rounded-lg bg-background/60 p-3 border border-border/50 text-sm">
-                <p className="font-medium text-foreground mb-1 flex items-center justify-between">
-                  <span className="flex items-center gap-1.5"><Users className="w-4 h-4 text-blue-500" /> Reassign Ownership</span>
-                  {!isLoading && <Badge className="bg-primary text-primary-foreground text-[10px] h-5 px-1.5">{stats.orphaned} Orphaned</Badge>}
-                </p>
-                <p className="text-muted-foreground text-xs leading-relaxed">
-                  No active owners found for these workspaces. Assign new owners to maintain governance.
-                </p>
-                <Button size="sm" variant="outline" className="w-full mt-3 h-8 text-xs border-primary/20 hover:bg-primary/5 text-primary" disabled>
-                  Suggest New Owners
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card className="glass-panel border-border/50">
-            <CardHeader className="pb-3">
-              <CardTitle className="text-base">Lifecycle Policies</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              <div className="flex items-center justify-between p-2 rounded-lg bg-muted/30 border border-border/40">
-                <div className="flex items-center gap-2">
-                  <div className="w-2 h-2 rounded-full bg-emerald-500" />
-                  <span className="text-sm font-medium">Inactivity Threshold (90 days)</span>
-                </div>
-                <Badge variant="outline" className="text-[10px]">Active</Badge>
-              </div>
-              <div className="flex items-center justify-between p-2 rounded-lg bg-muted/30 border border-border/40">
-                <div className="flex items-center gap-2">
-                  <div className="w-2 h-2 rounded-full bg-emerald-500" />
-                  <span className="text-sm font-medium">Archive Review (180 days)</span>
-                </div>
-                <Badge variant="outline" className="text-[10px]">Active</Badge>
-              </div>
-              <div className="flex items-center justify-between p-2 rounded-lg bg-muted/30 border border-border/40">
-                <div className="flex items-center gap-2">
-                  <div className="w-2 h-2 rounded-full bg-amber-500" />
-                  <span className="text-sm font-medium">Orphan Escalation</span>
-                </div>
-                <Badge variant="outline" className="text-[10px]">Draft</Badge>
-              </div>
-              <Button variant="link" size="sm" className="w-full text-xs text-muted-foreground" asChild>
-                <Link href="/app/admin/policies">Manage Policies →</Link>
-              </Button>
-            </CardContent>
-          </Card>
+        <div className="flex justify-end">
+          <Button variant="link" size="sm" className="text-xs text-muted-foreground" asChild>
+            <Link href="/app/admin/policies">Manage Lifecycle Policies →</Link>
+          </Button>
         </div>
       </div>
-    </div>
+    </TooltipProvider>
   );
 }
