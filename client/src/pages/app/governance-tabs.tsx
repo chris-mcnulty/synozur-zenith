@@ -1,5 +1,7 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo, useCallback } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
+import { SavedViewsBar } from "@/components/saved-views-bar";
+import { useSavedViewController, type ViewState } from "@/lib/saved-views";
 import { queryClient } from "@/lib/queryClient";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -413,6 +415,25 @@ export function GovernanceSharingTab({ tenantConnectionId }: { tenantConnectionI
   const [detailPage, setDetailPage] = useState(1);
   const { toast } = useToast();
 
+  const buildViewState = useCallback<() => ViewState>(() => ({
+    filterJson: { linkTypeFilter, resourceTypeFilter, search },
+    sortJson: {},
+    columnsJson: {},
+  }), [linkTypeFilter, resourceTypeFilter, search]);
+  const applyViewState = useCallback((state: ViewState) => {
+    const f = state.filterJson as { linkTypeFilter?: string; resourceTypeFilter?: string; search?: string };
+    if (typeof f.linkTypeFilter === "string") setLinkTypeFilter(f.linkTypeFilter);
+    if (typeof f.resourceTypeFilter === "string") setResourceTypeFilter(f.resourceTypeFilter);
+    if (typeof f.search === "string") setSearch(f.search);
+  }, []);
+  const viewState = useMemo<ViewState>(() => buildViewState(), [buildViewState]);
+  const { activeViewId, applyView, clearActiveView, syncStateToUrl } = useSavedViewController({
+    page: "sharing_links",
+    buildState: buildViewState,
+    applyState: applyViewState,
+  });
+  useEffect(() => { syncStateToUrl(); }, [viewState, syncStateToUrl]);
+
   const { data: latestRun, refetch: refetchRun } = useQuery<SharingLinkDiscoveryRun | null>({
     queryKey: [`/api/admin/tenants/${tenantConnectionId}/sharing-links/latest-run`],
     queryFn: async () => {
@@ -641,7 +662,18 @@ export function GovernanceSharingTab({ tenantConnectionId }: { tenantConnectionI
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h3 className="text-lg font-semibold">Sharing Links</h3>
+        <div>
+          <h3 className="text-lg font-semibold">Sharing Links</h3>
+          <div className="mt-2">
+            <SavedViewsBar
+              page="sharing_links"
+              currentState={viewState}
+              activeViewId={activeViewId}
+              onApplyView={applyView}
+              onClearView={clearActiveView}
+            />
+          </div>
+        </div>
         <Button
           onClick={() => scanMutation.mutate()}
           disabled={scanMutation.isPending || latestRun?.status === "RUNNING" || !tenantConnectionId}

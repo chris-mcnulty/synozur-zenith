@@ -2100,3 +2100,170 @@ export const insertScheduledJobRunSchema = createInsertSchema(scheduledJobRuns).
 });
 export type InsertScheduledJobRun = z.infer<typeof insertScheduledJobRunSchema>;
 export type ScheduledJobRun = typeof scheduledJobRuns.$inferSelect;
+
+// ── Saved Views ───────────────────────────────────────────────────────────
+// Each inventory page can save its current filter / sort / column state as a
+// reusable view. Views are private by default, can be shared org-wide by
+// Tenant Admins, and have a stable URL so a teammate can land on the same
+// filter state with a click.
+export const SAVED_VIEW_PAGES = [
+  "site_governance",
+  "sharing_links",
+  "recordings",
+  "purview",
+  "workspaces",
+] as const;
+export type SavedViewPage = (typeof SAVED_VIEW_PAGES)[number];
+
+export const SAVED_VIEW_SCOPES = ["PRIVATE", "ORG"] as const;
+export type SavedViewScope = (typeof SAVED_VIEW_SCOPES)[number];
+
+export const savedViews = pgTable("saved_views", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  organizationId: varchar("organization_id").notNull(),
+  ownerUserId: varchar("owner_user_id").notNull(),
+  page: text("page").notNull(),
+  name: text("name").notNull(),
+  filterJson: jsonb("filter_json").$type<Record<string, unknown>>().notNull().default(sql`'{}'::jsonb`),
+  sortJson: jsonb("sort_json").$type<{ column?: string; direction?: "asc" | "desc" } | Record<string, unknown>>().notNull().default(sql`'{}'::jsonb`),
+  columnsJson: jsonb("columns_json").$type<{ visible?: string[]; hidden?: string[] } | Record<string, unknown>>().notNull().default(sql`'{}'::jsonb`),
+  scope: text("scope").notNull().default("PRIVATE"),
+  pinnedByUserIds: text("pinned_by_user_ids").array().notNull().default(sql`'{}'::text[]`),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+export const insertSavedViewSchema = createInsertSchema(savedViews)
+  .omit({ id: true, createdAt: true, updatedAt: true })
+  .extend({
+    name: z.string().trim().min(1, "Name is required").max(80, "Name is too long"),
+    page: z.enum(SAVED_VIEW_PAGES),
+    scope: z.enum(SAVED_VIEW_SCOPES).default("PRIVATE"),
+    filterJson: z.record(z.unknown()).default({}),
+    sortJson: z.record(z.unknown()).default({}),
+    columnsJson: z.record(z.unknown()).default({}),
+    pinnedByUserIds: z.array(z.string()).default([]),
+  });
+
+export type InsertSavedView = z.infer<typeof insertSavedViewSchema>;
+export type SavedView = typeof savedViews.$inferSelect;
+
+// Built-in views are read-only, bundled with the app, and surfaced under the
+// "Built-in" section of the view picker on each page. Their `id` is a stable,
+// human-readable slug prefixed with "builtin:" so URLs are friendly and the
+// API can recognise them without a DB lookup.
+export type BuiltInSavedView = {
+  id: string;
+  page: SavedViewPage;
+  name: string;
+  description: string;
+  filterJson: Record<string, unknown>;
+  sortJson?: { column?: string; direction?: "asc" | "desc" };
+  columnsJson?: { visible?: string[]; hidden?: string[] };
+};
+
+export const BUILT_IN_SAVED_VIEWS: BuiltInSavedView[] = [
+  // ── Site Governance / Workspaces ──
+  {
+    id: "builtin:site_governance:external-shared-without-label",
+    page: "site_governance",
+    name: "External-Shared Without Label",
+    description: "Sites with external sharing enabled that lack a sensitivity label.",
+    filterJson: { externalSharing: "enabled", sensitivityLabel: "missing" },
+    sortJson: { column: "displayName", direction: "asc" },
+  },
+  {
+    id: "builtin:site_governance:stale-90-days",
+    page: "site_governance",
+    name: "Stale 90+ Days",
+    description: "Sites with no content activity in the last 90 days.",
+    filterJson: { lastActivity: "stale_90" },
+    sortJson: { column: "lastActivityDate", direction: "asc" },
+  },
+  {
+    id: "builtin:site_governance:orphaned",
+    page: "site_governance",
+    name: "Orphaned Sites",
+    description: "Sites with zero owners.",
+    filterJson: { owners: "none" },
+    sortJson: { column: "displayName", direction: "asc" },
+  },
+  {
+    id: "builtin:site_governance:highly-confidential-without-owner",
+    page: "site_governance",
+    name: "Highly Confidential Without Owner",
+    description: "Highly confidential workspaces missing an accountable owner.",
+    filterJson: { sensitivity: "HIGHLY_CONFIDENTIAL", owners: "none" },
+    sortJson: { column: "displayName", direction: "asc" },
+  },
+  // Workspaces page mirrors the site_governance built-ins so the inventory
+  // grid has the same starter set.
+  {
+    id: "builtin:workspaces:external-shared-without-label",
+    page: "workspaces",
+    name: "External-Shared Without Label",
+    description: "Workspaces with external sharing enabled that lack a sensitivity label.",
+    filterJson: { externalSharing: "enabled", sensitivityLabel: "missing" },
+    sortJson: { column: "displayName", direction: "asc" },
+  },
+  {
+    id: "builtin:workspaces:stale-90-days",
+    page: "workspaces",
+    name: "Stale 90+ Days",
+    description: "Workspaces inactive for 90+ days.",
+    filterJson: { lastActivity: "stale_90" },
+    sortJson: { column: "lastActivityDate", direction: "asc" },
+  },
+  {
+    id: "builtin:workspaces:orphaned",
+    page: "workspaces",
+    name: "Orphaned Workspaces",
+    description: "Workspaces with zero owners.",
+    filterJson: { owners: "none" },
+  },
+  // ── Sharing Links ──
+  {
+    id: "builtin:sharing_links:anonymous",
+    page: "sharing_links",
+    name: "Anonymous Links",
+    description: "Sharing links accessible by anyone with the URL.",
+    filterJson: { linkType: "anonymous" },
+  },
+  {
+    id: "builtin:sharing_links:externally-shared",
+    page: "sharing_links",
+    name: "Externally Shared",
+    description: "Sharing links granting access to external recipients.",
+    filterJson: { audience: "external" },
+  },
+  // ── Recordings ──
+  {
+    id: "builtin:recordings:transcripts-only",
+    page: "recordings",
+    name: "With Transcripts",
+    description: "Meeting recordings that have a Stream transcript.",
+    filterJson: { hasTranscript: true },
+  },
+  {
+    id: "builtin:recordings:no-label",
+    page: "recordings",
+    name: "Recordings Without Label",
+    description: "Recordings missing a sensitivity or retention label.",
+    filterJson: { label: "missing" },
+  },
+  // ── Purview ──
+  {
+    id: "builtin:purview:unlabeled-sites",
+    page: "purview",
+    name: "Unlabeled Sites",
+    description: "Workspaces with neither a sensitivity nor a retention label.",
+    filterJson: { coverage: "unlabeled" },
+  },
+  {
+    id: "builtin:purview:sensitivity-only",
+    page: "purview",
+    name: "Sensitivity Labeled Only",
+    description: "Sites with a sensitivity label.",
+    filterJson: { coverage: "labeled" },
+  },
+];

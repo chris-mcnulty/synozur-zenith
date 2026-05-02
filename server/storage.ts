@@ -151,6 +151,11 @@ import {
   type InsertScheduledJobRun,
   type JobType,
   type JobStatus,
+  savedViews,
+  type SavedView,
+  type InsertSavedView,
+  type SavedViewPage,
+  type SavedViewScope,
 } from "@shared/schema";
 import {
   decryptRecord,
@@ -563,6 +568,21 @@ export interface IStorage {
    * runs orphaned by a previous crash/restart.
    */
   reconcileOrphanedJobRuns(maxAgeMs?: number): Promise<number>;
+
+  // ── Saved Views ──
+  listSavedViewsForUser(params: {
+    organizationId: string;
+    userId: string;
+    page: SavedViewPage;
+  }): Promise<SavedView[]>;
+  getSavedView(id: string): Promise<SavedView | undefined>;
+  createSavedView(data: InsertSavedView): Promise<SavedView>;
+  updateSavedView(
+    id: string,
+    updates: Partial<Pick<InsertSavedView, "name" | "filterJson" | "sortJson" | "columnsJson" | "scope">>,
+  ): Promise<SavedView | undefined>;
+  deleteSavedView(id: string): Promise<void>;
+  setSavedViewPin(id: string, userId: string, pinned: boolean): Promise<SavedView | undefined>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -4148,6 +4168,88 @@ export class DatabaseStorage implements IStorage {
       )
       .returning({ id: scheduledJobRuns.id });
     return result.length;
+  }
+
+  // ── Saved Views ──
+  async listSavedViewsForUser(params: {
+    organizationId: string;
+    userId: string;
+    page: SavedViewPage;
+  }): Promise<SavedView[]> {
+    return db
+      .select()
+      .from(savedViews)
+      .where(
+        and(
+          eq(savedViews.organizationId, params.organizationId),
+          eq(savedViews.page, params.page),
+          or(
+            eq(savedViews.ownerUserId, params.userId),
+            eq(savedViews.scope, "ORG"),
+          ),
+        ),
+      )
+      .orderBy(desc(savedViews.updatedAt));
+  }
+
+  async getSavedView(id: string): Promise<SavedView | undefined> {
+    const [row] = await db.select().from(savedViews).where(eq(savedViews.id, id));
+    return row ?? undefined;
+  }
+
+  async createSavedView(data: InsertSavedView): Promise<SavedView> {
+    const [row] = await db
+      .insert(savedViews)
+      .values({
+        organizationId: data.organizationId,
+        ownerUserId: data.ownerUserId,
+        page: data.page,
+        name: data.name,
+        filterJson: (data.filterJson ?? {}) as Record<string, unknown>,
+        sortJson: (data.sortJson ?? {}) as Record<string, unknown>,
+        columnsJson: (data.columnsJson ?? {}) as Record<string, unknown>,
+        scope: data.scope ?? "PRIVATE",
+        pinnedByUserIds: data.pinnedByUserIds ?? [],
+      })
+      .returning();
+    return row;
+  }
+
+  async updateSavedView(
+    id: string,
+    updates: Partial<Pick<InsertSavedView, "name" | "filterJson" | "sortJson" | "columnsJson" | "scope">>,
+  ): Promise<SavedView | undefined> {
+    const patch: Record<string, unknown> = { updatedAt: new Date() };
+    if (updates.name !== undefined) patch.name = updates.name;
+    if (updates.filterJson !== undefined) patch.filterJson = updates.filterJson;
+    if (updates.sortJson !== undefined) patch.sortJson = updates.sortJson;
+    if (updates.columnsJson !== undefined) patch.columnsJson = updates.columnsJson;
+    if (updates.scope !== undefined) patch.scope = updates.scope;
+    const [row] = await db
+      .update(savedViews)
+      .set(patch as any)
+      .where(eq(savedViews.id, id))
+      .returning();
+    return row ?? undefined;
+  }
+
+  async deleteSavedView(id: string): Promise<void> {
+    await db.delete(savedViews).where(eq(savedViews.id, id));
+  }
+
+  async setSavedViewPin(id: string, userId: string, pinned: boolean): Promise<SavedView | undefined> {
+    const existing = await this.getSavedView(id);
+    if (!existing) return undefined;
+    const current = existing.pinnedByUserIds ?? [];
+    const next = pinned
+      ? Array.from(new Set([...current, userId]))
+      : current.filter((u) => u !== userId);
+    const [row] = await db
+      .update(savedViews)
+      .set({ pinnedByUserIds: next, updatedAt: new Date() })
+      .where(eq(savedViews.id, id))
+      .returning();
+    return row ?? undefined;
   }
 }
 

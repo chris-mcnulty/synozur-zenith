@@ -1,5 +1,7 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
+import { SavedViewsBar } from "@/components/saved-views-bar";
+import { useSavedViewController, type ViewState } from "@/lib/saved-views";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useTenant } from "@/lib/tenant-context";
 import { useToast } from "@/hooks/use-toast";
@@ -155,6 +157,23 @@ export default function RecordingsPage() {
   const { toast } = useToast();
   const [search, setSearch] = useState("");
   const [quickFilter, setQuickFilter] = useState<QuickFilter>("all");
+  const buildViewState = useCallback<() => ViewState>(() => ({
+    filterJson: { search, quickFilter },
+    sortJson: {},
+    columnsJson: {},
+  }), [search, quickFilter]);
+  const applyViewState = useCallback((state: ViewState) => {
+    const f = state.filterJson as { search?: string; quickFilter?: QuickFilter };
+    if (typeof f.search === "string") setSearch(f.search);
+    if (f.quickFilter) setQuickFilter(f.quickFilter);
+  }, []);
+  const viewState = useMemo<ViewState>(() => buildViewState(), [buildViewState]);
+  const { activeViewId: rdgActiveViewId, applyView: rdgApplyView, clearActiveView: rdgClearView, syncStateToUrl: rdgSyncUrl } = useSavedViewController({
+    page: "recordings",
+    buildState: buildViewState,
+    applyState: applyViewState,
+  });
+  useEffect(() => { rdgSyncUrl(); }, [viewState, rdgSyncUrl]);
   const [selected, setSelected] = useState<TeamsRecording | null>(null);
 
   const tenantConnectionId = selectedTenant?.id;
@@ -285,6 +304,15 @@ export default function RecordingsPage() {
           <p className="text-muted-foreground text-sm mt-1">
             Teams meeting recordings and transcripts across channels and OneDrive
           </p>
+          <div className="mt-3">
+            <SavedViewsBar
+              page="recordings"
+              currentState={viewState}
+              activeViewId={rdgActiveViewId}
+              onApplyView={rdgApplyView}
+              onClearView={rdgClearView}
+            />
+          </div>
         </div>
         <Button
           onClick={() => syncMutation.mutate()}

@@ -1,4 +1,6 @@
-import React, { useState, useEffect, useMemo, useRef } from "react";
+import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
+import { SavedViewsBar } from "@/components/saved-views-bar";
+import { useSavedViewController, type ViewState } from "@/lib/saved-views";
 import { Link } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import type { Workspace } from "@shared/schema";
@@ -137,6 +139,42 @@ export default function GovernancePage() {
   const [filterAge, setFilterAge] = useState("all");
   const [outcomeFilters, setOutcomeFilters] = useState<Record<string, string>>({});
   const [filterStatus, setFilterStatus] = useState("active");
+
+  const buildViewState = useCallback<() => ViewState>(() => ({
+    filterJson: {
+      searchTerm,
+      filterType, filterSensitivity, filterMetadata, filterDepartment,
+      filterSize, filterAge, filterStatus, outcomeFilters,
+    },
+    sortJson: { sortColumn, sortDirection },
+    columnsJson: { groupByHubs },
+  }), [searchTerm, filterType, filterSensitivity, filterMetadata, filterDepartment, filterSize, filterAge, filterStatus, outcomeFilters, sortColumn, sortDirection, groupByHubs]);
+  const applyViewState = useCallback((state: ViewState) => {
+    const f = state.filterJson as Record<string, unknown>;
+    if (typeof f.searchTerm === "string") setSearchTerm(f.searchTerm);
+    if (typeof f.filterType === "string") setFilterType(f.filterType);
+    if (typeof f.filterSensitivity === "string") setFilterSensitivity(f.filterSensitivity);
+    if (typeof f.filterMetadata === "string") setFilterMetadata(f.filterMetadata);
+    if (typeof f.filterDepartment === "string") setFilterDepartment(f.filterDepartment);
+    if (typeof f.filterSize === "string") setFilterSize(f.filterSize);
+    if (typeof f.filterAge === "string") setFilterAge(f.filterAge);
+    if (typeof f.filterStatus === "string") setFilterStatus(f.filterStatus);
+    if (f.outcomeFilters && typeof f.outcomeFilters === "object") {
+      setOutcomeFilters(f.outcomeFilters as Record<string, string>);
+    }
+    const s = state.sortJson as { sortColumn?: string; sortDirection?: "asc" | "desc" };
+    if (typeof s.sortColumn === "string") setSortColumn(s.sortColumn);
+    if (s.sortDirection === "asc" || s.sortDirection === "desc") setSortDirection(s.sortDirection);
+    const c = state.columnsJson as { groupByHubs?: boolean };
+    if (typeof c.groupByHubs === "boolean") setGroupByHubs(c.groupByHubs);
+  }, []);
+  const govViewState = useMemo<ViewState>(() => buildViewState(), [buildViewState]);
+  const { activeViewId: govActiveViewId, applyView: govApplyView, clearActiveView: govClearView, syncStateToUrl: govSyncUrl } = useSavedViewController({
+    page: "site_governance",
+    buildState: buildViewState,
+    applyState: applyViewState,
+  });
+  useEffect(() => { govSyncUrl(); }, [govViewState, govSyncUrl]);
 
   const [bulkSensitivity, setBulkSensitivity] = useState("");
   const [bulkDepartment, setBulkDepartment] = useState("");
@@ -1271,6 +1309,15 @@ export default function GovernancePage() {
         <div>
           <h1 className="text-3xl font-bold tracking-tight">SharePoint Sites</h1>
           <p className="text-muted-foreground mt-1">Enumerate and inspect SharePoint sites across your tenant</p>
+          <div className="mt-3">
+            <SavedViewsBar
+              page="site_governance"
+              currentState={govViewState}
+              activeViewId={govActiveViewId}
+              onApplyView={govApplyView}
+              onClearView={govClearView}
+            />
+          </div>
         </div>
       </div>
 

@@ -1,4 +1,6 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect, useCallback } from "react";
+import { SavedViewsBar } from "@/components/saved-views-bar";
+import { useSavedViewController, type ViewState } from "@/lib/saved-views";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient } from "@/lib/queryClient";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -91,6 +93,26 @@ export default function OneDriveInventoryPage() {
   const [statusFilter, setStatusFilter] = useState("all");
   const [quotaFilter, setQuotaFilter] = useState("all");
   const [showExcluded, setShowExcluded] = useState(false);
+
+  const buildViewState = useCallback<() => ViewState>(() => ({
+    filterJson: { search, statusFilter, quotaFilter, showExcluded },
+    sortJson: {},
+    columnsJson: {},
+  }), [search, statusFilter, quotaFilter, showExcluded]);
+  const applyViewState = useCallback((state: ViewState) => {
+    const f = state.filterJson as { search?: string; statusFilter?: string; quotaFilter?: string; showExcluded?: boolean };
+    if (typeof f.search === "string") setSearch(f.search);
+    if (typeof f.statusFilter === "string") setStatusFilter(f.statusFilter);
+    if (typeof f.quotaFilter === "string") setQuotaFilter(f.quotaFilter);
+    if (typeof f.showExcluded === "boolean") setShowExcluded(f.showExcluded);
+  }, []);
+  const viewState = useMemo<ViewState>(() => buildViewState(), [buildViewState]);
+  const { activeViewId, applyView, clearActiveView, syncStateToUrl } = useSavedViewController({
+    page: "workspaces",
+    buildState: buildViewState,
+    applyState: applyViewState,
+  });
+  useEffect(() => { syncStateToUrl(); }, [viewState, syncStateToUrl]);
   const { selectedTenant, isFeatureEnabled } = useTenant();
   const { toast } = useToast();
   const tenantConnectionId = selectedTenant?.id;
@@ -268,6 +290,15 @@ export default function OneDriveInventoryPage() {
           <p className="text-sm text-muted-foreground">
             Full inventory of OneDrive for Business drives across connected tenants.
           </p>
+          <div className="mt-3">
+            <SavedViewsBar
+              page="workspaces"
+              currentState={viewState}
+              activeViewId={activeViewId}
+              onApplyView={applyView}
+              onClearView={clearActiveView}
+            />
+          </div>
         </div>
         <Button
           onClick={() => syncMutation.mutate()}

@@ -1,5 +1,7 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { SavedViewsBar } from "@/components/saved-views-bar";
+import { useSavedViewController, type ViewState } from "@/lib/saved-views";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -105,6 +107,30 @@ export default function PurviewConfigPage() {
   const [coverageSearch, setCoverageSearch] = useState("");
   const [coverageFilter, setCoverageFilter] = useState<"all" | "labeled" | "unlabeled">("all");
   const [resyncBannerDismissed, setResyncBannerDismissed] = useState(false);
+
+  const buildViewState = useCallback<() => ViewState>(() => ({
+    filterJson: { coverageSearch, coverageFilter },
+    sortJson: {},
+    columnsJson: {},
+  }), [coverageSearch, coverageFilter]);
+
+  const applyViewState = useCallback((state: ViewState) => {
+    const f = state.filterJson as { coverageSearch?: string; coverageFilter?: "all" | "labeled" | "unlabeled" };
+    if (typeof f.coverageSearch === "string") setCoverageSearch(f.coverageSearch);
+    if (f.coverageFilter === "all" || f.coverageFilter === "labeled" || f.coverageFilter === "unlabeled") {
+      setCoverageFilter(f.coverageFilter);
+    }
+  }, []);
+
+  const viewState = useMemo<ViewState>(() => buildViewState(), [buildViewState]);
+
+  const { activeViewId, applyView, clearActiveView, syncStateToUrl } = useSavedViewController({
+    page: "purview",
+    buildState: buildViewState,
+    applyState: applyViewState,
+  });
+
+  useEffect(() => { syncStateToUrl(); }, [viewState, syncStateToUrl]);
 
   useEffect(() => {
     setResyncBannerDismissed(false);
@@ -275,6 +301,14 @@ export default function PurviewConfigPage() {
           </p>
         </div>
       </div>
+
+      <SavedViewsBar
+        page="purview"
+        currentState={viewState}
+        activeViewId={activeViewId}
+        onApplyView={applyView}
+        onClearView={clearActiveView}
+      />
 
       {(syncError || retentionSyncError) && (
         <Card className="border-red-500/20 bg-red-500/5" data-testid="card-sync-error">
