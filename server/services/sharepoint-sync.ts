@@ -586,7 +586,28 @@ export async function runSharePointTenantSync(
       // Admin "Archived sites" view (e.g. via Microsoft 365 Archive) appear
       // as live in our inventory and as `0 archived` in lifecycle reports.
       const spoArchivedFlag = enriched.isArchived === true;
-      workspaceData.isArchived = graphArchived || spoArchivedFlag;
+      const archivedNow = graphArchived || spoArchivedFlag;
+      workspaceData.isArchived = archivedNow;
+
+      // BL-019: reconcile lifecycleState from Graph archivalDetails so any
+      // PendingArchive / PendingRestore intent placed by the archive/unarchive
+      // endpoints settles into a terminal Active/Archived state once Graph
+      // confirms the transition. Without this, Pending* states could remain
+      // stuck indefinitely and the badge in the UI would never clear.
+      const existingForLifecycle = await storage.getWorkspaceByM365ObjectId(site.id);
+      const priorLifecycle = ((existingForLifecycle as any)?.lifecycleState ||
+        (archivedNow ? "Archived" : "Active")) as string;
+      if (archivedNow) {
+        workspaceData.lifecycleState = "Archived";
+        if (!(existingForLifecycle as any)?.archivedAt && priorLifecycle !== "PendingArchive") {
+          workspaceData.archivedAt = new Date();
+        }
+      } else {
+        workspaceData.lifecycleState = "Active";
+        workspaceData.archiveReason = null;
+        workspaceData.archivedAt = null;
+        workspaceData.archivedBy = null;
+      }
 
       if (graphArchived || spoArchivedFlag) {
         workspaceData.lockState =
@@ -731,10 +752,14 @@ export async function runSharePointTenantSync(
             await storage.updateWorkspace(ws.id, {
               isDeleted: false,
               isArchived: true,
+              lifecycleState: "Archived",
             } as any);
             reconciledRecoveredCount++;
           } else if (!ws.isArchived) {
-            await storage.updateWorkspace(ws.id, { isArchived: true } as any);
+            await storage.updateWorkspace(ws.id, {
+              isArchived: true,
+              lifecycleState: "Archived",
+            } as any);
             reconciledArchivedCount++;
           }
         } else if (

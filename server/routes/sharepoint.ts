@@ -633,7 +633,7 @@ router.delete("/api/workspaces/:id", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, 
   res.status(204).send();
 });
 
-router.post("/api/workspaces/:id/archive", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN), requireFeature("lifecycleAutomation"), async (req: AuthenticatedRequest, res) => {
+router.post("/api/workspaces/:id/archive", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN), requireFeature("m365WriteBack"), async (req: AuthenticatedRequest, res) => {
   if (!(await isWorkspaceInScope(req, req.params.id))) {
     return res.status(404).json({ message: "Workspace not found" });
   }
@@ -643,8 +643,22 @@ router.post("/api/workspaces/:id/archive", requireRole(ZENITH_ROLES.GOVERNANCE_A
   if (!workspace.tenantConnectionId) return res.status(400).json({ message: "Workspace has no tenant connection" });
   if (!workspace.m365ObjectId) return res.status(400).json({ message: "Workspace has no Graph site ID — sync the workspace first" });
 
+  const reasonRaw = typeof req.body?.reason === "string" ? req.body.reason.trim() : "";
+  if (!reasonRaw || reasonRaw.length < 3) {
+    return res.status(400).json({ message: "Archive reason is required (minimum 3 characters)" });
+  }
+  if (reasonRaw.length > 500) {
+    return res.status(400).json({ message: "Archive reason must be 500 characters or less" });
+  }
+
   const conn = await storage.getTenantConnection(workspace.tenantConnectionId);
   if (!conn) return res.status(404).json({ message: "Tenant connection not found" });
+
+  const auditDetailsBase = {
+    workspaceName: workspace.displayName,
+    siteUrl: workspace.siteUrl,
+    reason: reasonRaw,
+  };
 
   const clientId = conn.clientId || process.env.AZURE_CLIENT_ID!;
   const clientSecret = getEffectiveClientSecret(conn);
@@ -652,57 +666,53 @@ router.post("/api/workspaces/:id/archive", requireRole(ZENITH_ROLES.GOVERNANCE_A
   try {
     graphToken = await getAppToken(conn.tenantId, clientId, clientSecret);
   } catch (err: any) {
-    await storage.createAuditEntry({
-      userId: req.user?.id || null,
-      userEmail: req.user?.email || null,
-      action: 'SITE_ARCHIVED',
-      resource: 'workspace',
+    await logAuditEvent(req, {
+      action: AUDIT_ACTIONS.WORKSPACE_ARCHIVED,
+      resource: "workspace",
       resourceId: workspace.id,
-      organizationId: req.user?.organizationId || null,
       tenantConnectionId: workspace.tenantConnectionId,
-      details: { workspaceName: workspace.displayName, siteUrl: workspace.siteUrl, error: `Failed to acquire Graph token: ${err.message}` },
-      result: 'FAILURE',
-      ipAddress: req.ip || null,
+      details: { ...auditDetailsBase, error: `Failed to acquire Graph token: ${err.message}` },
+      result: "FAILURE",
     });
     return res.status(502).json({ message: `Failed to acquire Graph token: ${err.message}` });
   }
 
   const result = await archiveSite(graphToken, workspace.m365ObjectId!);
   if (!result.success) {
-    await storage.createAuditEntry({
-      userId: req.user?.id || null,
-      userEmail: req.user?.email || null,
-      action: 'SITE_ARCHIVED',
-      resource: 'workspace',
+    await logAuditEvent(req, {
+      action: AUDIT_ACTIONS.WORKSPACE_ARCHIVED,
+      resource: "workspace",
       resourceId: workspace.id,
-      organizationId: req.user?.organizationId || null,
       tenantConnectionId: workspace.tenantConnectionId,
-      details: { workspaceName: workspace.displayName, siteUrl: workspace.siteUrl, error: result.error },
-      result: 'FAILURE',
-      ipAddress: req.ip || null,
+      details: { ...auditDetailsBase, error: result.error },
+      result: "FAILURE",
     });
     return res.status(502).json({ message: `Archive failed: ${result.error}` });
   }
 
-  await storage.updateWorkspace(workspace.id, { isArchived: true, lockState: 'Locked' } as any);
+  const archivedBy = req.user?.email || req.user?.id || null;
+  await storage.updateWorkspace(workspace.id, {
+    isArchived: true,
+    lockState: "Locked",
+    lifecycleState: "PendingArchive",
+    archiveReason: reasonRaw,
+    archivedAt: new Date(),
+    archivedBy,
+  } as any);
 
-  await storage.createAuditEntry({
-    userId: req.user?.id || null,
-    userEmail: req.user?.email || null,
-    action: 'SITE_ARCHIVED',
-    resource: 'workspace',
+  await logAuditEvent(req, {
+    action: AUDIT_ACTIONS.WORKSPACE_ARCHIVED,
+    resource: "workspace",
     resourceId: workspace.id,
-    organizationId: req.user?.organizationId || null,
     tenantConnectionId: workspace.tenantConnectionId,
-    details: { workspaceName: workspace.displayName, siteUrl: workspace.siteUrl },
-    result: 'SUCCESS',
-    ipAddress: req.ip || null,
+    details: { ...auditDetailsBase, lifecycleState: "PendingArchive", archivedBy },
+    result: "SUCCESS",
   });
 
-  res.json({ success: true, workspaceId: workspace.id });
+  res.json({ success: true, workspaceId: workspace.id, lifecycleState: "PendingArchive", reason: reasonRaw });
 });
 
-router.post("/api/workspaces/:id/unarchive", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN), requireFeature("lifecycleAutomation"), async (req: AuthenticatedRequest, res) => {
+router.post("/api/workspaces/:id/unarchive", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN), requireFeature("m365WriteBack"), async (req: AuthenticatedRequest, res) => {
   if (!(await isWorkspaceInScope(req, req.params.id))) {
     return res.status(404).json({ message: "Workspace not found" });
   }
@@ -712,8 +722,19 @@ router.post("/api/workspaces/:id/unarchive", requireRole(ZENITH_ROLES.GOVERNANCE
   if (!workspace.tenantConnectionId) return res.status(400).json({ message: "Workspace has no tenant connection" });
   if (!workspace.m365ObjectId) return res.status(400).json({ message: "Workspace has no Graph site ID — sync the workspace first" });
 
+  const reasonRaw = typeof req.body?.reason === "string" ? req.body.reason.trim() : "";
+  if (reasonRaw && reasonRaw.length > 500) {
+    return res.status(400).json({ message: "Restore reason must be 500 characters or less" });
+  }
+
   const conn = await storage.getTenantConnection(workspace.tenantConnectionId);
   if (!conn) return res.status(404).json({ message: "Tenant connection not found" });
+
+  const auditDetailsBase = {
+    workspaceName: workspace.displayName,
+    siteUrl: workspace.siteUrl,
+    reason: reasonRaw || null,
+  };
 
   const clientId = conn.clientId || process.env.AZURE_CLIENT_ID!;
   const clientSecret = getEffectiveClientSecret(conn);
@@ -721,54 +742,48 @@ router.post("/api/workspaces/:id/unarchive", requireRole(ZENITH_ROLES.GOVERNANCE
   try {
     graphToken = await getAppToken(conn.tenantId, clientId, clientSecret);
   } catch (err: any) {
-    await storage.createAuditEntry({
-      userId: req.user?.id || null,
-      userEmail: req.user?.email || null,
-      action: 'SITE_UNARCHIVED',
-      resource: 'workspace',
+    await logAuditEvent(req, {
+      action: AUDIT_ACTIONS.WORKSPACE_UNARCHIVED,
+      resource: "workspace",
       resourceId: workspace.id,
-      organizationId: req.user?.organizationId || null,
       tenantConnectionId: workspace.tenantConnectionId,
-      details: { workspaceName: workspace.displayName, siteUrl: workspace.siteUrl, error: `Failed to acquire Graph token: ${err.message}` },
-      result: 'FAILURE',
-      ipAddress: req.ip || null,
+      details: { ...auditDetailsBase, error: `Failed to acquire Graph token: ${err.message}` },
+      result: "FAILURE",
     });
     return res.status(502).json({ message: `Failed to acquire Graph token: ${err.message}` });
   }
 
   const result = await unarchiveSite(graphToken, workspace.m365ObjectId!);
   if (!result.success) {
-    await storage.createAuditEntry({
-      userId: req.user?.id || null,
-      userEmail: req.user?.email || null,
-      action: 'SITE_UNARCHIVED',
-      resource: 'workspace',
+    await logAuditEvent(req, {
+      action: AUDIT_ACTIONS.WORKSPACE_UNARCHIVED,
+      resource: "workspace",
       resourceId: workspace.id,
-      organizationId: req.user?.organizationId || null,
       tenantConnectionId: workspace.tenantConnectionId,
-      details: { workspaceName: workspace.displayName, siteUrl: workspace.siteUrl, error: result.error },
-      result: 'FAILURE',
-      ipAddress: req.ip || null,
+      details: { ...auditDetailsBase, error: result.error },
+      result: "FAILURE",
     });
     return res.status(502).json({ message: `Unarchive failed: ${result.error}` });
   }
 
-  await storage.updateWorkspace(workspace.id, { isArchived: false, lockState: 'Unlock' } as any);
+  const restoredBy = req.user?.email || req.user?.id || null;
+  await storage.updateWorkspace(workspace.id, {
+    lifecycleState: "PendingRestore",
+    archiveReason: null,
+    archivedAt: null,
+    archivedBy: null,
+  } as any);
 
-  await storage.createAuditEntry({
-    userId: req.user?.id || null,
-    userEmail: req.user?.email || null,
-    action: 'SITE_UNARCHIVED',
-    resource: 'workspace',
+  await logAuditEvent(req, {
+    action: AUDIT_ACTIONS.WORKSPACE_UNARCHIVED,
+    resource: "workspace",
     resourceId: workspace.id,
-    organizationId: req.user?.organizationId || null,
     tenantConnectionId: workspace.tenantConnectionId,
-    details: { workspaceName: workspace.displayName, siteUrl: workspace.siteUrl },
-    result: 'SUCCESS',
-    ipAddress: req.ip || null,
+    details: { ...auditDetailsBase, lifecycleState: "PendingRestore", restoredBy },
+    result: "SUCCESS",
   });
 
-  res.json({ success: true, workspaceId: workspace.id });
+  res.json({ success: true, workspaceId: workspace.id, lifecycleState: "PendingRestore" });
 });
 
 router.delete("/api/workspaces/:id/m365", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN), requireFeature("lifecycleAutomation"), async (req: AuthenticatedRequest, res) => {
@@ -1439,6 +1454,23 @@ router.post("/api/workspaces/:id/sync", requireRole(ZENITH_ROLES.OPERATOR, ZENIT
       updates.lockState = workspace.lockState || "Unknown";
       if (updates.lockState === "Unknown") {
         warnings.push("Could not determine lock state — SPO REST API inaccessible and site is not archived.");
+      }
+    }
+    // Reconcile lifecycleState from Graph archivalDetails. Pending states
+    // (PendingArchive / PendingRestore) settle into terminal Active / Archived
+    // once the Graph state matches the requested operation.
+    {
+      const currentLifecycle = (workspace.lifecycleState || (workspace.isArchived ? "Archived" : "Active")) as string;
+      if (archiveData.isArchived) {
+        updates.lifecycleState = "Archived";
+        if (!workspace.archivedAt && currentLifecycle !== "PendingArchive") {
+          updates.archivedAt = new Date();
+        }
+      } else {
+        updates.lifecycleState = "Active";
+        updates.archiveReason = null;
+        updates.archivedAt = null;
+        updates.archivedBy = null;
       }
     }
     updates.isDeleted = false;

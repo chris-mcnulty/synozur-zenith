@@ -80,6 +80,7 @@ import {
   SheetFooter,
 } from "@/components/ui/sheet";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
   SelectContent,
@@ -760,12 +761,15 @@ export default function GovernancePage() {
     if (filterStatus !== "all") {
       result = result.filter(ws => {
         const state = ws.lockState || "Unlock";
-        if (filterStatus === "active") return state === "Unlock" && !ws.isDeleted && !ws.isArchived;
+        const lifecycle = ws.lifecycleState ?? undefined;
+        if (filterStatus === "active") return state === "Unlock" && !ws.isDeleted && !ws.isArchived && lifecycle !== "PendingArchive";
         if (filterStatus === "locked") return state === "NoAccess";
         if (filterStatus === "readonly") return state === "ReadOnly";
         if (filterStatus === "noadd") return state === "NoAdditions";
         if (filterStatus === "deleted") return ws.isDeleted === true;
-        if (filterStatus === "archived") return ws.isArchived === true;
+        if (filterStatus === "archived") return ws.isArchived === true && lifecycle !== "PendingArchive";
+        if (filterStatus === "pendingarchive") return lifecycle === "PendingArchive";
+        if (filterStatus === "pendingrestore") return lifecycle === "PendingRestore";
         return true;
       });
     }
@@ -997,15 +1001,20 @@ export default function GovernancePage() {
   });
 
   const [confirmAction, setConfirmAction] = useState<{ kind: "archive" | "unarchive" | "delete"; ws: Workspace } | null>(null);
+  const [archiveReason, setArchiveReason] = useState("");
+
+  useEffect(() => {
+    if (!confirmAction) setArchiveReason("");
+  }, [confirmAction]);
 
   const lifecycleMutation = useMutation({
-    mutationFn: async ({ id, kind }: { id: string; kind: "archive" | "unarchive" | "delete" }) => {
+    mutationFn: async ({ id, kind, reason }: { id: string; kind: "archive" | "unarchive" | "delete"; reason?: string }) => {
       if (kind === "archive") {
-        const res = await apiRequest("POST", `/api/workspaces/${id}/archive`);
+        const res = await apiRequest("POST", `/api/workspaces/${id}/archive`, { reason });
         return res.json();
       }
       if (kind === "unarchive") {
-        const res = await apiRequest("POST", `/api/workspaces/${id}/unarchive`);
+        const res = await apiRequest("POST", `/api/workspaces/${id}/unarchive`, reason ? { reason } : {});
         return res.json();
       }
       const res = await apiRequest("DELETE", `/api/workspaces/${id}/m365`);
@@ -1014,9 +1023,10 @@ export default function GovernancePage() {
     onSuccess: (_data, vars) => {
       queryClient.invalidateQueries({ queryKey: ["/api/workspaces"] });
       setConfirmAction(null);
+      setArchiveReason("");
       const messages = {
-        archive: { title: "Site archived", description: "The site is now read-only in Microsoft 365." },
-        unarchive: { title: "Site unarchived", description: "The site is writable again in Microsoft 365." },
+        archive: { title: "Archive requested", description: "The site will become read-only in Microsoft 365 once Graph completes the archive." },
+        unarchive: { title: "Restore requested", description: "The site will become writable again once Graph completes the restore." },
         delete: { title: "Site deleted in Microsoft 365", description: "Recoverable from the SharePoint Recycle Bin for 93 days." },
       } as const;
       toast(messages[vars.kind]);
@@ -1085,9 +1095,19 @@ export default function GovernancePage() {
                 {ws.isDeleted && (
                   <span className="text-[10px] font-semibold text-destructive bg-destructive/10 px-1.5 py-0.5 rounded">Deleted</span>
                 )}
-                {ws.isArchived && (
-                  <span className="text-[10px] font-semibold text-indigo-600 bg-indigo-500/10 px-1.5 py-0.5 rounded" data-testid={`badge-archived-${ws.id}`}>Archived</span>
-                )}
+                {(() => {
+                  const lifecycle = ws.lifecycleState ?? undefined;
+                  if (lifecycle === "PendingArchive") {
+                    return <span className="text-[10px] font-semibold text-amber-600 bg-amber-500/10 px-1.5 py-0.5 rounded" data-testid={`badge-lifecycle-${ws.id}`}>Pending Archive</span>;
+                  }
+                  if (lifecycle === "PendingRestore") {
+                    return <span className="text-[10px] font-semibold text-amber-600 bg-amber-500/10 px-1.5 py-0.5 rounded" data-testid={`badge-lifecycle-${ws.id}`}>Pending Restore</span>;
+                  }
+                  if (ws.isArchived) {
+                    return <span className="text-[10px] font-semibold text-indigo-600 bg-indigo-500/10 px-1.5 py-0.5 rounded" data-testid={`badge-archived-${ws.id}`}>Archived</span>;
+                  }
+                  return null;
+                })()}
                 {!ws.isArchived && ws.lockState && ws.lockState !== "Unlock" && (
                   <span className="text-[10px] font-semibold text-amber-600 bg-amber-500/10 px-1.5 py-0.5 rounded">
                     {ws.lockState === "NoAccess" ? "Locked" : ws.lockState === "ReadOnly" ? "Read-Only" : ws.lockState}
@@ -2076,8 +2096,10 @@ export default function GovernancePage() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All Statuses</SelectItem>
-                  <SelectItem value="active">Active</SelectItem>
-                  <SelectItem value="archived">Archived</SelectItem>
+                  <SelectItem value="active" data-testid="filter-status-active">Active</SelectItem>
+                  <SelectItem value="archived" data-testid="filter-status-archived">Archived</SelectItem>
+                  <SelectItem value="pendingarchive" data-testid="filter-status-pending-archive">Pending Archive</SelectItem>
+                  <SelectItem value="pendingrestore" data-testid="filter-status-pending-restore">Pending Restore</SelectItem>
                   <SelectItem value="readonly">Read-Only</SelectItem>
                   <SelectItem value="locked">Locked (No Access)</SelectItem>
                   <SelectItem value="noadd">No Additions</SelectItem>
@@ -2330,44 +2352,80 @@ export default function GovernancePage() {
           <AlertDialogHeader>
             <AlertDialogTitle>
               {confirmAction?.kind === "archive" && "Archive site in Microsoft 365?"}
-              {confirmAction?.kind === "unarchive" && "Unarchive site in Microsoft 365?"}
+              {confirmAction?.kind === "unarchive" && "Restore site in Microsoft 365?"}
               {confirmAction?.kind === "delete" && "Delete site in Microsoft 365?"}
             </AlertDialogTitle>
-            <AlertDialogDescription>
-              {confirmAction?.kind === "archive" && (
-                <>
-                  <strong>{confirmAction.ws.displayName}</strong> will be archived in Microsoft 365 and become read-only.
-                  Storage cost is reduced and content remains discoverable. The action is reversible via Unarchive.
-                </>
-              )}
-              {confirmAction?.kind === "unarchive" && (
-                <>
-                  <strong>{confirmAction.ws.displayName}</strong> will be unarchived in Microsoft 365 and become writable again.
-                </>
-              )}
-              {confirmAction?.kind === "delete" && (
-                <>
-                  <strong>{confirmAction.ws.displayName}</strong> will be deleted in Microsoft 365.
-                  The site moves to the SharePoint Recycle Bin and is recoverable for <strong>93 days</strong>;
-                  after that it is permanently destroyed. Type-confirm not required, but this action affects real M365 data.
-                </>
-              )}
+            <AlertDialogDescription asChild>
+              <div className="space-y-3">
+                {confirmAction?.kind === "archive" && (
+                  <p>
+                    <strong>{confirmAction.ws.displayName}</strong> will be archived in Microsoft 365 and become read-only.
+                    Storage cost is reduced and content remains discoverable. The action is reversible via Restore.
+                  </p>
+                )}
+                {confirmAction?.kind === "unarchive" && (
+                  <p>
+                    <strong>{confirmAction.ws.displayName}</strong> will be restored in Microsoft 365 and become writable again.
+                  </p>
+                )}
+                {confirmAction?.kind === "delete" && (
+                  <p>
+                    <strong>{confirmAction.ws.displayName}</strong> will be deleted in Microsoft 365.
+                    The site moves to the SharePoint Recycle Bin and is recoverable for <strong>93 days</strong>;
+                    after that it is permanently destroyed.
+                  </p>
+                )}
+              </div>
             </AlertDialogDescription>
           </AlertDialogHeader>
+          {(confirmAction?.kind === "archive" || confirmAction?.kind === "unarchive") && (
+            <div className="space-y-2">
+              <Label htmlFor="lifecycle-reason" className="text-sm">
+                {confirmAction.kind === "archive" ? "Reason for archive" : "Reason for restore (optional)"}
+                {confirmAction.kind === "archive" && <span className="text-destructive ml-0.5">*</span>}
+              </Label>
+              <Textarea
+                id="lifecycle-reason"
+                value={archiveReason}
+                onChange={(e) => setArchiveReason(e.target.value)}
+                placeholder={confirmAction.kind === "archive"
+                  ? "e.g. Project closed; retain content read-only for 1 year before disposition."
+                  : "e.g. Project reopened; site needed for active work."}
+                maxLength={500}
+                rows={3}
+                data-testid="textarea-archive-reason"
+              />
+              <p className="text-xs text-muted-foreground">
+                {confirmAction.kind === "archive"
+                  ? "This reason is recorded in the audit log and stored on the workspace."
+                  : "Optional. Recorded in the audit log."}
+                {" "}{archiveReason.length}/500
+              </p>
+            </div>
+          )}
           <AlertDialogFooter>
             <AlertDialogCancel data-testid="button-cancel-lifecycle">Cancel</AlertDialogCancel>
             <AlertDialogAction
-              disabled={lifecycleMutation.isPending}
+              disabled={
+                lifecycleMutation.isPending ||
+                (confirmAction?.kind === "archive" && archiveReason.trim().length < 3)
+              }
               className={confirmAction?.kind === "delete" ? "bg-destructive text-destructive-foreground hover:bg-destructive/90" : undefined}
               onClick={(e) => {
                 e.preventDefault();
                 if (confirmAction) {
-                  lifecycleMutation.mutate({ id: confirmAction.ws.id, kind: confirmAction.kind });
+                  lifecycleMutation.mutate({
+                    id: confirmAction.ws.id,
+                    kind: confirmAction.kind,
+                    reason: (confirmAction.kind === "archive" || confirmAction.kind === "unarchive")
+                      ? archiveReason.trim() || undefined
+                      : undefined,
+                  });
                 }
               }}
               data-testid="button-confirm-lifecycle"
             >
-              {lifecycleMutation.isPending ? "Working…" : confirmAction?.kind === "delete" ? "Delete in M365" : confirmAction?.kind === "unarchive" ? "Unarchive" : "Archive"}
+              {lifecycleMutation.isPending ? "Working…" : confirmAction?.kind === "delete" ? "Delete in M365" : confirmAction?.kind === "unarchive" ? "Restore" : "Archive"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

@@ -893,6 +893,25 @@ async function ensureTenantConnectionsSchema() {
       CREATE INDEX IF NOT EXISTS idx_scheduled_job_runs_job_type_started_desc  ON scheduled_job_runs (job_type, started_at DESC);
     `);
 
+    // ── BL-019: Workspace lifecycle state columns (migration 0019) ──────────
+    await client.query(`
+      ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS lifecycle_state text DEFAULT 'Active';
+      ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS archive_reason  text;
+      ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS archived_at     timestamp;
+      ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS archived_by     text;
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_constraint WHERE conname = 'workspaces_lifecycle_state_check'
+        ) THEN
+          ALTER TABLE workspaces
+            ADD CONSTRAINT workspaces_lifecycle_state_check
+            CHECK (lifecycle_state IN ('Active', 'Archived', 'PendingArchive', 'PendingRestore'));
+        END IF;
+      END $$;
+      CREATE INDEX IF NOT EXISTS idx_workspaces_lifecycle_state ON workspaces (lifecycle_state);
+    `);
+
     // Persistent app-only Graph token cache. Encrypted at rest; survives
     // cold starts so we don't refetch from Entra on every restart.
     await client.query(`

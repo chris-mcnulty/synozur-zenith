@@ -42,7 +42,7 @@ const SPO_DELEGATED_PERMISSIONS = [
 
 const GRAPH_PERMISSIONS = [
   { name: "Sites.Read.All", description: "Site inventory — read all site collections" },
-  { name: "Sites.ReadWrite.All", description: "SPE container management — read/write site collections" },
+  { name: "Sites.ReadWrite.All", description: "SPE container management & site archive/restore — read/write site collections (required for BL-019 archive workflow)" },
   { name: "Group.Read.All", description: "Site inventory — read all Microsoft 365 groups" },
   { name: "Group.ReadWrite.All", description: "Sensitivity label write-back — update group properties" },
   { name: "Directory.Read.All", description: "Site inventory — read directory and tenant data" },

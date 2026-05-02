@@ -400,6 +400,62 @@ router.post('/test', requireAuth(), requireRole(ZENITH_ROLES.TENANT_ADMIN), asyn
           checks.push({ step: 'Graph API Access', status: 'warn', message: `Could not reach Graph API: ${graphErr.message}` });
         }
 
+        // BL-019: Verify Sites.ReadWrite.All has been admin-consented (i.e. an
+        // appRoleAssignment exists from this app's service principal to the
+        // Microsoft Graph service principal). A *declared* permission on the
+        // application object is necessary but not sufficient — without admin
+        // consent the archive/restore Graph calls return 403.
+        try {
+          const authHeaders = { Authorization: `Bearer ${tokenResult.accessToken}` };
+          const [graphSpRes, ourSpRes] = await Promise.all([
+            fetch(
+              'https://graph.microsoft.com/v1.0/servicePrincipals?$filter=appId%20eq%20%2700000003-0000-0000-c000-000000000000%27&$select=id,appRoles',
+              { headers: authHeaders },
+            ),
+            fetch(
+              'https://graph.microsoft.com/v1.0/servicePrincipals?$filter=appId%20eq%20%27' + encodeURIComponent(clientId) + '%27&$select=id',
+              { headers: authHeaders },
+            ),
+          ]);
+          if (!graphSpRes.ok || !ourSpRes.ok) {
+            checks.push({ step: 'Sites.ReadWrite.All', status: 'warn', message: 'Could not enumerate service principals to verify Sites.ReadWrite.All admin consent. Required for archive/restore (BL-019).' });
+          } else {
+            const graphSpData = await graphSpRes.json();
+            const ourSpData = await ourSpRes.json();
+            const graphSp = graphSpData.value?.[0];
+            const ourSp = ourSpData.value?.[0];
+            const sitesReadWriteId = (graphSp?.appRoles || []).find(
+              (r: any) => r.value === 'Sites.ReadWrite.All',
+            )?.id;
+            if (!ourSp?.id) {
+              checks.push({ step: 'Sites.ReadWrite.All', status: 'warn', message: 'No service principal found for this app in the tenant. Grant admin consent so Sites.ReadWrite.All takes effect (required for archive/restore — BL-019).' });
+            } else if (!sitesReadWriteId || !graphSp?.id) {
+              checks.push({ step: 'Sites.ReadWrite.All', status: 'warn', message: 'Could not resolve the Sites.ReadWrite.All app role from Microsoft Graph. Required for archive/restore (BL-019).' });
+            } else {
+              const assignRes = await fetch(
+                `https://graph.microsoft.com/v1.0/servicePrincipals/${ourSp.id}/appRoleAssignments?$select=appRoleId,resourceId`,
+                { headers: authHeaders },
+              );
+              if (!assignRes.ok) {
+                checks.push({ step: 'Sites.ReadWrite.All', status: 'warn', message: 'Could not read app role assignments to verify Sites.ReadWrite.All admin consent. Required for archive/restore (BL-019).' });
+              } else {
+                const assignData = await assignRes.json();
+                const assignments: any[] = assignData.value || [];
+                const consented = assignments.some(
+                  (a: any) => a.appRoleId === sitesReadWriteId && a.resourceId === graphSp.id,
+                );
+                if (consented) {
+                  checks.push({ step: 'Sites.ReadWrite.All', status: 'pass', message: 'Sites.ReadWrite.All has been admin-consented — workspace archive/restore (BL-019) is enabled.' });
+                } else {
+                  checks.push({ step: 'Sites.ReadWrite.All', status: 'fail', message: 'Sites.ReadWrite.All is not admin-consented on this app. Workspace archive/restore (BL-019) will fail with 403 — declare the Application permission and click "Grant admin consent" in Entra.' });
+                }
+              }
+            }
+          }
+        } catch (permErr: any) {
+          checks.push({ step: 'Sites.ReadWrite.All', status: 'warn', message: `Could not verify Sites.ReadWrite.All admin consent: ${permErr.message}. Required for archive/restore (BL-019).` });
+        }
+
         msalClient = null;
         return res.json({ success: true, checks, message: 'App registration verified successfully' });
       } else {

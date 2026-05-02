@@ -134,6 +134,8 @@ const ACTION_LABEL_OVERRIDES: Record<string, string> = {
   WORKSPACE_MEMBER_ADDED: "Workspace Member Added",
   WORKSPACE_MEMBER_REMOVED: "Workspace Member Removed",
   SITE_UNARCHIVED: "Site Unarchived",
+  WORKSPACE_ARCHIVED: "Workspace Archived",
+  WORKSPACE_UNARCHIVED: "Workspace Unarchived",
   SITE_DELETED_M365: "Site Deleted in M365",
 };
 

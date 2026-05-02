@@ -811,24 +811,31 @@ router.post(
 );
 
 // 5. Archive (lifecycle) ────────────────────────────────────────────────────
-const archiveBodySchema = z.object({ ...baseBulkSchema });
+const archiveBodySchema = z.object({
+  ...baseBulkSchema,
+  payload: z.object({
+    reason: z.string().trim().min(3, "Archive reason is required").max(500),
+  }),
+});
 
 router.post(
   "/api/workspaces/bulk/archive",
   requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN),
-  requireFeature("lifecycleAutomation"),
+  requireFeature("m365WriteBack"),
   async (req: AuthenticatedRequest, res) => {
     const parsed = archiveBodySchema.safeParse(req.body);
     if (!parsed.success) {
       return res.status(400).json({ message: "Invalid request body", errors: parsed.error.flatten() });
     }
-    const { workspaceIds, filterCriteria } = parsed.data;
+    const { workspaceIds, filterCriteria, payload } = parsed.data;
+    const reason = payload.reason.trim();
+    const archivedBy = req.user?.email || req.user?.id || null;
 
     const validated = await loadAndValidateScope(req, workspaceIds, res);
     if (!validated.ok) return;
     const { workspaces } = validated;
     const auditBase = buildAuditBase(req);
-    const ACTION = "SITE_ARCHIVED";
+    const ACTION = "WORKSPACE_ARCHIVED";
 
     const tokenByTenant = new Map<string, string>();
     const tenantTokenError = new Map<string, string>();
@@ -895,11 +902,21 @@ router.post(
           }, "FAILURE");
           return { workspaceId: ws.id, displayName: ws.displayName, success: false, error: result.error || "Archive failed", tenantConnectionId: ws.tenantConnectionId };
         }
-        const updates: Partial<InsertWorkspace> = { isArchived: true, lockState: "Locked" };
+        const updates: Partial<InsertWorkspace> = {
+          isArchived: true,
+          lockState: "Locked",
+          lifecycleState: "PendingArchive",
+          archiveReason: reason,
+          archivedAt: new Date(),
+          archivedBy,
+        };
         await storage.updateWorkspace(ws.id, updates);
         await recordRowAudit(auditBase, ACTION, ws.id, ws.tenantConnectionId, {
           workspaceName: ws.displayName,
           siteUrl: ws.siteUrl,
+          reason,
+          lifecycleState: "PendingArchive",
+          archivedBy,
         }, "SUCCESS");
         return { workspaceId: ws.id, displayName: ws.displayName, success: true, tenantConnectionId: ws.tenantConnectionId };
       } catch (err: any) {

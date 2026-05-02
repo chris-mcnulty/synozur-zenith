@@ -717,16 +717,20 @@ function SetStewardDialog(props: DialogBaseProps & { role: StewardRole }) {
 function ArchiveDialog(props: DialogBaseProps & { targetWorkspaces: Workspace[] }) {
   const [submitting, setSubmitting] = useState(false);
   const [confirmation, setConfirmation] = useState("");
+  const [reason, setReason] = useState("");
   const { toast } = useToast();
 
   const knownAlreadyArchived = props.targetWorkspaces.filter(ws => ws.isArchived).length;
+  const trimmedReason = reason.trim();
+  const reasonValid = trimmedReason.length >= 3 && trimmedReason.length <= 500;
 
   const submit = async () => {
     setSubmitting(true);
     try {
-      const data = await postBulk<undefined>("/api/workspaces/bulk/archive", {
+      const data = await postBulk<{ reason: string }>("/api/workspaces/bulk/archive", {
         workspaceIds: props.workspaceIds,
         filterCriteria: props.filterCriteria,
+        payload: { reason: trimmedReason },
       });
       toast({
         title: "Archive complete",
@@ -749,7 +753,7 @@ function ArchiveDialog(props: DialogBaseProps & { targetWorkspaces: Workspace[] 
           </DialogTitle>
           <DialogDescription>
             Each site will be locked read-only in Microsoft 365 and marked as archived in Zenith. End
-            users will lose write access until you unarchive.
+            users will lose write access until you restore.
             {knownAlreadyArchived > 0 && (
               <span className="block mt-2 text-amber-600">
                 {knownAlreadyArchived} of these site{knownAlreadyArchived === 1 ? " is" : "s are"} already archived and will be skipped.
@@ -757,6 +761,23 @@ function ArchiveDialog(props: DialogBaseProps & { targetWorkspaces: Workspace[] 
             )}
           </DialogDescription>
         </DialogHeader>
+        <div className="space-y-2 py-2">
+          <Label htmlFor="bulk-archive-reason">
+            Reason for archive<span className="text-destructive ml-0.5">*</span>
+          </Label>
+          <Textarea
+            id="bulk-archive-reason"
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            placeholder="e.g. End-of-quarter cleanup; retain content read-only for 1 year before disposition."
+            maxLength={500}
+            rows={3}
+            data-testid="textarea-bulk-archive-reason"
+          />
+          <p className="text-xs text-muted-foreground">
+            Recorded in the audit log and stored on each workspace. {reason.length}/500
+          </p>
+        </div>
         <div className="space-y-2 py-2">
           <Label htmlFor="archive-confirm">Type ARCHIVE to confirm</Label>
           <Input
@@ -772,7 +793,7 @@ function ArchiveDialog(props: DialogBaseProps & { targetWorkspaces: Workspace[] 
           <Button
             variant="destructive"
             onClick={submit}
-            disabled={submitting || confirmation !== "ARCHIVE"}
+            disabled={submitting || confirmation !== "ARCHIVE" || !reasonValid}
             data-testid="button-bulk-archive-confirm"
           >
             {submitting ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Archive className="w-4 h-4 mr-2" />}

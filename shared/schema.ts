@@ -46,6 +46,10 @@ export const workspaces = pgTable("workspaces", {
   rootWebTemplate: text("root_web_template"),
   isArchived: boolean("is_archived").default(false),
   isDeleted: boolean("is_deleted").default(false),
+  lifecycleState: text("lifecycle_state").default("Active"),
+  archiveReason: text("archive_reason"),
+  archivedAt: timestamp("archived_at"),
+  archivedBy: text("archived_by"),
   siteCreatedDate: text("site_created_date"),
   reportRefreshDate: text("report_refresh_date"),
   propertyBag: jsonb("property_bag").$type<Record<string, string>>(),
@@ -61,6 +65,9 @@ export const insertWorkspaceSchema = createInsertSchema(workspaces).omit({
   id: true,
   createdAt: true,
 });
+
+export const LIFECYCLE_STATES = ["Active", "Archived", "PendingArchive", "PendingRestore"] as const;
+export type LifecycleState = typeof LIFECYCLE_STATES[number];
 
 export type InsertWorkspace = z.infer<typeof insertWorkspaceSchema>;
 export type Workspace = typeof workspaces.$inferSelect;

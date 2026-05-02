@@ -43,6 +43,7 @@ import {
   Trash2,
   RefreshCw,
   Archive,
+  ArchiveRestore,
   Library,
   UserPlus,
   X as XIcon,
@@ -256,6 +257,27 @@ export default function WorkspaceDetailsPage() {
       } else {
         toast({ title: "Sync Failed", description: msg, variant: "destructive" });
       }
+    },
+  });
+
+  const [showRestoreDialog, setShowRestoreDialog] = useState(false);
+  const [restoreReason, setRestoreReason] = useState("");
+
+  const restoreMutation = useMutation({
+    mutationFn: async () => {
+      const body = restoreReason.trim() ? { reason: restoreReason.trim() } : {};
+      const res = await apiRequest("POST", `/api/workspaces/${id}/unarchive`, body);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [`/api/workspaces/${id}`] });
+      queryClient.invalidateQueries({ queryKey: ["/api/workspaces"] });
+      setShowRestoreDialog(false);
+      setRestoreReason("");
+      toast({ title: "Restore requested", description: "The site will become writable again once Graph completes the restore." });
+    },
+    onError: (err: any) => {
+      toast({ title: "Restore failed", description: err?.message || "Could not restore the workspace.", variant: "destructive" });
     },
   });
 
@@ -641,14 +663,37 @@ export default function WorkspaceDetailsPage() {
       )}
 
       {workspace.isArchived && (
-        <div className="flex items-center gap-3 p-4 rounded-xl bg-indigo-500/10 border border-indigo-500/20 text-indigo-600 dark:text-indigo-400" data-testid="banner-archived">
-          <Archive className="w-5 h-5 shrink-0" />
-          <div>
-            <p className="font-semibold text-sm">This site is archived (M365 Archive)</p>
-            <p className="text-xs text-indigo-600/80 dark:text-indigo-400/80 mt-0.5">
-              Archived sites are read-only and stored at reduced cost. A SharePoint administrator can reactivate this site from the SharePoint admin center.
+        <div className="flex items-start gap-3 p-4 rounded-xl bg-indigo-500/10 border border-indigo-500/20 text-indigo-600 dark:text-indigo-400" data-testid="banner-archived">
+          <Archive className="w-5 h-5 shrink-0 mt-0.5" />
+          <div className="flex-1">
+            <p className="font-semibold text-sm">
+              {workspace.lifecycleState === "PendingArchive"
+                ? "Archive in progress (M365 Archive)"
+                : workspace.lifecycleState === "PendingRestore"
+                ? "Restore in progress"
+                : "This site is archived (M365 Archive)"}
             </p>
+            <p className="text-xs text-indigo-600/80 dark:text-indigo-400/80 mt-0.5">
+              Archived sites are read-only and stored at reduced cost. Use Restore to make this site writable again.
+            </p>
+            {workspace.archiveReason && (
+              <p className="text-xs mt-2" data-testid="text-archive-reason">
+                <span className="font-semibold">Reason:</span> {workspace.archiveReason}
+                {workspace.archivedBy && <> &middot; <span className="font-semibold">By:</span> {workspace.archivedBy}</>}
+              </p>
+            )}
           </div>
+          <Button
+            variant="outline"
+            size="sm"
+            className="gap-2 border-indigo-500/30 text-indigo-600 hover:bg-indigo-500/10"
+            disabled={restoreMutation.isPending || workspace.lifecycleState === "PendingRestore"}
+            onClick={() => setShowRestoreDialog(true)}
+            data-testid="button-restore-workspace"
+          >
+            <ArchiveRestore className="w-4 h-4" />
+            {workspace.lifecycleState === "PendingRestore" ? "Restoring…" : "Restore"}
+          </Button>
         </div>
       )}
 
@@ -1261,6 +1306,42 @@ export default function WorkspaceDetailsPage() {
                 </CardContent>
               </Card>
             </TabsContent>
+
+            <AlertDialog open={showRestoreDialog} onOpenChange={(o) => { if (!o) { setShowRestoreDialog(false); setRestoreReason(""); } }}>
+              <AlertDialogContent data-testid="dialog-restore-workspace">
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Restore site in Microsoft 365?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    <strong>{workspace.displayName}</strong> will be unarchived in Microsoft 365 and become writable again.
+                    The action runs through the Microsoft Graph archive API.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <div className="space-y-2">
+                  <Label htmlFor="restore-reason" className="text-sm">Reason for restore (optional)</Label>
+                  <Textarea
+                    id="restore-reason"
+                    value={restoreReason}
+                    onChange={(e) => setRestoreReason(e.target.value)}
+                    placeholder="e.g. Project reopened; site needed for active collaboration."
+                    maxLength={500}
+                    rows={3}
+                    data-testid="textarea-restore-reason"
+                  />
+                  <p className="text-xs text-muted-foreground">Recorded in the audit log. {restoreReason.length}/500</p>
+                </div>
+                <AlertDialogFooter>
+                  <AlertDialogCancel data-testid="button-cancel-restore">Cancel</AlertDialogCancel>
+                  <AlertDialogAction
+                    disabled={restoreMutation.isPending}
+                    onClick={(e) => { e.preventDefault(); restoreMutation.mutate(); }}
+                    data-testid="button-confirm-restore"
+                  >
+                    {restoreMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1.5" /> : <ArchiveRestore className="w-3.5 h-3.5 mr-1.5" />}
+                    Restore site
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
 
             <TabsContent value="metadata" className="mt-4">
               <Card className="glass-panel border-border/50">
