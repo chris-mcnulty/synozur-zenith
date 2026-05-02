@@ -34,6 +34,11 @@ import {
   COPILOT_RISK_LEVELS,
 } from "@shared/schema";
 import { trackJobRun, DuplicateJobError } from "./job-tracking";
+import {
+  decryptField,
+  isMaskedValue,
+  getTenantKeyBuffer,
+} from "./data-masking";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -41,6 +46,130 @@ import { trackJobRun, DuplicateJobError } from "./job-tracking";
 
 /** Re-exported for backwards compatibility with routes that import this type. */
 export type CopilotPromptAssessmentRow = CopilotPromptAssessment;
+
+// ---------------------------------------------------------------------------
+// CSV export of high/critical risk interactions
+// ---------------------------------------------------------------------------
+
+const CSV_EXPORT_COLUMNS = [
+  "interactionAt",
+  "userPrincipalName",
+  "userDisplayName",
+  "userDepartment",
+  "appClass",
+  "qualityTier",
+  "qualityScore",
+  "riskLevel",
+  "flags",
+  "promptText",
+  "recommendation",
+] as const;
+
+/**
+ * CSV-escape a value, defending against CSV / spreadsheet formula injection.
+ *
+ * Excel, Google Sheets, and LibreOffice will execute a cell whose first
+ * character is `=`, `+`, `-`, `@`, tab, or CR. Since this export carries
+ * user-authored prompt text and other untrusted strings, we prefix any such
+ * value with a leading apostrophe so spreadsheets render it as text.
+ */
+function csvEscape(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  let str = typeof value === "string" ? value : String(value);
+  if (str.length > 0 && /^[=+\-@\t\r]/.test(str)) {
+    str = `'${str}`;
+  }
+  if (/[",\n\r]/.test(str)) {
+    return `"${str.replace(/"/g, '""')}"`;
+  }
+  return str;
+}
+
+/** Sensitive columns that must be redacted for masked tenants. */
+const REDACTED_PLACEHOLDER = "[REDACTED]";
+
+/**
+ * Render a sensitive value for export based on the tenant's masking policy.
+ * - Masked tenants: always emit `[REDACTED]`, regardless of how the value is
+ *   stored (covers both encrypted-at-rest values and any field that the
+ *   masking pipeline does not encrypt today, such as `recommendation`).
+ * - Unmasked tenants: decrypt any stale `MASKED:<ciphertext>` values using
+ *   the tenant key when available; otherwise emit blank to avoid leaking
+ *   ciphertext.
+ */
+function renderSensitive(
+  value: string | null | undefined,
+  masked: boolean,
+  keyBuffer: Buffer | null,
+): string {
+  if (value == null || value === "") return "";
+  if (masked) return REDACTED_PLACEHOLDER;
+  if (isMaskedValue(value)) {
+    if (!keyBuffer) return "";
+    try {
+      return decryptField(value, keyBuffer);
+    } catch {
+      return "";
+    }
+  }
+  return value;
+}
+
+/**
+ * Build a CSV of high/critical-risk Copilot interactions for a tenant.
+ *
+ * Risk scope is fixed server-side to HIGH and CRITICAL — callers cannot widen
+ * it. Sensitive fields (UPN, display name, prompt text, recommendation) are
+ * redacted when the tenant has data masking enabled and otherwise rendered
+ * as plaintext (decrypting any stale ciphertext).
+ */
+export async function buildHighRiskInteractionsCsv(
+  tenantConnectionId: string,
+  options: { masked: boolean } = { masked: false },
+): Promise<{ csv: string; rowCount: number }> {
+  const riskLevels: CopilotRiskLevel[] = ["HIGH", "CRITICAL"];
+  const rows = await storage.listHighRiskCopilotInteractions(tenantConnectionId, {
+    riskLevels,
+  });
+
+  // For unmasked tenants, load the tenant key once so we can decrypt any
+  // stale `MASKED:<ciphertext>` values left over from a previous masking-on
+  // period. For masked tenants we never need the key — values are redacted.
+  let keyBuffer: Buffer | null = null;
+  if (!options.masked) {
+    const keyRecord = await storage.getTenantEncryptionKey(tenantConnectionId);
+    if (keyRecord) {
+      try {
+        keyBuffer = getTenantKeyBuffer(keyRecord.encryptedKey);
+      } catch {
+        keyBuffer = null;
+      }
+    }
+  }
+
+  const lines = [CSV_EXPORT_COLUMNS.join(",")];
+  for (const row of rows) {
+    const flagsSummary = (row.flags ?? [])
+      .map((f) => `${f.category}/${f.signal}${f.severity ? `(${f.severity})` : ""}`)
+      .join("; ");
+
+    lines.push([
+      csvEscape(row.interactionAt instanceof Date ? row.interactionAt.toISOString() : row.interactionAt),
+      csvEscape(renderSensitive(row.userPrincipalName, options.masked, keyBuffer)),
+      csvEscape(renderSensitive(row.userDisplayName, options.masked, keyBuffer)),
+      csvEscape(row.userDepartment),
+      csvEscape(row.appClass),
+      csvEscape(row.qualityTier),
+      csvEscape(row.qualityScore),
+      csvEscape(row.riskLevel),
+      csvEscape(flagsSummary),
+      csvEscape(renderSensitive(row.promptText, options.masked, keyBuffer)),
+      csvEscape(renderSensitive(row.recommendation, options.masked, keyBuffer)),
+    ].join(","));
+  }
+
+  return { csv: lines.join("\n"), rowCount: rows.length };
+}
 
 interface InteractionRow {
   id: string;

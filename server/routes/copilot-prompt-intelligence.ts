@@ -36,6 +36,7 @@ import {
   getLatestAssessmentForTenant,
   listAssessmentsForOrg,
   listAssessmentsByTenant,
+  buildHighRiskInteractionsCsv,
 } from "../services/copilot-prompt-intelligence-service";
 
 const router = Router();
@@ -225,6 +226,73 @@ router.get(
     });
 
     return res.json({ rows, total, limit, offset });
+  },
+);
+
+// ---------------------------------------------------------------------------
+// GET /api/copilot-prompt-intelligence/interactions/export.csv
+// Export high/critical risk interactions as CSV. Respects tenant masking
+// (masked tenants get masked UPN/display name/prompt/recommendation; unmasked
+// tenants get plaintext). Same role gate as the page (governance/tenant admin).
+// ---------------------------------------------------------------------------
+
+router.get(
+  "/api/copilot-prompt-intelligence/interactions/export.csv",
+  requireAuth(),
+  requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN),
+  requireFeature("copilotPromptIntelligence"),
+  async (req: AuthenticatedRequest, res) => {
+    const tenantConnectionId =
+      typeof req.query.tenantConnectionId === "string"
+        ? req.query.tenantConnectionId
+        : "";
+
+    if (!tenantConnectionId) {
+      return res.status(400).json({ message: "tenantConnectionId query param required" });
+    }
+
+    const access = await assertTenantAccess(req, tenantConnectionId);
+    if (!access.ok) return res.status(access.status).json({ message: access.message });
+
+    // Risk scope is fixed server-side — callers cannot widen this export
+    // beyond high/critical interactions.
+    const masked = !!access.conn.dataMaskingEnabled;
+    const { csv, rowCount } = await buildHighRiskInteractionsCsv(
+      tenantConnectionId,
+      { masked },
+    );
+
+    // Audit log this export.
+    try {
+      await storage.createAuditEntry({
+        userId: req.user?.id ?? null,
+        userEmail: req.user?.email ?? null,
+        action: "EXPORT_CSV",
+        resource: "copilot_prompt_intelligence_risk",
+        resourceId: tenantConnectionId,
+        organizationId: getActiveOrgId(req) || access.conn.organizationId || null,
+        tenantConnectionId: access.conn.id,
+        details: {
+          riskLevels: ["HIGH", "CRITICAL"],
+          rowCount,
+          masked,
+        },
+        result: "SUCCESS",
+        ipAddress: req.ip || null,
+      });
+    } catch (auditErr) {
+      console.warn(
+        "[copilot-prompt-intelligence] failed to record export audit entry:",
+        auditErr instanceof Error ? auditErr.message : auditErr,
+      );
+    }
+
+    const filename = `copilot-risk-prompts-${access.conn.id.slice(0, 8)}-${new Date()
+      .toISOString()
+      .slice(0, 10)}.csv`;
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    return res.send(csv);
   },
 );
 

@@ -514,6 +514,7 @@ export interface IStorage {
   getUnanalyzedCopilotInteractionIds(tenantConnectionId: string, limit?: number): Promise<string[]>;
   updateCopilotInteractionAnalysis(id: string, analysis: { qualityScore: number; qualityTier: string; riskLevel: string; flags: CopilotPromptFlag[]; recommendation: string | null }): Promise<void>;
   getCopilotInteractionsForTenant(tenantConnectionId: string, options?: { limit?: number; offset?: number; includePromptText?: boolean }): Promise<{ rows: Array<Omit<CopilotInteraction, 'promptText'> & { promptText?: string }>; total: number }>;
+  listHighRiskCopilotInteractions(tenantConnectionId: string, options?: { riskLevels?: string[]; limit?: number }): Promise<CopilotInteraction[]>;
   loadCopilotInteractionsForAnalysis(tenantConnectionId: string): Promise<CopilotInteraction[]>;
   purgeCopilotInteractions(tenantConnectionId: string): Promise<number>;
   getLatestCopilotInteractionDateForUser(tenantConnectionId: string, userPrincipalName: string): Promise<Date | null>;
@@ -3726,6 +3727,42 @@ export class DatabaseStorage implements IStorage {
       rows: rows as Array<Omit<CopilotInteraction, 'promptText'> & { promptText?: string }>,
       total: countResult?.count ?? 0,
     };
+  }
+
+  async listHighRiskCopilotInteractions(
+    tenantConnectionId: string,
+    options: { riskLevels?: string[]; limit?: number } = {},
+  ): Promise<CopilotInteraction[]> {
+    const riskLevels = options.riskLevels && options.riskLevels.length > 0
+      ? options.riskLevels
+      : ["HIGH", "CRITICAL"];
+
+    // Match the scope of the assessment that powers the on-screen risk panel:
+    //   • interactionType === 'userPrompt'
+    //   • promptText present (non-null, non-empty)
+    //   • within the same retention window used by the assessment loader
+    const query = db
+      .select()
+      .from(copilotInteractions)
+      .where(
+        and(
+          eq(copilotInteractions.tenantConnectionId, tenantConnectionId),
+          inArray(copilotInteractions.riskLevel, riskLevels),
+          eq(copilotInteractions.interactionType, "userPrompt"),
+          isNotNull(copilotInteractions.promptText),
+          sql`${copilotInteractions.promptText} <> ''`,
+          gte(
+            copilotInteractions.interactionAt,
+            sql`now() - make_interval(days => ${DatabaseStorage.COPILOT_RETENTION_DAYS})`,
+          ),
+        ),
+      )
+      .orderBy(desc(copilotInteractions.interactionAt));
+
+    if (options.limit && options.limit > 0) {
+      return query.limit(options.limit);
+    }
+    return query;
   }
 
   async loadCopilotInteractionsForAnalysis(

@@ -56,6 +56,7 @@ import {
   ChevronDown,
   Database,
   Info,
+  Download,
 } from "lucide-react";
 import { UpgradeGate } from "@/components/upgrade-gate";
 import { useTenant } from "@/lib/tenant-context";
@@ -377,9 +378,49 @@ function OrgMetricsCards({ summary }: { summary: OrgSummary }) {
 // Distribution section
 // ---------------------------------------------------------------------------
 
-function DistributionSection({ summary }: { summary: OrgSummary }) {
-  const qd = summary.qualityDistribution;
+function DistributionSection({
+  summary,
+  tenantConnectionId,
+}: {
+  summary: OrgSummary;
+  tenantConnectionId: string;
+}) {
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
   const rd = summary.riskDistribution;
+  const riskCount = (rd.HIGH ?? 0) + (rd.CRITICAL ?? 0);
+
+  const handleExport = async () => {
+    if (!tenantConnectionId || exporting) return;
+    setExporting(true);
+    setExportError(null);
+    try {
+      const url = `/api/copilot-prompt-intelligence/interactions/export.csv?tenantConnectionId=${encodeURIComponent(tenantConnectionId)}`;
+      const res = await fetch(url, { credentials: "include" });
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || `Export failed (HTTP ${res.status})`);
+      }
+      const blob = await res.blob();
+      const disposition = res.headers.get("Content-Disposition") ?? "";
+      const match = /filename="?([^"]+)"?/.exec(disposition);
+      const filename = match?.[1] ?? `copilot-risk-prompts-${new Date().toISOString().slice(0, 10)}.csv`;
+      const downloadUrl = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = downloadUrl;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(downloadUrl);
+    } catch (err) {
+      setExportError(err instanceof Error ? err.message : "Export failed");
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const qd = summary.qualityDistribution;
   const totalQ = Object.values(qd).reduce((s, v) => s + v, 0);
   const totalR = Object.values(rd).reduce((s, v) => s + v, 0);
 
@@ -421,8 +462,28 @@ function DistributionSection({ summary }: { summary: OrgSummary }) {
       </Card>
 
       <Card>
-        <CardHeader className="pb-2">
+        <CardHeader className="pb-2 flex-row items-center justify-between space-y-0">
           <CardTitle className="text-sm font-medium">Risk Distribution</CardTitle>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-7 gap-1.5 text-xs"
+            onClick={handleExport}
+            disabled={exporting || riskCount === 0 || !tenantConnectionId}
+            data-testid="button-export-risk-csv"
+            title={
+              riskCount === 0
+                ? "No high or critical risk prompts to export"
+                : "Download high/critical risk prompts as CSV"
+            }
+          >
+            {exporting ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            ) : (
+              <Download className="w-3.5 h-3.5" />
+            )}
+            Export CSV
+          </Button>
         </CardHeader>
         <CardContent className="space-y-3">
           <DistributionBar items={riskItems} total={totalR} />
@@ -437,6 +498,11 @@ function DistributionSection({ summary }: { summary: OrgSummary }) {
               </div>
             ))}
           </div>
+          {exportError && (
+            <p className="text-xs text-red-500" data-testid="text-export-error">
+              {exportError}
+            </p>
+          )}
         </CardContent>
       </Card>
     </div>
@@ -1058,7 +1124,10 @@ export default function CopilotPromptIntelligencePage() {
             </div>
 
             <OrgMetricsCards summary={activeAssessment.orgSummary} />
-            <DistributionSection summary={activeAssessment.orgSummary} />
+            <DistributionSection
+              summary={activeAssessment.orgSummary}
+              tenantConnectionId={tenantConnectionId}
+            />
 
             <div className="grid md:grid-cols-2 gap-4">
               <TopFlagsPanel flags={activeAssessment.orgSummary.topFlags} />
