@@ -3,6 +3,7 @@ import { storage } from "../storage";
 import { ZENITH_ROLES, FEATURE_TOGGLES, FEATURE_TOGGLE_LABELS, type FeatureToggleKey } from "@shared/schema";
 import { requireAuth, requireRole, type AuthenticatedRequest } from "../middleware/rbac";
 import { cancelDiscovery } from "../services/discovery-cancellation";
+import { logAuditEvent, logAccessDenied, AUDIT_ACTIONS } from "../services/audit-logger";
 
 const router = Router();
 
@@ -73,6 +74,7 @@ router.patch(
 
     const allowedIds = await getOrgTenantConnectionIds(req.user);
     if (allowedIds && !allowedIds.includes(conn.id)) {
+      await logAccessDenied(req, "tenant_connection", conn.id, "Feature toggle update outside caller scope", { feature });
       return res.status(403).json({ message: "Access denied" });
     }
 
@@ -82,6 +84,7 @@ router.patch(
     }
 
     const col = FEATURE_TOGGLES[feature];
+    const previous = !!(conn as Record<string, unknown>)[col];
     const updates: Record<string, any> = { [col]: enabled };
 
     if (!enabled) {
@@ -89,6 +92,19 @@ router.patch(
     }
 
     const updated = await storage.updateTenantConnection(conn.id, updates);
+    await logAuditEvent(req, {
+      action: AUDIT_ACTIONS.FEATURE_TOGGLE_CHANGED,
+      resource: "tenant_connection",
+      resourceId: conn.id,
+      organizationId: conn.organizationId ?? null,
+      tenantConnectionId: conn.id,
+      details: {
+        feature,
+        label: FEATURE_TOGGLE_LABELS[feature],
+        before: { enabled: previous },
+        after: { enabled },
+      },
+    });
     res.json({
       feature,
       enabled,
@@ -170,11 +186,24 @@ router.delete(
 
     const allowedIds = await getOrgTenantConnectionIds(req.user);
     if (allowedIds && !allowedIds.includes(conn.id)) {
+      await logAccessDenied(req, "tenant_connection", conn.id, "Tenant data purge outside caller scope", { section });
       return res.status(403).json({ message: "Access denied" });
     }
 
     const deleted = await PURGE_METHODS[section].purge(conn.id);
     console.log(`[feature-toggle] Purged ${deleted} records from ${section} for tenant ${conn.tenantName}`);
+    await logAuditEvent(req, {
+      action: AUDIT_ACTIONS.TENANT_DATA_PURGED,
+      resource: "tenant_connection",
+      resourceId: conn.id,
+      organizationId: conn.organizationId ?? null,
+      tenantConnectionId: conn.id,
+      details: {
+        section,
+        label: FEATURE_TOGGLE_LABELS[section],
+        recordsDeleted: deleted,
+      },
+    });
 
     res.json({
       section,

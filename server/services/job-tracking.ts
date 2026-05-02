@@ -7,10 +7,49 @@
  *   3. Inserts scheduled_job_runs row (status=running)
  *   4. Invokes work(signal, updateProgress)
  *   5. On success/failure/abort: updates DB row and unregisters
+ *   6. Emits SYNC_STARTED / SYNC_COMPLETED / SYNC_FAILED audit entries via
+ *      `logAuditEvent` so every Graph sync run is automatically captured
+ *      without per-call instrumentation in the individual sync services.
  */
 import type { JobType, JobTriggerSource } from "@shared/schema";
 import { storage } from "../storage";
 import { jobRegistry, type ActiveJob, type ProgressFn } from "./job-registry";
+import { logAuditEvent, AUDIT_ACTIONS, type AuditAction, type AuditResult } from "./audit-logger";
+
+function writeSyncAudit(
+  action: AuditAction,
+  opts: {
+    jobId: string;
+    jobType: JobType;
+    organizationId: string | null;
+    tenantConnectionId: string | null;
+    triggeredByUserId: string | null;
+    triggeredBy: JobTriggerSource;
+    targetId: string | null;
+    targetName: string | null;
+    durationMs?: number;
+    errorMessage?: string;
+    result?: AuditResult;
+  },
+): void {
+  void logAuditEvent(null, {
+    action,
+    resource: "scheduled_job_run",
+    resourceId: opts.jobId,
+    organizationId: opts.organizationId,
+    tenantConnectionId: opts.tenantConnectionId,
+    userId: opts.triggeredByUserId,
+    details: {
+      jobType: opts.jobType,
+      triggeredBy: opts.triggeredBy,
+      targetId: opts.targetId,
+      targetName: opts.targetName,
+      ...(opts.durationMs !== undefined ? { durationMs: opts.durationMs } : {}),
+      ...(opts.errorMessage ? { error: opts.errorMessage } : {}),
+    },
+    result: opts.result ?? (action === AUDIT_ACTIONS.SYNC_FAILED ? "FAILURE" : "SUCCESS"),
+  });
+}
 
 export class DuplicateJobError extends Error {
   readonly code = "JOB_ALREADY_RUNNING";
@@ -133,6 +172,17 @@ export async function trackJobRun<T>(
     meta,
   });
 
+  writeSyncAudit(AUDIT_ACTIONS.SYNC_STARTED, {
+    jobId,
+    jobType,
+    organizationId: organizationId ?? null,
+    tenantConnectionId: tenantConnectionId ?? null,
+    triggeredByUserId: triggeredByUserId ?? null,
+    triggeredBy,
+    targetId: targetId ?? null,
+    targetName: targetName ?? null,
+  });
+
   // 4. Throttled progress writer
   let lastProgressWrite = 0;
   const updateProgress: ProgressFn = (label, pct) => {
@@ -173,6 +223,19 @@ export async function trackJobRun<T>(
         console.warn(`[job-tracking] completion update failed for ${jobId}:`, err),
       );
 
+    writeSyncAudit(AUDIT_ACTIONS.SYNC_COMPLETED, {
+      jobId,
+      jobType,
+      organizationId: organizationId ?? null,
+      tenantConnectionId: tenantConnectionId ?? null,
+      triggeredByUserId: triggeredByUserId ?? null,
+      triggeredBy,
+      targetId: targetId ?? null,
+      targetName: targetName ?? null,
+      durationMs,
+      result: cancelled ? "PARTIAL" : "SUCCESS",
+    });
+
     return { jobId, result };
   } catch (err) {
     const completedAt = new Date();
@@ -194,6 +257,20 @@ export async function trackJobRun<T>(
       .catch((dbErr) =>
         console.warn(`[job-tracking] failure update failed for ${jobId}:`, dbErr),
       );
+
+    writeSyncAudit(aborted ? AUDIT_ACTIONS.SYNC_COMPLETED : AUDIT_ACTIONS.SYNC_FAILED, {
+      jobId,
+      jobType,
+      organizationId: organizationId ?? null,
+      tenantConnectionId: tenantConnectionId ?? null,
+      triggeredByUserId: triggeredByUserId ?? null,
+      triggeredBy,
+      targetId: targetId ?? null,
+      targetName: targetName ?? null,
+      durationMs,
+      errorMessage: aborted ? undefined : errorMessage,
+      result: aborted ? "PARTIAL" : "FAILURE",
+    });
 
     throw err;
   } finally {

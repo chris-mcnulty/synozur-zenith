@@ -1,28 +1,19 @@
 import { Request, Response, NextFunction } from 'express';
 import { storage } from '../storage';
 import { ZENITH_ROLES, type ZenithRole, type User } from '@shared/schema';
+import { logAuditEvent, AUDIT_ACTIONS } from '../services/audit-logger';
 
 async function logAccessDenial(req: AuthenticatedRequest, resource: string, reason: string) {
-  try {
-    await storage.createAuditEntry({
-      userId: req.user?.id || null,
-      userEmail: req.user?.email || null,
-      action: 'ACCESS_DENIED',
-      resource,
-      resourceId: null,
-      organizationId: req.user?.organizationId || req.activeOrganizationId || null,
-      details: {
-        method: req.method,
-        path: req.path,
-        reason,
-        requiredRole: undefined,
-      },
-      result: 'DENIED',
-      ipAddress: req.ip || null,
-    });
-  } catch (err) {
-    console.error('[RBAC] Failed to log access denial:', err);
-  }
+  await logAuditEvent(req, {
+    action: AUDIT_ACTIONS.ACCESS_DENIED,
+    resource,
+    details: {
+      method: req.method,
+      path: req.path,
+      reason,
+    },
+    result: 'DENIED',
+  });
 }
 
 declare module 'express-session' {
@@ -146,14 +137,15 @@ export function requirePermission(permission: string) {
 }
 
 export function requireAnyPermission(...permissions: string[]) {
-  return (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+  return async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     if (!req.user) {
       return res.status(401).json({ error: 'Authentication required' });
     }
-    const userRole = req.user.role as ZenithRole;
+    const userRole = (req.effectiveRole || req.user.role) as ZenithRole;
     const userPerms = ROLE_PERMISSIONS[userRole] || [];
     const hasAny = permissions.some(p => userPerms.includes(p));
     if (!hasAny) {
+      await logAccessDenial(req, req.path, `Missing any permission of [${permissions.join(', ')}] for role '${userRole}'`);
       return res.status(403).json({ error: 'Insufficient permissions for this action' });
     }
     next();
@@ -167,8 +159,4 @@ export function hasPermission(role: ZenithRole, permission: string): boolean {
 
 export function getRoleLevel(role: ZenithRole): number {
   return ROLE_HIERARCHY[role] || 0;
-}
-
-export function getPermissionsForRole(role: ZenithRole): string[] {
-  return ROLE_PERMISSIONS[role] || [];
 }

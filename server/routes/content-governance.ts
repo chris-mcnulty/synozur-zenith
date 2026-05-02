@@ -9,10 +9,12 @@ import {
   governanceReviewTasks,
   governanceReviewFindings,
 } from "@shared/schema";
-import { requireAuth, type AuthenticatedRequest } from "../middleware/rbac";
+import { requireAuth, requireRole, type AuthenticatedRequest } from "../middleware/rbac";
+import { ZENITH_ROLES } from "@shared/schema";
 import { computeGovernanceSnapshot } from "../services/governance-snapshot";
 import { trackJobRun, DuplicateJobError } from "../services/job-tracking";
-import { getOrgTenantConnectionIds, getActiveOrgId } from "./scope-helpers";
+import { getOrgTenantConnectionIds, getActiveOrgId, assertTenantInScope } from "./scope-helpers";
+import { logAuditEvent, logAccessDenied, AUDIT_ACTIONS } from "../services/audit-logger";
 import { storage } from "../storage";
 
 const router = Router();
@@ -287,11 +289,14 @@ router.get("/api/content-governance/trends", requireAuth(), async (req: Authenti
 });
 
 // ── POST /api/content-governance/reviews ───────────────────────────────────
-router.post("/api/content-governance/reviews", requireAuth(), async (req: AuthenticatedRequest, res) => {
+router.post("/api/content-governance/reviews", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN), async (req: AuthenticatedRequest, res) => {
   try {
     const { tenantConnectionId, organizationId, reviewType, triggerType, targetResourceType } = req.body;
     if (!tenantConnectionId || !organizationId || !reviewType) {
       return res.status(400).json({ error: "tenantConnectionId, organizationId, and reviewType are required" });
+    }
+    if (!(await assertTenantInScope(req, String(tenantConnectionId), "Tenant connection is outside caller scope (governance review)"))) {
+      return res.status(403).json({ error: "Tenant connection is outside your organization scope" });
     }
 
     const [task] = await db
@@ -305,6 +310,14 @@ router.post("/api/content-governance/reviews", requireAuth(), async (req: Authen
       })
       .returning();
 
+    await logAuditEvent(req, {
+      action: AUDIT_ACTIONS.GOVERNANCE_REVIEW_CREATED,
+      resource: "governance_review",
+      resourceId: task.id,
+      organizationId: task.organizationId,
+      tenantConnectionId: task.tenantConnectionId,
+      details: { reviewType, triggerType: task.triggerType, targetResourceType: task.targetResourceType },
+    });
     res.status(201).json(task);
   } catch (err: any) {
     console.error("[content-governance] create review error:", err);
@@ -345,6 +358,9 @@ router.get("/api/content-governance/reviews/:id", requireAuth(), async (req: Aut
 
     const allowedTenantConnectionIds = await getOrgTenantConnectionIds(req);
     if (allowedTenantConnectionIds !== null && !allowedTenantConnectionIds.includes(task.tenantConnectionId)) {
+      await logAccessDenied(req, "governance_review", id, "Governance review tenant outside caller scope", {
+        taskTenantConnectionId: task.tenantConnectionId,
+      });
       return res.status(403).json({ error: "Forbidden" });
     }
 
@@ -358,13 +374,36 @@ router.get("/api/content-governance/reviews/:id", requireAuth(), async (req: Aut
 });
 
 // ── PATCH /api/content-governance/reviews/:id/findings/:findingId ──────────
-router.patch("/api/content-governance/reviews/:id/findings/:findingId", requireAuth(), async (req: AuthenticatedRequest, res) => {
+router.patch("/api/content-governance/reviews/:id/findings/:findingId", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN), async (req: AuthenticatedRequest, res) => {
   try {
-    const { findingId } = req.params;
+    const findingId = String(req.params.findingId);
+    const taskId = String(req.params.id);
     const { status } = req.body;
     if (!status) return res.status(400).json({ error: "status is required" });
 
-    const updates: Record<string, any> = { status };
+    const [task] = await db
+      .select()
+      .from(governanceReviewTasks)
+      .where(eq(governanceReviewTasks.id, taskId))
+      .limit(1);
+    if (!task) return res.status(404).json({ error: "Review task not found" });
+    if (!(await assertTenantInScope(req, task.tenantConnectionId, "Governance review is outside caller scope"))) {
+      return res.status(403).json({ error: "Forbidden" });
+    }
+
+    const [existing] = await db
+      .select()
+      .from(governanceReviewFindings)
+      .where(and(eq(governanceReviewFindings.id, findingId), eq(governanceReviewFindings.reviewTaskId, taskId)))
+      .limit(1);
+    if (!existing) {
+      await logAccessDenied(req, "governance_review_finding", findingId, "Finding does not belong to the supplied review task", {
+        reviewTaskId: taskId,
+      });
+      return res.status(404).json({ error: "Finding not found" });
+    }
+
+    const updates: { status: string; resolvedAt?: Date; resolvedBy?: string | null } = { status };
     if (status === "RESOLVED") {
       updates.resolvedAt = new Date();
       updates.resolvedBy = req.user?.id ?? null;
@@ -373,10 +412,22 @@ router.patch("/api/content-governance/reviews/:id/findings/:findingId", requireA
     const [updated] = await db
       .update(governanceReviewFindings)
       .set(updates)
-      .where(eq(governanceReviewFindings.id, findingId as string))
+      .where(and(eq(governanceReviewFindings.id, findingId), eq(governanceReviewFindings.reviewTaskId, taskId)))
       .returning();
 
     if (!updated) return res.status(404).json({ error: "Finding not found" });
+    await logAuditEvent(req, {
+      action: AUDIT_ACTIONS.GOVERNANCE_FINDING_UPDATED,
+      resource: "governance_review_finding",
+      resourceId: findingId,
+      organizationId: task.organizationId,
+      tenantConnectionId: task.tenantConnectionId,
+      details: {
+        reviewTaskId: taskId,
+        before: { status: existing.status },
+        after: { status: updated.status },
+      },
+    });
     res.json(updated);
   } catch (err: any) {
     console.error("[content-governance] update finding error:", err);

@@ -10,8 +10,9 @@ import { computeWritebackHash, computeSpoSyncHash } from "../services/writeback-
 import { evaluatePolicy, evaluationResultsToCopilotRules, formatPolicyBagValue, DEFAULT_COPILOT_READINESS_RULES, type EvaluationContext } from "../services/policy-engine";
 import { BUILT_IN_TEMPLATES, getTemplateById, deriveRetentionPolicy, validateProvisioningPayload, validateGovernedName } from "../services/provisioning-templates";
 import type { Workspace, PolicyOutcome, GovernancePolicy } from "@shared/schema";
-import { getActiveOrgId, getOrgTenantConnectionIds, getAccessibleTenantConnectionIds, getOwnedTenantConnectionIds, isWorkspaceInScope } from "./scope-helpers";
+import { getActiveOrgId, getOrgTenantConnectionIds, getAccessibleTenantConnectionIds, getOwnedTenantConnectionIds, isWorkspaceInScope, assertTenantInScope } from "./scope-helpers";
 import { runIASync } from "../services/ia-sync";
+import { logAuditEvent, logAccessDenied, AUDIT_ACTIONS } from "../services/audit-logger";
 import {
   runSharePointTenantSync,
   getEffectiveClientSecret,
@@ -210,12 +211,24 @@ router.post("/api/workspaces", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH
 
   const isPlatformOwner = req.user?.role === ZENITH_ROLES.PLATFORM_OWNER;
   if (!isPlatformOwner && parsed.data.tenantConnectionId) {
-    const allowedIds = await getOrgTenantConnectionIds(req);
-    if (allowedIds !== null && !allowedIds.includes(parsed.data.tenantConnectionId)) {
+    if (!(await assertTenantInScope(req, parsed.data.tenantConnectionId, "Tenant connection does not belong to caller organization"))) {
       return res.status(403).json({ message: "Tenant connection does not belong to your organization" });
     }
   }
   const workspace = await storage.createWorkspace(parsed.data);
+  await logAuditEvent(req, {
+    action: AUDIT_ACTIONS.WORKSPACE_CREATED,
+    resource: 'workspace',
+    resourceId: workspace.id,
+    tenantConnectionId: workspace.tenantConnectionId || null,
+    details: {
+      workspaceName: workspace.displayName,
+      type: workspace.type,
+      sensitivity: workspace.sensitivity,
+      siteUrl: workspace.siteUrl,
+      m365ObjectId: workspace.m365ObjectId,
+    },
+  });
   res.status(201).json(workspace);
 });
 
@@ -591,13 +604,32 @@ router.get("/api/admin/tenants/:tenantConnectionId/libraries/stats", requirePerm
 });
 
 router.delete("/api/workspaces/:id", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN), async (req: AuthenticatedRequest, res) => {
+  const wsId = String(req.params.id);
+  const existing = await storage.getWorkspace(wsId);
   const allowedTenantIds = await getOrgTenantConnectionIds(req);
   if (allowedTenantIds !== null) {
-    const deleted = await storage.deleteWorkspaceScoped(req.params.id, allowedTenantIds);
-    if (!deleted) return res.status(404).json({ message: "Workspace not found" });
-    return res.status(204).send();
+    const deleted = await storage.deleteWorkspaceScoped(wsId, allowedTenantIds);
+    if (!deleted) {
+      await logAccessDenied(req, "workspace", wsId, "Workspace not in caller's tenant scope (delete)");
+      return res.status(404).json({ message: "Workspace not found" });
+    }
+  } else {
+    await storage.deleteWorkspace(wsId);
   }
-  await storage.deleteWorkspace(req.params.id);
+  if (existing) {
+    await logAuditEvent(req, {
+      action: AUDIT_ACTIONS.WORKSPACE_DELETED,
+      resource: 'workspace',
+      resourceId: wsId,
+      tenantConnectionId: existing.tenantConnectionId || null,
+      details: {
+        workspaceName: existing.displayName,
+        type: existing.type,
+        siteUrl: existing.siteUrl,
+        m365ObjectId: existing.m365ObjectId,
+      },
+    });
+  }
   res.status(204).send();
 });
 
@@ -877,7 +909,7 @@ router.post("/api/workspaces/:id/owners", requireRole(ZENITH_ROLES.GOVERNANCE_AD
   const auditBase = {
     userId: req.user?.id || null,
     userEmail: req.user?.email || null,
-    action: 'SITE_OWNER_ADDED',
+    action: 'WORKSPACE_OWNER_ADDED',
     resource: 'workspace',
     resourceId: workspace.id,
     organizationId: req.user?.organizationId || null,
@@ -963,7 +995,7 @@ router.delete("/api/workspaces/:id/owners/:userId", requireRole(ZENITH_ROLES.GOV
   const auditBase = {
     userId: req.user?.id || null,
     userEmail: req.user?.email || null,
-    action: 'SITE_OWNER_REMOVED',
+    action: 'WORKSPACE_OWNER_REMOVED',
     resource: 'workspace',
     resourceId: workspace.id,
     organizationId: req.user?.organizationId || null,
@@ -1062,7 +1094,7 @@ router.post("/api/workspaces/:id/members", requireRole(ZENITH_ROLES.GOVERNANCE_A
   const auditBase = {
     userId: req.user?.id || null,
     userEmail: req.user?.email || null,
-    action: 'SITE_MEMBER_ADDED',
+    action: 'WORKSPACE_MEMBER_ADDED',
     resource: 'workspace',
     resourceId: workspace.id,
     organizationId: req.user?.organizationId || null,
@@ -1147,7 +1179,7 @@ router.delete("/api/workspaces/:id/members/:userId", requireRole(ZENITH_ROLES.GO
   const auditBase = {
     userId: req.user?.id || null,
     userEmail: req.user?.email || null,
-    action: 'SITE_MEMBER_REMOVED',
+    action: 'WORKSPACE_MEMBER_REMOVED',
     resource: 'workspace',
     resourceId: workspace.id,
     organizationId: req.user?.organizationId || null,
@@ -1194,29 +1226,63 @@ router.delete("/api/workspaces/:id/members/:userId", requireRole(ZENITH_ROLES.GO
 });
 
 router.post("/api/workspaces/:id/sync", requireRole(ZENITH_ROLES.OPERATOR, ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN), async (req: AuthenticatedRequest, res) => {
-  if (!(await isWorkspaceInScope(req, req.params.id))) {
+  const workspaceId = String(req.params.id);
+  if (!(await isWorkspaceInScope(req, workspaceId))) {
     return res.status(404).json({ message: "Workspace not found" });
   }
+  await logAuditEvent(req, {
+    action: AUDIT_ACTIONS.SYNC_STARTED,
+    resource: 'workspace',
+    resourceId: workspaceId,
+    organizationId: req.user?.organizationId || null,
+    details: { trigger: 'manual' },
+  });
+  const failSync = async (err: string, details: Record<string, unknown> = {}) => {
+    await logAuditEvent(req, {
+      action: AUDIT_ACTIONS.SYNC_FAILED,
+      resource: 'workspace',
+      resourceId: workspaceId,
+      organizationId: req.user?.organizationId || null,
+      details: { error: err, ...details },
+      result: 'FAILURE',
+    });
+  };
   try {
-    const workspace = await storage.getWorkspace(req.params.id);
-    if (!workspace) return res.status(404).json({ message: "Workspace not found" });
-    if (!workspace.tenantConnectionId) return res.status(400).json({ message: "Workspace has no tenant connection" });
+    const workspace = await storage.getWorkspace(workspaceId);
+    if (!workspace) {
+      await failSync('Workspace not found');
+      return res.status(404).json({ message: "Workspace not found" });
+    }
+    if (!workspace.tenantConnectionId) {
+      await failSync('Workspace has no tenant connection');
+      return res.status(400).json({ message: "Workspace has no tenant connection" });
+    }
 
     const connection = await storage.getTenantConnection(workspace.tenantConnectionId);
-    if (!connection) return res.status(404).json({ message: "Tenant connection not found" });
+    if (!connection) {
+      await failSync('Tenant connection not found');
+      return res.status(404).json({ message: "Tenant connection not found" });
+    }
 
     const clientId = connection.clientId || process.env.AZURE_CLIENT_ID;
     const clientSecret = getEffectiveClientSecret(connection);
     if (!clientId || !clientSecret) {
+      await failSync('Zenith app credentials not configured');
       return res.status(503).json({ success: false, error: "Zenith app credentials not configured." });
     }
 
     const graphSiteId = workspace.m365ObjectId;
-    if (!graphSiteId) return res.status(400).json({ message: "No M365 object ID on this workspace" });
+    if (!graphSiteId) {
+      await failSync('No M365 object ID on workspace');
+      return res.status(400).json({ message: "No M365 object ID on this workspace" });
+    }
 
     let token: string | null = null;
     try { token = await getAppToken(connection.tenantId, clientId, clientSecret); } catch {}
-    if (!token) return res.status(503).json({ success: false, error: "Could not acquire Graph API token." });
+    if (!token) {
+      await failSync('Could not acquire Graph API token');
+      return res.status(503).json({ success: false, error: "Could not acquire Graph API token." });
+    }
 
     const siteRes = await fetch(`https://graph.microsoft.com/v1.0/sites/${graphSiteId}?$select=id,displayName,webUrl,description,createdDateTime,lastModifiedDateTime,isPersonalSite,root,siteCollection`, {
       headers: { Authorization: `Bearer ${token}` },
@@ -1230,6 +1296,7 @@ router.post("/api/workspaces/:id/sync", requireRole(ZENITH_ROLES.OPERATOR, ZENIT
       siteDeleted = true;
     } else {
       const errText = await siteRes.text();
+      await failSync(`Graph API error ${siteRes.status}`, { graphStatus: siteRes.status, graphError: errText });
       return res.status(502).json({ success: false, error: `Graph API error ${siteRes.status}: ${errText}` });
     }
 
@@ -1238,6 +1305,14 @@ router.post("/api/workspaces/:id/sync", requireRole(ZENITH_ROLES.OPERATOR, ZENIT
     if (siteDeleted) {
       updates.isDeleted = true;
       await storage.updateWorkspace(workspace.id, updates);
+      await logAuditEvent(req, {
+        action: AUDIT_ACTIONS.SYNC_COMPLETED,
+        resource: 'workspace',
+        resourceId: workspace.id,
+        organizationId: connection.organizationId || req.user?.organizationId || null,
+        tenantConnectionId: workspace.tenantConnectionId,
+        details: { workspaceName: workspace.displayName, siteDeleted: true },
+      });
       return res.json({ success: true, siteDeleted: true, message: "Site no longer found in Microsoft 365 — marked as deleted." });
     }
 
@@ -1469,9 +1544,23 @@ router.post("/api/workspaces/:id/sync", requireRole(ZENITH_ROLES.OPERATOR, ZENIT
     }
 
     const finalWorkspace = await storage.getWorkspace(workspace.id);
+    await logAuditEvent(req, {
+      action: AUDIT_ACTIONS.SYNC_COMPLETED,
+      resource: 'workspace',
+      resourceId: workspace.id,
+      organizationId: connection.organizationId || req.user?.organizationId || null,
+      tenantConnectionId: workspace.tenantConnectionId,
+      details: {
+        workspaceName: workspace.displayName,
+        siteUrl: finalWorkspace?.siteUrl || workspace.siteUrl,
+        librariesSynced: librarySyncCount,
+        warnings: warnings.length > 0 ? warnings : undefined,
+      },
+    });
     res.json({ success: true, workspace: finalWorkspace, librariesSynced: librarySyncCount, warnings: warnings.length > 0 ? warnings : undefined });
   } catch (err: any) {
     console.error("[single-site-sync] Error:", err);
+    await failSync(err.message || 'Sync failed');
     res.status(500).json({ success: false, error: err.message || "Sync failed" });
   }
 });
@@ -1570,16 +1659,27 @@ router.patch("/api/workspaces/bulk/update", requireRole(ZENITH_ROLES.GOVERNANCE_
     console.log(`[bulk-update] ${writebackPendingCount} workspaces have pending property bag writebacks`);
   }
 
-  await storage.createAuditEntry({
-    userId: req.user?.id || null,
-    userEmail: req.user?.email || null,
-    action: 'BULK_UPDATE',
+  const beforeSnapshots: Array<{ id: string; displayName: string | null; values: Record<string, unknown> }> = [];
+  for (const wsId of ids) {
+    const ws = workspaceMap.get(wsId);
+    if (!ws) continue;
+    const values: Record<string, unknown> = {};
+    for (const f of Object.keys(updates)) {
+      values[f] = (ws as Record<string, unknown>)[f];
+    }
+    beforeSnapshots.push({ id: ws.id, displayName: ws.displayName, values });
+  }
+  await logAuditEvent(req, {
+    action: AUDIT_ACTIONS.WORKSPACE_BULK_UPDATED,
     resource: 'workspace',
-    resourceId: null,
     organizationId: req.user?.organizationId || null,
-    details: { count: ids.length, fields: Object.keys(updates), workspaceIds: ids },
-    result: 'SUCCESS',
-    ipAddress: req.ip || null,
+    details: {
+      count: ids.length,
+      fields: Object.keys(updates),
+      workspaceIds: ids,
+      before: beforeSnapshots,
+      after: updates,
+    },
   });
 
   res.json({
@@ -1697,6 +1797,20 @@ router.patch("/api/workspaces/bulk/hub-assignment", requireRole(ZENITH_ROLES.GOV
   const noneSynced = spoSyncResults.every(r => !r.success);
   const syncedCount = spoSyncResults.filter(r => r.success).length;
 
+  const hubBefore = targetWorkspaces.map(ws => ({ id: ws.id, displayName: ws.displayName, hubSiteId: ws.hubSiteId }));
+  await logAuditEvent(req, {
+    action: AUDIT_ACTIONS.HUB_ASSIGNMENT_CHANGED,
+    resource: 'workspace',
+    organizationId: req.user?.organizationId || null,
+    details: {
+      workspaceIds,
+      before: hubBefore,
+      after: { hubSiteId: hubSiteId || null },
+      spoSync: { attempted: spoSyncResults.length, succeeded: syncedCount, failed: spoSyncResults.length - syncedCount },
+    },
+    result: noneSynced && spoSyncResults.length > 0 ? 'FAILURE' : 'SUCCESS',
+  });
+
   res.json({
     message: allSynced
       ? `Hub assignment updated and synced to SharePoint (${syncedCount}/${spoSyncResults.length})`
@@ -1730,7 +1844,21 @@ router.put("/api/workspaces/:id/copilot-rules", requireRole(ZENITH_ROLES.GOVERNA
   if (!Array.isArray(rules)) {
     return res.status(400).json({ message: "rules array is required" });
   }
+  const previousRules = await storage.getCopilotRules(req.params.id);
+  const ws = await storage.getWorkspace(req.params.id);
   const created = await storage.setCopilotRules(req.params.id, rules);
+  await logAuditEvent(req, {
+    action: AUDIT_ACTIONS.COPILOT_RULES_UPDATED,
+    resource: 'workspace',
+    resourceId: req.params.id,
+    organizationId: req.user?.organizationId || null,
+    tenantConnectionId: ws?.tenantConnectionId || null,
+    details: {
+      workspaceName: ws?.displayName,
+      before: previousRules,
+      after: created,
+    },
+  });
   res.json(created);
 });
 
@@ -2114,11 +2242,11 @@ router.patch("/api/provisioning-requests/:id/status", requireRole(ZENITH_ROLES.T
 
 // ── Site Inventory Sync ──
 router.post("/api/admin/tenants/:id/sync", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN), async (req: AuthenticatedRequest, res) => {
-  const allowedTenantIds = await getOrgTenantConnectionIds(req);
-  if (allowedTenantIds !== null && !allowedTenantIds.includes(req.params.id)) {
+  const tenantId = String(req.params.id);
+  if (!(await assertTenantInScope(req, tenantId, "Tenant connection is outside caller scope (sync)"))) {
     return res.status(403).json({ message: "Tenant connection is outside your organization scope" });
   }
-  const result = await runSharePointTenantSync(req.params.id, {
+  const result = await runSharePointTenantSync(tenantId, {
     sessionUserId: req.session?.userId,
     triggeredByUserId: req.user?.id || null,
     triggeredByEmail: req.user?.email || null,
@@ -2126,6 +2254,14 @@ router.post("/api/admin/tenants/:id/sync", requireRole(ZENITH_ROLES.GOVERNANCE_A
     triggeredByIp: req.ip || null,
   });
   if (!result.success) {
+    await logAuditEvent(req, {
+      action: AUDIT_ACTIONS.TENANT_SYNC_FAILED,
+      resource: 'tenant_connection',
+      resourceId: tenantId,
+      tenantConnectionId: tenantId,
+      details: { stage: 'tenant-sync', error: result.error },
+      result: 'FAILURE',
+    });
     if (result.error === "Tenant connection not found") return res.status(404).json(result);
     if (result.error?.includes("credentials not configured")) return res.status(503).json(result);
     return res.status(500).json(result);
@@ -2134,13 +2270,32 @@ router.post("/api/admin/tenants/:id/sync", requireRole(ZENITH_ROLES.GOVERNANCE_A
 });
 
 router.post("/api/admin/tenants/:id/sync-libraries", requireRole(ZENITH_ROLES.TENANT_ADMIN), async (req: AuthenticatedRequest, res) => {
+  const tenantId = String(req.params.id);
   try {
-    const allowedTenantIds = await getOrgTenantConnectionIds(req);
-    if (allowedTenantIds !== null && !allowedTenantIds.includes(req.params.id)) {
+    if (!(await assertTenantInScope(req, tenantId, "Tenant connection is outside caller scope (sync-libraries)"))) {
       return res.status(403).json({ message: "Tenant connection is outside your organization scope" });
     }
-    const connection = await storage.getTenantConnection(req.params.id);
-    if (!connection) return res.status(404).json({ error: "Tenant not found" });
+    const connection = await storage.getTenantConnection(tenantId);
+    if (!connection) {
+      await logAuditEvent(req, {
+        action: AUDIT_ACTIONS.SYNC_FAILED,
+        resource: 'tenant_connection',
+        resourceId: tenantId,
+        tenantConnectionId: tenantId,
+        details: { stage: 'sync-libraries', reason: 'tenant_not_found' },
+        result: 'FAILURE',
+      });
+      return res.status(404).json({ error: "Tenant not found" });
+    }
+
+    await logAuditEvent(req, {
+      action: AUDIT_ACTIONS.SYNC_STARTED,
+      resource: 'tenant_connection',
+      resourceId: tenantId,
+      organizationId: connection.organizationId ?? null,
+      tenantConnectionId: tenantId,
+      details: { stage: 'sync-libraries', tenantName: connection.tenantName },
+    });
 
     let token: string | null = null;
 
@@ -2154,7 +2309,18 @@ router.post("/api/admin/tenants/:id/sync-libraries", requireRole(ZENITH_ROLES.TE
       token = await getDelegatedTokenForRetention(req.session?.userId, connection.organizationId);
     }
 
-    if (!token) return res.status(500).json({ error: "No Graph API token available. Please sign in with SSO." });
+    if (!token) {
+      await logAuditEvent(req, {
+        action: AUDIT_ACTIONS.SYNC_FAILED,
+        resource: 'tenant_connection',
+        resourceId: tenantId,
+        organizationId: connection.organizationId ?? null,
+        tenantConnectionId: tenantId,
+        details: { stage: 'sync-libraries', reason: 'no_graph_token' },
+        result: 'FAILURE',
+      });
+      return res.status(500).json({ error: "No Graph API token available. Please sign in with SSO." });
+    }
 
     const allWorkspaces = await storage.getWorkspaces(undefined, req.params.id);
     console.log(`[library-sync] Starting full library sync for ${allWorkspaces.length} workspaces in tenant ${connection.tenantName}...`);
@@ -2267,6 +2433,23 @@ router.post("/api/admin/tenants/:id/sync-libraries", requireRole(ZENITH_ROLES.TE
       console.error(`[library-sync] Flagging error: ${flagErr.message}`);
     }
 
+    await logAuditEvent(req, {
+      action: result.errors === 0 ? AUDIT_ACTIONS.SYNC_COMPLETED : AUDIT_ACTIONS.SYNC_FAILED,
+      resource: 'tenant_connection',
+      resourceId: tenantId,
+      organizationId: connection.organizationId ?? null,
+      tenantConnectionId: tenantId,
+      details: {
+        stage: 'sync-libraries',
+        workspacesProcessed: allWorkspaces.length,
+        workspacesSynced: result.synced,
+        librariesSynced: result.totalLibraries,
+        librariesSkipped: result.skipped,
+        errors: result.errors,
+        flagged: flaggedCount,
+      },
+      result: result.errors === 0 ? 'SUCCESS' : (result.synced > 0 ? 'PARTIAL' : 'FAILURE'),
+    });
     res.json({
       success: true,
       workspacesProcessed: allWorkspaces.length,
@@ -2278,6 +2461,14 @@ router.post("/api/admin/tenants/:id/sync-libraries", requireRole(ZENITH_ROLES.TE
     });
   } catch (err: any) {
     console.error(`[library-sync] Error: ${err.message}`);
+    await logAuditEvent(req, {
+      action: AUDIT_ACTIONS.SYNC_FAILED,
+      resource: 'tenant_connection',
+      resourceId: tenantId,
+      tenantConnectionId: tenantId,
+      details: { stage: 'sync-libraries', error: err.message },
+      result: 'FAILURE',
+    });
     res.status(500).json({ success: false, error: err.message });
   }
 });
@@ -2299,8 +2490,7 @@ router.get("/api/admin/tenants/:id/content-types", requireAuth(), async (req: Au
 
 router.post("/api/admin/tenants/:id/sync-ia", requireRole(ZENITH_ROLES.TENANT_ADMIN), async (req: AuthenticatedRequest, res) => {
   try {
-    const allowedTenantIds = await getOrgTenantConnectionIds(req);
-    if (allowedTenantIds !== null && !allowedTenantIds.includes(req.params.id)) {
+    if (!(await assertTenantInScope(req, req.params.id, "Tenant connection is outside caller scope (sync-ia)"))) {
       return res.status(403).json({ message: "Tenant connection is outside your organization scope" });
     }
     const connection = await storage.getTenantConnection(req.params.id);
@@ -2978,13 +3168,21 @@ router.get("/api/admin/tenants/:id/export-csv", requireRole(ZENITH_ROLES.VIEWER)
 });
 
 router.post("/api/admin/tenants/:id/import-csv", requireRole(ZENITH_ROLES.TENANT_ADMIN), async (req: AuthenticatedRequest, res) => {
+  const tenantId = String(req.params.id);
   try {
-    const allowedTenantIds = await getOrgTenantConnectionIds(req);
-    if (allowedTenantIds !== null && !allowedTenantIds.includes(req.params.id)) {
+    if (!(await assertTenantInScope(req, tenantId, "Tenant connection is outside caller scope (import-csv)"))) {
       return res.status(403).json({ message: "Tenant connection is outside your organization scope" });
     }
-    const connection = await storage.getTenantConnection(req.params.id);
+    const connection = await storage.getTenantConnection(tenantId);
     if (!connection) return res.status(404).json({ error: "Tenant not found" });
+    await logAuditEvent(req, {
+      action: AUDIT_ACTIONS.CSV_IMPORT_STARTED,
+      resource: 'tenant_connection',
+      resourceId: tenantId,
+      organizationId: connection.organizationId || req.user?.organizationId || null,
+      tenantConnectionId: tenantId,
+      details: { dryRun: !!req.body?.dryRun },
+    });
 
     const { csvData, dryRun } = req.body;
     if (!csvData || typeof csvData !== "string") {
@@ -3131,6 +3329,23 @@ router.post("/api/admin/tenants/:id/import-csv", requireRole(ZENITH_ROLES.TENANT
     }
 
     console.log(`[csv-import] ${dryRun ? "DRY RUN" : "APPLIED"}: ${results.matched} matched, ${results.updated} updated, ${results.notFound} not found, ${results.errors} errors`);
+    await logAuditEvent(req, {
+      action: AUDIT_ACTIONS.CSV_IMPORT_COMPLETED,
+      resource: 'tenant_connection',
+      resourceId: tenantId,
+      organizationId: connection.organizationId || req.user?.organizationId || null,
+      tenantConnectionId: tenantId,
+      details: {
+        dryRun: !!dryRun,
+        total: results.total,
+        matched: results.matched,
+        updated: results.updated,
+        notFound: results.notFound,
+        errors: results.errors,
+        changes: results.changes,
+      },
+      result: results.errors > 0 ? 'PARTIAL' : 'SUCCESS',
+    });
     res.json({
       success: true,
       dryRun: !!dryRun,
@@ -3138,6 +3353,15 @@ router.post("/api/admin/tenants/:id/import-csv", requireRole(ZENITH_ROLES.TENANT
     });
   } catch (err: any) {
     console.error(`[csv-import] Error:`, err.message);
+    await logAuditEvent(req, {
+      action: AUDIT_ACTIONS.CSV_IMPORT_FAILED,
+      resource: 'tenant_connection',
+      resourceId: tenantId,
+      organizationId: req.user?.organizationId || null,
+      tenantConnectionId: tenantId,
+      details: { error: err.message },
+      result: 'FAILURE',
+    });
     res.status(500).json({ error: err.message });
   }
 });
@@ -3165,6 +3389,13 @@ async function handleMetadataWriteback(req: AuthenticatedRequest, res: any) {
       return res.status(403).json({ error: "One or more workspaces are outside your organization scope" });
     }
   }
+
+  await logAuditEvent(req, {
+    action: AUDIT_ACTIONS.METADATA_WRITEBACK_STARTED,
+    resource: 'workspace',
+    organizationId: req.user?.organizationId || null,
+    details: { workspaceIds, route: req.path },
+  });
 
   const results: { workspaceId: string; displayName: string; success: boolean; fieldsSynced?: string[]; error?: string }[] = [];
 
@@ -3260,6 +3491,13 @@ async function handleMetadataWriteback(req: AuthenticatedRequest, res: any) {
 
   const succeeded = results.filter(r => r.success).length;
   const failed = results.filter(r => !r.success).length;
+  await logAuditEvent(req, {
+    action: failed === 0 ? AUDIT_ACTIONS.METADATA_WRITEBACK_COMPLETED : AUDIT_ACTIONS.METADATA_WRITEBACK_FAILED,
+    resource: 'workspace',
+    organizationId: req.user?.organizationId || null,
+    details: { workspaceIds, succeeded, failed, results },
+    result: failed === 0 ? 'SUCCESS' : (succeeded > 0 ? 'PARTIAL' : 'FAILURE'),
+  });
   res.json({ succeeded, failed, results });
 }
 
@@ -3267,13 +3505,21 @@ router.post("/api/workspaces/writeback/department", requireRole(ZENITH_ROLES.GOV
 router.post("/api/workspaces/writeback/metadata", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN), requireFeature("m365WriteBack"), handleMetadataWriteback);
 
 router.post("/api/admin/tenants/:id/writeback", requireRole(ZENITH_ROLES.TENANT_ADMIN), requireFeature("m365WriteBack"), async (req: AuthenticatedRequest, res) => {
-  const allowedTenantIds = await getOrgTenantConnectionIds(req);
-  if (allowedTenantIds !== null && !allowedTenantIds.includes(req.params.id)) {
+  const tenantId = String(req.params.id);
+  if (!(await assertTenantInScope(req, tenantId, "Tenant connection is outside caller scope (writeback)"))) {
     return res.status(403).json({ message: "Tenant connection is outside your organization scope" });
   }
 
-  const connection = await storage.getTenantConnection(req.params.id);
+  const connection = await storage.getTenantConnection(tenantId);
   if (!connection) return res.status(404).json({ error: "Tenant connection not found" });
+  await logAuditEvent(req, {
+    action: AUDIT_ACTIONS.TENANT_WRITEBACK_STARTED,
+    resource: 'tenant_connection',
+    resourceId: tenantId,
+    organizationId: connection.organizationId || req.user?.organizationId || null,
+    tenantConnectionId: tenantId,
+    details: { tenantName: connection.tenantName },
+  });
 
   const allWorkspaces = await storage.getWorkspaces(undefined, req.params.id);
   const dirty = allWorkspaces.filter(w =>
@@ -3359,6 +3605,15 @@ router.post("/api/admin/tenants/:id/writeback", requireRole(ZENITH_ROLES.TENANT_
   const written = results.filter(r => r.success).length;
   const failed = results.filter(r => !r.success).length;
   console.log(`[bulk-writeback] Complete: ${written} written, ${failed} failed out of ${dirty.length} dirty`);
+  await logAuditEvent(req, {
+    action: AUDIT_ACTIONS.TENANT_WRITEBACK_COMPLETED,
+    resource: 'tenant_connection',
+    resourceId: tenantId,
+    organizationId: connection.organizationId || req.user?.organizationId || null,
+    tenantConnectionId: tenantId,
+    details: { total: allWorkspaces.length, dirty: dirty.length, written, failed, results },
+    result: failed === 0 ? 'SUCCESS' : (written > 0 ? 'PARTIAL' : 'FAILURE'),
+  });
   res.json({ total: allWorkspaces.length, dirty: dirty.length, written, failed, results });
 });
 

@@ -3,6 +3,7 @@ import { storage } from '../storage';
 import { AuthenticatedRequest, requireAuth, requirePermission } from '../middleware/rbac';
 import { ZENITH_ROLES, type ZenithRole } from '@shared/schema';
 import { getAppToken, searchEntraUsers } from '../services/graph';
+import { logAccessDenied } from '../services/audit-logger';
 
 const router = Router();
 
@@ -110,6 +111,7 @@ router.get('/api/orgs/:id/members', requireAuth(), async (req: AuthenticatedRequ
 
     const membership = await storage.getOrgMembership(user.id, orgId);
     if (!membership && user.organizationId !== orgId) {
+      await logAccessDenied(req, 'organization', orgId, 'Caller is not a member of this organization (members)');
       return res.status(403).json({ error: 'You are not a member of this organization' });
     }
 
@@ -147,6 +149,7 @@ router.post('/api/orgs/:id/members', requireAuth(), requirePermission('users:man
 
     const adminMembership = await storage.getOrgMembership(adminUser.id, orgId);
     if (!adminMembership && adminUser.organizationId !== orgId) {
+      await logAccessDenied(req, 'organization', orgId, 'Caller is not a member of this organization (add member)');
       return res.status(403).json({ error: 'You are not a member of this organization' });
     }
 
@@ -301,6 +304,7 @@ router.patch('/api/orgs/:id/settings', requireAuth(), requirePermission('setting
 
     const adminMembership = await storage.getOrgMembership(adminUser.id, orgId);
     if (!adminMembership && adminUser.organizationId !== orgId) {
+      await logAccessDenied(req, 'organization', orgId, 'Caller is not a member of this organization (settings)');
       return res.status(403).json({ error: 'You are not a member of this organization' });
     }
 
@@ -352,6 +356,7 @@ router.get('/api/orgs/:id/data-counts', requireAuth(), requirePermission('settin
 
     const membership = await storage.getOrgMembership(user.id, orgId);
     if (!membership && user.organizationId !== orgId) {
+      await logAccessDenied(req, 'organization', orgId, 'Caller is not a member of this organization (data-counts)');
       return res.status(403).json({ error: 'You are not a member of this organization' });
     }
 
@@ -371,10 +376,12 @@ router.delete('/api/orgs/:id/cancel', requireAuth(), requirePermission('settings
     const membership = await storage.getOrgMembership(user.id, orgId);
     const isTenantAdmin = membership?.role === 'tenant_admin' || user.role === 'tenant_admin' || user.role === 'platform_owner';
     if (!isTenantAdmin) {
+      await logAccessDenied(req, 'organization', orgId, 'Only tenant_admin can cancel an organization');
       return res.status(403).json({ error: 'Only tenant administrators can cancel an organization' });
     }
 
     if (!membership && user.organizationId !== orgId) {
+      await logAccessDenied(req, 'organization', orgId, 'Caller is not a member of this organization (cancel)');
       return res.status(403).json({ error: 'You are not a member of this organization' });
     }
 
@@ -424,6 +431,7 @@ router.get('/api/orgs/:id/entra-users', requireAuth(), requirePermission('users:
 
     const adminMembership = await storage.getOrgMembership(adminUser.id, orgId);
     if (!adminMembership && adminUser.organizationId !== orgId) {
+      await logAccessDenied(req, 'organization', orgId, 'Caller is not a member of this organization (entra-users)');
       return res.status(403).json({ error: 'You are not a member of this organization' });
     }
 

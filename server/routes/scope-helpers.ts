@@ -1,6 +1,7 @@
 import { ZENITH_ROLES } from "@shared/schema";
 import { storage } from "../storage";
 import type { AuthenticatedRequest } from "../middleware/rbac";
+import { logAccessDenied } from "../services/audit-logger";
 
 export function getActiveOrgId(req: AuthenticatedRequest): string | null {
   return req.activeOrganizationId || req.user?.organizationId || null;
@@ -86,11 +87,39 @@ export async function getAccessibleTenantConnectionIds(req: AuthenticatedRequest
 export const getOrgTenantConnectionIds = getAccessibleTenantConnectionIds;
 
 export async function isWorkspaceInScope(req: AuthenticatedRequest, workspaceId: string): Promise<boolean> {
-  if (!req.user) return false;
+  if (!req.user) {
+    await logAccessDenied(req, "workspace", workspaceId, "Unauthenticated workspace access attempt");
+    return false;
+  }
   if (req.user.role === ZENITH_ROLES.PLATFORM_OWNER) return true;
   const ws = await storage.getWorkspace(workspaceId);
-  if (!ws?.tenantConnectionId) return false;
+  if (!ws?.tenantConnectionId) {
+    await logAccessDenied(req, "workspace", workspaceId, "Workspace not found or has no tenant connection");
+    return false;
+  }
   const allowedIds = await getAccessibleTenantConnectionIds(req);
   if (!allowedIds) return true;
-  return allowedIds.includes(ws.tenantConnectionId);
+  if (allowedIds.includes(ws.tenantConnectionId)) return true;
+  await logAccessDenied(req, "workspace", workspaceId, "Workspace tenant connection is outside caller scope", {
+    workspaceTenantConnectionId: ws.tenantConnectionId,
+  });
+  return false;
+}
+
+/**
+ * Assert that a tenant connection is in the caller's accessible scope.
+ * Returns true if allowed; otherwise emits ACCESS_DENIED and returns false so
+ * the caller can return 403/404. Use at every mutating route that takes a
+ * `:tenantConnectionId` / `:id` (tenant) param.
+ */
+export async function assertTenantInScope(
+  req: AuthenticatedRequest,
+  tenantConnectionId: string,
+  reason = "Tenant connection is outside caller scope",
+): Promise<boolean> {
+  const allowed = await getAccessibleTenantConnectionIds(req);
+  if (allowed === null) return true;
+  if (allowed.includes(tenantConnectionId)) return true;
+  await logAccessDenied(req, "tenant_connection", tenantConnectionId, reason);
+  return false;
 }

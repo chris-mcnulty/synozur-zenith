@@ -15,6 +15,15 @@ import { getAIUsageSummary, getMonthlyTokenBurn } from '../services/ai-usage';
 import { storage } from '../storage';
 import { extractTextFromBuffer, mimeToFileType } from '../services/ai-document-extraction';
 import { assembleGroundingContext } from '../services/ai-grounding';
+import { logAuditEvent, logAccessDenied, AUDIT_ACTIONS } from '../services/audit-logger';
+
+async function assertOrgScope(req: AuthenticatedRequest, orgId: string, reason: string): Promise<boolean> {
+  if (req.user?.role === ZENITH_ROLES.PLATFORM_OWNER) return true;
+  const callerOrg = req.activeOrganizationId || req.user?.organizationId || null;
+  if (callerOrg && callerOrg === orgId) return true;
+  await logAccessDenied(req, 'organization', orgId, reason, { callerOrg });
+  return false;
+}
 
 const router = Router();
 
@@ -301,6 +310,13 @@ router.post(
         uploadedBy: req.user?.id || null,
       });
 
+      await logAuditEvent(req, {
+        action: AUDIT_ACTIONS.GROUNDING_DOC_CREATED,
+        resource: 'grounding_document',
+        resourceId: doc.id,
+        organizationId: null,
+        details: { scope: 'system', name: doc.name, fileType, fileSizeBytes: req.file.size },
+      });
       res.json(doc);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -314,10 +330,23 @@ router.patch(
   requireRole(ZENITH_ROLES.PLATFORM_OWNER),
   async (req: AuthenticatedRequest, res) => {
     try {
-      const { id } = req.params;
+      const id = String(req.params.id);
       const { isActive } = req.body;
+      const before = await storage.getGroundingDocument(id);
       const doc = await storage.updateGroundingDocument(id, { isActive: Boolean(isActive) });
       if (!doc) return res.status(404).json({ error: 'Document not found' });
+      await logAuditEvent(req, {
+        action: AUDIT_ACTIONS.GROUNDING_DOC_UPDATED,
+        resource: 'grounding_document',
+        resourceId: id,
+        organizationId: before?.orgId ?? null,
+        details: {
+          scope: doc.scope,
+          name: doc.name,
+          before: { isActive: before?.isActive },
+          after: { isActive: doc.isActive },
+        },
+      });
       res.json(doc);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -329,14 +358,21 @@ router.delete(
   '/api/admin/ai/grounding/:id',
   requireAuth(),
   requireRole(ZENITH_ROLES.PLATFORM_OWNER),
-  async (_req, res) => {
+  async (req: AuthenticatedRequest, res) => {
     try {
-      const { id } = _req.params;
+      const id = String(req.params.id);
       const existing = await storage.getGroundingDocument(id);
       if (!existing || existing.scope !== 'system') {
         return res.status(404).json({ error: 'Document not found' });
       }
       await storage.deleteGroundingDocument(id);
+      await logAuditEvent(req, {
+        action: AUDIT_ACTIONS.GROUNDING_DOC_DELETED,
+        resource: 'grounding_document',
+        resourceId: id,
+        organizationId: null,
+        details: { scope: 'system', name: existing.name },
+      });
       res.json({ success: true });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -365,9 +401,12 @@ router.get(
   '/api/admin/tenants/:orgId/ai/grounding',
   requireAuth(),
   requireRole(ZENITH_ROLES.TENANT_ADMIN),
-  async (req, res) => {
+  async (req: AuthenticatedRequest, res) => {
     try {
-      const { orgId } = req.params;
+      const orgId = String(req.params.orgId);
+      if (!(await assertOrgScope(req, orgId, 'Grounding documents requested for a different organization'))) {
+        return res.status(403).json({ error: 'Forbidden' });
+      }
       const docs = await storage.getGroundingDocuments('org', orgId);
       res.json(docs);
     } catch (err: any) {
@@ -383,7 +422,10 @@ router.post(
   handleUpload,
   async (req: AuthenticatedRequest, res) => {
     try {
-      const { orgId } = req.params;
+      const orgId = String(req.params.orgId);
+      if (!(await assertOrgScope(req, orgId, 'Grounding document upload for a different organization'))) {
+        return res.status(403).json({ error: 'Forbidden' });
+      }
 
       if (!req.file) {
         return res.status(400).json({ error: 'No file uploaded' });
@@ -415,6 +457,13 @@ router.post(
         uploadedBy: req.user?.id || null,
       });
 
+      await logAuditEvent(req, {
+        action: AUDIT_ACTIONS.GROUNDING_DOC_CREATED,
+        resource: 'grounding_document',
+        resourceId: doc.id,
+        organizationId: orgId,
+        details: { scope: 'org', name: doc.name, fileType, fileSizeBytes: req.file.size },
+      });
       res.json(doc);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -426,12 +475,35 @@ router.patch(
   '/api/admin/tenants/:orgId/ai/grounding/:id',
   requireAuth(),
   requireRole(ZENITH_ROLES.TENANT_ADMIN),
-  async (req, res) => {
+  async (req: AuthenticatedRequest, res) => {
     try {
-      const { id } = req.params;
+      const id = String(req.params.id);
+      const orgId = String(req.params.orgId);
+      if (!(await assertOrgScope(req, orgId, 'Grounding document update for a different organization'))) {
+        return res.status(403).json({ error: 'Forbidden' });
+      }
       const { isActive } = req.body;
+      const before = await storage.getGroundingDocument(id);
+      if (!before || before.scope !== 'org' || before.orgId !== orgId) {
+        await logAccessDenied(req, 'grounding_document', id, 'Grounding document does not belong to supplied organization', {
+          orgId, docScope: before?.scope, docOrgId: before?.orgId,
+        });
+        return res.status(404).json({ error: 'Document not found' });
+      }
       const doc = await storage.updateGroundingDocument(id, { isActive: Boolean(isActive) });
       if (!doc) return res.status(404).json({ error: 'Document not found' });
+      await logAuditEvent(req, {
+        action: AUDIT_ACTIONS.GROUNDING_DOC_UPDATED,
+        resource: 'grounding_document',
+        resourceId: id,
+        organizationId: orgId,
+        details: {
+          scope: doc.scope,
+          name: doc.name,
+          before: { isActive: before.isActive },
+          after: { isActive: doc.isActive },
+        },
+      });
       res.json(doc);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -443,14 +515,28 @@ router.delete(
   '/api/admin/tenants/:orgId/ai/grounding/:id',
   requireAuth(),
   requireRole(ZENITH_ROLES.TENANT_ADMIN),
-  async (req, res) => {
+  async (req: AuthenticatedRequest, res) => {
     try {
-      const { id, orgId } = req.params;
+      const id = String(req.params.id);
+      const orgId = String(req.params.orgId);
+      if (!(await assertOrgScope(req, orgId, 'Grounding document delete for a different organization'))) {
+        return res.status(403).json({ error: 'Forbidden' });
+      }
       const existing = await storage.getGroundingDocument(id);
       if (!existing || existing.scope !== 'org' || existing.orgId !== orgId) {
+        await logAccessDenied(req, 'grounding_document', id, 'Grounding document does not belong to supplied organization', {
+          orgId, docScope: existing?.scope, docOrgId: existing?.orgId,
+        });
         return res.status(404).json({ error: 'Document not found' });
       }
       await storage.deleteGroundingDocument(id);
+      await logAuditEvent(req, {
+        action: AUDIT_ACTIONS.GROUNDING_DOC_DELETED,
+        resource: 'grounding_document',
+        resourceId: id,
+        organizationId: orgId,
+        details: { scope: 'org', name: existing.name },
+      });
       res.json({ success: true });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -462,9 +548,12 @@ router.get(
   '/api/admin/tenants/:orgId/ai/grounding/preview',
   requireAuth(),
   requireRole(ZENITH_ROLES.TENANT_ADMIN),
-  async (req, res) => {
+  async (req: AuthenticatedRequest, res) => {
     try {
-      const { orgId } = req.params;
+      const orgId = String(req.params.orgId);
+      if (!(await assertOrgScope(req, orgId, 'Grounding preview for a different organization'))) {
+        return res.status(403).json({ error: 'Forbidden' });
+      }
       const context = await assembleGroundingContext(orgId);
       res.json({ context, charCount: context.length });
     } catch (err: any) {

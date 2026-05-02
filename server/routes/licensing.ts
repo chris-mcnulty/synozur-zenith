@@ -10,7 +10,8 @@ import {
 import { requireAuth, type AuthenticatedRequest } from "../middleware/rbac";
 import { syncLicenses } from "../services/license-sync";
 import { trackJobRun, DuplicateJobError } from "../services/job-tracking";
-import { getActiveOrgId } from "./scope-helpers";
+import { getActiveOrgId, assertTenantInScope } from "./scope-helpers";
+import { logAuditEvent, AUDIT_ACTIONS } from "../services/audit-logger";
 import { decryptToken } from "../utils/encryption";
 
 const router = Router();
@@ -112,24 +113,44 @@ router.get("/api/licensing/subscriptions", requireAuth(), async (req: Authentica
 // ── PATCH /api/licensing/subscriptions/:id/price ───────────────────────────
 router.patch("/api/licensing/subscriptions/:id/price", requireAuth(), async (req: AuthenticatedRequest, res) => {
   try {
-    const { id } = req.params;
+    const id = String(req.params.id);
     const tenantConnectionId = (req.body?.tenantConnectionId ?? req.query.tenantConnectionId) as string | undefined;
     const { price } = req.body;
     if (!tenantConnectionId) return res.status(400).json({ error: "tenantConnectionId is required" });
     if (price === undefined || price === null) return res.status(400).json({ error: "price is required" });
+    if (!(await assertTenantInScope(req, tenantConnectionId, "License price update outside caller scope"))) {
+      return res.status(403).json({ error: "Tenant connection is outside your organization scope" });
+    }
+
+    const [existing] = await db
+      .select()
+      .from(licenseSubscriptions)
+      .where(and(eq(licenseSubscriptions.id, id), eq(licenseSubscriptions.tenantConnectionId, tenantConnectionId)))
+      .limit(1);
 
     const [updated] = await db
       .update(licenseSubscriptions)
       .set({ customPricePerUnit: String(price) })
       .where(
         and(
-          eq(licenseSubscriptions.id, id as string),
+          eq(licenseSubscriptions.id, id),
           eq(licenseSubscriptions.tenantConnectionId, tenantConnectionId),
         ),
       )
       .returning();
 
     if (!updated) return res.status(404).json({ error: "Subscription not found" });
+    await logAuditEvent(req, {
+      action: AUDIT_ACTIONS.LICENSE_PRICE_UPDATED,
+      resource: "license_subscription",
+      resourceId: id,
+      tenantConnectionId,
+      details: {
+        skuId: updated.skuId,
+        before: { customPricePerUnit: existing?.customPricePerUnit ?? null },
+        after: { customPricePerUnit: updated.customPricePerUnit },
+      },
+    });
     res.json(updated);
   } catch (err: any) {
     console.error("[licensing] update price error:", err);
@@ -313,11 +334,21 @@ router.get("/api/licensing/optimization/findings", requireAuth(), async (req: Au
 // ── PATCH /api/licensing/optimization/findings/:id ─────────────────────────
 router.patch("/api/licensing/optimization/findings/:id", requireAuth(), async (req: AuthenticatedRequest, res) => {
   try {
-    const { id } = req.params;
+    const id = String(req.params.id);
     const { status } = req.body;
     if (!status) return res.status(400).json({ error: "status is required" });
 
-    const updates: Record<string, any> = { status };
+    const [existing] = await db
+      .select()
+      .from(licenseOptimizationFindings)
+      .where(eq(licenseOptimizationFindings.id, id))
+      .limit(1);
+    if (!existing) return res.status(404).json({ error: "Finding not found" });
+    if (!(await assertTenantInScope(req, existing.tenantConnectionId, "License finding outside caller scope"))) {
+      return res.status(403).json({ error: "Forbidden" });
+    }
+
+    const updates: { status: string; resolvedAt?: Date } = { status };
     if (status === "RESOLVED") {
       updates.resolvedAt = new Date();
     }
@@ -325,10 +356,20 @@ router.patch("/api/licensing/optimization/findings/:id", requireAuth(), async (r
     const [updated] = await db
       .update(licenseOptimizationFindings)
       .set(updates)
-      .where(eq(licenseOptimizationFindings.id, id as string))
+      .where(eq(licenseOptimizationFindings.id, id))
       .returning();
 
     if (!updated) return res.status(404).json({ error: "Finding not found" });
+    await logAuditEvent(req, {
+      action: AUDIT_ACTIONS.LICENSE_FINDING_UPDATED,
+      resource: "license_optimization_finding",
+      resourceId: id,
+      tenantConnectionId: existing.tenantConnectionId,
+      details: {
+        before: { status: existing.status },
+        after: { status: updated.status },
+      },
+    });
     res.json(updated);
   } catch (err: any) {
     console.error("[licensing] update finding error:", err);

@@ -5,6 +5,7 @@ import { ZENITH_ROLES, type Workspace, type InsertWorkspace, type ServicePlanTie
 import { requireRole, type AuthenticatedRequest } from "../middleware/rbac";
 import { requireFeature, getPlanFeatures } from "../services/feature-gate";
 import { getAccessibleTenantConnectionIds } from "./scope-helpers";
+import { logAccessDenied } from "../services/audit-logger";
 import {
   getAppToken,
   fetchSiteGroupOwners,
@@ -98,6 +99,7 @@ async function loadAndValidateScope(
     for (const id of workspaceIds) {
       const ws = map.get(id);
       if (!ws?.tenantConnectionId || !allowedIds.includes(ws.tenantConnectionId)) {
+        await logAccessDenied(req, "workspace", id, "Workspace tenant outside caller scope (bulk)");
         res.status(403).json({ message: "One or more workspaces are outside your organization scope" });
         return { ok: false };
       }
@@ -676,7 +678,7 @@ router.post(
     if (!validated.ok) return;
     const { workspaces } = validated;
     const auditBase = buildAuditBase(req);
-    const ACTION = "SITE_OWNER_ADDED";
+    const ACTION = "WORKSPACE_OWNER_ADDED";
 
     const tokenByTenant = new Map<string, string>();
     const userIdByTenant = new Map<string, string>();

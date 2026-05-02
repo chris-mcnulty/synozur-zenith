@@ -6,6 +6,7 @@ import { getPlanFeatures } from "../services/feature-gate";
 import { invalidateDefaultSignupPlanCache } from "../utils/platformSettingsCache";
 import { buildRequiredFieldsByTenantId, evaluateMetadataCompleteness } from "../services/metadata-completeness";
 import { getAccessibleTenantConnectionIds, getOwnedTenantConnectionIds } from "./scope-helpers";
+import { logAuditEvent, AUDIT_ACTIONS } from "../services/audit-logger";
 
 const router = Router();
 
@@ -231,7 +232,16 @@ router.get("/api/audit-log", requireAuth(), requireRole(ZENITH_ROLES.PLATFORM_OW
     if (requestedTenantId) {
       const accessible = await getAccessibleTenantConnectionIds(req);
       const isAllowed = accessible === null || accessible.includes(requestedTenantId);
-      if (!isAllowed) return res.status(403).json({ error: "Access denied to the requested tenant" });
+      if (!isAllowed) {
+        await logAuditEvent(req, {
+          action: AUDIT_ACTIONS.ACCESS_DENIED,
+          resource: "audit_log",
+          tenantConnectionId: requestedTenantId,
+          details: { method: req.method, path: req.path, reason: "Requested tenant not in accessible set" },
+          result: "DENIED",
+        });
+        return res.status(403).json({ error: "Access denied to the requested tenant" });
+      }
       tenantConnectionId = requestedTenantId;
     } else if (!isPlatformOwner) {
       const owned = await getOwnedTenantConnectionIds(req);
@@ -335,6 +345,13 @@ router.post("/api/admin/organizations", requireRole(ZENITH_ROLES.PLATFORM_OWNER)
     servicePlan: servicePlan || "TRIAL",
     supportEmail: supportEmail?.trim() || null,
   });
+  await logAuditEvent(req, {
+    action: AUDIT_ACTIONS.ORG_CREATED,
+    resource: 'organization',
+    resourceId: org.id,
+    organizationId: org.id,
+    details: { name: org.name, domain: org.domain, servicePlan: org.servicePlan, supportEmail: org.supportEmail },
+  });
   res.status(201).json(org);
 });
 
@@ -411,9 +428,19 @@ router.patch("/api/organization/plan", requireRole(ZENITH_ROLES.PLATFORM_OWNER, 
   }
   const org = await storage.getOrganization();
   if (!org) return res.status(404).json({ message: "Organization not found" });
+  const previousPlan = org.servicePlan;
   const updated = await storage.updateOrganizationPlan(org.id, plan);
   if (!updated) return res.status(500).json({ message: "Failed to update plan" });
   const features = getPlanFeatures(plan as ServicePlanTier);
+  if (previousPlan !== plan) {
+    await logAuditEvent(req, {
+      action: AUDIT_ACTIONS.ORG_PLAN_CHANGED,
+      resource: 'organization',
+      resourceId: org.id,
+      organizationId: org.id,
+      details: { fromPlan: previousPlan, toPlan: plan },
+    });
+  }
   res.json({ ...updated, features });
 });
 
@@ -483,6 +510,18 @@ router.patch("/api/admin/platform/settings", requireRole(ZENITH_ROLES.PLATFORM_O
 
     const updated = await storage.updatePlatformSettings(patch);
     invalidateDefaultSignupPlanCache();
+    await logAuditEvent(req, {
+      action: AUDIT_ACTIONS.PLATFORM_SETTINGS_UPDATED,
+      resource: 'platform_settings',
+      details: {
+        changedFields: Object.keys(patch).filter(k => k !== 'updatedBy'),
+        values: {
+          defaultSignupPlan: patch.defaultSignupPlan,
+          plannerPlanId: patch.plannerPlanId,
+          plannerBucketId: patch.plannerBucketId,
+        },
+      },
+    });
     res.json(updated);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -515,6 +554,12 @@ router.post("/api/admin/domain-blocklist", requireRole(ZENITH_ROLES.PLATFORM_OWN
       reason: reason || null,
       createdBy: null,
     });
+    await logAuditEvent(req, {
+      action: AUDIT_ACTIONS.DOMAIN_BLOCKLIST_ADDED,
+      resource: 'domain_blocklist',
+      resourceId: entry.id || normalizedDomain,
+      details: { domain: normalizedDomain, reason: reason || null },
+    });
     res.status(201).json(entry);
   } catch (err: any) {
     if (err.message?.includes("unique") || err.code === '23505') {
@@ -526,7 +571,14 @@ router.post("/api/admin/domain-blocklist", requireRole(ZENITH_ROLES.PLATFORM_OWN
 
 router.delete("/api/admin/domain-blocklist/:domain", requireRole(ZENITH_ROLES.PLATFORM_OWNER), async (req: AuthenticatedRequest, res) => {
   try {
-    await storage.removeBlockedDomain(decodeURIComponent(req.params.domain));
+    const domain = decodeURIComponent(req.params.domain);
+    await storage.removeBlockedDomain(domain);
+    await logAuditEvent(req, {
+      action: AUDIT_ACTIONS.DOMAIN_BLOCKLIST_REMOVED,
+      resource: 'domain_blocklist',
+      resourceId: domain,
+      details: { domain },
+    });
     res.json({ success: true });
   } catch (err: any) {
     res.status(500).json({ error: err.message });

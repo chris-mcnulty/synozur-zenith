@@ -2,6 +2,7 @@ import { PLAN_FEATURES, type ServicePlanTier } from "@shared/schema";
 import { storage } from "../storage";
 import type { Response, NextFunction } from "express";
 import type { AuthenticatedRequest } from "../middleware/rbac";
+import { logAuditEvent, AUDIT_ACTIONS } from "./audit-logger";
 
 export function getPlanFeatures(plan: ServicePlanTier) {
   return PLAN_FEATURES[plan] || PLAN_FEATURES.TRIAL;
@@ -37,6 +38,20 @@ export function requireFeature(feature: keyof typeof PLAN_FEATURES.TRIAL) {
         m365OverviewReport: "M365 30-Day Overview Report",
       };
       const label = featureLabels[feature] || feature;
+      await logAuditEvent(req, {
+        action: AUDIT_ACTIONS.ACCESS_DENIED,
+        resource: req.path,
+        organizationId: orgId ?? null,
+        details: {
+          method: req.method,
+          path: req.path,
+          feature: String(feature),
+          currentPlan: plan,
+          deniedBy: "feature_gate",
+          reason: `Feature '${String(feature)}' not available on plan '${plan}'`,
+        },
+        result: "DENIED",
+      });
       return res.status(403).json({
         error: "FEATURE_GATED",
         message: `${label} is not available on the ${features.label} plan. Please upgrade to access this feature.`,

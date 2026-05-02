@@ -8,6 +8,7 @@ import { getValidUserGraphToken } from "../routes-entra";
 import { requireAuth, requireRole, requirePermission, type AuthenticatedRequest } from "../middleware/rbac";
 import { encryptToken, decryptToken, isEncryptionConfigured, isEncrypted } from "../utils/encryption";
 import { requireFeature } from "../services/feature-gate";
+import { logAuditEvent, logAccessDenied, AUDIT_ACTIONS, type AuditAction } from "../services/audit-logger";
 import { enableDataMasking, disableDataMasking } from "../services/data-masking-toggle";
 
 const router = Router();
@@ -156,6 +157,7 @@ router.get("/api/admin/tenants/consent/initiate", requireRole(ZENITH_ROLES.TENAN
 
   const user = await storage.getUser(userId);
   if (!user || !user.organizationId) {
+    await logAccessDenied(req as AuthenticatedRequest, "tenant_connection", null, "User has no organization — cannot initiate tenant consent");
     return res.status(403).json({ error: "You must belong to an organization to connect a tenant." });
   }
 
@@ -252,6 +254,14 @@ router.get("/api/admin/tenants/consent/callback", async (req, res) => {
         consentGranted: true,
         status: 'ACTIVE',
       });
+      await logAuditEvent(req as AuthenticatedRequest, {
+        action: AUDIT_ACTIONS.TENANT_REACTIVATED,
+        resource: 'tenant_connection',
+        resourceId: existing.id,
+        organizationId,
+        tenantConnectionId: existing.id,
+        details: { tenantName: existing.tenantName, domain: existing.domain, op: 'consent_callback', reconsent: true },
+      });
       return res.redirect(`${returnTo}?consent_success=true`);
     }
 
@@ -292,7 +302,7 @@ router.get("/api/admin/tenants/consent/callback", async (req, res) => {
       }
     } catch {}
 
-    await storage.createTenantConnection({
+    const newConn = await storage.createTenantConnection({
       tenantId: tenantIdStr,
       tenantName,
       domain,
@@ -300,6 +310,14 @@ router.get("/api/admin/tenants/consent/callback", async (req, res) => {
       organizationId,
       consentGranted: true,
       status: 'ACTIVE',
+    });
+    await logAuditEvent(req as AuthenticatedRequest, {
+      action: AUDIT_ACTIONS.TENANT_REGISTERED,
+      resource: 'tenant_connection',
+      resourceId: newConn.id,
+      organizationId,
+      tenantConnectionId: newConn.id,
+      details: { tenantName, domain, ownershipType, op: 'consent_callback' },
     });
 
     return res.redirect(`${returnTo}?consent_success=true`);
@@ -320,6 +338,7 @@ router.get("/api/admin/tenants/:id", requirePermission('inventory:read'), async 
     if (connection.installMode === "CUSTOMER") {
       const grant = orgId ? await storage.getActiveMspGrantForOrg(connection.id, orgId) : null;
       if (!grant) {
+        await logAccessDenied(req, "tenant_connection", connection.id, "No active MSP grant for caller organization");
         return res.status(403).json({
           reason: "MSP_ACCESS_DENIED",
           tenantId: connection.tenantId,
@@ -328,6 +347,7 @@ router.get("/api/admin/tenants/:id", requirePermission('inventory:read'), async 
         });
       }
     } else {
+      await logAccessDenied(req, "tenant_connection", connection.id, "Tenant connection belongs to a different organization");
       return res.status(404).json({ message: "Tenant connection not found" });
     }
   }
@@ -348,6 +368,7 @@ router.post("/api/admin/tenants", requireRole(ZENITH_ROLES.TENANT_ADMIN), async 
     if (orgForTrialCheck?.servicePlan === 'TRIAL') {
       const existingConns = await storage.getTenantConnections(orgIdForTrialCheck);
       if (existingConns.length >= 1) {
+        await logAccessDenied(req, "tenant_connection", null, "Trial plan limited to one tenant connection", { plan: "TRIAL", tenantId });
         return res.status(403).json({ message: "Your Trial plan is limited to one tenant connection. Upgrade your plan to add more tenants." });
       }
       if (orgForTrialCheck.domain) {
@@ -362,6 +383,7 @@ router.post("/api/admin/tenants", requireRole(ZENITH_ROLES.TENANT_ADMIN), async 
         }
         if (!trialDomainMatches(orgForTrialCheck.domain, domainResult.domains)) {
           console.warn(`[trial-domain] Org domain "${orgForTrialCheck.domain}" does not match tenant verified domains: ${domainResult.domains.join(', ')}`);
+          await logAccessDenied(req, "tenant_connection", null, "Trial plan domain mismatch", { plan: "TRIAL", orgDomain: orgForTrialCheck.domain, tenantDomains: domainResult.domains });
           return res.status(403).json({ message: "Trial plan is limited to your own domain. The tenant domain must match your organization's registered domain." });
         }
       }
@@ -383,17 +405,12 @@ router.post("/api/admin/tenants", requireRole(ZENITH_ROLES.TENANT_ADMIN), async 
     clientSecret: encryptedSecret,
   });
 
-  await storage.createAuditEntry({
-    userId: req.user?.id || null,
-    userEmail: req.user?.email || null,
-    action: 'TENANT_REGISTERED',
+  await logAuditEvent(req, {
+    action: AUDIT_ACTIONS.TENANT_REGISTERED,
     resource: 'tenant_connection',
     resourceId: connection.id,
-    organizationId: req.user?.organizationId || null,
     tenantConnectionId: connection.id,
     details: { tenantName: connection.tenantName, domain: connection.domain, ownershipType: connection.ownershipType },
-    result: 'SUCCESS',
-    ipAddress: req.ip || null,
   });
 
   res.status(201).json({ ...connection, clientSecret: undefined });
@@ -403,6 +420,7 @@ router.patch("/api/admin/tenants/:id", requireRole(ZENITH_ROLES.TENANT_ADMIN), a
   const existing = await storage.getTenantConnection(req.params.id);
   if (!existing) return res.status(404).json({ message: "Tenant connection not found" });
   if (req.user?.role !== ZENITH_ROLES.PLATFORM_OWNER && existing.organizationId !== req.user?.organizationId) {
+    await logAccessDenied(req, "tenant_connection", String(req.params.id), "Tenant connection belongs to a different organization");
     return res.status(404).json({ message: "Tenant connection not found" });
   }
   const updates = { ...req.body };
@@ -412,24 +430,46 @@ router.patch("/api/admin/tenants/:id", requireRole(ZENITH_ROLES.TENANT_ADMIN), a
   const connection = await storage.updateTenantConnection(req.params.id, updates);
   if (!connection) return res.status(404).json({ message: "Tenant connection not found" });
 
+  // Audit any meaningful field change. clientSecret values are masked.
+  const AUDITABLE_FIELDS = [
+    "status", "tenantName", "domain", "displayName", "clientId", "clientSecret",
+    "organizationId", "ownerUserId", "isMspManaged", "consentedScopes", "notes",
+    "consentStatus", "consentTenantId",
+  ] as const;
+  type AuditableField = typeof AUDITABLE_FIELDS[number];
+  const body = req.body as Partial<Record<AuditableField, unknown>>;
+  const existingRecord = existing as unknown as Record<AuditableField, unknown>;
+  const changedFields: Record<string, { from: unknown; to: unknown }> = {};
+  for (const f of AUDITABLE_FIELDS) {
+    if (f in body && body[f] !== existingRecord[f]) {
+      changedFields[f] = {
+        from: f === "clientSecret" ? "***" : existingRecord[f],
+        to: f === "clientSecret" ? "***" : body[f],
+      };
+    }
+  }
+
   if ('status' in req.body && req.body.status !== existing.status) {
-    const statusActionMap: Record<string, string> = {
-      ACTIVE: 'TENANT_REACTIVATED',
-      SUSPENDED: 'TENANT_SUSPENDED',
-      REVOKED: 'TENANT_REVOKED',
+    const statusActionMap: Record<string, AuditAction> = {
+      ACTIVE: AUDIT_ACTIONS.TENANT_REACTIVATED,
+      SUSPENDED: AUDIT_ACTIONS.TENANT_SUSPENDED,
+      REVOKED: AUDIT_ACTIONS.TENANT_REVOKED,
     };
-    const action = statusActionMap[req.body.status] || 'TENANT_REGISTERED';
-    await storage.createAuditEntry({
-      userId: req.user?.id || null,
-      userEmail: req.user?.email || null,
+    const action = statusActionMap[req.body.status as string] || AUDIT_ACTIONS.TENANT_UPDATED;
+    await logAuditEvent(req, {
       action,
       resource: 'tenant_connection',
-      resourceId: req.params.id,
-      organizationId: req.user?.organizationId || null,
-      tenantConnectionId: req.params.id,
-      details: { tenantName: existing.tenantName, previousStatus: existing.status, newStatus: req.body.status },
-      result: 'SUCCESS',
-      ipAddress: req.ip || null,
+      resourceId: String(req.params.id),
+      tenantConnectionId: String(req.params.id),
+      details: { tenantName: existing.tenantName, previousStatus: existing.status, newStatus: req.body.status, changedFields },
+    });
+  } else if (Object.keys(changedFields).length > 0) {
+    await logAuditEvent(req, {
+      action: AUDIT_ACTIONS.TENANT_UPDATED,
+      resource: 'tenant_connection',
+      resourceId: String(req.params.id),
+      tenantConnectionId: String(req.params.id),
+      details: { tenantName: existing.tenantName, changedFields },
     });
   }
 
@@ -513,6 +553,7 @@ router.get("/api/admin/tenants/:id/permissions", requirePermission('inventory:re
     const conn = await storage.getTenantConnection(req.params.id);
     if (!conn) return res.status(404).json({ error: "Tenant connection not found" });
     if (!(await verifyTenantAccess(req, conn))) {
+      await logAccessDenied(req, "tenant_connection", conn.id, "verifyTenantAccess failed (permissions check)");
       return res.status(403).json({ error: "You do not have access to this tenant connection" });
     }
 
@@ -546,6 +587,7 @@ router.get("/api/admin/tenants/:id/reconsent", requireRole(ZENITH_ROLES.TENANT_A
     const conn = await storage.getTenantConnection(req.params.id);
     if (!conn) return res.status(404).json({ error: "Tenant connection not found" });
     if (!(await verifyTenantAccess(req, conn))) {
+      await logAccessDenied(req, "tenant_connection", conn.id, "verifyTenantAccess failed (reconsent)");
       return res.status(403).json({ error: "You do not have access to this tenant connection" });
     }
 
@@ -591,7 +633,10 @@ router.get("/api/admin/tenants/:tenantConnectionId/data-dictionaries", requirePe
     const orgId = req.activeOrganizationId || req.user?.organizationId;
     if (!isPlatformOwner && conn.organizationId !== orgId) {
       const grant = orgId ? await storage.getActiveTenantAccessGrant(conn.id, orgId) : null;
-      if (!grant) return res.status(403).json({ error: "Access denied" });
+      if (!grant) {
+        await logAccessDenied(req, "tenant_connection", conn.id, "No active tenant access grant for caller organization");
+        return res.status(403).json({ error: "Access denied" });
+      }
     }
     const { category } = req.query;
     if (category && typeof category === "string") {
@@ -612,6 +657,7 @@ router.post("/api/admin/tenants/:tenantConnectionId/data-dictionaries", requireR
     const isPlatformOwner = req.user?.role === ZENITH_ROLES.PLATFORM_OWNER;
     const orgId = req.activeOrganizationId || req.user?.organizationId;
     if (!isPlatformOwner && conn.organizationId !== orgId) {
+      await logAccessDenied(req, "tenant_connection", conn.id, "Caller organization has no access to tenant");
       return res.status(403).json({ error: "Access denied" });
     }
     const { category, value } = req.body;
@@ -631,6 +677,13 @@ router.post("/api/admin/tenants/:tenantConnectionId/data-dictionaries", requireR
       category,
       value: value.trim(),
     });
+    await logAuditEvent(req, {
+      action: AUDIT_ACTIONS.DATA_DICTIONARY_ENTRY_CREATED,
+      resource: 'data_dictionary',
+      resourceId: entry.id,
+      tenantConnectionId: conn.id,
+      details: { category, value: value.trim() },
+    });
     res.status(201).json(entry);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -644,6 +697,7 @@ router.delete("/api/admin/tenants/:tenantConnectionId/data-dictionaries/:entryId
     const isPlatformOwner = req.user?.role === ZENITH_ROLES.PLATFORM_OWNER;
     const orgId = req.activeOrganizationId || req.user?.organizationId;
     if (!isPlatformOwner && conn.organizationId !== orgId) {
+      await logAccessDenied(req, "tenant_connection", conn.id, "Caller organization has no access to tenant");
       return res.status(403).json({ error: "Access denied" });
     }
     const entry = await storage.getDataDictionaryEntry(req.params.entryId);
@@ -651,6 +705,13 @@ router.delete("/api/admin/tenants/:tenantConnectionId/data-dictionaries/:entryId
       return res.status(404).json({ error: "Data dictionary entry not found" });
     }
     await storage.deleteDataDictionaryEntry(req.params.entryId);
+    await logAuditEvent(req, {
+      action: AUDIT_ACTIONS.DATA_DICTIONARY_ENTRY_DELETED,
+      resource: 'data_dictionary',
+      resourceId: req.params.entryId,
+      tenantConnectionId: conn.id,
+      details: { category: entry.category, value: entry.value },
+    });
     res.json({ success: true });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -689,6 +750,7 @@ router.put("/api/admin/tenants/:tenantConnectionId/required-metadata", requireRo
     const isPlatformOwner = req.user?.role === ZENITH_ROLES.PLATFORM_OWNER;
     const orgId = req.activeOrganizationId || req.user?.organizationId;
     if (!isPlatformOwner && conn.organizationId !== orgId) {
+      await logAccessDenied(req, "tenant_connection", conn.id, "Caller organization has no access to tenant");
       return res.status(403).json({ error: "Access denied" });
     }
     const { requiredFields } = req.body;
@@ -720,6 +782,15 @@ router.put("/api/admin/tenants/:tenantConnectionId/required-metadata", requireRo
     }
 
     const updatedEntries = await storage.getDataDictionary(conn.tenantId, "required_metadata_field");
+    if (toAdd.length > 0 || toRemove.length > 0) {
+      await logAuditEvent(req, {
+        action: AUDIT_ACTIONS.REQUIRED_METADATA_UPDATED,
+        resource: 'tenant_connection',
+        resourceId: conn.id,
+        tenantConnectionId: conn.id,
+        details: { added: toAdd, removed: toRemove.map(e => e.value), final: requiredFields },
+      });
+    }
     res.json({
       availableFields: CONFIGURABLE_METADATA_FIELDS,
       requiredFields,
@@ -748,17 +819,34 @@ router.post("/api/admin/tenants/:tenantConnectionId/sensitivity-labels/sync", re
     const isPlatformOwner = req.user?.role === ZENITH_ROLES.PLATFORM_OWNER;
     const orgId = req.activeOrganizationId || req.user?.organizationId;
     if (!isPlatformOwner && conn.organizationId !== orgId) {
+      await logAccessDenied(req, "tenant_connection", conn.id, "Caller organization has no access to tenant");
       return res.status(403).json({ error: "Access denied" });
     }
 
     const clientId = process.env.AZURE_CLIENT_ID;
     const clientSecret = process.env.AZURE_CLIENT_SECRET;
     if (!clientId || !clientSecret) {
+      await logAuditEvent(req, {
+        action: AUDIT_ACTIONS.SENSITIVITY_LABELS_SYNCED,
+        resource: 'tenant_connection',
+        resourceId: conn.id,
+        tenantConnectionId: conn.id,
+        details: { reason: 'azure_credentials_not_configured' },
+        result: 'FAILURE',
+      });
       return res.status(500).json({ error: "Azure credentials not configured" });
     }
 
     const token = await getAppToken(conn.tenantId, clientId, clientSecret);
     if (!token) {
+      await logAuditEvent(req, {
+        action: AUDIT_ACTIONS.SENSITIVITY_LABELS_SYNCED,
+        resource: 'tenant_connection',
+        resourceId: conn.id,
+        tenantConnectionId: conn.id,
+        details: { reason: 'app_token_failed' },
+        result: 'FAILURE',
+      });
       return res.status(500).json({ error: "Failed to acquire app token for tenant" });
     }
 
@@ -767,6 +855,14 @@ router.post("/api/admin/tenants/:tenantConnectionId/sensitivity-labels/sync", re
 
     if (labelResult.error) {
       console.error(`[label-sync] Error: ${labelResult.error}`);
+      await logAuditEvent(req, {
+        action: AUDIT_ACTIONS.SENSITIVITY_LABELS_SYNCED,
+        resource: 'tenant_connection',
+        resourceId: conn.id,
+        tenantConnectionId: conn.id,
+        details: { error: labelResult.error },
+        result: 'FAILURE',
+      });
       return res.json({ synced: 0, total: 0, error: labelResult.error });
     }
 
@@ -791,9 +887,24 @@ router.post("/api/admin/tenants/:tenantConnectionId/sensitivity-labels/sync", re
       synced++;
     }
 
+    await logAuditEvent(req, {
+      action: AUDIT_ACTIONS.SENSITIVITY_LABELS_SYNCED,
+      resource: 'tenant_connection',
+      resourceId: conn.id,
+      tenantConnectionId: conn.id,
+      details: { synced, total: labelResult.labels.length },
+    });
     res.json({ synced, total: labelResult.labels.length });
   } catch (err: any) {
     console.error(`[label-sync] Sync failed: ${err.message}`);
+    await logAuditEvent(req, {
+      action: AUDIT_ACTIONS.SENSITIVITY_LABELS_SYNCED,
+      resource: 'tenant_connection',
+      resourceId: req.params.tenantConnectionId,
+      tenantConnectionId: req.params.tenantConnectionId,
+      details: { error: err.message },
+      result: 'FAILURE',
+    });
     res.status(500).json({ error: err.message });
   }
 });
@@ -817,12 +928,21 @@ router.post("/api/admin/tenants/:tenantConnectionId/retention-labels/sync", requ
     const isPlatformOwner = req.user?.role === ZENITH_ROLES.PLATFORM_OWNER;
     const orgId = req.activeOrganizationId || req.user?.organizationId;
     if (!isPlatformOwner && conn.organizationId !== orgId) {
+      await logAccessDenied(req, "tenant_connection", conn.id, "Caller organization has no access to tenant");
       return res.status(403).json({ error: "Access denied" });
     }
 
     const clientId = process.env.AZURE_CLIENT_ID;
     const clientSecret = process.env.AZURE_CLIENT_SECRET;
     if (!clientId || !clientSecret) {
+      await logAuditEvent(req, {
+        action: AUDIT_ACTIONS.RETENTION_LABELS_SYNCED,
+        resource: 'tenant_connection',
+        resourceId: conn.id,
+        tenantConnectionId: conn.id,
+        details: { reason: 'azure_credentials_not_configured' },
+        result: 'FAILURE',
+      });
       return res.status(500).json({ error: "Azure credentials not configured" });
     }
 
@@ -836,6 +956,14 @@ router.post("/api/admin/tenants/:tenantConnectionId/retention-labels/sync", requ
 
     if (!result) {
       console.warn(`[retention-sync] No delegated SSO token available. Retention labels require delegated (SSO) authentication — app-only tokens are not supported by Microsoft for this endpoint.`);
+      await logAuditEvent(req, {
+        action: AUDIT_ACTIONS.RETENTION_LABELS_SYNCED,
+        resource: 'tenant_connection',
+        resourceId: conn.id,
+        tenantConnectionId: conn.id,
+        details: { reason: 'no_delegated_sso_token' },
+        result: 'FAILURE',
+      });
       return res.json({
         synced: 0,
         total: 0,
@@ -845,6 +973,14 @@ router.post("/api/admin/tenants/:tenantConnectionId/retention-labels/sync", requ
 
     if (result.error) {
       console.error(`[retention-sync] Error: ${result.error}`);
+      await logAuditEvent(req, {
+        action: AUDIT_ACTIONS.RETENTION_LABELS_SYNCED,
+        resource: 'tenant_connection',
+        resourceId: conn.id,
+        tenantConnectionId: conn.id,
+        details: { error: result.error },
+        result: 'FAILURE',
+      });
       return res.json({ synced: 0, total: 0, error: result.error });
     }
 
@@ -867,9 +1003,24 @@ router.post("/api/admin/tenants/:tenantConnectionId/retention-labels/sync", requ
       synced++;
     }
 
+    await logAuditEvent(req, {
+      action: AUDIT_ACTIONS.RETENTION_LABELS_SYNCED,
+      resource: 'tenant_connection',
+      resourceId: conn.id,
+      tenantConnectionId: conn.id,
+      details: { synced, total: result.labels.length },
+    });
     res.json({ synced, total: result.labels.length });
   } catch (err: any) {
     console.error(`[retention-sync] Sync failed: ${err.message}`);
+    await logAuditEvent(req, {
+      action: AUDIT_ACTIONS.RETENTION_LABELS_SYNCED,
+      resource: 'tenant_connection',
+      resourceId: req.params.tenantConnectionId,
+      tenantConnectionId: req.params.tenantConnectionId,
+      details: { error: err.message },
+      result: 'FAILURE',
+    });
     res.status(500).json({ error: err.message });
   }
 });
@@ -934,6 +1085,12 @@ router.post("/api/admin/tenants/:tenantConnectionId/custom-fields", requireRole(
   try {
     const conn = await storage.getTenantConnection(req.params.tenantConnectionId);
     if (!conn) return res.status(404).json({ error: "Tenant connection not found" });
+    const isPlatformOwner = req.user?.role === ZENITH_ROLES.PLATFORM_OWNER;
+    const orgId = req.activeOrganizationId || req.user?.organizationId;
+    if (!isPlatformOwner && conn.organizationId !== orgId) {
+      await logAccessDenied(req, "tenant_connection", conn.id, "Caller organization has no access to tenant");
+      return res.status(403).json({ error: "Access denied" });
+    }
     const { fieldName, fieldLabel, fieldType, options, defaultValue, required, filterable, sortOrder } = req.body;
     if (!fieldLabel || typeof fieldLabel !== "string" || !fieldLabel.trim()) {
       return res.status(400).json({ error: "fieldLabel is required" });
@@ -960,6 +1117,13 @@ router.post("/api/admin/tenants/:tenantConnectionId/custom-fields", requireRole(
       filterable: filterable !== false,
       sortOrder: typeof sortOrder === "number" ? sortOrder : existing.length,
     });
+    await logAuditEvent(req, {
+      action: AUDIT_ACTIONS.CUSTOM_FIELD_CREATED,
+      resource: 'custom_field_definition',
+      resourceId: created.id,
+      tenantConnectionId: conn.id,
+      details: { fieldName: created.fieldName, fieldLabel: created.fieldLabel, fieldType: created.fieldType, required: created.required },
+    });
     res.status(201).json(created);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -973,6 +1137,7 @@ router.patch("/api/admin/tenants/:tenantConnectionId/custom-fields/:fieldId", re
     const isPlatformOwner = req.user?.role === ZENITH_ROLES.PLATFORM_OWNER;
     const orgId = req.activeOrganizationId || req.user?.organizationId;
     if (!isPlatformOwner && conn.organizationId !== orgId) {
+      await logAccessDenied(req, "tenant_connection", conn.id, "Caller organization has no access to tenant");
       return res.status(403).json({ error: "Access denied" });
     }
     const field = await storage.getCustomFieldDefinition(req.params.fieldId);
@@ -993,6 +1158,13 @@ router.patch("/api/admin/tenants/:tenantConnectionId/custom-fields/:fieldId", re
     if (req.body.filterable !== undefined) updates.filterable = req.body.filterable;
     if (req.body.sortOrder !== undefined) updates.sortOrder = req.body.sortOrder;
     const updated = await storage.updateCustomFieldDefinition(req.params.fieldId, updates);
+    await logAuditEvent(req, {
+      action: AUDIT_ACTIONS.CUSTOM_FIELD_UPDATED,
+      resource: 'custom_field_definition',
+      resourceId: req.params.fieldId,
+      tenantConnectionId: conn.id,
+      details: { fieldName: field.fieldName, changedFields: Object.keys(updates) },
+    });
     res.json(updated);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -1006,6 +1178,7 @@ router.delete("/api/admin/tenants/:tenantConnectionId/custom-fields/:fieldId", r
     const isPlatformOwner = req.user?.role === ZENITH_ROLES.PLATFORM_OWNER;
     const orgId = req.activeOrganizationId || req.user?.organizationId;
     if (!isPlatformOwner && conn.organizationId !== orgId) {
+      await logAccessDenied(req, "tenant_connection", conn.id, "Caller organization has no access to tenant");
       return res.status(403).json({ error: "Access denied" });
     }
     const field = await storage.getCustomFieldDefinition(req.params.fieldId);
@@ -1013,6 +1186,13 @@ router.delete("/api/admin/tenants/:tenantConnectionId/custom-fields/:fieldId", r
       return res.status(404).json({ error: "Custom field not found" });
     }
     await storage.deleteCustomFieldDefinition(req.params.fieldId);
+    await logAuditEvent(req, {
+      action: AUDIT_ACTIONS.CUSTOM_FIELD_DELETED,
+      resource: 'custom_field_definition',
+      resourceId: req.params.fieldId,
+      tenantConnectionId: conn.id,
+      details: { fieldName: field.fieldName, fieldLabel: field.fieldLabel },
+    });
     res.json({ success: true });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -1052,6 +1232,7 @@ router.post("/api/admin/tenants/:id/msp-access/code", requireRole(ZENITH_ROLES.T
 
     const orgId = req.activeOrganizationId || req.user?.organizationId;
     if (req.user?.role !== ZENITH_ROLES.PLATFORM_OWNER && conn.organizationId !== orgId) {
+      await logAccessDenied(req, "tenant_connection", conn.id, "Caller organization has no access to tenant");
       return res.status(403).json({ error: "Access denied" });
     }
 
@@ -1143,6 +1324,7 @@ router.get("/api/admin/tenants/:id/msp-access/grants", requireRole(ZENITH_ROLES.
 
     const orgId = req.activeOrganizationId || req.user?.organizationId;
     if (req.user?.role !== ZENITH_ROLES.PLATFORM_OWNER && conn.organizationId !== orgId) {
+      await logAccessDenied(req, "tenant_connection", conn.id, "Caller organization has no access to tenant");
       return res.status(403).json({ error: "Access denied" });
     }
 
@@ -1169,6 +1351,7 @@ router.post("/api/admin/tenants/:tenantConnectionId/access-codes", requireRole(Z
     const orgId = req.activeOrganizationId || req.user?.organizationId;
     const isPlatformOwner = req.user?.role === ZENITH_ROLES.PLATFORM_OWNER;
     if (!isPlatformOwner && conn.organizationId !== orgId) {
+      await logAccessDenied(req, "tenant_connection", conn.id, "Only the tenant owner can generate access codes");
       return res.status(403).json({ error: "Only the tenant owner can generate access codes" });
     }
 
@@ -1190,6 +1373,13 @@ router.post("/api/admin/tenants/:tenantConnectionId/access-codes", requireRole(Z
       }
     }
 
+    await logAuditEvent(req, {
+      action: AUDIT_ACTIONS.TENANT_ACCESS_CODE_CREATED,
+      resource: 'tenant_access_code',
+      resourceId: accessCode!.id,
+      tenantConnectionId: conn.id,
+      details: { tenantName: conn.tenantName, expiresAt: accessCode!.expiresAt },
+    });
     res.json({ code: accessCode!.code, expiresAt: accessCode!.expiresAt });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -1204,12 +1394,20 @@ router.delete("/api/admin/tenants/:tenantConnectionId/access-grants/:grantId", r
     const orgId = req.activeOrganizationId || req.user?.organizationId;
     const isPlatformOwner = req.user?.role === ZENITH_ROLES.PLATFORM_OWNER;
     if (!isPlatformOwner && conn.organizationId !== orgId) {
+      await logAccessDenied(req, "tenant_connection", conn.id, "Only the tenant owner can revoke access grants");
       return res.status(403).json({ error: "Only the tenant owner can revoke access" });
     }
 
     const revoked = await storage.revokeTenantAccessGrant(req.params.grantId, req.params.tenantConnectionId);
     if (!revoked) return res.status(404).json({ error: "Access grant not found or does not belong to this tenant" });
 
+    await logAuditEvent(req, {
+      action: AUDIT_ACTIONS.TENANT_ACCESS_GRANT_REVOKED,
+      resource: 'tenant_access_grant',
+      resourceId: req.params.grantId,
+      tenantConnectionId: conn.id,
+      details: { tenantName: conn.tenantName, revokedBy: req.user?.email },
+    });
     res.json({ success: true });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -1224,6 +1422,7 @@ router.delete("/api/admin/tenants/:id/msp-access/grants/:grantId", requireRole(Z
 
     const orgId = req.activeOrganizationId || req.user?.organizationId;
     if (req.user?.role !== ZENITH_ROLES.PLATFORM_OWNER && conn.organizationId !== orgId) {
+      await logAccessDenied(req, "tenant_connection", conn.id, "Caller organization has no access to tenant");
       return res.status(403).json({ error: "Access denied" });
     }
 
@@ -1273,6 +1472,14 @@ router.post("/api/admin/tenants/claim-access", requireRole(ZENITH_ROLES.TENANT_A
       return res.status(400).json({ error: "Invalid or expired access code. Ask the tenant owner to generate a new code." });
     }
 
+    await logAuditEvent(req, {
+      action: AUDIT_ACTIONS.TENANT_ACCESS_CLAIMED,
+      resource: 'tenant_access_grant',
+      resourceId: result.grant?.id || null,
+      organizationId: orgId,
+      tenantConnectionId: result.tenantConnection.id,
+      details: { tenantName: result.tenantConnection.tenantName, tenantDomain: result.tenantConnection.domain },
+    });
     res.json({
       success: true,
       tenantName: result.tenantConnection.tenantName,
@@ -1336,6 +1543,7 @@ router.get("/api/admin/tenants/:id/data-masking", requireAuth(), requireRole(ZEN
     if (!conn) return res.status(404).json({ error: "Tenant connection not found" });
 
     if (!(await verifyTenantAccess(req, conn))) {
+      await logAccessDenied(req, "tenant_connection", conn.id, "verifyTenantAccess failed (data-masking read)");
       return res.status(403).json({ error: "You do not have access to this tenant connection" });
     }
 
@@ -1355,6 +1563,7 @@ router.post("/api/admin/tenants/:id/data-masking", requireAuth(), requireRole(ZE
     if (!conn) return res.status(404).json({ error: "Tenant connection not found" });
 
     if (!(await verifyTenantAccess(req, conn))) {
+      await logAccessDenied(req, "tenant_connection", conn.id, "verifyTenantAccess failed (data-masking write)");
       return res.status(403).json({ error: "You do not have access to this tenant connection" });
     }
 

@@ -1060,6 +1060,14 @@ async function backfillOrgMemberships() {
     console.error('[Seed] Failed to initialize platform settings:', err);
   }
 
+  try {
+    const { startAuditRetentionScheduler } = await import('./services/audit-logger');
+    startAuditRetentionScheduler();
+    log('Audit retention scheduler started');
+  } catch (err) {
+    console.error('[Startup] Failed to start audit retention scheduler:', err);
+  }
+
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
     const status = err.status || err.statusCode || 500;
     const message = err.message || "Internal Server Error";
