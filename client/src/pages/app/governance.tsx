@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import { Link } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import type { Workspace } from "@shared/schema";
@@ -6,6 +6,7 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useTenant } from "@/lib/tenant-context";
 import { DatasetFreshnessBanner } from "@/components/datasets";
+import { BulkActionsExtras } from "@/components/governance/bulk-actions";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { GovernanceRiskTab, GovernanceOwnershipTab, GovernanceStorageTab, GovernanceSharingTab, GovernanceReviewsTab } from "./governance-tabs";
 import { 
@@ -115,6 +116,8 @@ export default function GovernancePage() {
   const [currentPage, setCurrentPage] = useState(1);
   const [isPaginatedMode, setIsPaginatedMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [selectedWorkspacesById, setSelectedWorkspacesById] = useState<Map<string, Workspace>>(new Map());
+  const [isSelectingAllMatching, setIsSelectingAllMatching] = useState(false);
   const [isBulkEditOpen, setIsBulkEditOpen] = useState(false);
   const [showFilterDrawer, setShowFilterDrawer] = useState(false);
   const [groupByHubs, setGroupByHubs] = useState(false);
@@ -306,6 +309,7 @@ export default function GovernancePage() {
       queryClient.invalidateQueries({ queryKey: ["/api/workspaces"] });
       setIsBulkEditOpen(false);
       setSelectedIds(new Set());
+      setSelectedWorkspacesById(new Map());
       setBulkSensitivity("");
 
       setBulkDepartment("");
@@ -403,22 +407,109 @@ export default function GovernancePage() {
     importApplyMutation.mutate(csvData);
   };
 
+  const clearSelection = () => {
+    setSelectedIds(new Set());
+    setSelectedWorkspacesById(new Map());
+  };
+
   const toggleSelectAll = () => {
-    if (selectedIds.size === filteredAndSortedWorkspaces.length) {
-      setSelectedIds(new Set());
+    if (allVisibleSelected) {
+      // Deselect only this page's rows; preserve cross-page selections.
+      const next = new Set(selectedIds);
+      const nextMap = new Map(selectedWorkspacesById);
+      for (const id of visiblePageIds) {
+        next.delete(id);
+        nextMap.delete(id);
+      }
+      setSelectedIds(next);
+      setSelectedWorkspacesById(nextMap);
     } else {
-      setSelectedIds(new Set(filteredAndSortedWorkspaces.map(w => w.id)));
+      const next = new Set(selectedIds);
+      const nextMap = new Map(selectedWorkspacesById);
+      for (const ws of filteredAndSortedWorkspaces) {
+        next.add(ws.id);
+        nextMap.set(ws.id, ws);
+      }
+      setSelectedIds(next);
+      setSelectedWorkspacesById(nextMap);
     }
   };
 
   const toggleSelect = (id: string) => {
     const newSet = new Set(selectedIds);
+    const newMap = new Map(selectedWorkspacesById);
     if (newSet.has(id)) {
       newSet.delete(id);
+      newMap.delete(id);
     } else {
       newSet.add(id);
+      const ws = workspaces.find(w => w.id === id);
+      if (ws) newMap.set(id, ws);
     }
     setSelectedIds(newSet);
+    setSelectedWorkspacesById(newMap);
+  };
+
+  const buildFilterParams = (extra?: Record<string, string>) => {
+    const p = new URLSearchParams();
+    if (debouncedSearch) p.set("search", debouncedSearch);
+    if (tenantConnectionId) p.set("tenantConnectionId", tenantConnectionId);
+    if (extra) Object.entries(extra).forEach(([k, v]) => p.set(k, v));
+    return p;
+  };
+
+  const handleSelectAllMatching = async () => {
+    if (isSelectingAllMatching) return;
+    // Defensive guard: this affordance must never run while client-side
+    // filter chips are active, because the server endpoint cannot evaluate
+    // them. The button is hidden in that case, but we re-check here.
+    if (clientFiltersActive) {
+      toast({
+        title: "Clear filters first",
+        description: "“Select all matching” only works when no client-side filters are active.",
+        variant: "destructive",
+      });
+      return;
+    }
+    setIsSelectingAllMatching(true);
+    try {
+      const total = paginatedTotal;
+      if (total === 0) return;
+      const pageSize = 500;
+      const newIds = new Set(selectedIds);
+      const newMap = new Map(selectedWorkspacesById);
+      let page = 1;
+      let collected = 0;
+      while (collected < total) {
+        const params = buildFilterParams({ page: String(page), pageSize: String(pageSize) });
+        const result: unknown = await fetch(`/api/workspaces?${params.toString()}`).then(r => r.json());
+        const items: Workspace[] = (() => {
+          if (Array.isArray(result)) return result as Workspace[];
+          if (result && typeof result === "object" && Array.isArray((result as { items?: unknown }).items)) {
+            return (result as { items: Workspace[] }).items;
+          }
+          return [];
+        })();
+        if (items.length === 0) break;
+        for (const ws of items) {
+          newIds.add(ws.id);
+          newMap.set(ws.id, ws);
+        }
+        collected += items.length;
+        page += 1;
+        if (items.length < pageSize) break;
+      }
+      setSelectedIds(newIds);
+      setSelectedWorkspacesById(newMap);
+      toast({
+        title: "Selection expanded",
+        description: `${newIds.size.toLocaleString()} workspace${newIds.size === 1 ? "" : "s"} selected across all matching pages.`,
+      });
+    } catch (err: any) {
+      toast({ title: "Could not select all matching", description: err.message, variant: "destructive" });
+    } finally {
+      setIsSelectingAllMatching(false);
+    }
   };
 
   const handleBulkSave = () => {
@@ -673,6 +764,88 @@ export default function GovernancePage() {
 
     return result;
   }, [workspaces, filterType, filterSensitivity, filterMetadata, filterDepartment, filterSize, filterAge, outcomeFilters, policyOutcomes, filterStatus, sortColumn, sortDirection, requiredMetadataFields]);
+
+  // A signature of the active filter/search/tenant scope. Whenever this
+  // changes, any row that was selected under the previous scope may no
+  // longer be visible — so we clear the selection to prevent bulk actions
+  // from acting on hidden, stale rows.
+  const filterSignature = useMemo(
+    () =>
+      JSON.stringify({
+        t: tenantConnectionId,
+        s: debouncedSearch,
+        ft: filterType,
+        fse: filterSensitivity,
+        fm: filterMetadata,
+        fd: filterDepartment,
+        fsz: filterSize,
+        fa: filterAge,
+        fst: filterStatus,
+        oc: outcomeFilters,
+      }),
+    [tenantConnectionId, debouncedSearch, filterType, filterSensitivity, filterMetadata, filterDepartment, filterSize, filterAge, filterStatus, outcomeFilters],
+  );
+  const lastFilterSignatureRef = useRef<string>(filterSignature);
+  useEffect(() => {
+    if (lastFilterSignatureRef.current !== filterSignature) {
+      lastFilterSignatureRef.current = filterSignature;
+      setSelectedIds(new Set());
+      setSelectedWorkspacesById(new Map());
+    }
+  }, [filterSignature]);
+
+  // filterStatus is applied client-side via the lock-state filter below, so
+  // it must count as a client-side filter for the "Select all matching"
+  // affordance. Treating "active" as neutral would silently include
+  // archived/deleted/locked rows fetched from the server.
+  const clientFiltersActive =
+    filterType !== "all" ||
+    filterSensitivity !== "all" ||
+    filterMetadata !== "all" ||
+    filterDepartment !== "all" ||
+    filterSize !== "all" ||
+    filterAge !== "all" ||
+    filterStatus !== "all" ||
+    Object.values(outcomeFilters).some(v => v && v !== "all");
+
+  const visiblePageIds = useMemo(
+    () => filteredAndSortedWorkspaces.map(w => w.id),
+    [filteredAndSortedWorkspaces],
+  );
+  const visiblePageSelectedCount = useMemo(
+    () => visiblePageIds.filter(id => selectedIds.has(id)).length,
+    [visiblePageIds, selectedIds],
+  );
+  const allVisibleSelected =
+    filteredAndSortedWorkspaces.length > 0 && visiblePageSelectedCount === filteredAndSortedWorkspaces.length;
+  const someVisibleSelected = visiblePageSelectedCount > 0 && !allVisibleSelected;
+  const totalMatching = showPagination ? paginatedTotal : filteredAndSortedWorkspaces.length;
+  // Only offer "Select all matching" when the visible filter is exactly
+  // representable on the server (search + tenant). The grid's other filter
+  // chips are client-side only, so if any are active we cannot guarantee
+  // server-fetched ids match the visible grid — hide the affordance and
+  // require explicit per-page selection instead.
+  const hasMoreMatchingThanSelected =
+    showPagination &&
+    !clientFiltersActive &&
+    allVisibleSelected &&
+    totalMatching > selectedIds.size;
+
+  // Keep the metadata cache fresh as pages load so cross-page selections retain data.
+  useEffect(() => {
+    if (filteredAndSortedWorkspaces.length === 0) return;
+    setSelectedWorkspacesById(prev => {
+      let mutated = false;
+      const next = new Map(prev);
+      for (const ws of filteredAndSortedWorkspaces) {
+        if (selectedIds.has(ws.id) && next.get(ws.id) !== ws) {
+          next.set(ws.id, ws);
+          mutated = true;
+        }
+      }
+      return mutated ? next : prev;
+    });
+  }, [filteredAndSortedWorkspaces, selectedIds]);
 
   const hubSites = useMemo(() => workspaces.filter(ws => ws.isHubSite), [workspaces]);
 
@@ -1323,13 +1496,31 @@ export default function GovernancePage() {
       </div>
 
       {selectedIds.size > 0 && (
-        <div className="bg-primary/10 border border-primary/20 rounded-xl p-3 flex items-center justify-between animate-in fade-in slide-in-from-top-2">
-          <div className="flex items-center gap-3">
-            <Badge className="bg-primary text-primary-foreground">{selectedIds.size}</Badge>
+        <div
+          className="sticky top-0 z-30 bg-primary/10 border border-primary/20 rounded-xl p-3 flex items-center justify-between flex-wrap gap-y-2 animate-in fade-in slide-in-from-top-2 backdrop-blur-sm"
+          data-testid="bulk-action-bar"
+        >
+          <div className="flex items-center gap-3 flex-wrap">
+            <Badge className="bg-primary text-primary-foreground" data-testid="badge-selected-count">{selectedIds.size}</Badge>
             <span className="text-sm font-medium text-primary">workspaces selected</span>
+            {hasMoreMatchingThanSelected && (
+              <Button
+                variant="link"
+                size="sm"
+                className="h-6 px-1 text-xs text-primary"
+                onClick={handleSelectAllMatching}
+                disabled={isSelectingAllMatching}
+                data-testid="button-select-all-matching"
+              >
+                {isSelectingAllMatching ? (
+                  <Loader2 className="w-3 h-3 mr-1 animate-spin" />
+                ) : null}
+                Select all {totalMatching.toLocaleString()} matching
+              </Button>
+            )}
           </div>
-          <div className="flex items-center gap-2">
-            <Button variant="outline" size="sm" onClick={() => setSelectedIds(new Set())} className="h-8 border-primary/20 text-primary hover:bg-primary/10">
+          <div className="flex items-center gap-2 flex-wrap">
+            <Button variant="outline" size="sm" onClick={clearSelection} className="h-8 border-primary/20 text-primary hover:bg-primary/10">
               <X className="w-4 h-4 mr-1" /> Clear
             </Button>
             <Button size="sm" onClick={() => setIsBulkEditOpen(true)} className="h-8 gap-2 shadow-sm shadow-primary/20">
@@ -1371,6 +1562,28 @@ export default function GovernancePage() {
                 Sync Metadata to SharePoint
               </Button>
             </UpgradeGate>
+            <BulkActionsExtras
+              selectedIds={selectedIds}
+              selectedWorkspacesById={selectedWorkspacesById}
+              tenantConnectionId={tenantConnectionId}
+              filterCriteria={{
+                search: debouncedSearch || undefined,
+                tenantConnectionId: tenantConnectionId || undefined,
+                filters: {
+                  type: filterType,
+                  sensitivity: filterSensitivity,
+                  metadata: filterMetadata,
+                  department: filterDepartment,
+                  size: filterSize,
+                  age: filterAge,
+                  status: filterStatus,
+                  outcomes: outcomeFilters,
+                },
+                totalMatching,
+                selectionMode: hasMoreMatchingThanSelected || selectedIds.size < totalMatching ? "explicit" : "all-matching",
+              }}
+              onClearSelection={clearSelection}
+            />
           </div>
         </div>
       )}
@@ -1418,10 +1631,11 @@ export default function GovernancePage() {
                 <TableHeader className="bg-muted/30">
                   <TableRow className="hover:bg-transparent">
                     <TableHead className="w-[40px] pl-4">
-                      <Checkbox 
-                        checked={selectedIds.size === filteredAndSortedWorkspaces.length && filteredAndSortedWorkspaces.length > 0} 
+                      <Checkbox
+                        checked={allVisibleSelected ? true : someVisibleSelected ? "indeterminate" : false}
                         onCheckedChange={toggleSelectAll}
-                        aria-label="Select all"
+                        aria-label="Select all on this page"
+                        data-testid="checkbox-select-all-page"
                       />
                     </TableHead>
                     <TableHead className="min-w-[240px] cursor-pointer select-none" onClick={() => handleSort("displayName")} data-testid="sort-header-site">

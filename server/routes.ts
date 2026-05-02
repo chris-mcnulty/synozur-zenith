@@ -3,6 +3,7 @@ import { createServer, type Server } from "http";
 import authRouter from "./routes-auth";
 import entraRouter from "./routes-entra";
 import sharepointRouter from "./routes/sharepoint";
+import workspacesBulkRouter from "./routes/workspaces-bulk";
 import tenantRouter from "./routes/tenants";
 import adminRouter from "./routes/admin";
 import docsRouter from "./routes/docs";
@@ -38,6 +39,11 @@ export async function registerRoutes(
   app.use("/api/auth", authRouter);
   app.use("/auth/entra", entraRouter);
 
+  // Mount workspacesBulkRouter before sharepointRouter so
+  // POST /api/workspaces/bulk/archive matches before
+  // POST /api/workspaces/:id/archive (which would otherwise capture
+  // "bulk" as the :id and 404).
+  app.use(workspacesBulkRouter);
   app.use(sharepointRouter);
   app.use(tenantRouter);
   app.use(adminRouter);
