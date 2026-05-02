@@ -215,7 +215,7 @@ interface QualitySignal {
 
 const QUALITY_PENALTY_SIGNALS: QualitySignal[] = [
   {
-    pattern: /^.{1,15}$/s,
+    pattern: /^[\s\S]{1,15}$/,
     signal: "TOO_SHORT",
     detail: "Prompt is fewer than 15 characters — likely under-specified.",
     penaltyPoints: 30,
@@ -233,7 +233,7 @@ const QUALITY_PENALTY_SIGNALS: QualitySignal[] = [
     penaltyPoints: 20,
   },
   {
-    pattern: /^.{1501,}$/s,
+    pattern: /^[\s\S]{1501,}$/,
     signal: "OVERLY_LONG",
     detail: "Prompt exceeds 1500 characters — may be a bulk data dump.",
     penaltyPoints: 10,

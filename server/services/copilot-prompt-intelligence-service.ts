@@ -27,7 +27,7 @@ import type {
   CopilotUserBreakdown,
   CopilotRecommendation,
   CopilotPromptFlag,
-  type CopilotPromptAssessment,
+  CopilotPromptAssessment,
 } from "@shared/schema";
 import {
   COPILOT_QUALITY_TIERS,
@@ -55,6 +55,7 @@ interface InteractionRow {
   qualityTier: string | null;
   qualityScore: number | null;
   riskLevel: string | null;
+  recommendation: string | null;
   analyzedAt: Date | null;
   interactionType?: string;
   requestId?: string | null;
@@ -140,6 +141,7 @@ async function loadInteractions(tenantConnectionId: string): Promise<Interaction
       qualityTier: r.qualityTier ?? null,
       qualityScore: r.qualityScore ?? null,
       riskLevel: r.riskLevel ?? null,
+      recommendation: r.recommendation ?? null,
       analyzedAt: r.analyzedAt ?? null,
       interactionType: r.interactionType,
       requestId: r.requestId,
@@ -172,6 +174,7 @@ async function analyzeAndPersistInteractions(
     row.qualityTier = result.qualityTier;
     row.riskLevel = result.riskLevel;
     row.flags = result.flags;
+    row.recommendation = result.recommendation ?? null;
     row.analyzedAt = new Date();
   }
 
