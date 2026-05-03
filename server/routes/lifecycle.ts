@@ -24,9 +24,65 @@ import {
   defaultDetectionRules,
   isCompliant,
   type DetectionRules,
+  type ComplianceWeights,
 } from "../services/lifecycle-compliance";
 import { buildRequiredFieldsByTenantId } from "../services/metadata-completeness";
 import { logAuditEvent, AUDIT_ACTIONS } from "../services/audit-logger";
+import {
+  insertLifecycleComplianceSettingsSchema,
+  LIFECYCLE_DETECTION_DEFAULTS,
+  LIFECYCLE_WEIGHT_DEFAULTS,
+  type LifecycleComplianceSettings,
+} from "@shared/schema";
+
+// Load detection rules + weights from per-org (and optionally per-tenant) settings,
+// falling back to compiled-in defaults.
+async function loadDetectionRules(
+  organizationId: string,
+  tenantConnectionId?: string | null,
+): Promise<DetectionRules> {
+  let row: LifecycleComplianceSettings | undefined;
+  if (tenantConnectionId) {
+    row = await storage.getLifecycleComplianceSettings({ organizationId, tenantConnectionId });
+  }
+  if (!row) {
+    row = await storage.getLifecycleComplianceSettings({ organizationId, tenantConnectionId: null });
+  }
+  if (!row) return defaultDetectionRules();
+  return {
+    staleThresholdDays: row.staleThresholdDays,
+    orphanedThresholdDays: row.orphanedThresholdDays,
+    labelRequired: row.labelRequired,
+    metadataRequired: row.metadataRequired,
+    weights: {
+      primarySteward: row.weightPrimarySteward,
+      secondarySteward: row.weightSecondarySteward,
+      sensitivityLabel: row.weightSensitivityLabel,
+      metadata: row.weightMetadata,
+      activity: row.weightActivity,
+      sharingPosture: row.weightSharingPosture,
+      retentionLabel: row.weightRetentionLabel,
+    },
+  };
+}
+
+function settingsToRules(row: LifecycleComplianceSettings): DetectionRules {
+  return {
+    staleThresholdDays: row.staleThresholdDays,
+    orphanedThresholdDays: row.orphanedThresholdDays,
+    labelRequired: row.labelRequired,
+    metadataRequired: row.metadataRequired,
+    weights: {
+      primarySteward: row.weightPrimarySteward,
+      secondarySteward: row.weightSecondarySteward,
+      sensitivityLabel: row.weightSensitivityLabel,
+      metadata: row.weightMetadata,
+      activity: row.weightActivity,
+      sharingPosture: row.weightSharingPosture,
+      retentionLabel: row.weightRetentionLabel,
+    },
+  };
+}
 
 const router = Router();
 
@@ -93,9 +149,10 @@ router.get(
       const workspaces = await loadWorkspaces(scope.tenantIds, scope.orgId);
       const requiredFieldsByTenant = await buildRequiredFieldsByTenantId(workspaces);
 
+      const baseRules = await loadDetectionRules(scope.orgId, q.tenantConnectionId ?? null);
       const rules: DetectionRules = {
-        ...defaultDetectionRules(),
-        staleThresholdDays: q.staleThresholdDays ?? defaultDetectionRules().staleThresholdDays,
+        ...baseRules,
+        staleThresholdDays: q.staleThresholdDays ?? baseRules.staleThresholdDays,
       };
 
       const evaluated = workspaces.map((w) => {
@@ -198,7 +255,7 @@ router.get(
 
       const workspaces = await loadWorkspaces(scope.tenantIds, scope.orgId);
       const requiredFieldsByTenant = await buildRequiredFieldsByTenantId(workspaces);
-      const rules = defaultDetectionRules();
+      const rules = await loadDetectionRules(scope.orgId, tenantConnectionId ?? null);
 
       let totalScore = 0;
       let compliant = 0, stale = 0, orphaned = 0, missingLabel = 0, externallyShared = 0;
@@ -296,14 +353,14 @@ router.post(
       try {
         const workspaces = await loadWorkspaces(scope.tenantIds, scope.orgId);
         const requiredFieldsByTenant = await buildRequiredFieldsByTenantId(workspaces);
-        const rules = defaultDetectionRules();
+        const scanRules = await loadDetectionRules(scope.orgId, tenantConnectionId ?? null);
 
         let totalScore = 0;
         let compliantCount = 0, staleCount = 0, orphanedCount = 0, missingLabelCount = 0, externallySharedCount = 0;
 
         for (const w of workspaces) {
           const fields = w.tenantConnectionId ? (requiredFieldsByTenant[w.tenantConnectionId] || []) : [];
-          const c = evaluateCompliance(w as any, fields, rules);
+          const c = evaluateCompliance(w as any, fields, scanRules);
           totalScore += c.score;
           if (isCompliant(c.score)) compliantCount++;
           if (c.isStale) staleCount++;
@@ -447,6 +504,144 @@ router.post(
       res.json({ ok: true });
     } catch (err: any) {
       console.error("[lifecycle] email-owner error:", err);
+      res.status(500).json({ error: err.message });
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
+// GET/PUT /api/lifecycle/settings — Org-level lifecycle compliance thresholds
+// and per-criterion weights. Optional ?tenantConnectionId= to read/write
+// per-tenant overrides; otherwise applies to the org default.
+// ---------------------------------------------------------------------------
+
+const settingsBody = z.object({
+  staleThresholdDays: z.coerce.number().int().min(1).max(3650),
+  orphanedThresholdDays: z.coerce.number().int().min(1).max(3650),
+  labelRequired: z.boolean(),
+  metadataRequired: z.boolean(),
+  weightPrimarySteward: z.coerce.number().int().min(0).max(100),
+  weightSecondarySteward: z.coerce.number().int().min(0).max(100),
+  weightSensitivityLabel: z.coerce.number().int().min(0).max(100),
+  weightMetadata: z.coerce.number().int().min(0).max(100),
+  weightActivity: z.coerce.number().int().min(0).max(100),
+  weightSharingPosture: z.coerce.number().int().min(0).max(100),
+  weightRetentionLabel: z.coerce.number().int().min(0).max(100),
+  tenantConnectionId: z.string().nullable().optional(),
+});
+
+function buildResponseRow(orgId: string, row: LifecycleComplianceSettings | undefined) {
+  if (row) return { ...row, isDefault: false };
+  return {
+    organizationId: orgId,
+    tenantConnectionId: null,
+    staleThresholdDays: LIFECYCLE_DETECTION_DEFAULTS.staleThresholdDays,
+    orphanedThresholdDays: LIFECYCLE_DETECTION_DEFAULTS.orphanedThresholdDays,
+    labelRequired: LIFECYCLE_DETECTION_DEFAULTS.labelRequired,
+    metadataRequired: LIFECYCLE_DETECTION_DEFAULTS.metadataRequired,
+    weightPrimarySteward: LIFECYCLE_WEIGHT_DEFAULTS.primarySteward,
+    weightSecondarySteward: LIFECYCLE_WEIGHT_DEFAULTS.secondarySteward,
+    weightSensitivityLabel: LIFECYCLE_WEIGHT_DEFAULTS.sensitivityLabel,
+    weightMetadata: LIFECYCLE_WEIGHT_DEFAULTS.metadata,
+    weightActivity: LIFECYCLE_WEIGHT_DEFAULTS.activity,
+    weightSharingPosture: LIFECYCLE_WEIGHT_DEFAULTS.sharingPosture,
+    weightRetentionLabel: LIFECYCLE_WEIGHT_DEFAULTS.retentionLabel,
+    updatedAt: null,
+    updatedBy: null,
+    isDefault: true,
+  };
+}
+
+router.get(
+  "/api/lifecycle/settings",
+  requireAuth(),
+  requireFeature("lifecycleReview"),
+  async (req: AuthenticatedRequest, res) => {
+    try {
+      const tenantConnectionId = (req.query.tenantConnectionId as string | undefined) ?? null;
+      const scope = await resolveScope(req, tenantConnectionId ?? undefined);
+      if (!scope.ok) return res.status(scope.status).json({ error: scope.error });
+
+      const row = await storage.getLifecycleComplianceSettings({
+        organizationId: scope.orgId,
+        tenantConnectionId,
+      });
+      res.json({
+        settings: buildResponseRow(scope.orgId, row),
+        defaults: {
+          ...LIFECYCLE_DETECTION_DEFAULTS,
+          weights: { ...LIFECYCLE_WEIGHT_DEFAULTS },
+        },
+      });
+    } catch (err: any) {
+      console.error("[lifecycle] settings get error:", err);
+      res.status(500).json({ error: err.message });
+    }
+  },
+);
+
+router.put(
+  "/api/lifecycle/settings",
+  requireAuth(),
+  requireFeature("lifecycleReview"),
+  async (req: AuthenticatedRequest, res) => {
+    try {
+      const role = (req.user as any)?.role;
+      if (role !== "platform_owner" && role !== "tenant_admin" && role !== "governance_admin") {
+        return res.status(403).json({ error: "Forbidden — admin role required" });
+      }
+
+      const parsed = settingsBody.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ error: "Invalid body", details: parsed.error.flatten() });
+      const b = parsed.data;
+
+      const scope = await resolveScope(req, b.tenantConnectionId ?? undefined);
+      if (!scope.ok) return res.status(scope.status).json({ error: scope.error });
+
+      const saved = await storage.upsertLifecycleComplianceSettings({
+        organizationId: scope.orgId,
+        tenantConnectionId: b.tenantConnectionId ?? null,
+        staleThresholdDays: b.staleThresholdDays,
+        orphanedThresholdDays: b.orphanedThresholdDays,
+        labelRequired: b.labelRequired,
+        metadataRequired: b.metadataRequired,
+        weightPrimarySteward: b.weightPrimarySteward,
+        weightSecondarySteward: b.weightSecondarySteward,
+        weightSensitivityLabel: b.weightSensitivityLabel,
+        weightMetadata: b.weightMetadata,
+        weightActivity: b.weightActivity,
+        weightSharingPosture: b.weightSharingPosture,
+        weightRetentionLabel: b.weightRetentionLabel,
+        updatedBy: req.user?.email ?? null,
+      } as any);
+
+      await logAuditEvent(req, {
+        action: "lifecycle.settings.updated",
+        resource: "lifecycle_settings",
+        resourceId: saved.id,
+        organizationId: scope.orgId,
+        tenantConnectionId: b.tenantConnectionId ?? null,
+        details: {
+          staleThresholdDays: b.staleThresholdDays,
+          orphanedThresholdDays: b.orphanedThresholdDays,
+          labelRequired: b.labelRequired,
+          metadataRequired: b.metadataRequired,
+          weights: {
+            primarySteward: b.weightPrimarySteward,
+            secondarySteward: b.weightSecondarySteward,
+            sensitivityLabel: b.weightSensitivityLabel,
+            metadata: b.weightMetadata,
+            activity: b.weightActivity,
+            sharingPosture: b.weightSharingPosture,
+            retentionLabel: b.weightRetentionLabel,
+          },
+        },
+        result: "SUCCESS",
+      });
+
+      res.json({ settings: { ...saved, isDefault: false } });
+    } catch (err: any) {
+      console.error("[lifecycle] settings put error:", err);
       res.status(500).json({ error: err.message });
     }
   },

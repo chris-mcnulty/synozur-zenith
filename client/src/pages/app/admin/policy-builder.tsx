@@ -37,7 +37,9 @@ import {
   Eye,
   EyeOff,
   Filter,
-  FilterX
+  FilterX,
+  Sliders,
+  RotateCcw
 } from "lucide-react";
 
 interface PolicyRule {
@@ -113,6 +115,244 @@ const DEFAULT_COPILOT_READINESS_RULES: PolicyRule[] = [
   { ruleType: "METADATA_COMPLETE", label: "Metadata Complete", description: "All required governance metadata fields must be populated.", enabled: true },
   { ruleType: "SHARING_POLICY", label: "Sharing Policy", description: "External sharing policy must align with sensitivity classification.", enabled: true },
 ];
+
+interface LifecycleSettings {
+  organizationId: string;
+  tenantConnectionId: string | null;
+  staleThresholdDays: number;
+  orphanedThresholdDays: number;
+  labelRequired: boolean;
+  metadataRequired: boolean;
+  weightPrimarySteward: number;
+  weightSecondarySteward: number;
+  weightSensitivityLabel: number;
+  weightMetadata: number;
+  weightActivity: number;
+  weightSharingPosture: number;
+  weightRetentionLabel: number;
+  updatedAt: string | null;
+  updatedBy: string | null;
+  isDefault: boolean;
+}
+
+const WEIGHT_FIELDS: Array<{ key: keyof LifecycleSettings; label: string; description: string }> = [
+  { key: "weightPrimarySteward", label: "Primary Steward Assigned", description: "Workspace has a named site owner." },
+  { key: "weightSecondarySteward", label: "Secondary Steward Assigned", description: "Workspace has at least two owners." },
+  { key: "weightSensitivityLabel", label: "Sensitivity Label Applied", description: "Purview label is assigned." },
+  { key: "weightMetadata", label: "Required Metadata Complete", description: "All required metadata fields are populated." },
+  { key: "weightActivity", label: "Recent Activity", description: "Workspace shows activity within the stale threshold." },
+  { key: "weightSharingPosture", label: "Sharing Posture Aligned", description: "External sharing matches sensitivity classification." },
+  { key: "weightRetentionLabel", label: "Retention Policy Assigned", description: "Retention label or policy is in place." },
+];
+
+function LifecycleComplianceSettingsCard() {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState<LifecycleSettings | null>(null);
+
+  const { data, isLoading } = useQuery<{ settings: LifecycleSettings }>({
+    queryKey: ["/api/lifecycle/settings"],
+    queryFn: () => fetch("/api/lifecycle/settings", { credentials: "include" }).then(r => r.ok ? r.json() : null),
+    enabled: open,
+  });
+
+  useEffect(() => {
+    if (data?.settings) setDraft(data.settings);
+  }, [data]);
+
+  const saveMutation = useMutation({
+    mutationFn: async (body: LifecycleSettings) => {
+      const res = await fetch("/api/lifecycle/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          staleThresholdDays: body.staleThresholdDays,
+          orphanedThresholdDays: body.orphanedThresholdDays,
+          labelRequired: body.labelRequired,
+          metadataRequired: body.metadataRequired,
+          weightPrimarySteward: body.weightPrimarySteward,
+          weightSecondarySteward: body.weightSecondarySteward,
+          weightSensitivityLabel: body.weightSensitivityLabel,
+          weightMetadata: body.weightMetadata,
+          weightActivity: body.weightActivity,
+          weightSharingPosture: body.weightSharingPosture,
+          weightRetentionLabel: body.weightRetentionLabel,
+        }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/lifecycle/settings"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/lifecycle/review"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/lifecycle/health"] });
+      toast({ title: "Settings saved", description: "Run a fresh lifecycle scan for scores to be updated using the new thresholds and weights." });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Save failed", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const totalWeight = draft
+    ? draft.weightPrimarySteward + draft.weightSecondarySteward + draft.weightSensitivityLabel +
+      draft.weightMetadata + draft.weightActivity + draft.weightSharingPosture + draft.weightRetentionLabel
+    : 0;
+
+  function setField<K extends keyof LifecycleSettings>(key: K, value: LifecycleSettings[K]) {
+    if (!draft) return;
+    setDraft({ ...draft, [key]: value });
+  }
+
+  function resetToDefaults() {
+    if (!draft) return;
+    setDraft({
+      ...draft,
+      staleThresholdDays: 90,
+      orphanedThresholdDays: 30,
+      labelRequired: true,
+      metadataRequired: true,
+      weightPrimarySteward: 15,
+      weightSecondarySteward: 15,
+      weightSensitivityLabel: 20,
+      weightMetadata: 15,
+      weightActivity: 15,
+      weightSharingPosture: 10,
+      weightRetentionLabel: 10,
+    });
+  }
+
+  return (
+    <Card className="glass-panel border-border/50 shadow-sm" data-testid="card-lifecycle-settings">
+      <CardHeader className="pb-2 cursor-pointer" onClick={() => setOpen(!open)}>
+        <div className="flex items-center justify-between">
+          <CardTitle className="text-sm flex items-center gap-2">
+            <Sliders className="w-4 h-4 text-primary" />
+            Lifecycle Compliance Thresholds &amp; Weights
+            {data?.settings && !data.settings.isDefault && (
+              <Badge variant="outline" className="ml-1 text-[10px]">Customized</Badge>
+            )}
+          </CardTitle>
+          <div className="flex items-center gap-2">
+            <p className="text-xs text-muted-foreground">Tune the stale/orphan thresholds, required toggles, and per-criterion weights used to score every site.</p>
+            {open ? <ChevronDown className="w-4 h-4 text-muted-foreground" /> : <ChevronRight className="w-4 h-4 text-muted-foreground" />}
+          </div>
+        </div>
+      </CardHeader>
+      {open && (
+        <CardContent className="pt-0">
+          {isLoading || !draft ? (
+            <div className="flex items-center justify-center py-8">
+              <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
+            </div>
+          ) : (
+            <div className="space-y-6">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <Label className="text-xs">Stale Threshold (days)</Label>
+                  <Input
+                    type="number" min={1} max={3650}
+                    value={draft.staleThresholdDays}
+                    onChange={(e) => setField("staleThresholdDays", Math.max(1, Number(e.target.value) || 1))}
+                    data-testid="input-stale-threshold"
+                  />
+                  <p className="text-[11px] text-muted-foreground mt-1">Sites with no activity for this many days are flagged stale.</p>
+                </div>
+                <div>
+                  <Label className="text-xs">Orphan Threshold (days)</Label>
+                  <Input
+                    type="number" min={1} max={3650}
+                    value={draft.orphanedThresholdDays}
+                    onChange={(e) => setField("orphanedThresholdDays", Math.max(1, Number(e.target.value) || 1))}
+                    data-testid="input-orphan-threshold"
+                  />
+                  <p className="text-[11px] text-muted-foreground mt-1">Sites without a primary steward beyond this window are flagged orphaned.</p>
+                </div>
+                <div className="flex items-center justify-between rounded-md border border-border/50 px-3 py-2">
+                  <div>
+                    <Label className="text-xs">Sensitivity Label Required</Label>
+                    <p className="text-[11px] text-muted-foreground">When off, missing labels do not impact the score.</p>
+                  </div>
+                  <Switch
+                    checked={draft.labelRequired}
+                    onCheckedChange={(v) => setField("labelRequired", v)}
+                    data-testid="switch-label-required"
+                  />
+                </div>
+                <div className="flex items-center justify-between rounded-md border border-border/50 px-3 py-2">
+                  <div>
+                    <Label className="text-xs">Metadata Required</Label>
+                    <p className="text-[11px] text-muted-foreground">When off, missing required metadata does not impact the score.</p>
+                  </div>
+                  <Switch
+                    checked={draft.metadataRequired}
+                    onCheckedChange={(v) => setField("metadataRequired", v)}
+                    data-testid="switch-metadata-required"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <h4 className="text-sm font-medium">Per-Criterion Weights</h4>
+                  <Badge variant={totalWeight === 100 ? "outline" : "secondary"} className="text-[11px]" data-testid="badge-weight-total">
+                    Total: {totalWeight}{totalWeight !== 100 ? " (will be normalized)" : ""}
+                  </Badge>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {WEIGHT_FIELDS.map(f => (
+                    <div key={f.key} className="rounded-md border border-border/50 p-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="min-w-0">
+                          <Label className="text-xs">{f.label}</Label>
+                          <p className="text-[11px] text-muted-foreground">{f.description}</p>
+                        </div>
+                        <Input
+                          type="number" min={0} max={100}
+                          className="w-20"
+                          value={(draft as any)[f.key]}
+                          onChange={(e) => setField(f.key as any, Math.max(0, Math.min(100, Number(e.target.value) || 0)) as any)}
+                          data-testid={`input-${f.key}`}
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <p className="text-[11px] text-muted-foreground mt-2">
+                  Scores are computed as the sum of weights for passing criteria divided by the total weight × 100, so values do not need to add up to 100.
+                </p>
+              </div>
+
+              <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-border/40">
+                <div className="text-[11px] text-muted-foreground">
+                  {draft.updatedAt
+                    ? <>Last updated {new Date(draft.updatedAt).toLocaleString()}{draft.updatedBy ? <> by {draft.updatedBy}</> : null}.</>
+                    : <>Currently using the platform defaults — no organization override saved yet.</>}
+                </div>
+                <div className="flex gap-2">
+                  <Button variant="ghost" size="sm" className="gap-2" onClick={resetToDefaults} data-testid="button-reset-defaults">
+                    <RotateCcw className="w-3.5 h-3.5" /> Reset to Defaults
+                  </Button>
+                  <Button
+                    size="sm"
+                    className="gap-2"
+                    disabled={saveMutation.isPending}
+                    onClick={() => draft && saveMutation.mutate(draft)}
+                    data-testid="button-save-lifecycle-settings"
+                  >
+                    {saveMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+                    Save Settings
+                  </Button>
+                </div>
+              </div>
+            </div>
+          )}
+        </CardContent>
+      )}
+    </Card>
+  );
+}
 
 export default function PolicyBuilderPage() {
   const { toast } = useToast();
@@ -390,6 +630,9 @@ export default function PolicyBuilderPage() {
           </Button>
         </div>
       </div>
+
+      {/* Lifecycle Compliance Thresholds & Weights */}
+      <LifecycleComplianceSettingsCard />
 
       {/* Outcome Manager */}
       <Card className="glass-panel border-border/50 shadow-sm">

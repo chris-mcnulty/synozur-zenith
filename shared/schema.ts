@@ -2342,3 +2342,43 @@ export const LIFECYCLE_DETECTION_DEFAULTS = {
   labelRequired: true,
   metadataRequired: true,
 } as const;
+
+export const LIFECYCLE_WEIGHT_DEFAULTS = {
+  primarySteward: 15,
+  secondarySteward: 15,
+  sensitivityLabel: 20,
+  metadata: 15,
+  activity: 15,
+  sharingPosture: 10,
+  retentionLabel: 10,
+} as const;
+
+export type LifecycleWeightKey = keyof typeof LIFECYCLE_WEIGHT_DEFAULTS;
+
+export const lifecycleComplianceSettings = pgTable("lifecycle_compliance_settings", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  organizationId: varchar("organization_id").notNull(),
+  tenantConnectionId: varchar("tenant_connection_id"),
+  staleThresholdDays: integer("stale_threshold_days").notNull().default(LIFECYCLE_DETECTION_DEFAULTS.staleThresholdDays),
+  orphanedThresholdDays: integer("orphaned_threshold_days").notNull().default(LIFECYCLE_DETECTION_DEFAULTS.orphanedThresholdDays),
+  labelRequired: boolean("label_required").notNull().default(LIFECYCLE_DETECTION_DEFAULTS.labelRequired),
+  metadataRequired: boolean("metadata_required").notNull().default(LIFECYCLE_DETECTION_DEFAULTS.metadataRequired),
+  weightPrimarySteward: integer("weight_primary_steward").notNull().default(LIFECYCLE_WEIGHT_DEFAULTS.primarySteward),
+  weightSecondarySteward: integer("weight_secondary_steward").notNull().default(LIFECYCLE_WEIGHT_DEFAULTS.secondarySteward),
+  weightSensitivityLabel: integer("weight_sensitivity_label").notNull().default(LIFECYCLE_WEIGHT_DEFAULTS.sensitivityLabel),
+  weightMetadata: integer("weight_metadata").notNull().default(LIFECYCLE_WEIGHT_DEFAULTS.metadata),
+  weightActivity: integer("weight_activity").notNull().default(LIFECYCLE_WEIGHT_DEFAULTS.activity),
+  weightSharingPosture: integer("weight_sharing_posture").notNull().default(LIFECYCLE_WEIGHT_DEFAULTS.sharingPosture),
+  weightRetentionLabel: integer("weight_retention_label").notNull().default(LIFECYCLE_WEIGHT_DEFAULTS.retentionLabel),
+  updatedAt: timestamp("updated_at").defaultNow(),
+  updatedBy: text("updated_by"),
+}, (table) => [
+  unique("uq_lifecycle_settings_scope").on(table.organizationId, table.tenantConnectionId),
+]);
+
+export const insertLifecycleComplianceSettingsSchema = createInsertSchema(lifecycleComplianceSettings).omit({
+  id: true,
+  updatedAt: true,
+});
+export type InsertLifecycleComplianceSettings = z.infer<typeof insertLifecycleComplianceSettingsSchema>;
+export type LifecycleComplianceSettings = typeof lifecycleComplianceSettings.$inferSelect;

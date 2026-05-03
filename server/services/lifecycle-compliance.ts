@@ -16,14 +16,25 @@
  */
 
 import type { Workspace } from "@shared/schema";
-import { LIFECYCLE_DETECTION_DEFAULTS } from "@shared/schema";
+import { LIFECYCLE_DETECTION_DEFAULTS, LIFECYCLE_WEIGHT_DEFAULTS } from "@shared/schema";
 import { evaluateMetadataCompleteness } from "./metadata-completeness";
+
+export interface ComplianceWeights {
+  primarySteward: number;
+  secondarySteward: number;
+  sensitivityLabel: number;
+  metadata: number;
+  activity: number;
+  sharingPosture: number;
+  retentionLabel: number;
+}
 
 export interface DetectionRules {
   staleThresholdDays: number;
   orphanedThresholdDays: number;
   labelRequired: boolean;
   metadataRequired: boolean;
+  weights: ComplianceWeights;
 }
 
 export interface ComplianceCriterion {
@@ -45,18 +56,12 @@ export interface ComplianceResult {
   breakdown: ComplianceCriterion[];
 }
 
-const WEIGHTS = {
-  primarySteward: 15,
-  secondarySteward: 15,
-  sensitivityLabel: 20,
-  metadata: 15,
-  activity: 15,
-  sharingPosture: 10,
-  retentionLabel: 10,
-};
+export function defaultComplianceWeights(): ComplianceWeights {
+  return { ...LIFECYCLE_WEIGHT_DEFAULTS };
+}
 
 export function defaultDetectionRules(): DetectionRules {
-  return { ...LIFECYCLE_DETECTION_DEFAULTS };
+  return { ...LIFECYCLE_DETECTION_DEFAULTS, weights: defaultComplianceWeights() };
 }
 
 export function daysSince(date: string | Date | null | undefined): number | null {
@@ -102,11 +107,13 @@ export function evaluateCompliance(
   const retentionPassFinal = !!workspace.retentionLabelId ||
     (workspace.retentionPolicy != null && workspace.retentionPolicy.trim().length > 0);
 
+  const weights: ComplianceWeights = rules.weights ?? defaultComplianceWeights();
+
   const breakdown: ComplianceCriterion[] = [
     {
       key: "primarySteward",
       label: "Primary Steward Assigned",
-      weight: WEIGHTS.primarySteward,
+      weight: weights.primarySteward,
       pass: hasPrimary,
       remediation: hasPrimary
         ? "Primary steward is assigned."
@@ -115,7 +122,7 @@ export function evaluateCompliance(
     {
       key: "secondarySteward",
       label: "Secondary Steward Assigned",
-      weight: WEIGHTS.secondarySteward,
+      weight: weights.secondarySteward,
       pass: hasSecondary,
       remediation: hasSecondary
         ? "Two or more stewards are assigned."
@@ -124,7 +131,7 @@ export function evaluateCompliance(
     {
       key: "sensitivityLabel",
       label: "Sensitivity Label Applied",
-      weight: WEIGHTS.sensitivityLabel,
+      weight: weights.sensitivityLabel,
       pass: labelPass,
       remediation: labelPass
         ? "Sensitivity label is applied."
@@ -133,7 +140,7 @@ export function evaluateCompliance(
     {
       key: "metadata",
       label: "Required Metadata Complete",
-      weight: WEIGHTS.metadata,
+      weight: weights.metadata,
       pass: metaPass,
       remediation: metaPass
         ? "All required metadata fields are populated."
@@ -142,7 +149,7 @@ export function evaluateCompliance(
     {
       key: "activity",
       label: `Active Within ${rules.staleThresholdDays} Days`,
-      weight: WEIGHTS.activity,
+      weight: weights.activity,
       pass: !isStale,
       remediation: isStale
         ? (dActivity === null
@@ -153,7 +160,7 @@ export function evaluateCompliance(
     {
       key: "sharingPosture",
       label: "Sharing Posture Aligned",
-      weight: WEIGHTS.sharingPosture,
+      weight: weights.sharingPosture,
       pass: sharingPass,
       remediation: sharingPass
         ? "External sharing posture is aligned with classification."
@@ -164,7 +171,7 @@ export function evaluateCompliance(
     {
       key: "retentionLabel",
       label: "Retention Policy Assigned",
-      weight: WEIGHTS.retentionLabel,
+      weight: weights.retentionLabel,
       pass: retentionPassFinal,
       remediation: retentionPassFinal
         ? "Retention policy is assigned."

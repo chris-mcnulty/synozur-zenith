@@ -151,6 +151,20 @@ import {
   type InsertScheduledJobRun,
   type JobType,
   type JobStatus,
+  savedViews,
+  type SavedView,
+  type InsertSavedView,
+  type SavedViewPage,
+  type SavedViewScope,
+  workspaceComplianceScores,
+  type WorkspaceComplianceScore,
+  type InsertWorkspaceComplianceScore,
+  lifecycleScanRuns,
+  type LifecycleScanRun,
+  type InsertLifecycleScanRun,
+  lifecycleComplianceSettings,
+  type LifecycleComplianceSettings,
+  type InsertLifecycleComplianceSettings,
 } from "@shared/schema";
 import {
   decryptRecord,
@@ -324,6 +338,9 @@ export interface IStorage {
   updateOrgMembership(id: string, updates: Partial<InsertOrganizationUser>): Promise<OrganizationUser | undefined>;
   deleteOrgMembership(userId: string, organizationId: string): Promise<void>;
   updateOrganizationSettings(id: string, updates: Partial<InsertOrganization>): Promise<Organization | undefined>;
+
+  getLifecycleComplianceSettings(filters: { organizationId: string; tenantConnectionId?: string | null }): Promise<LifecycleComplianceSettings | undefined>;
+  upsertLifecycleComplianceSettings(data: InsertLifecycleComplianceSettings): Promise<LifecycleComplianceSettings>;
 
   getPlatformSettings(): Promise<PlatformSettings>;
   updatePlatformSettings(patch: { defaultSignupPlan?: string; plannerPlanId?: string | null; plannerBucketId?: string | null; updatedBy?: string | null }): Promise<PlatformSettings>;
@@ -4272,6 +4289,102 @@ export class DatabaseStorage implements IStorage {
       .orderBy(desc(scheduledJobRuns.completedAt))
       .limit(1);
     return row?.completedAt ?? null;
+  }
+
+  // ── BL-007: Lifecycle Compliance Scores & Scan Runs ─────────────────────
+  async upsertWorkspaceComplianceScore(data: InsertWorkspaceComplianceScore): Promise<WorkspaceComplianceScore> {
+    const [row] = await db.insert(workspaceComplianceScores)
+      .values(data)
+      .onConflictDoUpdate({
+        target: workspaceComplianceScores.workspaceId,
+        set: {
+          organizationId: data.organizationId ?? null,
+          tenantConnectionId: data.tenantConnectionId ?? null,
+          score: data.score ?? 0,
+          isStale: data.isStale ?? false,
+          isOrphaned: data.isOrphaned ?? false,
+          missingLabel: data.missingLabel ?? false,
+          missingMetadata: data.missingMetadata ?? false,
+          externallySharedUnclassified: data.externallySharedUnclassified ?? false,
+          daysSinceActivity: data.daysSinceActivity ?? null,
+          breakdown: data.breakdown ?? null,
+          computedAt: data.computedAt ?? new Date(),
+          scanRunId: data.scanRunId ?? null,
+        },
+      })
+      .returning();
+    return row;
+  }
+
+  async getWorkspaceComplianceScores(filters: {
+    organizationId?: string;
+    tenantConnectionIds?: string[];
+  }): Promise<WorkspaceComplianceScore[]> {
+    const conds: any[] = [];
+    if (filters.organizationId) conds.push(eq(workspaceComplianceScores.organizationId, filters.organizationId));
+    if (filters.tenantConnectionIds && filters.tenantConnectionIds.length > 0) {
+      conds.push(inArray(workspaceComplianceScores.tenantConnectionId, filters.tenantConnectionIds));
+    }
+    const where = conds.length ? and(...conds) : undefined;
+    return where ? db.select().from(workspaceComplianceScores).where(where) : db.select().from(workspaceComplianceScores);
+  }
+
+  async createLifecycleScanRun(data: InsertLifecycleScanRun): Promise<LifecycleScanRun> {
+    const [row] = await db.insert(lifecycleScanRuns).values(data).returning();
+    return row;
+  }
+
+  async updateLifecycleScanRun(id: string, updates: Partial<InsertLifecycleScanRun>): Promise<LifecycleScanRun | undefined> {
+    const [row] = await db.update(lifecycleScanRuns).set(updates as any).where(eq(lifecycleScanRuns.id, id)).returning();
+    return row;
+  }
+
+  async getLifecycleScanRuns(filters: { organizationId: string; tenantConnectionId?: string; limit?: number }): Promise<LifecycleScanRun[]> {
+    const conds: any[] = [eq(lifecycleScanRuns.organizationId, filters.organizationId)];
+    if (filters.tenantConnectionId) conds.push(eq(lifecycleScanRuns.tenantConnectionId, filters.tenantConnectionId));
+    return db.select().from(lifecycleScanRuns)
+      .where(and(...conds))
+      .orderBy(desc(lifecycleScanRuns.startedAt))
+      .limit(filters.limit ?? 60);
+  }
+
+  async getLifecycleComplianceSettings(filters: { organizationId: string; tenantConnectionId?: string | null }): Promise<LifecycleComplianceSettings | undefined> {
+    const tcId = filters.tenantConnectionId ?? null;
+    const conds: any[] = [eq(lifecycleComplianceSettings.organizationId, filters.organizationId)];
+    conds.push(tcId === null ? isNull(lifecycleComplianceSettings.tenantConnectionId) : eq(lifecycleComplianceSettings.tenantConnectionId, tcId));
+    const [row] = await db.select().from(lifecycleComplianceSettings).where(and(...conds)).limit(1);
+    return row;
+  }
+
+  async upsertLifecycleComplianceSettings(data: InsertLifecycleComplianceSettings): Promise<LifecycleComplianceSettings> {
+    const tcId = data.tenantConnectionId ?? null;
+    const existing = await this.getLifecycleComplianceSettings({
+      organizationId: data.organizationId,
+      tenantConnectionId: tcId,
+    });
+    const payload = { ...data, tenantConnectionId: tcId, updatedAt: new Date() };
+    if (existing) {
+      const [row] = await db.update(lifecycleComplianceSettings)
+        .set(payload as any)
+        .where(eq(lifecycleComplianceSettings.id, existing.id))
+        .returning();
+      return row;
+    }
+    const [row] = await db.insert(lifecycleComplianceSettings).values(payload as any).returning();
+    return row;
+  }
+
+  async getLatestLifecycleScanRun(filters: { organizationId: string; tenantConnectionId?: string | null }): Promise<LifecycleScanRun | undefined> {
+    const conds: any[] = [
+      eq(lifecycleScanRuns.organizationId, filters.organizationId),
+      eq(lifecycleScanRuns.status, "completed"),
+    ];
+    if (filters.tenantConnectionId) conds.push(eq(lifecycleScanRuns.tenantConnectionId, filters.tenantConnectionId));
+    const [row] = await db.select().from(lifecycleScanRuns)
+      .where(and(...conds))
+      .orderBy(desc(lifecycleScanRuns.startedAt))
+      .limit(1);
+    return row;
   }
 
   async reconcileOrphanedJobRuns(maxAgeMs: number = 60 * 60 * 1000): Promise<number> {
