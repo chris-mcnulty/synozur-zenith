@@ -23,6 +23,7 @@ import {
   evaluateCompliance,
   defaultDetectionRules,
   isCompliant,
+  type ComplianceCriterion,
   type DetectionRules,
   type ComplianceWeights,
 } from "../services/lifecycle-compliance";
@@ -34,6 +35,7 @@ import {
   LIFECYCLE_WEIGHT_DEFAULTS,
   type LifecycleComplianceSettings,
 } from "@shared/schema";
+import { getUncachableSendGridClient } from "../services/sendgrid-client";
 
 // Load detection rules + weights from per-org (and optionally per-tenant) settings,
 // falling back to compiled-in defaults.
@@ -82,6 +84,60 @@ function settingsToRules(row: LifecycleComplianceSettings): DetectionRules {
       retentionLabel: row.weightRetentionLabel,
     },
   };
+}
+
+const escapeHtml = (s: string) =>
+  s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+
+function renderRemediationEmail(args: {
+  ownerDisplayName: string | null;
+  workspaceName: string;
+  siteUrl: string | null;
+  score: number;
+  failingCriteria: ComplianceCriterion[];
+  passingCriteria: ComplianceCriterion[];
+  replyTo: string | null;
+}): { html: string; text: string; subject: string } {
+  const { ownerDisplayName, workspaceName, siteUrl, score, failingCriteria, passingCriteria, replyTo } = args;
+  const subject = `Action needed: governance review for ${workspaceName} (compliance ${score}%)`;
+  const failingHtml = failingCriteria.length === 0
+    ? `<p style="margin:0;color:#374151;">No failing criteria — thank you for keeping this workspace in good shape.</p>`
+    : `<ul style="margin:0;padding-left:20px;color:#374151;">${failingCriteria.map(c =>
+        `<li style="margin-bottom:10px;"><strong>${escapeHtml(c.label)}</strong><br/><span style="color:#6b7280;">${escapeHtml(c.remediation)}</span></li>`
+      ).join("")}</ul>`;
+  const failingText = failingCriteria.length === 0
+    ? "No failing criteria."
+    : failingCriteria.map(c => `- ${c.label}: ${c.remediation}`).join("\n");
+  const passingText = passingCriteria.length === 0
+    ? ""
+    : `\n\nWhat's working well:\n${passingCriteria.map(c => `- ${c.label}`).join("\n")}`;
+
+  const html = `<!DOCTYPE html>
+<html><body style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;color:#111827;background:#f5f5f5;margin:0;padding:24px;">
+<table width="600" cellpadding="0" cellspacing="0" style="background:#fff;border-radius:8px;max-width:600px;margin:0 auto;box-shadow:0 1px 3px rgba(0,0,0,0.08);">
+  <tr><td style="background:#5b0fbc;color:#fff;padding:20px;border-radius:8px 8px 0 0;font-weight:600;">Zenith lifecycle remediation</td></tr>
+  <tr><td style="padding:24px;">
+    <p style="margin:0 0 12px;">Hi ${escapeHtml(ownerDisplayName || "there")},</p>
+    <p style="margin:0 0 16px;color:#374151;">Your SharePoint workspace <strong>${escapeHtml(workspaceName)}</strong>${siteUrl ? ` (<a href="${escapeHtml(siteUrl)}" style="color:#5b0fbc;">${escapeHtml(siteUrl.replace(/^https?:\/\//, ""))}</a>)` : ""} was flagged in the latest lifecycle review.</p>
+    <p style="margin:0 0 8px;color:#374151;">Current compliance score: <strong>${score}%</strong></p>
+    <h3 style="margin:20px 0 8px;font-size:14px;color:#111827;">Items needing attention</h3>
+    ${failingHtml}
+    <p style="margin:24px 0 0;color:#9ca3af;font-size:12px;">This message was sent via Zenith governance. Reply directly to ${escapeHtml(replyTo || "your governance admin")} for follow-up.</p>
+  </td></tr>
+</table></body></html>`;
+
+  const text = `Hi ${ownerDisplayName || "there"},
+
+Your SharePoint workspace "${workspaceName}"${siteUrl ? ` (${siteUrl})` : ""} was flagged in the latest lifecycle review.
+
+Current compliance score: ${score}%
+
+Items needing attention:
+${failingText}${passingText}
+
+Reply to ${replyTo || "your governance admin"} for follow-up.`;
+
+  return { html, text, subject };
 }
 
 const router = Router();
@@ -487,21 +543,106 @@ router.post(
         return res.status(403).json({ error: "Forbidden" });
       }
 
-      await logAuditEvent(req, {
-        action: AUDIT_ACTIONS.LIFECYCLE_REMEDIATION_OWNER_EMAILED,
-        resource: "workspace",
+      const recipient = workspace.ownerPrincipalName;
+      const auditBase = {
+        resource: "workspace" as const,
         resourceId: workspace.id,
         organizationId: orgId,
         tenantConnectionId: workspace.tenantConnectionId,
+      };
+
+      if (!recipient) {
+        const err = "No owner email on file for this workspace.";
+        await logAuditEvent(req, {
+          ...auditBase,
+          action: AUDIT_ACTIONS.LIFECYCLE_REMEDIATION_OWNER_EMAILED,
+          details: { workspaceName: workspace.displayName, error: err },
+          result: "FAILURE",
+        });
+        return res.status(400).json({ error: err });
+      }
+
+      // Compute compliance for templated remediation guidance.
+      const requiredFieldsByTenant = await buildRequiredFieldsByTenantId([workspace as any]);
+      const fields = workspace.tenantConnectionId ? (requiredFieldsByTenant[workspace.tenantConnectionId] || []) : [];
+      const compliance = evaluateCompliance(workspace as any, fields, defaultDetectionRules());
+      const failingCriteria = compliance.breakdown.filter(c => !c.pass);
+      const passingCriteria = compliance.breakdown.filter(c => c.pass);
+
+      const { html, text, subject } = renderRemediationEmail({
+        ownerDisplayName: workspace.ownerDisplayName,
+        workspaceName: workspace.displayName,
+        siteUrl: workspace.siteUrl,
+        score: compliance.score,
+        failingCriteria,
+        passingCriteria,
+        replyTo: req.user?.email || null,
+      });
+
+      let sgClient: Awaited<ReturnType<typeof getUncachableSendGridClient>>;
+      try {
+        sgClient = await getUncachableSendGridClient();
+      } catch (sgErr: any) {
+        const message = sgErr?.message || "SendGrid not configured";
+        await logAuditEvent(req, {
+          ...auditBase,
+          action: AUDIT_ACTIONS.LIFECYCLE_REMEDIATION_OWNER_EMAILED,
+          details: {
+            ownerEmail: recipient,
+            ownerName: workspace.ownerDisplayName,
+            workspaceName: workspace.displayName,
+            error: message,
+          },
+          result: "FAILURE",
+        });
+        return res.status(502).json({ error: `Email delivery unavailable: ${message}` });
+      }
+
+      try {
+        await sgClient.client.send({
+          to: recipient,
+          from: sgClient.fromEmail,
+          ...(req.user?.email ? { replyTo: req.user.email } : {}),
+          subject,
+          html,
+          text,
+        });
+      } catch (sendErr: any) {
+        const message = sendErr?.message || "Failed to send email";
+        await logAuditEvent(req, {
+          ...auditBase,
+          action: AUDIT_ACTIONS.LIFECYCLE_REMEDIATION_OWNER_EMAILED,
+          details: {
+            ownerEmail: recipient,
+            ownerName: workspace.ownerDisplayName,
+            workspaceName: workspace.displayName,
+            score: compliance.score,
+            error: message,
+          },
+          result: "FAILURE",
+        });
+        return res.status(502).json({ error: message });
+      }
+
+      await logAuditEvent(req, {
+        ...auditBase,
+        action: AUDIT_ACTIONS.LIFECYCLE_REMEDIATION_OWNER_EMAILED,
         details: {
-          ownerEmail: workspace.ownerPrincipalName,
+          ownerEmail: recipient,
           ownerName: workspace.ownerDisplayName,
           workspaceName: workspace.displayName,
+          score: compliance.score,
+          failingCriteria: failingCriteria.map(c => c.key),
         },
         result: "SUCCESS",
       });
 
-      res.json({ ok: true });
+      res.json({
+        ok: true,
+        recipient,
+        score: compliance.score,
+        failingCriteria: failingCriteria.map(c => ({ key: c.key, label: c.label })),
+      });
     } catch (err: any) {
       console.error("[lifecycle] email-owner error:", err);
       res.status(500).json({ error: err.message });

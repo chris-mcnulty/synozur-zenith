@@ -203,13 +203,18 @@ export default function LifecycleReviewHub() {
   const emailOwnerMutation = useMutation({
     mutationFn: async (workspaceId: string) => {
       const res = await apiRequest("POST", `/api/lifecycle/review/${workspaceId}/email-owner`, {});
-      return res.json();
+      return res.json() as Promise<{ ok: boolean; recipient?: string; score?: number }>;
     },
-    onSuccess: () => {
-      toast({ title: "Owner notified", description: "An audit-logged remediation email has been queued." });
+    onSuccess: (data) => {
+      toast({
+        title: "Owner notified",
+        description: data?.recipient
+          ? `Remediation email sent to ${data.recipient}.`
+          : "Remediation email sent.",
+      });
     },
     onError: (err: any) => {
-      toast({ title: "Action failed", description: err.message ?? String(err), variant: "destructive" });
+      toast({ title: "Email failed", description: err.message ?? String(err), variant: "destructive" });
     },
   });
 
@@ -238,14 +243,44 @@ export default function LifecycleReviewHub() {
   const summary = health?.summary;
   const trendData = useMemo(() => (health?.trend ?? []).map(p => p.averageScore), [health?.trend]);
 
+  const [bulkEmailing, setBulkEmailing] = useState(false);
   const handleBulkEmail = async () => {
     if (selected.size === 0) return;
+    setBulkEmailing(true);
     const ids = Array.from(selected);
     let ok = 0;
+    const failures: Array<{ id: string; error: string }> = [];
+    // Call the API directly here (not via emailOwnerMutation.mutateAsync) so
+    // that we don't fire one toast per row — only a single aggregate toast.
     for (const id of ids) {
-      try { await emailOwnerMutation.mutateAsync(id); ok++; } catch {}
+      try {
+        const res = await apiRequest("POST", `/api/lifecycle/review/${id}/email-owner`, {});
+        await res.json();
+        ok++;
+      } catch (err: any) {
+        failures.push({ id, error: err?.message ?? String(err) });
+      }
     }
-    toast({ title: "Bulk action complete", description: `${ok} of ${ids.length} owner emails queued.` });
+    const failed = failures.length;
+    const itemsById = new Map(items.map(i => [i.id, i] as const));
+    if (failed === 0) {
+      toast({
+        title: "Bulk emails sent",
+        description: `${ok} of ${ids.length} owner emails delivered.`,
+      });
+    } else {
+      const sample = failures.slice(0, 3).map(f => {
+        const name = itemsById.get(f.id)?.displayName ?? f.id;
+        return `${name}: ${f.error}`;
+      }).join("; ");
+      const more = failed > 3 ? ` (+${failed - 3} more)` : "";
+      toast({
+        title: `${ok} sent, ${failed} failed`,
+        description: `${sample}${more}`,
+        variant: "destructive",
+      });
+    }
+    setBulkEmailing(false);
     setSelected(new Set());
   };
 
@@ -395,8 +430,8 @@ export default function LifecycleReviewHub() {
             {selected.size > 0 && (
               <div className="flex items-center gap-3 mt-3 p-2 rounded-lg bg-primary/5 border border-primary/20">
                 <span className="text-sm font-medium" data-testid="text-selection-count">{selected.size} selected</span>
-                <Button size="sm" variant="default" className="h-8 gap-1.5" onClick={handleBulkEmail} data-testid="button-bulk-email">
-                  <Mail className="w-3.5 h-3.5" /> Email owners
+                <Button size="sm" variant="default" className="h-8 gap-1.5" onClick={handleBulkEmail} disabled={bulkEmailing} data-testid="button-bulk-email">
+                  {bulkEmailing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Mail className="w-3.5 h-3.5" />} Email owners
                 </Button>
                 <Button size="sm" variant="ghost" className="h-8" onClick={() => setSelected(new Set())} data-testid="button-clear-selection">
                   Clear
