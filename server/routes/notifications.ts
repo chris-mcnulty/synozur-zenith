@@ -30,6 +30,7 @@ import {
   buildDigestSummary,
   sendDigestForUser,
 } from "../services/notification-digest";
+import { sseSubscribe } from "../services/notification-sse";
 
 function planAtLeast(plan: ServicePlanTier, minimum: ServicePlanTier): boolean {
   return SERVICE_PLANS.indexOf(plan) >= SERVICE_PLANS.indexOf(minimum);
@@ -215,6 +216,37 @@ router.post(
     const result = await sendDigestForUser(req.user!.id, { force: true });
     if (!result.sent) return res.status(400).json({ error: "Digest not sent", reason: result.reason });
     res.json({ sent: true, total: result.total });
+  },
+);
+
+router.get(
+  "/api/notifications/stream",
+  requireAuth(),
+  (req: AuthenticatedRequest, res) => {
+    const userId = req.user!.id;
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection", "keep-alive");
+    res.setHeader("X-Accel-Buffering", "no");
+    res.flushHeaders();
+
+    // Send an initial heartbeat so the client knows the connection is live.
+    res.write(": connected\n\n");
+
+    const heartbeat = setInterval(() => {
+      try {
+        res.write(": heartbeat\n\n");
+      } catch {
+        clearInterval(heartbeat);
+      }
+    }, 25_000);
+
+    const unsubscribe = sseSubscribe(userId, res);
+
+    req.on("close", () => {
+      clearInterval(heartbeat);
+      unsubscribe();
+    });
   },
 );
 

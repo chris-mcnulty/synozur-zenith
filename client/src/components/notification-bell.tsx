@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Link } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Bell, Check, Settings as SettingsIcon, AlertCircle, AlertTriangle, Info } from "lucide-react";
@@ -51,9 +51,42 @@ export function NotificationBell() {
 
   const { data: countData } = useQuery<UnreadCountResponse>({
     queryKey: ["/api/notifications/unread-count"],
-    refetchInterval: 60_000,
+    // Fallback poll at 5 minutes — SSE will invalidate immediately on push.
+    refetchInterval: 5 * 60_000,
     staleTime: 30_000,
   });
+
+  useEffect(() => {
+    let es: EventSource | null = null;
+    let retryTimeout: ReturnType<typeof setTimeout> | null = null;
+    let retryDelay = 2_000;
+
+    function connect() {
+      es = new EventSource("/api/notifications/stream");
+
+      es.addEventListener("notification", () => {
+        queryClient.invalidateQueries({ queryKey: ["/api/notifications/unread-count"] });
+        queryClient.invalidateQueries({ queryKey: ["/api/notifications"] });
+        retryDelay = 2_000;
+      });
+
+      es.onerror = () => {
+        es?.close();
+        // Exponential back-off, cap at 60 s.
+        retryTimeout = setTimeout(() => {
+          retryDelay = Math.min(retryDelay * 2, 60_000);
+          connect();
+        }, retryDelay);
+      };
+    }
+
+    connect();
+
+    return () => {
+      es?.close();
+      if (retryTimeout) clearTimeout(retryTimeout);
+    };
+  }, []);
 
   const { data: listData, isLoading } = useQuery<NotificationsResponse>({
     queryKey: ["/api/notifications"],

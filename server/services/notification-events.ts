@@ -16,8 +16,16 @@ import {
   type NotificationSeverity,
   NOTIFICATION_SEVERITIES,
   ZENITH_ROLES,
+  SERVICE_PLANS,
   type ZenithRole,
+  type ServicePlanTier,
 } from "@shared/schema";
+import { sendInstantAlert } from "./notification-digest";
+import { ssePublish } from "./notification-sse";
+
+function planAtLeast(plan: ServicePlanTier, minimum: ServicePlanTier): boolean {
+  return SERVICE_PLANS.indexOf(plan) >= SERVICE_PLANS.indexOf(minimum);
+}
 
 interface CategoryMapping {
   category: NotificationCategory;
@@ -301,7 +309,7 @@ export async function emitNotificationsForAuditEvent(
       const prefs = await storage.getNotificationPreferences(recipient.id);
       if (!passesUserPreferences(mapping.category, prefs)) continue;
 
-      await storage.createNotification({
+      const created = await storage.createNotification({
         userId: recipient.id,
         organizationId: input.organizationId,
         tenantConnectionId: input.tenantConnectionId ?? null,
@@ -313,6 +321,32 @@ export async function emitNotificationsForAuditEvent(
         payload: input.details ?? null,
       });
       inserted++;
+
+      // SSE push — update the bell badge live for all open tabs.
+      ssePublish(recipient.id, "notification", { notification: created });
+
+      // Instant email alert for critical events to Professional+ users with realTimeAlerts=true.
+      // The plan is checked again at delivery time (not just at preference-save time) so that
+      // a downgraded org can no longer benefit from the feature even if the flag is still set.
+      if (mapping.severity === "critical" && prefs?.realTimeAlerts) {
+        void (async () => {
+          try {
+            const org = recipient.organizationId
+              ? await storage.getOrganization(recipient.organizationId)
+              : null;
+            const plan = (org?.servicePlan || "TRIAL") as ServicePlanTier;
+            if (!planAtLeast(plan, "PROFESSIONAL")) {
+              console.log(
+                `[notification-events] instant alert skipped for ${recipient.id}: plan ${plan} < PROFESSIONAL`,
+              );
+              return;
+            }
+            await sendInstantAlert(created, recipient);
+          } catch (err) {
+            console.error("[notification-events] instant alert failed for", recipient.id, err);
+          }
+        })();
+      }
     }
     return inserted;
   } catch (err) {

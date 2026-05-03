@@ -231,6 +231,117 @@ export function renderDigestHtml(
 </html>`;
 }
 
+function renderInstantAlertHtml(user: User, notification: Notification): string {
+  const firstName = user.name ? user.name.split(" ")[0] : user.email;
+  const color = SEVERITY_COLOR[notification.severity] || SEVERITY_COLOR.info;
+  const link = notification.link
+    ? `${APP_PUBLIC_URL}${notification.link.startsWith("/") ? "" : "/"}${notification.link}`
+    : `${APP_PUBLIC_URL}/app/settings/notifications`;
+  const settingsUrl = `${APP_PUBLIC_URL}/app/settings/notifications`;
+
+  return `
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Zenith Critical Alert</title>
+</head>
+<body style="margin:0;padding:0;background:#f5f5f5;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#f5f5f5;padding:32px 16px;">
+    <tr>
+      <td align="center">
+        <table width="640" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:8px;overflow:hidden;max-width:640px;width:100%;box-shadow:0 1px 3px rgba(0,0,0,0.1);">
+          <tr>
+            <td style="background:#dc2626;padding:24px;">
+              <h1 style="margin:0;color:#ffffff;font-size:20px;font-weight:700;">&#9888; Critical Governance Alert</h1>
+              <p style="margin:6px 0 0;color:#fecaca;font-size:13px;">Immediate attention required</p>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:24px;">
+              <p style="margin:0 0 16px;color:#111827;font-size:16px;">Hi ${escapeHtml(firstName)},</p>
+              <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;border:2px solid ${color};border-radius:6px;overflow:hidden;">
+                <tr>
+                  <td style="padding:16px 20px;background:#fef2f2;">
+                    <div style="display:flex;align-items:center;gap:8px;">
+                      <div style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${color};margin-right:8px;"></div>
+                      <span style="color:#991b1b;font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;">Critical</span>
+                    </div>
+                    <p style="margin:8px 0 4px;color:#111827;font-size:16px;font-weight:600;">${escapeHtml(notification.title)}</p>
+                    ${notification.body ? `<p style="margin:0;color:#374151;font-size:14px;line-height:1.6;">${escapeHtml(notification.body)}</p>` : ""}
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:0 24px 28px;">
+              <a href="${link}" style="display:inline-block;background:#dc2626;color:#ffffff;text-decoration:none;padding:10px 20px;border-radius:6px;font-size:14px;font-weight:600;margin-right:8px;">
+                View Details
+              </a>
+              <a href="${settingsUrl}" style="display:inline-block;background:#f3f4f6;color:#374151;text-decoration:none;padding:10px 20px;border-radius:6px;font-size:14px;font-weight:600;">
+                Notification Settings
+              </a>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:16px 24px;border-top:1px solid #e5e7eb;">
+              <p style="margin:0;color:#9ca3af;font-size:12px;line-height:1.6;">
+                You received this because you have real-time critical alerts enabled.
+                <a href="${settingsUrl}" style="color:#5b0fbc;">Manage preferences</a>
+              </p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`;
+}
+
+/**
+ * Send an immediate email alert for a single critical notification.
+ * Skips the digest interval gate but still honors quiet hours.
+ */
+export async function sendInstantAlert(
+  notification: Notification,
+  user: User,
+): Promise<{ sent: boolean; reason?: string }> {
+  const now = new Date();
+
+  const prefs = await storage.getNotificationPreferences(user.id);
+  if (prefs && isInQuietHours(now, prefs.quietHoursStart, prefs.quietHoursEnd)) {
+    return { sent: false, reason: "user_quiet_hours" };
+  }
+
+  if (user.organizationId) {
+    const rules = await storage.getNotificationRules(user.organizationId);
+    if (rules && isInQuietHours(now, rules.orgQuietHoursStart, rules.orgQuietHoursEnd)) {
+      return { sent: false, reason: "org_quiet_hours" };
+    }
+  }
+
+  const html = renderInstantAlertHtml(user, notification);
+
+  try {
+    const { client, fromEmail } = await getUncachableSendGridClient();
+    await client.send({
+      to: user.email,
+      from: fromEmail,
+      subject: `[Critical Alert] ${notification.title}`,
+      html,
+    });
+  } catch (err: any) {
+    console.error(`[notification-digest] Failed to send instant alert to ${user.email}:`, err?.message || err);
+    return { sent: false, reason: "send_failed" };
+  }
+
+  console.log(`[notification-digest] Instant alert sent to ${user.email}: ${notification.title}`);
+  return { sent: true };
+}
+
 export async function sendDigestForUser(userId: string, options: { force?: boolean } = {}): Promise<{
   sent: boolean;
   reason?: string;
