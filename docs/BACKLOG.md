@@ -52,7 +52,7 @@ Gap analysis performed against the authoritative Zenith Engineering Product Spec
 | 3.1 | Lifecycle Review & Stale Site Detection | UI only (mock data) | High | BL-007 |
 | 3.2 | Retention & Lifecycle Classification enforcement | Partial | Medium | BL-012 |
 | 3.3 | Copilot Explainability (scoring, remediation, exclusions) | Partial | High | BL-006 |
-| 4.2 | Tenant Status Lifecycle (Suspended/Revoked) | Missing | Critical | BL-004 |
+| 4.2 | Tenant Status Lifecycle (Suspended/Revoked) | Done | Critical | BL-004 |
 | 4.3 | One-Owner Tenant Lock & Ownership Transfer | Missing | Critical | BL-002 |
 | 4.4 | Operator Allowlisting | Missing | Critical | BL-003 |
 | 4.7 | Comprehensive Audit Trail (governance actions, access denials) | Partial | Critical | BL-001 |
@@ -108,8 +108,8 @@ Gap analysis performed against the authoritative Zenith Engineering Product Spec
 - Audit log entries for operator allowlist changes
 - Platform Owner can view all operator relationships across the platform
 
-### 🔴 BL-004: Tenant Status Lifecycle
-**Status:** Backlog | **Spec Reference:** Section 4.2
+### ✅ BL-004: Tenant Status Lifecycle
+**Status:** Done (Task #82, May 2026) | **Spec Reference:** Section 4.2
 **Description:** The spec defines four tenant statuses: Pending, Active, Suspended, Revoked. Currently only Pending and Active are implemented. Suspended and Revoked states are missing, along with the transitions between them.
 **Acceptance Criteria:**
 - Add SUSPENDED and REVOKED to tenant connection status options

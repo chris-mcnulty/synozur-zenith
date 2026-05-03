@@ -226,6 +226,14 @@ export async function runSharePointTenantSync(
   const connection = await storage.getTenantConnection(tenantConnectionId);
   if (!connection) return { success: false, error: "Tenant connection not found" };
 
+  // BL-004 / Spec §4.2 — Block sync for non-ACTIVE tenants.
+  if (connection.status !== "ACTIVE" && connection.status !== "PENDING") {
+    return {
+      success: false,
+      error: `Tenant connection is ${connection.status}; sync blocked. ${connection.statusReason || ""}`.trim(),
+    };
+  }
+
   const clientId = connection.clientId || process.env.AZURE_CLIENT_ID;
   const clientSecret = getEffectiveClientSecret(connection);
 
@@ -1235,10 +1243,35 @@ export async function runSharePointTenantSync(
       permissionWarnings: permissionWarnings.length > 0 ? permissionWarnings : undefined,
     };
   } catch (err: any) {
-    await storage.updateTenantConnection(tenantConnectionId, {
+    // BL-004 / Spec §4.2 — Auto-suspend on consent revocation / invalid grant.
+    const msg = String(err?.message || "");
+    const consentRevoked = /invalid_grant|AADSTS65001|AADSTS70011|AADSTS90094|consent_required|unauthorized_client|invalid_client/i.test(msg);
+    const tenantUpdates: any = {
       lastSyncAt: new Date(),
       lastSyncStatus: `ERROR: ${err.message}`,
-    });
+    };
+    if (consentRevoked && connection.status === "ACTIVE") {
+      tenantUpdates.status = "SUSPENDED";
+      tenantUpdates.statusReason = `Auto-suspended: consent invalid (${msg.slice(0, 200)})`;
+      tenantUpdates.statusChangedAt = new Date();
+      tenantUpdates.statusChangedBy = "system:auto-suspend";
+      tenantUpdates.consentGranted = false;
+    }
+    await storage.updateTenantConnection(tenantConnectionId, tenantUpdates);
+    if (consentRevoked && connection.status === "ACTIVE") {
+      await storage.createAuditEntry({
+        userId: triggeredByUserId || null,
+        userEmail: triggeredByEmail || null,
+        action: "TENANT_SUSPENDED",
+        resource: "tenant_connection",
+        resourceId: tenantConnectionId,
+        organizationId: triggeredByOrgId || null,
+        tenantConnectionId,
+        details: { autoSuspended: true, reason: tenantUpdates.statusReason, error: msg },
+        result: "SUCCESS",
+        ipAddress: triggeredByIp || null,
+      });
+    }
     await storage.createAuditEntry({
       userId: triggeredByUserId || null,
       userEmail: triggeredByEmail || null,

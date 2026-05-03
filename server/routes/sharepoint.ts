@@ -2293,6 +2293,16 @@ router.post("/api/admin/tenants/:id/sync", requireRole(ZENITH_ROLES.GOVERNANCE_A
   if (!(await assertTenantInScope(req, tenantId, "Tenant connection is outside caller scope (sync)"))) {
     return res.status(403).json({ message: "Tenant connection is outside your organization scope" });
   }
+  // BL-004 / Spec §4.2 — block sync triggers for non-ACTIVE tenants.
+  const connCheck = await storage.getTenantConnection(tenantId);
+  if (connCheck && connCheck.status !== "ACTIVE" && connCheck.status !== "PENDING") {
+    return res.status(409).json({
+      error: "TENANT_NOT_ACTIVE",
+      message: `Tenant is ${connCheck.status}; sync is blocked.`,
+      status: connCheck.status,
+      statusReason: connCheck.statusReason ?? null,
+    });
+  }
   const result = await runSharePointTenantSync(tenantId, {
     sessionUserId: req.session?.userId,
     triggeredByUserId: req.user?.id || null,

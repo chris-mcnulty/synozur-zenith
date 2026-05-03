@@ -39,6 +39,8 @@ import {
   KeyRound,
   Lock,
   Play,
+  Pause,
+  Ban,
   Users,
   TicketCheck,
   Timer,
@@ -186,6 +188,34 @@ export default function TenantConnectionsPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/tenants"] });
       toast({ title: "Tenant Disconnected", description: "The tenant connection has been removed." });
+    },
+  });
+
+  const [statusDialog, setStatusDialog] = useState<{ id: string; tenantName: string; from: string; to: "SUSPENDED" | "ACTIVE" | "REVOKED" } | null>(null);
+  const [statusReason, setStatusReason] = useState("");
+
+  const statusTransitionMutation = useMutation({
+    mutationFn: async (vars: { id: string; status: string; reason?: string }) => {
+      const body: any = { status: vars.status };
+      if (vars.reason) body.statusReason = vars.reason;
+      const res = await apiRequest("PATCH", `/api/admin/tenants/${vars.id}`, body);
+      return res.json();
+    },
+    onSuccess: (_data, vars) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/tenants"] });
+      setStatusDialog(null);
+      setStatusReason("");
+      toast({
+        title: vars.status === "ACTIVE" ? "Tenant Reactivated" : vars.status === "SUSPENDED" ? "Tenant Suspended" : "Tenant Revoked",
+        description: vars.status === "ACTIVE"
+          ? "Sync and governance operations are re-enabled."
+          : vars.status === "SUSPENDED"
+          ? "Sync and governance operations are blocked. Reactivate to resume."
+          : "All credentials have been cleared. This action is irreversible.",
+      });
+    },
+    onError: (err: any) => {
+      toast({ title: "Status Change Failed", description: err.message, variant: "destructive" });
     },
   });
 
@@ -695,7 +725,19 @@ export default function TenantConnectionsPage() {
                       ) : "—"}
                     </TableCell>
                     <TableCell>
-                      <div className="flex items-center gap-1.5">
+                      <div className="flex items-center gap-1.5" data-testid={`status-tenant-${conn.id}`} title={(conn as any).statusReason || ""}>
+                        {conn.status === 'SUSPENDED' && (
+                          <>
+                            <Pause className="w-3.5 h-3.5 text-amber-600" />
+                            <span className="text-xs font-medium text-amber-600">Suspended</span>
+                          </>
+                        )}
+                        {conn.status === 'REVOKED' && (
+                          <>
+                            <Ban className="w-3.5 h-3.5 text-destructive" />
+                            <span className="text-xs font-medium text-destructive">Revoked</span>
+                          </>
+                        )}
                         {conn.status === 'ACTIVE' && conn.lastSyncStatus === 'SUCCESS' && (
                           <>
                             <ShieldCheck className="w-3.5 h-3.5 text-emerald-500" />
@@ -726,7 +768,7 @@ export default function TenantConnectionsPage() {
                             <span className="text-xs font-medium text-amber-500">Pending</span>
                           </>
                         )}
-                        {conn.lastSyncStatus?.startsWith('ERROR') && (
+                        {conn.status === 'ACTIVE' && conn.lastSyncStatus?.startsWith('ERROR') && (
                           <>
                             <XCircle className="w-3.5 h-3.5 text-destructive" />
                             <span className="text-xs font-medium text-destructive">Error</span>
@@ -792,6 +834,34 @@ export default function TenantConnectionsPage() {
                             <Copy className="w-4 h-4" /> Copy Tenant ID
                           </DropdownMenuItem>
                           <DropdownMenuSeparator />
+                          {conn.status === 'ACTIVE' && (
+                            <DropdownMenuItem
+                              className="gap-2"
+                              data-testid={`button-suspend-tenant-${conn.id}`}
+                              onClick={() => setStatusDialog({ id: conn.id, tenantName: conn.tenantName, from: conn.status, to: 'SUSPENDED' })}
+                            >
+                              <Pause className="w-4 h-4 text-amber-600" /> Suspend Tenant
+                            </DropdownMenuItem>
+                          )}
+                          {conn.status === 'SUSPENDED' && (
+                            <DropdownMenuItem
+                              className="gap-2"
+                              data-testid={`button-reactivate-tenant-${conn.id}`}
+                              onClick={() => statusTransitionMutation.mutate({ id: conn.id, status: 'ACTIVE' })}
+                            >
+                              <Play className="w-4 h-4 text-emerald-600" /> Reactivate Tenant
+                            </DropdownMenuItem>
+                          )}
+                          {(conn.status === 'ACTIVE' || conn.status === 'SUSPENDED' || conn.status === 'PENDING') && (
+                            <DropdownMenuItem
+                              className="gap-2 text-destructive focus:text-destructive"
+                              data-testid={`button-revoke-tenant-${conn.id}`}
+                              onClick={() => setStatusDialog({ id: conn.id, tenantName: conn.tenantName, from: conn.status, to: 'REVOKED' })}
+                            >
+                              <Ban className="w-4 h-4" /> Revoke Tenant
+                            </DropdownMenuItem>
+                          )}
+                          <DropdownMenuSeparator />
                           <DropdownMenuItem
                             className="gap-2 text-destructive focus:text-destructive"
                             data-testid={`button-delete-tenant-${conn.id}`}
@@ -824,6 +894,50 @@ export default function TenantConnectionsPage() {
           )}
         </CardContent>
       </Card>
+
+      <Dialog open={statusDialog !== null} onOpenChange={(open) => { if (!open) { setStatusDialog(null); setStatusReason(""); } }}>
+        <DialogContent className="sm:max-w-[500px]" data-testid="dialog-status-transition">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              {statusDialog?.to === 'REVOKED' ? <Ban className="w-5 h-5 text-destructive" /> : <Pause className="w-5 h-5 text-amber-600" />}
+              {statusDialog?.to === 'REVOKED' ? 'Revoke Tenant' : 'Suspend Tenant'}
+            </DialogTitle>
+            <DialogDescription>
+              {statusDialog?.to === 'REVOKED' ? (
+                <>
+                  Permanently revoke <strong>{statusDialog?.tenantName}</strong>. This clears stored credentials, blocks all sync and governance operations, and cannot be undone without Platform Owner override. Workspace data is retained for audit but hidden from operators.
+                </>
+              ) : (
+                <>
+                  Suspend <strong>{statusDialog?.tenantName}</strong>. All sync and governance mutations will be blocked until you reactivate the tenant. Workspace data is retained.
+                </>
+              )}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2 py-2">
+            <Label htmlFor="status-reason">Reason <span className="text-destructive">*</span></Label>
+            <Input
+              id="status-reason"
+              data-testid="input-status-reason"
+              placeholder={statusDialog?.to === 'REVOKED' ? "e.g. Customer offboarded, contract ended" : "e.g. Payment lapsed, awaiting consent renewal"}
+              value={statusReason}
+              onChange={(e) => setStatusReason(e.target.value)}
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setStatusDialog(null); setStatusReason(""); }} data-testid="button-cancel-status">Cancel</Button>
+            <Button
+              variant={statusDialog?.to === 'REVOKED' ? "destructive" : "default"}
+              data-testid="button-confirm-status"
+              disabled={!statusReason.trim() || statusTransitionMutation.isPending}
+              onClick={() => statusDialog && statusTransitionMutation.mutate({ id: statusDialog.id, status: statusDialog.to, reason: statusReason.trim() })}
+            >
+              {statusTransitionMutation.isPending && <Loader2 className="w-4 h-4 animate-spin mr-2" />}
+              {statusDialog?.to === 'REVOKED' ? 'Revoke Tenant' : 'Suspend Tenant'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={permDialogTenantId !== null} onOpenChange={(open) => { if (!open) { setPermDialogTenantId(null); setPermResult(null); setPermError(null); } }}>
         <DialogContent className="sm:max-w-[600px]">

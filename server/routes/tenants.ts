@@ -424,12 +424,54 @@ router.patch("/api/admin/tenants/:id", requireRole(ZENITH_ROLES.TENANT_ADMIN), a
     await logAccessDenied(req, "tenant_connection", String(req.params.id), "Tenant connection belongs to a different organization");
     return res.status(404).json({ message: "Tenant connection not found" });
   }
-  const updates = { ...req.body };
+  const updates: any = { ...req.body };
   if (updates.clientSecret && isEncryptionConfigured() && !isEncrypted(updates.clientSecret)) {
     updates.clientSecret = encryptToken(updates.clientSecret);
   }
+
+  // BL-004 / Spec §4.2 — Status transition handling.
+  // Validate transitions, stamp metadata, and on REVOKE clear credentials + token caches.
+  const VALID_STATUSES = new Set(["PENDING", "ACTIVE", "SUSPENDED", "REVOKED"]);
+  const ALLOWED_TRANSITIONS: Record<string, Set<string>> = {
+    PENDING: new Set(["ACTIVE", "REVOKED"]),
+    ACTIVE: new Set(["SUSPENDED", "REVOKED"]),
+    SUSPENDED: new Set(["ACTIVE", "REVOKED"]),
+    REVOKED: new Set([]),
+  };
+  if ('status' in req.body && req.body.status !== existing.status) {
+    const newStatus = String(req.body.status);
+    if (!VALID_STATUSES.has(newStatus)) {
+      return res.status(400).json({ message: `Invalid status: ${newStatus}` });
+    }
+    const allowed = ALLOWED_TRANSITIONS[existing.status as string] || new Set();
+    if (!allowed.has(newStatus) && req.user?.role !== ZENITH_ROLES.PLATFORM_OWNER) {
+      return res.status(409).json({
+        message: `Invalid status transition: ${existing.status} → ${newStatus}`,
+        currentStatus: existing.status,
+      });
+    }
+    if ((newStatus === 'SUSPENDED' || newStatus === 'REVOKED') && !req.body.statusReason) {
+      return res.status(400).json({ message: `statusReason is required when setting status to ${newStatus}` });
+    }
+    updates.statusReason = req.body.statusReason ?? null;
+    updates.statusChangedAt = new Date();
+    updates.statusChangedBy = req.user?.id || null;
+
+    if (newStatus === 'REVOKED') {
+      updates.clientSecret = null;
+      updates.consentGranted = false;
+    }
+  }
+
   const connection = await storage.updateTenantConnection(req.params.id, updates);
   if (!connection) return res.status(404).json({ message: "Tenant connection not found" });
+
+  if ('status' in req.body && req.body.status === 'REVOKED' && existing.status !== 'REVOKED') {
+    const cid = existing.clientId || process.env.AZURE_CLIENT_ID;
+    if (cid) {
+      try { await clearTokenCache(existing.tenantId, cid); } catch {}
+    }
+  }
 
   // Audit any meaningful field change. clientSecret values are redacted.
   const AUDITABLE_FIELDS = [
