@@ -219,8 +219,8 @@ export interface TeamsChannelsSummary {
 }
 
 export interface IStorage {
-  getWorkspaces(search?: string, tenantConnectionId?: string, organizationId?: string): Promise<Workspace[]>;
-  getWorkspacesPaginated(params: { page: number; pageSize: number; search?: string; tenantConnectionId?: string; tenantConnectionIds?: string[]; organizationId?: string }): Promise<{ items: Workspace[]; total: number }>;
+  getWorkspaces(search?: string, tenantConnectionId?: string, organizationId?: string, activeTenantsOnly?: boolean): Promise<Workspace[]>;
+  getWorkspacesPaginated(params: { page: number; pageSize: number; search?: string; tenantConnectionId?: string; tenantConnectionIds?: string[]; organizationId?: string; activeTenantsOnly?: boolean }): Promise<{ items: Workspace[]; total: number }>;
   getWorkspacesAtRisk(tenantConnectionId: string): Promise<Workspace[]>;
   getOrphanedWorkspaces(tenantConnectionId: string): Promise<Workspace[]>;
   getWorkspace(id: string): Promise<Workspace | undefined>;
@@ -842,12 +842,19 @@ export class DatabaseStorage implements IStorage {
     });
   }
 
-  async getWorkspaces(search?: string, tenantConnectionId?: string, organizationId?: string): Promise<Workspace[]> {
+  async getWorkspaces(search?: string, tenantConnectionId?: string, organizationId?: string, activeTenantsOnly?: boolean): Promise<Workspace[]> {
     const conditions = [];
 
     // Always exclude soft-deleted and M365-archived sites from the governance inventory
     conditions.push(eq(workspaces.isDeleted, false));
     conditions.push(eq(workspaces.isArchived, false));
+
+    // Spec §4.2 – hide workspaces whose tenant is not ACTIVE for non-admin callers
+    if (activeTenantsOnly) {
+      conditions.push(
+        sql`${workspaces.tenantConnectionId} IN (SELECT id FROM tenant_connections WHERE status = 'ACTIVE')`
+      );
+    }
 
     if (search) {
       conditions.push(
@@ -882,13 +889,20 @@ export class DatabaseStorage implements IStorage {
     return this.decryptRows(rows, "workspaces") as Promise<Workspace[]>;
   }
 
-  async getWorkspacesPaginated(params: { page: number; pageSize: number; search?: string; tenantConnectionId?: string; tenantConnectionIds?: string[]; organizationId?: string }): Promise<{ items: Workspace[]; total: number }> {
-    const { page, pageSize, search, tenantConnectionId, tenantConnectionIds, organizationId } = params;
+  async getWorkspacesPaginated(params: { page: number; pageSize: number; search?: string; tenantConnectionId?: string; tenantConnectionIds?: string[]; organizationId?: string; activeTenantsOnly?: boolean }): Promise<{ items: Workspace[]; total: number }> {
+    const { page, pageSize, search, tenantConnectionId, tenantConnectionIds, organizationId, activeTenantsOnly } = params;
     const conditions = [];
 
     // Always exclude soft-deleted and M365-archived sites from the governance inventory
     conditions.push(eq(workspaces.isDeleted, false));
     conditions.push(eq(workspaces.isArchived, false));
+
+    // Spec §4.2 – hide workspaces whose tenant is not ACTIVE for non-admin callers
+    if (activeTenantsOnly) {
+      conditions.push(
+        sql`${workspaces.tenantConnectionId} IN (SELECT id FROM tenant_connections WHERE status = 'ACTIVE')`
+      );
+    }
 
     if (search) {
       conditions.push(

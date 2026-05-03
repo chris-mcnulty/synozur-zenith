@@ -122,6 +122,12 @@ router.get("/api/workspaces", requireAuth(), async (req: AuthenticatedRequest, r
   const pageParam = req.query.page as string | undefined;
   const pageSizeParam = req.query.pageSize as string | undefined;
 
+  // Spec §4.2 – only PLATFORM_OWNER and TENANT_ADMIN see workspaces from non-ACTIVE tenants.
+  // All other roles (viewer, operator, governance_admin, auditor) get the filtered view.
+  const userRole = req.user?.role;
+  const isAdmin = userRole === ZENITH_ROLES.PLATFORM_OWNER || userRole === ZENITH_ROLES.TENANT_ADMIN;
+  const activeTenantsOnly = !isAdmin;
+
   // Selector pick is validated against the broader accessible set (own + MSP
   // grants); the default aggregate is the org's OWN tenants only.
   if (pageParam !== undefined) {
@@ -133,7 +139,7 @@ router.get("/api/workspaces", requireAuth(), async (req: AuthenticatedRequest, r
       if (accessible && !accessible.includes(tenantConnectionId)) {
         return res.json({ items: [], total: 0, page, pageSize });
       }
-      const result = await storage.getWorkspacesPaginated({ page, pageSize, search, tenantConnectionId });
+      const result = await storage.getWorkspacesPaginated({ page, pageSize, search, tenantConnectionId, activeTenantsOnly });
       return res.json({ ...result, page, pageSize });
     }
 
@@ -142,11 +148,11 @@ router.get("/api/workspaces", requireAuth(), async (req: AuthenticatedRequest, r
       if (ownedIds.length === 0) {
         return res.json({ items: [], total: 0, page, pageSize });
       }
-      const result = await storage.getWorkspacesPaginated({ page, pageSize, search, tenantConnectionIds: ownedIds });
+      const result = await storage.getWorkspacesPaginated({ page, pageSize, search, tenantConnectionIds: ownedIds, activeTenantsOnly });
       return res.json({ ...result, page, pageSize });
     }
 
-    const result = await storage.getWorkspacesPaginated({ page, pageSize, search });
+    const result = await storage.getWorkspacesPaginated({ page, pageSize, search, activeTenantsOnly });
     return res.json({ ...result, page, pageSize });
   }
 
@@ -155,7 +161,7 @@ router.get("/api/workspaces", requireAuth(), async (req: AuthenticatedRequest, r
     if (accessible && !accessible.includes(tenantConnectionId)) {
       return res.json([]);
     }
-    const workspaces = await storage.getWorkspaces(search, tenantConnectionId);
+    const workspaces = await storage.getWorkspaces(search, tenantConnectionId, undefined, activeTenantsOnly);
     return res.json(workspaces);
   }
 
@@ -163,12 +169,12 @@ router.get("/api/workspaces", requireAuth(), async (req: AuthenticatedRequest, r
   if (ownedIds) {
     let allWorkspaces: Workspace[] = [];
     for (const id of ownedIds) {
-      const ws = await storage.getWorkspaces(search, id);
+      const ws = await storage.getWorkspaces(search, id, undefined, activeTenantsOnly);
       allWorkspaces = allWorkspaces.concat(ws);
     }
     return res.json(allWorkspaces);
   }
-  const workspaces = await storage.getWorkspaces(search);
+  const workspaces = await storage.getWorkspaces(search, undefined, undefined, activeTenantsOnly);
   res.json(workspaces);
 });
 
