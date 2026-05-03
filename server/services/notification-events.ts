@@ -98,11 +98,20 @@ const ACTION_MAP: Record<string, CategoryMapping> = {
   },
   TENANT_SUSPENDED: {
     category: "tenant_status",
-    severity: "warning",
+    severity: "critical",
     recipientRoles: ADMIN_ROLES,
-    titleTemplate: (i) => `Tenant suspended: ${i.details?.tenantName || "tenant"}`,
-    bodyTemplate: (i) => i.details?.reason || "The tenant connection was suspended.",
-    link: () => "/app/admin/tenants",
+    titleTemplate: (i) =>
+      i.details?.autoSuspended
+        ? `Action required: "${i.details?.tenantName || "tenant"}" suspended — consent lost`
+        : `Tenant suspended: ${i.details?.tenantName || "tenant"}`,
+    bodyTemplate: (i) =>
+      i.details?.autoSuspended
+        ? `Admin consent was revoked or expired. Sync is paused. Open Tenant Connections and click Re-consent to restore access. Reason: ${(i.details?.error || i.details?.reason || "").slice(0, 200)}`
+        : i.details?.reason || "The tenant connection was suspended.",
+    link: (i) =>
+      i.tenantConnectionId
+        ? `/app/admin/tenants?suspended=${i.tenantConnectionId}`
+        : "/app/admin/tenants",
   },
   TENANT_REVOKED: {
     category: "tenant_status",

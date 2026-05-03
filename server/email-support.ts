@@ -332,3 +332,80 @@ export async function sendTicketConfirmationToSubmitter(
     html,
   });
 }
+
+export async function sendTenantAutoSuspendedEmail(
+  recipientEmail: string,
+  recipientName: string,
+  tenantName: string,
+  errorReason: string,
+  tenantsPageUrl: string,
+): Promise<void> {
+  const { client, fromEmail } = await getUncachableSendGridClient();
+  const firstName = recipientName.split(" ")[0] || recipientEmail;
+  const shortReason = errorReason.slice(0, 300);
+
+  const html = `
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Tenant Auto-Suspended</title>
+</head>
+<body style="margin:0;padding:0;background:#f5f5f5;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#f5f5f5;padding:32px 16px;">
+    <tr>
+      <td align="center">
+        <table width="600" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:8px;overflow:hidden;max-width:600px;width:100%;box-shadow:0 1px 3px rgba(0,0,0,0.1);">
+          <tr>
+            <td style="background:#b91c1c;padding:24px;">
+              <h1 style="margin:0;color:#ffffff;font-size:20px;font-weight:700;">Zenith &mdash; Action Required</h1>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:32px 24px 16px;">
+              <p style="margin:0 0 12px;color:#111827;font-size:16px;">Hi ${firstName},</p>
+              <p style="margin:0 0 16px;color:#374151;font-size:15px;line-height:1.6;">
+                The Microsoft 365 tenant <strong>${tenantName}</strong> has been <strong>automatically suspended</strong> because Zenith can no longer access it — admin consent was revoked or has expired.
+              </p>
+              <p style="margin:0 0 8px;color:#374151;font-size:14px;font-weight:600;">Error reason:</p>
+              <p style="margin:0 0 24px;padding:12px 16px;background:#fef2f2;border-left:3px solid #b91c1c;color:#991b1b;font-size:13px;font-family:monospace;line-height:1.5;word-break:break-word;">
+                ${shortReason}
+              </p>
+              <p style="margin:0 0 24px;color:#374151;font-size:15px;line-height:1.6;">
+                Sync and governance operations for this tenant are paused. To restore access, a Global Administrator of the tenant must re-grant admin consent.
+              </p>
+              <a href="${tenantsPageUrl}" style="display:inline-block;background:#5b0fbc;color:#ffffff;text-decoration:none;padding:12px 24px;border-radius:6px;font-size:15px;font-weight:600;">
+                Go to Tenant Connections &rarr;
+              </a>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:16px 24px 32px;">
+              <p style="margin:0;color:#6b7280;font-size:13px;line-height:1.6;">
+                Once you are on the Tenant Connections page, find <strong>${tenantName}</strong> and click
+                <strong>Re-consent</strong> from the actions menu to initiate the Microsoft admin consent flow.
+              </p>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:16px 24px;border-top:1px solid #e5e7eb;">
+              <p style="margin:0;color:#9ca3af;font-size:12px;">
+                This is an automated alert from Zenith. If you believe this is an error, please contact your Zenith administrator.
+              </p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`;
+
+  await client.send({
+    to: recipientEmail,
+    from: fromEmail,
+    subject: `[Action Required] Tenant "${tenantName}" suspended — consent lost`,
+    html,
+  });
+}

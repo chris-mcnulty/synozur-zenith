@@ -1332,6 +1332,13 @@ export async function runSharePointTenantSync(
     }
     await storage.updateTenantConnection(tenantConnectionId, tenantUpdates);
     if (consentRevoked && connection.status === "ACTIVE") {
+      const suspensionDetails = {
+        autoSuspended: true,
+        reason: tenantUpdates.statusReason,
+        tenantName: connection.tenantName,
+        error: msg,
+      };
+      // logAuditEvent fans-out in-app notifications automatically (BL-013).
       await logAuditEvent(null, {
         userId: triggeredByUserId || null,
         userEmail: triggeredByEmail || null,
@@ -1340,9 +1347,52 @@ export async function runSharePointTenantSync(
         resourceId: tenantConnectionId,
         organizationId: triggeredByOrgId || null,
         tenantConnectionId,
-        details: { autoSuspended: true, reason: tenantUpdates.statusReason, error: msg },
+        details: suspensionDetails,
+        result: "SUCCESS",
         ipAddress: triggeredByIp || null,
       });
+
+      // Send email to each org admin.
+      const orgId = connection.organizationId || triggeredByOrgId || null;
+      try {
+        if (orgId) {
+          const { sendTenantAutoSuspendedEmail } = await import("../email-support");
+          const { ZENITH_ROLES } = await import("../../shared/schema");
+          const APP_PUBLIC_URL = process.env.APP_PUBLIC_URL || "https://zenith.synozur.com";
+          const tenantsPageUrl = `${APP_PUBLIC_URL}/app/admin/tenants?suspended=${encodeURIComponent(tenantConnectionId)}`;
+          const orgUsers = await storage.getUsersByOrganization(orgId);
+          const adminRoleValues = [ZENITH_ROLES.PLATFORM_OWNER, ZENITH_ROLES.TENANT_ADMIN, ZENITH_ROLES.GOVERNANCE_ADMIN] as const;
+          const adminUsers = orgUsers.filter((u) => (adminRoleValues as readonly string[]).includes(u.role || ""));
+          // Also notify the user who originally triggered the sync (e.g. the consent-granting admin),
+          // if their email is available and not already in the org admin list.
+          const extraEmails = new Set(adminUsers.map((u) => u.email).filter(Boolean));
+          if (triggeredByEmail && !extraEmails.has(triggeredByEmail)) {
+            sendTenantAutoSuspendedEmail(
+              triggeredByEmail,
+              triggeredByEmail,
+              connection.tenantName,
+              msg,
+              tenantsPageUrl,
+            ).catch((emailErr) =>
+              console.error(`[sync] Failed to send suspension email to ${triggeredByEmail}:`, emailErr),
+            );
+          }
+          for (const admin of adminUsers) {
+            if (!admin.email) continue;
+            sendTenantAutoSuspendedEmail(
+              admin.email,
+              admin.name || admin.email,
+              connection.tenantName,
+              msg,
+              tenantsPageUrl,
+            ).catch((emailErr) =>
+              console.error(`[sync] Failed to send suspension email to ${admin.email}:`, emailErr),
+            );
+          }
+        }
+      } catch (emailErr) {
+        console.error("[sync] Failed to send suspension emails:", emailErr);
+      }
     }
     await logAuditEvent(null, {
       userId: triggeredByUserId || null,

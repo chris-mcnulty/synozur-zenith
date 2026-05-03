@@ -113,6 +113,7 @@ export default function TenantConnectionsPage() {
   const [deletionSummary, setDeletionSummary] = useState<{ tenantName: string; domain: string; summary: Record<string, number> } | null>(null);
   const [deletionSummaryLoading, setDeletionSummaryLoading] = useState(false);
   const [deleteAcknowledged, setDeleteAcknowledged] = useState(false);
+  const [highlightedSuspendedId, setHighlightedSuspendedId] = useState<string | null>(null);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -126,11 +127,27 @@ export default function TenantConnectionsPage() {
       toast({ title: "Consent Failed", description: decodeURIComponent(consentError), variant: "destructive" });
       window.history.replaceState({}, "", window.location.pathname);
     }
+    const suspendedId = params.get("suspended");
+    if (suspendedId) {
+      setHighlightedSuspendedId(suspendedId);
+      window.history.replaceState({}, "", window.location.pathname);
+    }
   }, [toast]);
 
   const { data: connections = [], isLoading } = useQuery<TenantConnection[]>({
     queryKey: ["/api/admin/tenants"],
   });
+
+  // When arriving from a suspension notification deep-link, auto-launch the
+  // Microsoft re-consent flow for the affected tenant once connections load.
+  useEffect(() => {
+    if (!highlightedSuspendedId || connections.length === 0) return;
+    const conn = connections.find((c) => c.id === highlightedSuspendedId);
+    if (conn && conn.status === "SUSPENDED" && conn.statusReason?.startsWith("Auto-suspended")) {
+      setHighlightedSuspendedId(null);
+      handleReconsent(conn.id);
+    }
+  }, [connections, highlightedSuspendedId]);
 
   const { data: maskingStatus } = useQuery<{ enabled: boolean; hasKey: boolean }>({
     queryKey: ["/api/admin/tenants", maskingDialogTenantId, "data-masking"],
@@ -618,6 +635,46 @@ export default function TenantConnectionsPage() {
           </div>
         </CardHeader>
         <CardContent className="p-0">
+          {connections
+            .filter(c => c.status === 'SUSPENDED' && c.statusReason?.startsWith('Auto-suspended'))
+            .map(c => (
+              <div
+                key={`auto-suspend-banner-${c.id}`}
+                className="mx-4 mt-4 mb-2 flex flex-col sm:flex-row sm:items-center gap-3 rounded-md border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm"
+                data-testid={`banner-auto-suspended-${c.id}`}
+              >
+                <ShieldAlert className="w-5 h-5 shrink-0 text-red-600 dark:text-red-400" />
+                <div className="flex-1 min-w-0">
+                  <p className="font-semibold text-red-700 dark:text-red-300">
+                    Tenant auto-suspended: <span className="font-bold">{c.tenantName}</span>
+                  </p>
+                  <p className="text-red-600 dark:text-red-400 text-xs mt-0.5 break-words">
+                    Admin consent was revoked or expired. Sync and governance are paused.
+                    {c.statusReason ? (
+                      <span className="block mt-0.5 font-mono opacity-75 truncate" title={c.statusReason}>
+                        {c.statusReason}
+                      </span>
+                    ) : null}
+                  </p>
+                </div>
+                <Button
+                  size="sm"
+                  variant="destructive"
+                  className="shrink-0"
+                  disabled={reconsentingId === c.id}
+                  onClick={() => handleReconsent(c.id)}
+                  data-testid={`button-reconsent-suspended-${c.id}`}
+                >
+                  {reconsentingId === c.id ? (
+                    <Loader2 className="w-4 h-4 animate-spin mr-1" />
+                  ) : (
+                    <Lock className="w-4 h-4 mr-1" />
+                  )}
+                  Re-consent
+                </Button>
+              </div>
+            ))
+          }
           {isTrial && maxSites > 0 && connections.some(c => (c.lastSyncSiteCount ?? 0) > maxSites) && (
             <div className="mx-4 mt-4 mb-2 flex items-center gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-700 dark:text-amber-400" data-testid="banner-trial-site-cap">
               <AlertTriangle className="w-4 h-4 shrink-0" />
@@ -659,7 +716,7 @@ export default function TenantConnectionsPage() {
                   .map((conn) => {
                   const isBlocked = (conn as any).mspAccessDenied;
                   return (
-                  <TableRow key={conn.id} className={`hover:bg-muted/10 transition-colors ${isBlocked ? 'opacity-60' : ''}`} data-testid={`row-tenant-${conn.id}`}>
+                  <TableRow key={conn.id} className={`hover:bg-muted/10 transition-colors ${isBlocked ? 'opacity-60' : ''} ${highlightedSuspendedId === conn.id ? 'ring-2 ring-inset ring-red-500/50 bg-red-500/5' : ''}`} data-testid={`row-tenant-${conn.id}`}>
                     <TableCell className="pl-6">
                       <div className="flex flex-col">
                         <span className="font-semibold text-sm flex items-center gap-2">
