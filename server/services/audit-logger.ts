@@ -141,6 +141,20 @@ export const AUDIT_ACTIONS = {
   NOTIFICATION_DIGEST_SENT: "NOTIFICATION_DIGEST_SENT",
   NOTIFICATION_PREFERENCES_UPDATED: "NOTIFICATION_PREFERENCES_UPDATED",
   NOTIFICATION_RULES_UPDATED: "NOTIFICATION_RULES_UPDATED",
+
+  // Galaxy Partner API
+  GALAXY_CLIENT_REGISTERED: "GALAXY_CLIENT_REGISTERED",
+  GALAXY_CLIENT_UPDATED: "GALAXY_CLIENT_UPDATED",
+  GALAXY_CLIENT_SECRET_ROTATED: "GALAXY_CLIENT_SECRET_ROTATED",
+  GALAXY_CLIENT_DELETED: "GALAXY_CLIENT_DELETED",
+  GALAXY_TOKEN_ISSUED: "GALAXY_TOKEN_ISSUED",
+  GALAXY_TOKEN_DENIED: "GALAXY_TOKEN_DENIED",
+  GALAXY_AUTH_DENIED: "GALAXY_AUTH_DENIED",
+  GALAXY_API_READ: "GALAXY_API_READ",
+  GALAXY_FINDING_ACKNOWLEDGED: "GALAXY_FINDING_ACKNOWLEDGED",
+  GALAXY_FINDING_DISMISSED: "GALAXY_FINDING_DISMISSED",
+  GALAXY_FINDING_COMMENTED: "GALAXY_FINDING_COMMENTED",
+  GALAXY_PROVISIONING_REQUESTED: "GALAXY_PROVISIONING_REQUESTED",
 } as const;
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[keyof typeof AUDIT_ACTIONS];
@@ -216,6 +230,62 @@ export async function logAuditEvent(
       `[audit] Failed to write audit entry for action ${input.action}:`,
       err,
     );
+  }
+}
+
+/**
+ * Convenience helper for emitting Galaxy Partner API audit events.
+ *
+ * Galaxy events live in the same `audit_log` table but are tagged with
+ * `details.source = 'galaxy'` plus the Galaxy user identity (sub + email)
+ * and the Galaxy client id, so the audit viewer can filter by source.
+ *
+ * The `userId` field is intentionally left null — Galaxy users do not have
+ * Zenith user accounts. `userEmail` is populated with the Galaxy user's
+ * email so the existing audit viewer surfaces it without changes.
+ */
+export interface GalaxyAuditContext {
+  galaxyClientId: string;
+  galaxyClientName?: string;
+  galaxyUserSub?: string;
+  galaxyUserEmail?: string;
+  galaxyUserName?: string;
+  organizationId: string | null;
+  ipAddress?: string | null;
+}
+
+export async function logGalaxyAudit(
+  ctx: GalaxyAuditContext,
+  input: Omit<LogAuditEventInput, "userId" | "userEmail" | "organizationId" | "ipAddress"> & {
+    organizationId?: string | null;
+    extraDetails?: Record<string, any>;
+  },
+): Promise<void> {
+  const details = {
+    source: "galaxy",
+    galaxyClientId: ctx.galaxyClientId,
+    galaxyClientName: ctx.galaxyClientName,
+    galaxyUserSub: ctx.galaxyUserSub,
+    galaxyUserEmail: ctx.galaxyUserEmail,
+    galaxyUserName: ctx.galaxyUserName,
+    ...(input.details ?? {}),
+    ...(input.extraDetails ?? {}),
+  };
+  try {
+    await storage.createAuditEntry({
+      userId: null,
+      userEmail: ctx.galaxyUserEmail ?? null,
+      action: input.action,
+      resource: input.resource,
+      resourceId: input.resourceId ?? null,
+      organizationId: input.organizationId ?? ctx.organizationId,
+      tenantConnectionId: input.tenantConnectionId ?? null,
+      details,
+      result: input.result ?? "SUCCESS",
+      ipAddress: ctx.ipAddress ?? null,
+    });
+  } catch (err) {
+    console.error(`[audit] Failed to write galaxy audit entry for ${input.action}:`, err);
   }
 }
 

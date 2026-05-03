@@ -51,3 +51,8 @@ integrations = ["github:1.0.0", "sendgrid:1.0.0", "javascript_openai_ai_integrat
 [postMerge]
 path = "scripts/post-merge.sh"
 timeoutMs = 120000
+
+[userenv]
+
+[userenv.shared]
+GALAXY_TOKEN_SIGNING_SECRET = "pyEKQAIHrkp0V7OJFJn-0k-5hYAvhFb10DxT-5LE3XdOAdVR_ycN5_TBYPb_kkVt"

@@ -44,6 +44,7 @@ The frontend uses React, Vite, TanStack Query, shadcn/ui, and wouter, adhering t
 - **AI Agent Skills**: Per-org agent skill toggles (Provision, Validate, Explain, Report & Recommend) persisted in `ai_agent_skills` table.
 - **AI Connection Status**: `GET /api/ai/connection-status` returns live signals for AI configuration and last sync times.
 - **AI Chat GPT Fallback**: GENERAL intent in chat routes can call `completeForFeature('WORKSPACE_INSIGHT', ...)` with workspace summary context, falling back to static help text if OpenAI is not configured.
+- **Galaxy Partner API**: Curated `/api/galaxy/v1/*` surface for the sibling Galaxy portal. Two-factor auth: OAuth2 client_credentials bearer token (HS256, signed with `GALAXY_TOKEN_SIGNING_SECRET`) + per-request `X-Galaxy-User` RS256 JWT verified against the registered client's public key. Tables: `galaxy_clients`, `galaxy_tokens`, `galaxy_user_acknowledgements`. Scope/feature/org guards, per-client + per-user rate limiting, audit instrumentation with `details.source='galaxy'`. Platform Owner UI at `/app/admin/galaxy-api` for client registration, secret rotation (shown once), enable/disable, and deletion. OpenAPI spec served at `/api/galaxy/v1/openapi.json`. JWT signing uses Node built-in `crypto` (no `jsonwebtoken` dep).
 
 ## External Dependencies
 - **Microsoft 365 / SharePoint**: Core platform for M365 governance.

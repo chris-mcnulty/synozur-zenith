@@ -48,6 +48,7 @@ import AuditLogPage from "./pages/app/admin/audit-log";
 import AISettingsPage from "./pages/app/admin/ai-settings";
 import PlanManagementPage from "./pages/app/admin/plan-management";
 import JobMonitorPage from "./pages/app/admin/job-monitor";
+import GalaxyApiAdminPage from "./pages/app/admin/galaxy-api";
 import SupportPage from "./pages/app/support";
 import TeamsChannelsPage from "./pages/app/teams-channels";
 import OneDriveInventoryPage from "./pages/app/onedrive-inventory";
@@ -240,6 +241,9 @@ function AppRoutes() {
         </Route>
         <Route path="/app/admin/plan-management">
           <RoleGuard minRole="platform_owner"><PlanManagementPage /></RoleGuard>
+        </Route>
+        <Route path="/app/admin/galaxy-api">
+          <RoleGuard minRole="platform_owner"><GalaxyApiAdminPage /></RoleGuard>
         </Route>
         <Route path="/app/admin">
           <RoleGuard minRole="tenant_admin"><AdminTemplatesPage /></RoleGuard>

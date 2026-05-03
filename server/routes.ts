@@ -28,6 +28,8 @@ import jobsRouter from "./routes/jobs";
 import savedViewsRouter from "./routes/saved-views";
 import lifecycleRouter from "./routes/lifecycle";
 import notificationsRouter from "./routes/notifications";
+import galaxyApiRouter from "./routes/galaxy-api";
+import galaxyAdminRouter from "./routes/galaxy-admin";
 
 export async function registerRoutes(
   httpServer: Server,
@@ -72,6 +74,11 @@ export async function registerRoutes(
   app.use(savedViewsRouter);
   app.use(lifecycleRouter);
   app.use(notificationsRouter);
+
+  // Galaxy Partner API — public surface for the Galaxy portal + admin UI for
+  // Platform Owners. Mounted last so its catch-all doesn't shadow other paths.
+  app.use(galaxyAdminRouter);
+  app.use(galaxyApiRouter);
 
   return httpServer;
 }

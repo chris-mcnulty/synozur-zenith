@@ -180,6 +180,13 @@ import {
   type InsertNotificationPreferences,
   type NotificationRules,
   type InsertNotificationRules,
+  galaxyClients,
+  type GalaxyClient,
+  type InsertGalaxyClient,
+  galaxyTokens,
+  galaxyUserAcknowledgements,
+  type GalaxyUserAcknowledgement,
+  type InsertGalaxyAck,
 } from "@shared/schema";
 import {
   decryptRecord,
@@ -297,11 +304,15 @@ export interface IStorage {
   getAllNotificationPreferences(): Promise<NotificationPreferences[]>;
   getAuditLog(filters?: {
     orgId?: string;
+    tenantConnectionId?: string;
+    tenantConnectionIds?: string[];
+    onlyNullTenant?: boolean;
     action?: string;
     resource?: string;
     userId?: string;
     userEmail?: string;
     result?: string;
+    source?: string;
     startDate?: Date;
     endDate?: Date;
     limit?: number;
@@ -651,6 +662,50 @@ export interface IStorage {
     tenantConnectionId: string,
     withinMs?: number,
   ): Promise<SharingLinkDiscoveryRun | undefined>;
+
+  // ── Galaxy Partner API ────────────────────────────────────────────────────
+  listGalaxyClients(): Promise<GalaxyClient[]>;
+  getGalaxyClient(id: string): Promise<GalaxyClient | undefined>;
+  getGalaxyClientByClientId(clientId: string): Promise<GalaxyClient | undefined>;
+  createGalaxyClient(data: InsertGalaxyClient): Promise<GalaxyClient>;
+  updateGalaxyClient(id: string, updates: Partial<InsertGalaxyClient>): Promise<GalaxyClient | undefined>;
+  rotateGalaxyClientSecret(id: string, newEncryptedSecret: string): Promise<GalaxyClient | undefined>;
+  touchGalaxyClientLastUsed(id: string): Promise<void>;
+  deleteGalaxyClient(id: string): Promise<void>;
+
+  recordGalaxyTokenIssuance(data: {
+    jti: string;
+    galaxyClientId: string;
+    scopes: string[];
+    expiresAt: Date;
+  }): Promise<void>;
+  isGalaxyTokenRevoked(jti: string): Promise<boolean>;
+  revokeGalaxyToken(jti: string): Promise<void>;
+
+  createGalaxyAcknowledgement(data: InsertGalaxyAck): Promise<GalaxyUserAcknowledgement>;
+  listGalaxyAcknowledgements(filters: {
+    organizationId: string;
+    resourceType?: string;
+    resourceId?: string;
+    galaxyUserSub?: string;
+    limit?: number;
+    offset?: number;
+  }): Promise<{ rows: GalaxyUserAcknowledgement[]; total: number }>;
+
+  // ── Saved Views ──
+  listSavedViewsForUser(params: {
+    organizationId: string;
+    userId: string;
+    page: SavedViewPage;
+  }): Promise<SavedView[]>;
+  getSavedView(id: string): Promise<SavedView | undefined>;
+  createSavedView(data: InsertSavedView): Promise<SavedView>;
+  updateSavedView(
+    id: string,
+    updates: Partial<Pick<InsertSavedView, "name" | "filterJson" | "sortJson" | "columnsJson" | "scope">>,
+  ): Promise<SavedView | undefined>;
+  deleteSavedView(id: string): Promise<void>;
+  setSavedViewPin(id: string, userId: string, pinned: boolean): Promise<SavedView | undefined>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -1711,6 +1766,7 @@ export class DatabaseStorage implements IStorage {
     userId?: string;
     userEmail?: string;
     result?: string;
+    source?: string;
     startDate?: Date;
     endDate?: Date;
     limit?: number;
@@ -1738,6 +1794,11 @@ export class DatabaseStorage implements IStorage {
     if (userId) conditions.push(eq(auditLog.userId, userId));
     if (userEmail) conditions.push(ilike(auditLog.userEmail, `%${userEmail}%`));
     if (result) conditions.push(eq(auditLog.result, result));
+    if (filters.source) {
+      // `details.source` is a JSONB field. We use the `->>` operator to extract
+      // it as text and compare to the requested source (e.g. 'galaxy').
+      conditions.push(sql`${auditLog.details}->>'source' = ${filters.source}`);
+    }
     if (startDate) conditions.push(gte(auditLog.createdAt, startDate));
     if (endDate) conditions.push(lte(auditLog.createdAt, endDate));
 
@@ -4705,6 +4766,93 @@ export class DatabaseStorage implements IStorage {
       .returning({ id: scheduledJobRuns.id });
 
     return resumablePass.length + fatalPass.length;
+  }
+
+  // ── Galaxy Partner API ──────────────────────────────────────────────────
+  async listGalaxyClients(): Promise<GalaxyClient[]> {
+    return db.select().from(galaxyClients).orderBy(desc(galaxyClients.createdAt));
+  }
+
+  async getGalaxyClient(id: string): Promise<GalaxyClient | undefined> {
+    const [row] = await db.select().from(galaxyClients).where(eq(galaxyClients.id, id));
+    return row ?? undefined;
+  }
+
+  async getGalaxyClientByClientId(clientId: string): Promise<GalaxyClient | undefined> {
+    const [row] = await db.select().from(galaxyClients).where(eq(galaxyClients.clientId, clientId));
+    return row ?? undefined;
+  }
+
+  async createGalaxyClient(data: InsertGalaxyClient): Promise<GalaxyClient> {
+    const [row] = await db.insert(galaxyClients).values(data as any).returning();
+    return row;
+  }
+
+  async updateGalaxyClient(id: string, updates: Partial<InsertGalaxyClient>): Promise<GalaxyClient | undefined> {
+    const [row] = await db.update(galaxyClients).set(updates as any).where(eq(galaxyClients.id, id)).returning();
+    return row ?? undefined;
+  }
+
+  async rotateGalaxyClientSecret(id: string, newEncryptedSecret: string): Promise<GalaxyClient | undefined> {
+    const [row] = await db.update(galaxyClients)
+      .set({ clientSecretEncrypted: newEncryptedSecret, rotatedAt: new Date() })
+      .where(eq(galaxyClients.id, id))
+      .returning();
+    return row ?? undefined;
+  }
+
+  async touchGalaxyClientLastUsed(id: string): Promise<void> {
+    await db.update(galaxyClients).set({ lastUsedAt: new Date() }).where(eq(galaxyClients.id, id));
+  }
+
+  async deleteGalaxyClient(id: string): Promise<void> {
+    await db.delete(galaxyClients).where(eq(galaxyClients.id, id));
+  }
+
+  async recordGalaxyTokenIssuance(data: { jti: string; galaxyClientId: string; scopes: string[]; expiresAt: Date }): Promise<void> {
+    await db.insert(galaxyTokens).values({
+      jti: data.jti,
+      galaxyClientId: data.galaxyClientId,
+      scopes: data.scopes,
+      expiresAt: data.expiresAt,
+    });
+  }
+
+  async isGalaxyTokenRevoked(jti: string): Promise<boolean> {
+    const [row] = await db.select().from(galaxyTokens).where(eq(galaxyTokens.jti, jti));
+    if (!row) return false;
+    return row.revokedAt !== null;
+  }
+
+  async revokeGalaxyToken(jti: string): Promise<void> {
+    await db.update(galaxyTokens).set({ revokedAt: new Date() }).where(eq(galaxyTokens.jti, jti));
+  }
+
+  async createGalaxyAcknowledgement(data: InsertGalaxyAck): Promise<GalaxyUserAcknowledgement> {
+    const [row] = await db.insert(galaxyUserAcknowledgements).values(data as any).returning();
+    return row;
+  }
+
+  async listGalaxyAcknowledgements(filters: {
+    organizationId: string;
+    resourceType?: string;
+    resourceId?: string;
+    galaxyUserSub?: string;
+    limit?: number;
+    offset?: number;
+  }): Promise<{ rows: GalaxyUserAcknowledgement[]; total: number }> {
+    const conds: any[] = [eq(galaxyUserAcknowledgements.organizationId, filters.organizationId)];
+    if (filters.resourceType) conds.push(eq(galaxyUserAcknowledgements.resourceType, filters.resourceType));
+    if (filters.resourceId) conds.push(eq(galaxyUserAcknowledgements.resourceId, filters.resourceId));
+    if (filters.galaxyUserSub) conds.push(eq(galaxyUserAcknowledgements.galaxyUserSub, filters.galaxyUserSub));
+    const where = and(...conds);
+    const limit = filters.limit ?? 100;
+    const offset = filters.offset ?? 0;
+    const [countRes, rows] = await Promise.all([
+      db.select({ count: sql<number>`count(*)::int` }).from(galaxyUserAcknowledgements).where(where),
+      db.select().from(galaxyUserAcknowledgements).where(where).orderBy(desc(galaxyUserAcknowledgements.createdAt)).limit(limit).offset(offset),
+    ]);
+    return { rows, total: countRes[0]?.count ?? 0 };
   }
 }
 

@@ -2566,3 +2566,64 @@ export const insertNotificationRulesSchema = createInsertSchema(notificationRule
 });
 export type InsertNotificationRules = z.infer<typeof insertNotificationRulesSchema>;
 export type NotificationRules = typeof notificationRules.$inferSelect;
+
+// ── Galaxy Partner API ─────────────────────────────────────────────────────
+// Galaxy is the Synozur client-facing portal. These tables back the partner-
+// grade API (`/api/galaxy/v1/*`) that lets Galaxy-authenticated client users
+// view their org's M365 governance posture and take low-risk actions.
+export const GALAXY_SCOPES = ["galaxy.read", "galaxy.interact"] as const;
+export type GalaxyScope = typeof GALAXY_SCOPES[number];
+
+export const galaxyClients = pgTable("galaxy_clients", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  name: text("name").notNull(),
+  clientId: text("client_id").notNull().unique(),
+  clientSecretEncrypted: text("client_secret_encrypted").notNull(),
+  publicKeyPem: text("public_key_pem").notNull(),
+  organizationsAllowed: text("organizations_allowed").array().notNull().default(sql`ARRAY[]::text[]`),
+  allowedScopes: text("allowed_scopes").array().notNull().default(sql`ARRAY['galaxy.read']::text[]`),
+  status: text("status").notNull().default("ACTIVE"), // ACTIVE, DISABLED
+  rateLimitPerMinute: integer("rate_limit_per_minute").notNull().default(600),
+  tokenTtlSeconds: integer("token_ttl_seconds").notNull().default(900),
+  createdBy: varchar("created_by"),
+  rotatedAt: timestamp("rotated_at"),
+  lastUsedAt: timestamp("last_used_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+export const insertGalaxyClientSchema = createInsertSchema(galaxyClients).omit({
+  id: true,
+  createdAt: true,
+  rotatedAt: true,
+  lastUsedAt: true,
+});
+export type InsertGalaxyClient = z.infer<typeof insertGalaxyClientSchema>;
+export type GalaxyClient = typeof galaxyClients.$inferSelect;
+
+export const galaxyTokens = pgTable("galaxy_tokens", {
+  jti: varchar("jti").primaryKey(),
+  galaxyClientId: varchar("galaxy_client_id").notNull(),
+  scopes: text("scopes").array().notNull().default(sql`ARRAY[]::text[]`),
+  issuedAt: timestamp("issued_at").notNull().defaultNow(),
+  expiresAt: timestamp("expires_at").notNull(),
+  revokedAt: timestamp("revoked_at"),
+});
+export type GalaxyToken = typeof galaxyTokens.$inferSelect;
+
+export const galaxyUserAcknowledgements = pgTable("galaxy_user_acknowledgements", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  organizationId: varchar("organization_id").notNull(),
+  galaxyClientId: varchar("galaxy_client_id").notNull(),
+  galaxyUserSub: text("galaxy_user_sub").notNull(),
+  galaxyUserEmail: text("galaxy_user_email"),
+  resourceType: text("resource_type").notNull(), // sharing_link, lifecycle_finding, copilot_blocker, workspace, etc.
+  resourceId: text("resource_id").notNull(),
+  action: text("action").notNull(), // ACKNOWLEDGE, DISMISS, COMMENT
+  comment: text("comment"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+export const insertGalaxyAckSchema = createInsertSchema(galaxyUserAcknowledgements).omit({
+  id: true,
+  createdAt: true,
+});
+export type InsertGalaxyAck = z.infer<typeof insertGalaxyAckSchema>;
+export type GalaxyUserAcknowledgement = typeof galaxyUserAcknowledgements.$inferSelect;
