@@ -24,8 +24,24 @@ import {
   type M365OverviewSnapshot,
 } from "@shared/schema";
 import { storage } from "../storage";
+import { isMaskedValue } from "./data-masking";
 import { completeForFeature, type AIMessage } from "./ai-provider";
 import { extractJson, sanitizeRecommendations } from "./m365-overview-report-helpers";
+
+/**
+ * After a `decryptRows` pass, sensitive columns may still hold a
+ * `MASKED:<ciphertext>` value if the tenant key was missing/rotated.
+ * Replace any such value with `fallback` so masked ciphertext never reaches
+ * the report snapshot / AI narrative payload.
+ */
+function safePlain(value: string | null | undefined, fallback: string): string {
+  if (typeof value !== "string") return fallback;
+  return isMaskedValue(value) ? fallback : value;
+}
+function safePlainOrNull(value: string | null | undefined): string | null {
+  if (typeof value !== "string") return null;
+  return isMaskedValue(value) ? null : value;
+}
 
 export { extractJson, sanitizeRecommendations };
 
@@ -70,10 +86,14 @@ async function collectSnapshot(
   const caveats: string[] = [];
 
   // --- Sites / workspaces -------------------------------------------------
-  const siteRows = await db
+  // workspaces.displayName / siteUrl are SENSITIVE_FIELDS; decrypt before
+  // we ship them through topGrowth into the report snapshot, otherwise
+  // masked tenants leak `MASKED:<ciphertext>` into the executive narrative.
+  const siteRowsRaw = await db
     .select()
     .from(workspaces)
     .where(eq(workspaces.tenantConnectionId, tenantConnectionId));
+  const siteRows = await storage.decryptRows(siteRowsRaw, "workspaces");
 
   let newSites = 0;
   let newSitesPrior = 0;
@@ -103,10 +123,12 @@ async function collectSnapshot(
     // Historical storage isn't retained, so we surface top absolute storage
     // as a proxy for "growth attention" targets and caveat it.
     const used = Number(site.storageUsedBytes ?? 0);
+    // If decryption failed (rotated/missing key), fall back to the
+    // workspace id rather than leaking MASKED:<ciphertext>.
     growthRanking.push({
       workspaceId: site.id,
-      displayName: site.displayName,
-      siteUrl: site.siteUrl ?? null,
+      displayName: safePlain(site.displayName, site.id),
+      siteUrl: safePlainOrNull(site.siteUrl),
       storageUsedBytes: used,
     });
   }
@@ -123,10 +145,13 @@ async function collectSnapshot(
     .reduce((sum, w) => sum + w.storageUsedBytes, 0);
 
   // --- Teams --------------------------------------------------------------
-  const teamRows = await db
+  // teamsInventory.displayName is sensitive; decrypt before surfacing in
+  // topActiveTeams.
+  const teamRowsRaw = await db
     .select()
     .from(teamsInventory)
     .where(eq(teamsInventory.tenantConnectionId, tenantConnectionId));
+  const teamRows = await storage.decryptRows(teamRowsRaw, "teams_inventory");
 
   let newTeams = 0;
   let newTeamsPrior = 0;
@@ -142,7 +167,9 @@ async function collectSnapshot(
     .slice(0, 5)
     .map(t => ({
       teamId: t.teamId,
-      displayName: t.displayName,
+      // Fall back to teamId if decryption failed so we don't ship raw
+      // MASKED:<ciphertext> into the snapshot / AI narrative.
+      displayName: safePlain(t.displayName, t.teamId),
       channelCount: 0,
       memberCount: t.memberCount ?? null,
     }));

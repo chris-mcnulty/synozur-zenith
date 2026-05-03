@@ -189,11 +189,13 @@ import {
   type InsertGalaxyAck,
 } from "@shared/schema";
 import {
+  decryptField,
   decryptRecord,
   encryptRecord,
   getTenantKeyBuffer,
   isMaskedValue,
   maskEmailReportSummary,
+  scrubMaskedValues,
   unmaskEmailReportSummary,
 } from "./services/data-masking";
 
@@ -766,7 +768,39 @@ export class DatabaseStorage implements IStorage {
     return encryptRecord(data, tableName, buf);
   }
 
-  private async decryptRows<T extends Record<string, any>>(rows: T[], tableName: string, tenantConnectionIdField: string = "tenantConnectionId"): Promise<T[]> {
+  /**
+   * Decrypt MASKED: ciphertext on a set of rows (per row, per tenant) and
+   * scrub any leftover MASKED: value to `null` before returning.
+   *
+   * **Always decrypt before returning sensitive columns to the client.**
+   * Any code path that runs `db.select()` over a table listed in
+   * `SENSITIVE_FIELDS` (server/services/data-masking.ts) MUST funnel the
+   * rows through this helper before shipping them out of storage —
+   * otherwise `MASKED:<ciphertext>` blobs leak to the UI on tenants with
+   * masking enabled.
+   *
+   * Behavior:
+   *   1. Rows are matched to their tenant key via `tenantConnectionIdField`
+   *      (defaults to `tenantConnectionId`).
+   *   2. For each row whose key is available, sensitive fields are
+   *      decrypted via `decryptRecord`.
+   *   3. As a final safety pass, `scrubMaskedValues` replaces any field
+   *      still in `MASKED:` form (key missing, key rotated, decrypt threw)
+   *      with `null`. This guarantees no caller can accidentally ship
+   *      ciphertext to the client. Callers that need an alternate fallback
+   *      (e.g. show the resource id when displayName is null) should do
+   *      that mapping at the response layer.
+   *
+   * For sql aggregates over a sensitive column (e.g.
+   * `max(sharing_links_inventory.resourceName)`), this helper does not
+   * apply — the aggregate returns a single string, not a row. Use
+   * `getKeyBufferForDecrypt` + `decryptField` directly and fall back to
+   * `null` on failure (see getSharingLinkSummary).
+   *
+   * Public so service-level code can decrypt rows it fetched directly via
+   * `db.select(...)` without duplicating the tenant-key lookup logic.
+   */
+  async decryptRows<T extends Record<string, any>>(rows: T[], tableName: string, tenantConnectionIdField: string = "tenantConnectionId"): Promise<T[]> {
     if (rows.length === 0) return rows;
 
     const tenantIds = [...new Set(rows.map(r => r[tenantConnectionIdField]).filter(Boolean))];
@@ -780,13 +814,17 @@ export class DatabaseStorage implements IStorage {
       if (buf) keyMap.set(tid, buf);
     }
 
-    if (keyMap.size === 0) return rows;
-
+    // Always run scrubMaskedValues as a final pass: any leftover
+    // `MASKED:<ciphertext>` (key missing, key rotated, decryptField threw)
+    // is replaced with null so callers cannot accidentally ship ciphertext
+    // to clients. This is the single chokepoint enforcing the
+    // "always decrypt before returning" rule for every db.select() that
+    // touches a SENSITIVE_FIELDS table.
     return rows.map(row => {
       const tid = row[tenantConnectionIdField];
       const buf = keyMap.get(tid);
-      if (!buf) return row;
-      return decryptRecord(row, tableName, buf);
+      const decrypted = buf ? decryptRecord(row, tableName, buf) : row;
+      return scrubMaskedValues(decrypted, tableName);
     });
   }
 
@@ -2969,7 +3007,21 @@ export class DatabaseStorage implements IStorage {
       )
       .orderBy(sql`count(*) desc`);
 
-    return rows;
+    // resourceName is a SENSITIVE_FIELD on sharing_links_inventory; the
+    // sql `max(resourceName)` aggregate carries the raw MASKED: ciphertext
+    // straight through. Decrypt it before returning, and fall back to null
+    // (never the ciphertext) when decryption isn't possible — the UI can
+    // join back to resourceId for a stable, non-sensitive identifier.
+    const keyBuf = await this.getKeyBufferForDecrypt(tenantConnectionId);
+    return rows.map(r => {
+      if (typeof r.resourceName !== "string" || !isMaskedValue(r.resourceName)) return r;
+      if (!keyBuf) return { ...r, resourceName: null };
+      try {
+        return { ...r, resourceName: decryptField(r.resourceName, keyBuf) };
+      } catch {
+        return { ...r, resourceName: null };
+      }
+    });
   }
 
   async getSharingLinksPaginated(params: {
@@ -3166,10 +3218,13 @@ export class DatabaseStorage implements IStorage {
       .where(eq(governanceReviewFindings.reviewTaskId, taskId))
       .orderBy(desc(governanceReviewFindings.createdAt));
 
-    if (!task?.tenantConnectionId || rows.length === 0) return rows;
-    const buf = await this.getKeyBufferForDecrypt(task.tenantConnectionId);
-    if (!buf) return rows;
-    return rows.map((row) => decryptRecord(row as Record<string, any>, "governance_review_findings", buf) as GovernanceReviewFinding);
+    if (rows.length === 0) return rows;
+    // Stamp tenantConnectionId from the parent task so decryptRows can find
+    // the key, then strip it back off so we keep the original row shape.
+    const tid = task?.tenantConnectionId ?? null;
+    const stamped = rows.map((r) => ({ ...r, __tid: tid }));
+    const decrypted = await this.decryptRows(stamped, "governance_review_findings", "__tid");
+    return decrypted.map(({ __tid, ...rest }) => rest as GovernanceReviewFinding);
   }
 
   async getNextTicketNumber(orgId: string): Promise<number> {
@@ -4195,8 +4250,14 @@ export class DatabaseStorage implements IStorage {
       .limit(limit)
       .offset(offset);
 
+    // Decrypt sensitive columns (userPrincipalName, userDisplayName,
+    // promptText, recommendation) before returning so masked tenants don't
+    // leak `MASKED:...` ciphertext to the prompt-intelligence UI.
+    // decryptRows runs scrubMaskedValues internally, so any value that
+    // cannot be decrypted comes back as null rather than ciphertext.
+    const decrypted = await this.decryptRows(rows, "copilot_interactions");
     return {
-      rows: rows as Array<Omit<CopilotInteraction, 'promptText'> & { promptText?: string }>,
+      rows: decrypted as Array<Omit<CopilotInteraction, 'promptText'> & { promptText?: string }>,
       total: countResult?.count ?? 0,
     };
   }
@@ -4240,7 +4301,7 @@ export class DatabaseStorage implements IStorage {
   async loadCopilotInteractionsForAnalysis(
     tenantConnectionId: string,
   ): Promise<CopilotInteraction[]> {
-    return db
+    const rows = await db
       .select()
       .from(copilotInteractions)
       .where(
@@ -4253,6 +4314,13 @@ export class DatabaseStorage implements IStorage {
         ),
       )
       .orderBy(desc(copilotInteractions.interactionAt));
+    // Analysis runs `analyzePrompt(promptText)` and persists derived UPN /
+    // display name, so the rows must be decrypted before returning, otherwise
+    // the analyzer scores `MASKED:<ciphertext>` instead of the user's prompt.
+    // decryptRows scrubs any leftover MASKED: values to null, so rows whose
+    // tenant key is missing/rotated are skipped by the analyzer's
+    // `r.promptText` filter rather than scored as ciphertext.
+    return this.decryptRows(rows, "copilot_interactions") as Promise<CopilotInteraction[]>;
   }
 
   async purgeCopilotInteractions(tenantConnectionId: string): Promise<number> {

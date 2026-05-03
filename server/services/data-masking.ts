@@ -99,6 +99,28 @@ export function encryptRecord<T extends Record<string, any>>(
   return result;
 }
 
+/**
+ * Replace any leftover `MASKED:<ciphertext>` in `SENSITIVE_FIELDS[tableName]`
+ * with `null`. Use as a safety net immediately before returning rows to a
+ * client: if the tenant key was rotated/missing and `decryptRecord` left a
+ * value in MASKED form, this guarantees we never ship the ciphertext.
+ */
+export function scrubMaskedValues<T extends Record<string, any>>(
+  record: T,
+  tableName: string,
+): T {
+  const fields = SENSITIVE_FIELDS[tableName];
+  if (!fields) return record;
+  const result = { ...record };
+  for (const field of fields) {
+    const value = result[field];
+    if (typeof value === "string" && isMaskedValue(value)) {
+      (result as any)[field] = null;
+    }
+  }
+  return result;
+}
+
 export function decryptRecord<T extends Record<string, any>>(
   record: T,
   tableName: string,
