@@ -134,6 +134,7 @@ async function ensureTenantConnectionsSchema() {
       "ALTER TABLE tenant_connections ADD COLUMN IF NOT EXISTS spe_discovery_enabled boolean NOT NULL DEFAULT false",
       "ALTER TABLE tenant_connections ADD COLUMN IF NOT EXISTS content_governance_enabled boolean NOT NULL DEFAULT false",
       "ALTER TABLE tenant_connections ADD COLUMN IF NOT EXISTS licensing_enabled boolean NOT NULL DEFAULT false",
+      "ALTER TABLE tenant_connections ADD COLUMN IF NOT EXISTS lifecycle_scan_schedule_enabled boolean NOT NULL DEFAULT true",
     ];
 
     for (const stmt of alterStatements) {
@@ -1189,6 +1190,14 @@ async function backfillOrgMemberships() {
     log('Notification digest scheduler started');
   } catch (err) {
     console.error('[Startup] Failed to start notification digest scheduler:', err);
+  }
+
+  try {
+    const { startLifecycleScanScheduler } = await import('./services/lifecycle-scan-scheduler');
+    startLifecycleScanScheduler();
+    log('Lifecycle compliance scan scheduler started');
+  } catch (err) {
+    console.error('[Startup] Failed to start lifecycle scan scheduler:', err);
   }
 
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {

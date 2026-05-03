@@ -36,6 +36,7 @@ import {
   type LifecycleComplianceSettings,
 } from "@shared/schema";
 import { getUncachableSendGridClient } from "../services/sendgrid-client";
+import { executeLifecycleScan } from "../services/lifecycle-scan-runner";
 
 // Load detection rules + weights from per-org (and optionally per-tenant) settings,
 // falling back to compiled-in defaults.
@@ -386,101 +387,46 @@ router.post(
       const scope = await resolveScope(req, tenantConnectionId);
       if (!scope.ok) return res.status(scope.status).json({ error: scope.error });
 
-      const run = await storage.createLifecycleScanRun({
-        organizationId: scope.orgId,
-        tenantConnectionId: tenantConnectionId ?? null,
-        status: "running",
-        startedAt: new Date(),
-        triggeredBy: req.user?.email ?? "manual",
-      });
-
-      await logAuditEvent(req, {
-        action: AUDIT_ACTIONS.LIFECYCLE_SCAN_STARTED,
-        resource: "lifecycle_scan",
-        resourceId: run.id,
-        organizationId: scope.orgId,
-        tenantConnectionId: tenantConnectionId ?? null,
-        details: { tenantConnectionId: tenantConnectionId ?? null },
-        result: "SUCCESS",
-      });
-
-      // Run the scan synchronously — it's fast (in-memory math over the
-      // workspace inventory we already have in the DB).
       try {
-        const workspaces = await loadWorkspaces(scope.tenantIds, scope.orgId);
-        const requiredFieldsByTenant = await buildRequiredFieldsByTenantId(workspaces);
         const scanRules = await loadDetectionRules(scope.orgId, tenantConnectionId ?? null);
+        const result = await executeLifecycleScan({
+          organizationId: scope.orgId,
+          tenantConnectionId: tenantConnectionId ?? null,
+          triggeredBy: req.user?.email ?? "manual",
+          rules: scanRules,
+        });
 
-        let totalScore = 0;
-        let compliantCount = 0, staleCount = 0, orphanedCount = 0, missingLabelCount = 0, externallySharedCount = 0;
-
-        for (const w of workspaces) {
-          const fields = w.tenantConnectionId ? (requiredFieldsByTenant[w.tenantConnectionId] || []) : [];
-          const c = evaluateCompliance(w as any, fields, scanRules);
-          totalScore += c.score;
-          if (isCompliant(c.score)) compliantCount++;
-          if (c.isStale) staleCount++;
-          if (c.isOrphaned) orphanedCount++;
-          if (c.missingLabel) missingLabelCount++;
-          if (c.externallySharedUnclassified) externallySharedCount++;
-
-          await storage.upsertWorkspaceComplianceScore({
-            workspaceId: w.id,
-            organizationId: scope.orgId,
-            tenantConnectionId: w.tenantConnectionId ?? null,
-            score: c.score,
-            isStale: c.isStale,
-            isOrphaned: c.isOrphaned,
-            missingLabel: c.missingLabel,
-            missingMetadata: c.missingMetadata,
-            externallySharedUnclassified: c.externallySharedUnclassified,
-            daysSinceActivity: c.daysSinceActivity,
-            breakdown: c.breakdown,
-            computedAt: new Date(),
-            scanRunId: run.id,
-          });
-        }
-
-        const averageScore = workspaces.length === 0 ? 0 : Math.round(totalScore / workspaces.length);
-        const completed = await storage.updateLifecycleScanRun(run.id, {
-          status: "completed",
-          completedAt: new Date(),
-          workspacesScanned: workspaces.length,
-          averageScore,
-          compliantCount,
-          staleCount,
-          orphanedCount,
-          missingLabelCount,
-          externallySharedCount: externallySharedCount,
+        await logAuditEvent(req, {
+          action: AUDIT_ACTIONS.LIFECYCLE_SCAN_STARTED,
+          resource: "lifecycle_scan",
+          resourceId: result.run.id,
+          organizationId: scope.orgId,
+          tenantConnectionId: tenantConnectionId ?? null,
+          details: { tenantConnectionId: tenantConnectionId ?? null },
+          result: "SUCCESS",
         });
 
         await logAuditEvent(req, {
           action: AUDIT_ACTIONS.LIFECYCLE_SCAN_COMPLETED,
           resource: "lifecycle_scan",
-          resourceId: run.id,
+          resourceId: result.run.id,
           organizationId: scope.orgId,
           tenantConnectionId: tenantConnectionId ?? null,
           details: {
-            workspacesScanned: workspaces.length,
-            averageScore,
-            compliantCount,
-            staleCount,
-            orphanedCount,
+            workspacesScanned: result.workspacesScanned,
+            averageScore: result.averageScore,
+            compliantCount: result.compliantCount,
+            staleCount: result.staleCount,
+            orphanedCount: result.orphanedCount,
           },
           result: "SUCCESS",
         });
 
-        res.json({ ok: true, run: completed ?? run });
+        res.json({ ok: true, run: result.run });
       } catch (innerErr: any) {
-        await storage.updateLifecycleScanRun(run.id, {
-          status: "failed",
-          completedAt: new Date(),
-          errorMessage: innerErr?.message ?? String(innerErr),
-        });
         await logAuditEvent(req, {
           action: AUDIT_ACTIONS.LIFECYCLE_SCAN_FAILED,
           resource: "lifecycle_scan",
-          resourceId: run.id,
           organizationId: scope.orgId,
           tenantConnectionId: tenantConnectionId ?? null,
           details: { error: innerErr?.message ?? String(innerErr) },

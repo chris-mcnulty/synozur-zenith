@@ -219,6 +219,7 @@ export const tenantConnections = pgTable("tenant_connections", {
   speDiscoveryEnabled: boolean("spe_discovery_enabled").notNull().default(false),
   contentGovernanceEnabled: boolean("content_governance_enabled").notNull().default(false),
   licensingEnabled: boolean("licensing_enabled").notNull().default(false),
+  lifecycleScanScheduleEnabled: boolean("lifecycle_scan_schedule_enabled").notNull().default(true),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -2165,6 +2166,7 @@ export const JOB_TYPES = {
   governanceSnapshot:   { label: "Governance Snapshot",         dataset: "governanceSnapshot" },
   licenseSync:          { label: "License Sync",                dataset: "licenses" },
   iaSync:               { label: "IA Column Sync",              dataset: "iaColumns" },
+  lifecycleComplianceScan: { label: "Lifecycle Compliance Scan", dataset: "lifecycleCompliance" },
 } as const;
 
 export type JobType = keyof typeof JOB_TYPES;

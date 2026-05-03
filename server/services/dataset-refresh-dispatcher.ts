@@ -281,6 +281,26 @@ export async function dispatchDatasetRefresh(opts: {
       return { ok: true, jobId: null };
     }
 
+    case "lifecycleComplianceScan": {
+      // Lifecycle compliance scans are driven by the dedicated nightly
+      // scheduler and the manual /api/lifecycle/review/scan endpoint, both
+      // of which use executeLifecycleScan() directly. The dataset refresh
+      // dispatcher exposes them here so the unified Job Monitor can also
+      // kick one off on demand.
+      if (!orgId) return { ok: false, status: 400, message: "Tenant has no organizationId" };
+      try {
+        const { executeLifecycleScan } = await import("./lifecycle-scan-runner");
+        await executeLifecycleScan({
+          organizationId: orgId,
+          tenantConnectionId,
+          triggeredBy: triggeredByUserId ?? "manual",
+        });
+        return { ok: true, jobId: null };
+      } catch (err) {
+        return handleDispatchError(err);
+      }
+    }
+
     default: {
       const _exhaustive: never = jobType;
       return { ok: false, status: 400, message: `Unknown job type: ${String(_exhaustive)}` };
