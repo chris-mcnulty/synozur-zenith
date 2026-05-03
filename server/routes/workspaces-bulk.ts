@@ -23,6 +23,7 @@ import { writeSitePropertyBag } from "../services/graph";
 import { getUncachableSendGridClient } from "../services/sendgrid-client";
 import { getDelegatedSpoToken } from "../routes-entra";
 import { computeWritebackHash } from "../services/writeback-hash";
+import { bulkJobStore, type BulkJobResult } from "../services/bulk-job-store";
 
 const router = Router();
 
@@ -317,9 +318,12 @@ async function runBatched(
   ids: string[],
   batchSize: number,
   worker: (id: string) => Promise<RowResult>,
+  signal?: AbortSignal,
+  onResult?: (result: RowResult) => void,
 ): Promise<RowResult[]> {
   const out: RowResult[] = [];
   for (let i = 0; i < ids.length; i += batchSize) {
+    if (signal?.aborted) break;
     const batch = ids.slice(i, i + batchSize);
     const results = await Promise.all(
       batch.map(id =>
@@ -331,7 +335,10 @@ async function runBatched(
         })),
       ),
     );
-    out.push(...results);
+    for (const r of results) {
+      out.push(r);
+      onResult?.(r);
+    }
   }
   return out;
 }
@@ -493,6 +500,16 @@ router.post(
       return ctx;
     };
 
+    const _job = bulkJobStore.create({
+      action: "apply_label",
+      total: workspaces.size,
+      userId: req.user?.id || null,
+      organizationId: req.user?.organizationId || null,
+    });
+    res.status(202).json({ jobId: _job.jobId });
+
+    void (async () => {
+    try {
     const results = await runBatched(Array.from(workspaces.keys()), WRITE_BATCH, async (id) => {
       const ws = workspaces.get(id);
       if (!ws) {
@@ -630,10 +647,18 @@ router.post(
         await recordRowAudit(auditBase, ACTION, ws.id, ws.tenantConnectionId, { ...baseDetails, error: err.message }, "FAILURE");
         return { workspaceId: ws.id, displayName: ws.displayName, success: false, error: err.message, tenantConnectionId: ws.tenantConnectionId };
       }
-    });
+    },
+    _job.abortController.signal,
+    (r) => bulkJobStore.addResult(_job.jobId, r as BulkJobResult),
+    );
 
     const rollupAuditId = await emitRollupAudit(req, "apply_label", results, filterCriteria);
-    res.json(buildResponse("apply_label", results, rollupAuditId));
+    bulkJobStore.complete(_job.jobId, rollupAuditId);
+  } catch (err: any) {
+    console.error(`[bulk-apply_label] background job ${_job.jobId} error: ${err.message}`);
+    bulkJobStore.complete(_job.jobId, null);
+  }
+  })();
   },
 );
 
@@ -718,6 +743,16 @@ router.post(
       return ctx;
     };
 
+    const _job = bulkJobStore.create({
+      action: "set_retention",
+      total: workspaces.size,
+      userId: req.user?.id || null,
+      organizationId: req.user?.organizationId || null,
+    });
+    res.status(202).json({ jobId: _job.jobId });
+
+    void (async () => {
+    try {
     const results = await runBatched(Array.from(workspaces.keys()), WRITE_BATCH, async (id) => {
       const ws = workspaces.get(id);
       if (!ws) {
@@ -805,10 +840,18 @@ router.post(
         }, "FAILURE");
         return { workspaceId: ws.id, displayName: ws.displayName, success: false, error: err.message, tenantConnectionId: ws.tenantConnectionId };
       }
-    });
+    },
+    _job.abortController.signal,
+    (r) => bulkJobStore.addResult(_job.jobId, r as BulkJobResult),
+    );
 
     const rollupAuditId = await emitRollupAudit(req, "set_retention", results, filterCriteria);
-    res.json(buildResponse("set_retention", results, rollupAuditId));
+    bulkJobStore.complete(_job.jobId, rollupAuditId);
+  } catch (err: any) {
+    console.error(`[bulk-set_retention] background job ${_job.jobId} error: ${err.message}`);
+    bulkJobStore.complete(_job.jobId, null);
+  }
+  })();
   },
 );
 
@@ -894,6 +937,16 @@ router.post(
       return ctx;
     };
 
+    const _job = bulkJobStore.create({
+      action: "apply_metadata",
+      total: workspaces.size,
+      userId: req.user?.id || null,
+      organizationId: req.user?.organizationId || null,
+    });
+    res.status(202).json({ jobId: _job.jobId });
+
+    void (async () => {
+    try {
     const results = await runBatched(Array.from(workspaces.keys()), WRITE_BATCH, async (id) => {
       const ws = workspaces.get(id);
       if (!ws) {
@@ -1000,10 +1053,18 @@ router.post(
         }, "FAILURE");
         return { workspaceId: ws.id, displayName: ws.displayName, success: false, error: err.message, tenantConnectionId: ws.tenantConnectionId };
       }
-    });
+    },
+    _job.abortController.signal,
+    (r) => bulkJobStore.addResult(_job.jobId, r as BulkJobResult),
+    );
 
     const rollupAuditId = await emitRollupAudit(req, "apply_metadata", results, filterCriteria);
-    res.json(buildResponse("apply_metadata", results, rollupAuditId));
+    bulkJobStore.complete(_job.jobId, rollupAuditId);
+  } catch (err: any) {
+    console.error(`[bulk-apply_metadata] background job ${_job.jobId} error: ${err.message}`);
+    bulkJobStore.complete(_job.jobId, null);
+  }
+  })();
   },
 );
 
@@ -1093,6 +1154,16 @@ router.post(
       return { token, userId: resolvedUserId };
     };
 
+    const _job = bulkJobStore.create({
+      action: payload.role === "primary" ? "set_primary_steward" : "set_secondary_steward",
+      total: workspaces.size,
+      userId: req.user?.id || null,
+      organizationId: req.user?.organizationId || null,
+    });
+    res.status(202).json({ jobId: _job.jobId });
+
+    void (async () => {
+    try {
     const results = await runBatched(Array.from(workspaces.keys()), WRITE_BATCH, async (id) => {
       const ws = workspaces.get(id);
       if (!ws) {
@@ -1157,11 +1228,19 @@ router.post(
         await recordRowAudit(auditBase, ACTION, ws.id, ws.tenantConnectionId, { ...auditDetails, error: err.message }, "FAILURE");
         return { workspaceId: ws.id, displayName: ws.displayName, success: false, error: err.message, tenantConnectionId: ws.tenantConnectionId };
       }
-    });
+    },
+    _job.abortController.signal,
+    (r) => bulkJobStore.addResult(_job.jobId, r as BulkJobResult),
+    );
 
     const bulkAction = payload.role === "primary" ? "set_primary_steward" : "set_secondary_steward";
     const rollupAuditId = await emitRollupAudit(req, bulkAction, results, filterCriteria);
-    res.json(buildResponse(bulkAction, results, rollupAuditId));
+    bulkJobStore.complete(_job.jobId, rollupAuditId);
+  } catch (err: any) {
+    console.error(`[bulk-owner] background job ${_job.jobId} error: ${err.message}`);
+    bulkJobStore.complete(_job.jobId, null);
+  }
+  })();
   },
 );
 
@@ -1219,6 +1298,16 @@ router.post(
       }
     };
 
+    const _job = bulkJobStore.create({
+      action: "archive",
+      total: workspaces.size,
+      userId: req.user?.id || null,
+      organizationId: req.user?.organizationId || null,
+    });
+    res.status(202).json({ jobId: _job.jobId });
+
+    void (async () => {
+    try {
     const results = await runBatched(Array.from(workspaces.keys()), WRITE_BATCH, async (id) => {
       const ws = workspaces.get(id);
       if (!ws) {
@@ -1282,10 +1371,18 @@ router.post(
         }, "FAILURE");
         return { workspaceId: ws.id, displayName: ws.displayName, success: false, error: err.message, tenantConnectionId: ws.tenantConnectionId };
       }
-    });
+    },
+    _job.abortController.signal,
+    (r) => bulkJobStore.addResult(_job.jobId, r as BulkJobResult),
+    );
 
     const rollupAuditId = await emitRollupAudit(req, "archive", results, filterCriteria);
-    res.json(buildResponse("archive", results, rollupAuditId));
+    bulkJobStore.complete(_job.jobId, rollupAuditId);
+  } catch (err: any) {
+    console.error(`[bulk-archive] background job ${_job.jobId} error: ${err.message}`);
+    bulkJobStore.complete(_job.jobId, null);
+  }
+  })();
   },
 );
 
@@ -1340,6 +1437,16 @@ router.post(
       sgInitError = err.message || "SendGrid not configured";
     }
 
+    const _job = bulkJobStore.create({
+      action: "email_owner",
+      total: workspaces.size,
+      userId: req.user?.id || null,
+      organizationId: req.user?.organizationId || null,
+    });
+    res.status(202).json({ jobId: _job.jobId });
+
+    void (async () => {
+    try {
     const results = await runBatched(Array.from(workspaces.keys()), WRITE_BATCH, async (id) => {
       const ws = workspaces.get(id);
       if (!ws) {
@@ -1383,10 +1490,65 @@ router.post(
         }, "FAILURE");
         return { workspaceId: ws.id, displayName: ws.displayName, success: false, error: err.message, tenantConnectionId: ws.tenantConnectionId };
       }
-    });
+    },
+    _job.abortController.signal,
+    (r) => bulkJobStore.addResult(_job.jobId, r as BulkJobResult),
+    );
 
     const rollupAuditId = await emitRollupAudit(req, "email_owner", results, filterCriteria);
-    res.json(buildResponse("email_owner", results, rollupAuditId));
+    bulkJobStore.complete(_job.jobId, rollupAuditId);
+  } catch (err: any) {
+    console.error(`[bulk-email_owner] background job ${_job.jobId} error: ${err.message}`);
+    bulkJobStore.complete(_job.jobId, null);
+  }
+  })();
+  },
+);
+
+// ─── Bulk Job Status & Cancel ──────────────────────────────────────────────
+
+router.get(
+  "/api/workspaces/bulk/jobs/:jobId",
+  requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN),
+  async (req: AuthenticatedRequest, res) => {
+    const job = bulkJobStore.get(String(req.params.jobId));
+    if (!job) {
+      return res.status(404).json({ message: "Job not found or expired" });
+    }
+    if (job.organizationId && job.organizationId !== req.user?.organizationId) {
+      return res.status(403).json({ message: "Access denied" });
+    }
+    const succeeded = job.results.filter(r => r.success).length;
+    const failed = job.results.filter(r => !r.success).length;
+    return res.json({
+      jobId: job.jobId,
+      action: job.action,
+      status: job.status,
+      total: job.total,
+      processed: job.processed,
+      succeeded,
+      failed,
+      results: job.status !== "running" ? job.results : [],
+      rollupAuditId: job.rollupAuditId,
+      startedAt: job.startedAt.toISOString(),
+      completedAt: job.completedAt?.toISOString() ?? null,
+    });
+  },
+);
+
+router.post(
+  "/api/workspaces/bulk/jobs/:jobId/cancel",
+  requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN),
+  async (req: AuthenticatedRequest, res) => {
+    const job = bulkJobStore.get(String(req.params.jobId));
+    if (!job) {
+      return res.status(404).json({ message: "Job not found or expired" });
+    }
+    if (job.organizationId && job.organizationId !== req.user?.organizationId) {
+      return res.status(403).json({ message: "Access denied" });
+    }
+    const cancelled = bulkJobStore.cancel(String(req.params.jobId));
+    return res.json({ ok: true, cancelled });
   },
 );
 

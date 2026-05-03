@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import type { Workspace } from "@shared/schema";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -41,6 +41,7 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { Progress } from "@/components/ui/progress";
 import {
   ChevronDown,
   Tag,
@@ -55,6 +56,7 @@ import {
   Lock,
   ShieldCheck,
   FileText,
+  X,
 } from "lucide-react";
 
 type SensitivityLabel = {
@@ -106,6 +108,22 @@ interface BulkActionResponse {
   rollupAuditId: string | null;
 }
 
+interface BulkJobProgress {
+  jobId: string;
+  action: string;
+  status: "running" | "completed" | "cancelled";
+  total: number;
+  processed: number;
+  succeeded: number;
+  failed: number;
+  results: BulkActionResult[];
+  rollupAuditId: string | null;
+  startedAt: string;
+  completedAt: string | null;
+}
+
+const BULK_JOB_STORAGE_KEY = "bulk-active-job";
+
 export interface BulkFilterCriteria {
   search?: string;
   tenantConnectionId?: string;
@@ -125,27 +143,85 @@ interface BulkActionsExtrasProps {
 
 export function BulkActionsExtras(props: BulkActionsExtrasProps) {
   const [activeAction, setActiveAction] = useState<BulkActionKey | null>(null);
-  const [resultsResponse, setResultsResponse] = useState<BulkActionResponse | null>(null);
+  const [activeJobId, setActiveJobId] = useState<string | null>(null);
+  const [jobProgress, setJobProgress] = useState<BulkJobProgress | null>(null);
   const [retryIds, setRetryIds] = useState<string[] | null>(null);
   const { features } = useServicePlan();
+
+  // Restore an in-progress job across page refreshes
+  useEffect(() => {
+    const saved = localStorage.getItem(BULK_JOB_STORAGE_KEY);
+    if (saved) {
+      try {
+        const { jobId } = JSON.parse(saved) as { jobId: string };
+        setActiveJobId(jobId);
+      } catch {
+        localStorage.removeItem(BULK_JOB_STORAGE_KEY);
+      }
+    }
+  }, []);
+
+  // Persist active job to localStorage
+  useEffect(() => {
+    if (activeJobId) {
+      localStorage.setItem(BULK_JOB_STORAGE_KEY, JSON.stringify({ jobId: activeJobId }));
+    } else {
+      localStorage.removeItem(BULK_JOB_STORAGE_KEY);
+    }
+  }, [activeJobId]);
+
+  // Poll for job progress
+  useEffect(() => {
+    if (!activeJobId) return;
+
+    let cancelled = false;
+
+    const poll = async () => {
+      try {
+        const res = await fetch(`/api/workspaces/bulk/jobs/${activeJobId}`);
+        if (res.ok && !cancelled) {
+          const data = await res.json() as BulkJobProgress;
+          setJobProgress(data);
+          if (data.status !== "running") {
+            setActiveJobId(null);
+            queryClient.invalidateQueries({ queryKey: ["/api/workspaces"] });
+          }
+        }
+      } catch {
+        // silently ignore transient fetch errors during polling
+      }
+    };
+
+    poll();
+    const interval = setInterval(poll, 1500);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [activeJobId]);
 
   const closeDialog = () => {
     setActiveAction(null);
     setRetryIds(null);
   };
 
-  const handleSuccess = (resp: BulkActionResponse) => {
-    setResultsResponse(resp);
+  const handleSuccess = ({ jobId }: { jobId: string }) => {
+    setActiveJobId(jobId);
+    setJobProgress(null);
     setActiveAction(null);
     setRetryIds(null);
     props.onAfterAction?.();
-    queryClient.invalidateQueries({ queryKey: ["/api/workspaces"] });
   };
 
   const handleRetry = (action: BulkActionKey, ids: string[]) => {
-    setResultsResponse(null);
+    setJobProgress(null);
     setRetryIds(ids);
     setActiveAction(action);
+  };
+
+  const handleCloseDrawer = () => {
+    setJobProgress(null);
+    setActiveJobId(null);
   };
 
   const isAllMatchingMode = !retryIds && props.filterCriteria?.selectionMode === "all-matching";
@@ -281,12 +357,21 @@ export function BulkActionsExtras(props: BulkActionsExtrasProps) {
         />
       )}
 
-      {resultsResponse && (
+      {(activeJobId || jobProgress) && (
         <BulkResultDrawer
-          response={resultsResponse}
-          onClose={() => setResultsResponse(null)}
+          progress={jobProgress}
+          isPolling={!!activeJobId}
+          onClose={handleCloseDrawer}
+          onCancel={async () => {
+            if (activeJobId) {
+              try {
+                await fetch(`/api/workspaces/bulk/jobs/${activeJobId}/cancel`, { method: "POST" });
+              } catch {}
+            }
+          }}
           onRetryFailed={(ids) => {
-            const action = bulkActionKeyFromAction(resultsResponse.action);
+            if (!jobProgress) return;
+            const action = bulkActionKeyFromAction(jobProgress.action);
             if (action) handleRetry(action, ids);
           }}
         />
@@ -311,18 +396,18 @@ function bulkActionKeyFromAction(action: string): BulkActionKey | null {
 interface DialogBaseProps {
   open: boolean;
   onClose: () => void;
-  onSuccess: (resp: BulkActionResponse) => void;
+  onSuccess: (data: { jobId: string }) => void;
   workspaceIds: string[];
   targetCount: number;
   filterCriteria: BulkFilterCriteria;
 }
 
-async function postBulk<TPayload>(
+async function postBulkJob<TPayload>(
   url: string,
   body: { workspaceIds: string[]; payload?: TPayload; filterCriteria: BulkFilterCriteria },
-): Promise<BulkActionResponse> {
+): Promise<{ jobId: string }> {
   const res = await apiRequest("POST", url, body);
-  return (await res.json()) as BulkActionResponse;
+  return (await res.json()) as { jobId: string };
 }
 
 function ApplyLabelDialog(props: DialogBaseProps & { tenantConnectionId: string }) {
@@ -341,14 +426,10 @@ function ApplyLabelDialog(props: DialogBaseProps & { tenantConnectionId: string 
   const submit = async () => {
     setSubmitting(true);
     try {
-      const data = await postBulk<{ sensitivityLabelId: string | null }>("/api/workspaces/bulk/label", {
+      const data = await postBulkJob<{ sensitivityLabelId: string | null }>("/api/workspaces/bulk/label", {
         workspaceIds: props.workspaceIds,
         payload: { sensitivityLabelId: labelId === "__clear__" ? null : labelId },
         filterCriteria: props.filterCriteria,
-      });
-      toast({
-        title: "Sensitivity label updated",
-        description: `${data.succeeded}/${data.count} succeeded${data.failed ? ` · ${data.failed} failed` : ""}`,
       });
       props.onSuccess(data);
     } catch (err: any) {
@@ -424,14 +505,10 @@ function SetRetentionDialog(props: DialogBaseProps & { tenantConnectionId: strin
   const submit = async () => {
     setSubmitting(true);
     try {
-      const data = await postBulk<{ retentionLabelId: string | null }>("/api/workspaces/bulk/retention", {
+      const data = await postBulkJob<{ retentionLabelId: string | null }>("/api/workspaces/bulk/retention", {
         workspaceIds: props.workspaceIds,
         payload: { retentionLabelId: labelId === "__clear__" ? null : labelId },
         filterCriteria: props.filterCriteria,
-      });
-      toast({
-        title: "Retention label updated",
-        description: `${data.succeeded}/${data.count} succeeded${data.failed ? ` · ${data.failed} failed` : ""}`,
       });
       props.onSuccess(data);
     } catch (err: any) {
@@ -519,14 +596,10 @@ function ApplyMetadataDialog(props: DialogBaseProps) {
       if (costCenter.trim()) payload.costCenter = costCenter.trim();
       if (projectCode.trim()) payload.projectCode = projectCode.trim();
 
-      const data = await postBulk<MetadataPayload>("/api/workspaces/bulk/metadata", {
+      const data = await postBulkJob<MetadataPayload>("/api/workspaces/bulk/metadata", {
         workspaceIds: props.workspaceIds,
         payload,
         filterCriteria: props.filterCriteria,
-      });
-      toast({
-        title: "Metadata defaults applied",
-        description: `${data.succeeded}/${data.count} succeeded${data.failed ? ` · ${data.failed} failed` : ""}`,
       });
       props.onSuccess(data);
     } catch (err: any) {
@@ -638,14 +711,10 @@ function SetStewardDialog(props: DialogBaseProps & { role: StewardRole }) {
       };
       if (displayName.trim()) payload.displayName = displayName.trim();
 
-      const data = await postBulk<StewardPayload>("/api/workspaces/bulk/owner", {
+      const data = await postBulkJob<StewardPayload>("/api/workspaces/bulk/owner", {
         workspaceIds: props.workspaceIds,
         payload,
         filterCriteria: props.filterCriteria,
-      });
-      toast({
-        title: props.role === "primary" ? "Primary steward set" : "Secondary steward added",
-        description: `${data.succeeded}/${data.count} succeeded${data.failed ? ` · ${data.failed} failed` : ""}`,
       });
       props.onSuccess(data);
     } catch (err: any) {
@@ -735,14 +804,10 @@ function ArchiveDialog(props: DialogBaseProps & { targetWorkspaces: Workspace[] 
   const submit = async () => {
     setSubmitting(true);
     try {
-      const data = await postBulk<{ reason: string }>("/api/workspaces/bulk/archive", {
+      const data = await postBulkJob<{ reason: string }>("/api/workspaces/bulk/archive", {
         workspaceIds: props.workspaceIds,
         filterCriteria: props.filterCriteria,
         payload: { reason: trimmedReason },
-      });
-      toast({
-        title: "Archive complete",
-        description: `${data.succeeded}/${data.count} archived${data.failed ? ` · ${data.failed} failed` : ""}`,
       });
       props.onSuccess(data);
     } catch (err: any) {
@@ -833,14 +898,10 @@ function EmailOwnerDialog(props: DialogBaseProps & { targetWorkspaces: Workspace
   const submit = async () => {
     setSubmitting(true);
     try {
-      const data = await postBulk<EmailPayload>("/api/workspaces/bulk/email-owner", {
+      const data = await postBulkJob<EmailPayload>("/api/workspaces/bulk/email-owner", {
         workspaceIds: props.workspaceIds,
         payload: { subject: subject.trim(), message: message.trim() },
         filterCriteria: props.filterCriteria,
-      });
-      toast({
-        title: "Owner emails sent",
-        description: `${data.succeeded}/${data.count} sent${data.failed ? ` · ${data.failed} failed` : ""}`,
       });
       props.onSuccess(data);
     } catch (err: any) {
@@ -931,34 +992,80 @@ function ConfirmCount({ verb, count }: { verb: string; count: number }) {
 }
 
 function BulkResultDrawer({
-  response,
+  progress,
+  isPolling,
   onClose,
+  onCancel,
   onRetryFailed,
 }: {
-  response: BulkActionResponse;
+  progress: BulkJobProgress | null;
+  isPolling: boolean;
   onClose: () => void;
+  onCancel: () => void;
   onRetryFailed: (ids: string[]) => void;
 }) {
-  const failed = useMemo(() => response.results.filter(r => !r.success), [response]);
-  const succeeded = useMemo(() => response.results.filter(r => r.success), [response]);
+  const isRunning = isPolling || (progress?.status === "running");
+  const failed = useMemo(
+    () => (progress?.results ?? []).filter(r => !r.success),
+    [progress],
+  );
+  const succeeded = useMemo(
+    () => (progress?.results ?? []).filter(r => r.success),
+    [progress],
+  );
+
+  const pct = progress && progress.total > 0
+    ? Math.round((progress.processed / progress.total) * 100)
+    : 0;
 
   return (
-    <Sheet open onOpenChange={(o) => !o && onClose()}>
+    <Sheet open onOpenChange={(o) => !o && !isRunning && onClose()}>
       <SheetContent side="right" className="w-full sm:max-w-lg overflow-y-auto">
         <SheetHeader>
-          <SheetTitle>Bulk action results</SheetTitle>
+          <SheetTitle>
+            {isRunning ? "Running bulk action…" : "Bulk action results"}
+          </SheetTitle>
           <SheetDescription>
-            <div className="flex items-center gap-2 mt-2">
-              <Badge variant="secondary">{response.action}</Badge>
-              <span className="text-xs text-muted-foreground">
-                {response.succeeded}/{response.count} succeeded · {response.failed} failed
-              </span>
-            </div>
+            {progress && (
+              <div className="flex items-center gap-2 mt-2">
+                <Badge variant="secondary">{progress.action}</Badge>
+                {isRunning ? (
+                  <span className="text-xs text-muted-foreground">
+                    {progress.processed} of {progress.total} processed
+                  </span>
+                ) : (
+                  <span className="text-xs text-muted-foreground">
+                    {progress.succeeded}/{progress.total} succeeded · {progress.failed} failed
+                  </span>
+                )}
+              </div>
+            )}
+            {!progress && isRunning && (
+              <div className="flex items-center gap-2 mt-2 text-xs text-muted-foreground">
+                <Loader2 className="w-3 h-3 animate-spin" /> Starting…
+              </div>
+            )}
           </SheetDescription>
         </SheetHeader>
 
         <div className="space-y-4 py-4">
-          {failed.length > 0 && (
+          {isRunning && (
+            <div className="space-y-2" data-testid="bulk-job-progress">
+              <Progress value={pct} className="h-2" />
+              <p className="text-xs text-muted-foreground text-center">
+                {progress
+                  ? `${progress.processed} / ${progress.total} completed (${pct}%)`
+                  : "Starting…"}
+              </p>
+              {progress && progress.succeeded > 0 && (
+                <p className="text-xs text-emerald-600 text-center">
+                  {progress.succeeded} succeeded so far
+                </p>
+              )}
+            </div>
+          )}
+
+          {!isRunning && failed.length > 0 && (
             <section>
               <h4 className="text-sm font-medium text-destructive mb-2 flex items-center gap-1.5">
                 <XCircle className="w-4 h-4" /> Failed ({failed.length})
@@ -980,7 +1087,7 @@ function BulkResultDrawer({
               </ul>
             </section>
           )}
-          {succeeded.length > 0 && (
+          {!isRunning && succeeded.length > 0 && (
             <section>
               <h4 className="text-sm font-medium text-emerald-600 mb-2 flex items-center gap-1.5">
                 <CheckCircle2 className="w-4 h-4" /> Succeeded ({succeeded.length})
@@ -1020,8 +1127,18 @@ function BulkResultDrawer({
         </div>
 
         <SheetFooter className="flex flex-row gap-2 justify-between sm:justify-between">
-          <Button variant="ghost" onClick={onClose} data-testid="button-result-close">Close</Button>
-          {failed.length > 0 && (
+          {isRunning ? (
+            <Button
+              variant="outline"
+              onClick={onCancel}
+              data-testid="button-result-cancel"
+            >
+              <X className="w-4 h-4 mr-2" /> Cancel
+            </Button>
+          ) : (
+            <Button variant="ghost" onClick={onClose} data-testid="button-result-close">Close</Button>
+          )}
+          {!isRunning && failed.length > 0 && (
             <Button
               onClick={() => onRetryFailed(failed.map(r => r.workspaceId))}
               data-testid="button-result-retry"
