@@ -396,6 +396,7 @@ export const PLAN_FEATURES = {
     contentIntensityHeatmap: false,
     copilotPromptIntelligence: false,
     m365OverviewReport: false,
+    auditStreaming: false,
     trendRetentionDays: 0,
     maxUsers: 25,
     maxTenants: 1,
@@ -426,6 +427,7 @@ export const PLAN_FEATURES = {
     contentIntensityHeatmap: false,
     copilotPromptIntelligence: false,
     m365OverviewReport: false,
+    auditStreaming: false,
     trendRetentionDays: 0,
     maxUsers: 500,
     maxTenants: 2,
@@ -456,6 +458,7 @@ export const PLAN_FEATURES = {
     contentIntensityHeatmap: false,
     copilotPromptIntelligence: true,
     m365OverviewReport: false,
+    auditStreaming: true,
     trendRetentionDays: 30,
     maxUsers: 5000,
     maxTenants: 10,
@@ -486,6 +489,7 @@ export const PLAN_FEATURES = {
     contentIntensityHeatmap: true,
     copilotPromptIntelligence: true,
     m365OverviewReport: true,
+    auditStreaming: true,
     trendRetentionDays: -1,
     maxUsers: -1,
     maxTenants: -1,
@@ -643,6 +647,82 @@ export const insertAuditLogSchema = createInsertSchema(auditLog).omit({
 
 export type InsertAuditLog = z.infer<typeof insertAuditLogSchema>;
 export type AuditLog = typeof auditLog.$inferSelect;
+
+// Audit streaming: per-org SIEM mirror (Sentinel/Splunk/S3/Webhook/Datadog).
+export const AUDIT_STREAM_DESTINATIONS = [
+  "sentinel",
+  "splunk_hec",
+  "s3",
+  "webhook",
+  "datadog",
+] as const;
+export type AuditStreamDestination = typeof AUDIT_STREAM_DESTINATIONS[number];
+
+export const auditStreamConfigs = pgTable("audit_stream_configs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  organizationId: varchar("organization_id").notNull(),
+  destinationType: text("destination_type").notNull(),
+  endpoint: text("endpoint").notNull(),
+  secretEncrypted: text("secret_encrypted"),
+  options: jsonb("options").$type<Record<string, unknown>>(),
+  enabled: boolean("enabled").notNull().default(true),
+  batchSize: integer("batch_size").notNull().default(100),
+  cursorTimestamp: timestamp("cursor_timestamp"),
+  cursorId: varchar("cursor_id"),
+  lastDeliveryAt: timestamp("last_delivery_at"),
+  lastDeliveryStatus: text("last_delivery_status"),
+  lastError: text("last_error"),
+  lastErrorAt: timestamp("last_error_at"),
+  consecutiveFailures: integer("consecutive_failures").notNull().default(0),
+  totalDelivered: integer("total_delivered").notNull().default(0),
+  totalFailed: integer("total_failed").notNull().default(0),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (table) => [
+  unique("uq_audit_stream_config_org").on(table.organizationId),
+]);
+
+export const insertAuditStreamConfigSchema = createInsertSchema(auditStreamConfigs).omit({
+  id: true,
+  cursorTimestamp: true,
+  cursorId: true,
+  lastDeliveryAt: true,
+  lastDeliveryStatus: true,
+  lastError: true,
+  lastErrorAt: true,
+  consecutiveFailures: true,
+  totalDelivered: true,
+  totalFailed: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export type InsertAuditStreamConfig = z.infer<typeof insertAuditStreamConfigSchema>;
+export type AuditStreamConfig = typeof auditStreamConfigs.$inferSelect;
+
+export const auditStreamDeliveries = pgTable("audit_stream_deliveries", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  configId: varchar("config_id").notNull(),
+  organizationId: varchar("organization_id").notNull(),
+  status: text("status").notNull(), // DELIVERED | FAILED | DLQ
+  attempts: integer("attempts").notNull().default(1),
+  batchSize: integer("batch_size").notNull().default(0),
+  firstAuditId: varchar("first_audit_id"),
+  lastAuditId: varchar("last_audit_id"),
+  lastAuditCreatedAt: timestamp("last_audit_created_at"),
+  httpStatus: integer("http_status"),
+  errorMessage: text("error_message"),
+  eventIds: jsonb("event_ids").$type<string[]>(),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertAuditStreamDeliverySchema = createInsertSchema(auditStreamDeliveries).omit({
+  id: true,
+  createdAt: true,
+});
+
+export type InsertAuditStreamDelivery = z.infer<typeof insertAuditStreamDeliverySchema>;
+export type AuditStreamDelivery = typeof auditStreamDeliveries.$inferSelect;
 
 export const customFieldDefinitions = pgTable("custom_field_definitions", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),

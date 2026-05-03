@@ -1,16 +1,21 @@
-import { Fragment, useState, useCallback } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { Fragment, useState, useCallback, useEffect } from "react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Textarea } from "@/components/ui/textarea";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Download, Filter, RefreshCw, ChevronLeft, ChevronRight, ShieldAlert, Lock, ChevronDown, FileJson } from "lucide-react";
+import { Download, Filter, RefreshCw, ChevronLeft, ChevronRight, ShieldAlert, Lock, ChevronDown, FileJson, Send, Trash2, Radio, AlertTriangle, CheckCircle2 } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { UpgradeGate } from "@/components/upgrade-gate";
 import { useTenant } from "@/lib/tenant-context";
+import { useToast } from "@/hooks/use-toast";
+import { apiRequest } from "@/lib/queryClient";
 
 type AuditChange = { from: unknown; to: unknown };
 type AuditChanges = Record<string, AuditChange>;
@@ -477,6 +482,19 @@ export default function AuditLogPage() {
         </div>
       </div>
 
+      <Tabs defaultValue="log" className="space-y-6">
+        <TabsList data-testid="tabs-audit-log">
+          <TabsTrigger value="log" data-testid="tab-log">
+            <ShieldAlert className="w-4 h-4 mr-2" />
+            Log Entries
+          </TabsTrigger>
+          <TabsTrigger value="streaming" data-testid="tab-streaming">
+            <Radio className="w-4 h-4 mr-2" />
+            Streaming
+          </TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="log" className="space-y-6 mt-0">
       <Card className="glass-panel">
         <CardHeader className="pb-4">
           <CardTitle className="flex items-center gap-2 text-base">
@@ -738,6 +756,509 @@ export default function AuditLogPage() {
           )}
         </CardContent>
       </Card>
+        </TabsContent>
+
+        <TabsContent value="streaming" className="space-y-6 mt-0">
+          <StreamingTab />
+        </TabsContent>
+      </Tabs>
+    </div>
+  );
+}
+
+// Streaming Tab
+type StreamConfig = {
+  id: string;
+  organizationId: string;
+  destinationType: "sentinel" | "splunk_hec" | "s3" | "webhook" | "datadog";
+  endpoint: string;
+  secretMasked: string | null;
+  secretConfigured: boolean;
+  options: Record<string, any> | null;
+  enabled: boolean;
+  batchSize: number;
+  lastDeliveryAt: string | null;
+  lastDeliveryStatus: string | null;
+  lastError: string | null;
+  lastErrorAt: string | null;
+  consecutiveFailures: number;
+  totalDelivered: number;
+  totalFailed: number;
+  cursorTimestamp: string | null;
+  createdAt: string | null;
+  updatedAt: string | null;
+};
+
+type StreamDelivery = {
+  id: string;
+  configId: string;
+  status: "DELIVERED" | "FAILED" | "DLQ";
+  attempts: number;
+  batchSize: number;
+  firstAuditId: string | null;
+  lastAuditId: string | null;
+  lastAuditCreatedAt: string | null;
+  httpStatus: number | null;
+  errorMessage: string | null;
+  eventIds: string[] | null;
+  createdAt: string | null;
+};
+
+const DESTINATION_LABELS: Record<StreamConfig["destinationType"], string> = {
+  sentinel: "Microsoft Sentinel",
+  splunk_hec: "Splunk HEC",
+  s3: "Amazon S3 (presigned URL)",
+  webhook: "Generic Webhook",
+  datadog: "Datadog Logs",
+};
+
+function StreamingTab() {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const [form, setForm] = useState({
+    destinationType: "webhook" as StreamConfig["destinationType"],
+    endpoint: "",
+    secret: "",
+    rotateSecret: false,
+    enabled: true,
+    batchSize: 100,
+    optionsJson: "{}",
+  });
+
+  const configQuery = useQuery<{ config: StreamConfig | null }>({
+    queryKey: ["audit-streaming-config"],
+    queryFn: async () => {
+      const res = await fetch("/api/audit-streaming/config", { credentials: "include" });
+      if (res.status === 403) {
+        return { config: null };
+      }
+      if (!res.ok) throw new Error("Failed to load streaming configuration");
+      return res.json();
+    },
+    retry: false,
+  });
+
+  const deliveriesQuery = useQuery<{ deliveries: StreamDelivery[] }>({
+    queryKey: ["audit-streaming-deliveries"],
+    queryFn: async () => {
+      const res = await fetch("/api/audit-streaming/deliveries", { credentials: "include" });
+      if (!res.ok) return { deliveries: [] };
+      return res.json();
+    },
+    retry: false,
+    refetchInterval: 30_000,
+  });
+
+  const cfg = configQuery.data?.config ?? null;
+
+  useEffect(() => {
+    if (cfg) {
+      setForm(prev => ({
+        ...prev,
+        destinationType: cfg.destinationType,
+        endpoint: cfg.endpoint,
+        enabled: cfg.enabled,
+        batchSize: cfg.batchSize,
+        optionsJson: JSON.stringify(cfg.options ?? {}, null, 2),
+        secret: "",
+        rotateSecret: false,
+      }));
+    }
+  }, [cfg?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const saveMutation = useMutation({
+    mutationFn: async () => {
+      let parsedOptions: Record<string, any> = {};
+      if (form.optionsJson.trim()) {
+        try {
+          parsedOptions = JSON.parse(form.optionsJson);
+        } catch {
+          throw new Error("Options must be valid JSON");
+        }
+      }
+      const body: Record<string, any> = {
+        destinationType: form.destinationType,
+        endpoint: form.endpoint,
+        options: parsedOptions,
+        enabled: form.enabled,
+        batchSize: form.batchSize,
+      };
+      // Only include `secret` when the user explicitly wants to rotate it,
+      // or when there is no secret configured yet on the server.
+      if (form.rotateSecret || !cfg?.secretConfigured) {
+        if (form.secret) body.secret = form.secret;
+      }
+      const res = await apiRequest("PUT", "/api/audit-streaming/config", body);
+      return res.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Streaming configuration saved" });
+      queryClient.invalidateQueries({ queryKey: ["audit-streaming-config"] });
+    },
+    onError: (err: any) => toast({ title: "Save failed", description: err.message, variant: "destructive" }),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("DELETE", "/api/audit-streaming/config", undefined);
+      return res.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Streaming configuration removed" });
+      setForm(f => ({ ...f, secret: "", rotateSecret: false }));
+      queryClient.invalidateQueries({ queryKey: ["audit-streaming-config"] });
+      queryClient.invalidateQueries({ queryKey: ["audit-streaming-deliveries"] });
+    },
+    onError: (err: any) => toast({ title: "Remove failed", description: err.message, variant: "destructive" }),
+  });
+
+  const testMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/audit-streaming/test", {});
+      return res.json() as Promise<{ ok: boolean; httpStatus?: number; error?: string }>;
+    },
+    onSuccess: (r) => {
+      if (r.ok) {
+        toast({ title: "Test event delivered", description: `HTTP ${r.httpStatus ?? "?"}` });
+      } else {
+        toast({
+          title: "Test delivery failed",
+          description: r.error ? r.error.slice(0, 240) : `HTTP ${r.httpStatus ?? "error"}`,
+          variant: "destructive",
+        });
+      }
+      queryClient.invalidateQueries({ queryKey: ["audit-streaming-deliveries"] });
+    },
+    onError: (err: any) => toast({ title: "Test failed", description: err.message, variant: "destructive" }),
+  });
+
+  if (configQuery.isLoading) {
+    return <div className="text-muted-foreground py-8">Loading streaming configuration…</div>;
+  }
+
+  if (configQuery.isError) {
+    return (
+      <Card className="glass-panel">
+        <CardContent className="py-8 text-center space-y-2">
+          <Lock className="w-8 h-8 mx-auto text-muted-foreground" />
+          <p className="text-sm text-muted-foreground">
+            Audit streaming requires the Professional plan or higher. Upgrade your plan to mirror your audit trail to Sentinel, Splunk, S3, or Datadog.
+          </p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  const deliveries = deliveriesQuery.data?.deliveries ?? [];
+  const successDeliveries = deliveries.filter(d => d.status === "DELIVERED").length;
+  const failedDeliveries = deliveries.filter(d => d.status !== "DELIVERED").length;
+
+  return (
+    <div className="space-y-6">
+      <Card className="glass-panel">
+        <CardHeader>
+          <div className="flex items-center justify-between">
+            <div>
+              <CardTitle className="text-base flex items-center gap-2">
+                <Radio className="w-4 h-4 text-primary" />
+                SIEM Destination
+              </CardTitle>
+              <CardDescription>
+                Mirror every audit event to your own SIEM. Events are batched and delivered with automatic retry.
+              </CardDescription>
+            </div>
+            {cfg && (
+              <Badge
+                className={cfg.enabled
+                  ? "bg-emerald-500/10 text-emerald-500 border-emerald-500/20"
+                  : "bg-muted text-muted-foreground"}
+                data-testid="badge-streaming-status"
+              >
+                {cfg.enabled ? "Enabled" : "Disabled"}
+              </Badge>
+            )}
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="space-y-1.5">
+              <Label htmlFor="stream-destination">Destination</Label>
+              <Select
+                value={form.destinationType}
+                onValueChange={(v) => setForm(f => ({ ...f, destinationType: v as StreamConfig["destinationType"] }))}
+              >
+                <SelectTrigger id="stream-destination" data-testid="select-stream-destination">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {Object.entries(DESTINATION_LABELS).map(([k, v]) => (
+                    <SelectItem key={k} value={k}>{v}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="stream-batch">Batch size</Label>
+              <Input
+                id="stream-batch"
+                type="number"
+                min={1}
+                max={1000}
+                value={form.batchSize}
+                onChange={e => setForm(f => ({ ...f, batchSize: Math.max(1, Math.min(1000, parseInt(e.target.value || "1", 10))) }))}
+                data-testid="input-stream-batch-size"
+              />
+            </div>
+
+            <div className="space-y-1.5 md:col-span-2">
+              <Label htmlFor="stream-endpoint">Endpoint URL</Label>
+              <Input
+                id="stream-endpoint"
+                placeholder={
+                  form.destinationType === "sentinel"
+                    ? "https://<workspace>.ods.opinsights.azure.com/api/logs?api-version=2016-04-01"
+                    : form.destinationType === "splunk_hec"
+                    ? "https://splunk.example.com:8088/services/collector"
+                    : form.destinationType === "s3"
+                    ? "https://bucket.s3.amazonaws.com/path?presigned-params…"
+                    : form.destinationType === "datadog"
+                    ? "https://http-intake.logs.datadoghq.com/api/v2/logs"
+                    : "https://example.com/audit-webhook"
+                }
+                value={form.endpoint}
+                onChange={e => setForm(f => ({ ...f, endpoint: e.target.value }))}
+                data-testid="input-stream-endpoint"
+              />
+            </div>
+
+            <div className="space-y-1.5 md:col-span-2">
+              <Label htmlFor="stream-secret">
+                {form.destinationType === "sentinel" ? "Workspace shared key" :
+                 form.destinationType === "splunk_hec" ? "HEC token" :
+                 form.destinationType === "datadog" ? "API key" :
+                 "Shared secret (used for HMAC signing)"}
+              </Label>
+              {cfg?.secretConfigured && !form.rotateSecret ? (
+                <div className="flex items-center gap-3">
+                  <Input
+                    value={cfg.secretMasked ?? "•••••••"}
+                    disabled
+                    className="font-mono"
+                    data-testid="input-stream-secret-masked"
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setForm(f => ({ ...f, rotateSecret: true, secret: "" }))}
+                    data-testid="button-rotate-secret"
+                  >
+                    Rotate
+                  </Button>
+                </div>
+              ) : (
+                <Input
+                  id="stream-secret"
+                  type="password"
+                  placeholder={cfg?.secretConfigured ? "Enter a new secret to replace the existing one" : "Required for signed delivery"}
+                  value={form.secret}
+                  onChange={e => setForm(f => ({ ...f, secret: e.target.value }))}
+                  data-testid="input-stream-secret"
+                />
+              )}
+              <p className="text-xs text-muted-foreground">
+                Stored encrypted at rest (AES-256-GCM). Only the last few characters are shown after save.
+              </p>
+            </div>
+
+            <div className="space-y-1.5 md:col-span-2">
+              <Label htmlFor="stream-options">Destination options (JSON)</Label>
+              <Textarea
+                id="stream-options"
+                rows={4}
+                className="font-mono text-xs"
+                placeholder={
+                  form.destinationType === "sentinel"
+                    ? '{ "workspaceId": "<guid>", "logType": "ZenithAudit" }'
+                    : form.destinationType === "splunk_hec"
+                    ? '{ "index": "main", "sourcetype": "zenith:audit" }'
+                    : form.destinationType === "datadog"
+                    ? '{ "ddsource": "zenith", "service": "zenith-audit" }'
+                    : "{}"
+                }
+                value={form.optionsJson}
+                onChange={e => setForm(f => ({ ...f, optionsJson: e.target.value }))}
+                data-testid="textarea-stream-options"
+              />
+            </div>
+
+            <div className="flex items-center gap-3 md:col-span-2">
+              <Switch
+                id="stream-enabled"
+                checked={form.enabled}
+                onCheckedChange={(v) => setForm(f => ({ ...f, enabled: !!v }))}
+                data-testid="switch-stream-enabled"
+              />
+              <Label htmlFor="stream-enabled">Streaming enabled</Label>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap gap-2 pt-2">
+            <Button
+              onClick={() => saveMutation.mutate()}
+              disabled={saveMutation.isPending || !form.endpoint}
+              data-testid="button-save-streaming"
+            >
+              {cfg ? "Save changes" : "Enable streaming"}
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => testMutation.mutate()}
+              disabled={!cfg || testMutation.isPending}
+              className="gap-2"
+              data-testid="button-test-streaming"
+            >
+              <Send className="w-4 h-4" />
+              Send test event
+            </Button>
+            {cfg && (
+              <Button
+                variant="outline"
+                className="gap-2 text-destructive hover:text-destructive"
+                onClick={() => {
+                  if (confirm("Remove audit streaming configuration? Pending events will not be delivered.")) {
+                    deleteMutation.mutate();
+                  }
+                }}
+                disabled={deleteMutation.isPending}
+                data-testid="button-delete-streaming"
+              >
+                <Trash2 className="w-4 h-4" />
+                Remove
+              </Button>
+            )}
+          </div>
+        </CardContent>
+      </Card>
+
+      {cfg && (
+        <Card className="glass-panel">
+          <CardHeader>
+            <CardTitle className="text-base">Delivery health</CardTitle>
+            <CardDescription>Recent batch deliveries to {DESTINATION_LABELS[cfg.destinationType]}.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <HealthStat label="Delivered (lifetime)" value={cfg.totalDelivered.toLocaleString()} icon={<CheckCircle2 className="w-4 h-4 text-emerald-500" />} testId="stat-delivered" />
+              <HealthStat label="Failed (lifetime)" value={cfg.totalFailed.toLocaleString()} icon={<AlertTriangle className="w-4 h-4 text-amber-500" />} testId="stat-failed" />
+              <HealthStat label="Recent batches OK" value={String(successDeliveries)} testId="stat-recent-ok" />
+              <HealthStat label="Recent batches failed" value={String(failedDeliveries)} testId="stat-recent-failed" />
+            </div>
+
+            {cfg.lastError && (
+              <div className="rounded-md border border-amber-500/20 bg-amber-500/10 p-3 text-xs">
+                <div className="font-medium text-amber-500 mb-1">Last error</div>
+                <div className="font-mono break-all" data-testid="text-last-error">{cfg.lastError}</div>
+                {cfg.lastErrorAt && (
+                  <div className="text-muted-foreground mt-1">at {formatDate(cfg.lastErrorAt)}</div>
+                )}
+              </div>
+            )}
+
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Time</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead className="text-right">Events</TableHead>
+                    <TableHead className="text-right">Attempts</TableHead>
+                    <TableHead>HTTP</TableHead>
+                    <TableHead>Error</TableHead>
+                    <TableHead className="w-20"></TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {deliveries.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={7} className="text-center text-muted-foreground py-6">
+                        No deliveries yet. New audit events will be streamed within ~30 seconds.
+                      </TableCell>
+                    </TableRow>
+                  ) : deliveries.map(d => (
+                    <DeliveryRow key={d.id} delivery={d} />
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+    </div>
+  );
+}
+
+function DeliveryRow({ delivery }: { delivery: StreamDelivery }) {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const replayMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", `/api/audit-streaming/deliveries/${delivery.id}/replay`, {});
+      return res.json() as Promise<{ ok: boolean; httpStatus?: number; error?: string; deliveredCount: number }>;
+    },
+    onSuccess: (r) => {
+      if (r.ok) {
+        toast({ title: "Replay succeeded", description: `${r.deliveredCount} event(s) re-delivered (HTTP ${r.httpStatus ?? "?"}).` });
+      } else {
+        toast({ title: "Replay failed", description: r.error?.slice(0, 240) ?? "Unknown error", variant: "destructive" });
+      }
+      queryClient.invalidateQueries({ queryKey: ["audit-streaming-deliveries"] });
+      queryClient.invalidateQueries({ queryKey: ["audit-streaming-config"] });
+    },
+    onError: (err: any) => toast({ title: "Replay failed", description: err.message, variant: "destructive" }),
+  });
+  const canReplay = delivery.status !== "DELIVERED";
+  return (
+    <TableRow data-testid={`row-delivery-${delivery.id}`}>
+      <TableCell className="font-mono text-xs whitespace-nowrap">{delivery.createdAt ? formatDate(delivery.createdAt) : "—"}</TableCell>
+      <TableCell>
+        {delivery.status === "DELIVERED" ? (
+          <Badge className="bg-emerald-500/10 text-emerald-500 border-emerald-500/20">Delivered</Badge>
+        ) : delivery.status === "DLQ" ? (
+          <Badge className="bg-red-500/10 text-red-500 border-red-500/20">DLQ</Badge>
+        ) : (
+          <Badge className="bg-amber-500/10 text-amber-500 border-amber-500/20">Failed</Badge>
+        )}
+      </TableCell>
+      <TableCell className="text-right font-mono text-xs">{delivery.batchSize}</TableCell>
+      <TableCell className="text-right font-mono text-xs">{delivery.attempts}</TableCell>
+      <TableCell className="font-mono text-xs">{delivery.httpStatus ?? "—"}</TableCell>
+      <TableCell className="text-xs text-muted-foreground max-w-md truncate" title={delivery.errorMessage ?? ""}>
+        {delivery.errorMessage ?? "—"}
+      </TableCell>
+      <TableCell>
+        {canReplay && (
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => replayMutation.mutate()}
+            disabled={replayMutation.isPending}
+            data-testid={`button-replay-${delivery.id}`}
+          >
+            Replay
+          </Button>
+        )}
+      </TableCell>
+    </TableRow>
+  );
+}
+
+function HealthStat({ label, value, icon, testId }: { label: string; value: string; icon?: React.ReactNode; testId?: string }) {
+  return (
+    <div className="rounded-md border border-border/50 bg-background/40 p-3" data-testid={testId}>
+      <div className="text-xs text-muted-foreground flex items-center gap-1.5">{icon}{label}</div>
+      <div className="text-xl font-semibold mt-1">{value}</div>
     </div>
   );
 }

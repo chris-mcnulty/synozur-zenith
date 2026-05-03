@@ -43,6 +43,12 @@ import {
   type InsertGraphAppTokenCache,
   type AuditLog,
   type InsertAuditLog,
+  auditStreamConfigs,
+  auditStreamDeliveries,
+  type AuditStreamConfig,
+  type InsertAuditStreamConfig,
+  type AuditStreamDelivery,
+  type InsertAuditStreamDelivery,
   type DomainBlocklist,
   type InsertDomainBlocklist,
   type TenantDataDictionary,
@@ -279,6 +285,15 @@ export interface IStorage {
     limit?: number;
     offset?: number;
   }): Promise<{ rows: AuditLog[]; total: number }>;
+
+  getAuditStreamConfig(orgId: string): Promise<AuditStreamConfig | undefined>;
+  getAuditStreamConfigById(id: string): Promise<AuditStreamConfig | undefined>;
+  listEnabledAuditStreamConfigs(): Promise<AuditStreamConfig[]>;
+  upsertAuditStreamConfig(orgId: string, patch: Partial<InsertAuditStreamConfig> & { secretEncrypted?: string | null }): Promise<AuditStreamConfig>;
+  deleteAuditStreamConfig(orgId: string): Promise<void>;
+  recordAuditStreamDelivery(entry: InsertAuditStreamDelivery): Promise<AuditStreamDelivery>;
+  getAuditStreamDeliveries(configId: string, limit?: number): Promise<AuditStreamDelivery[]>;
+  getAuditStreamDeliveryById(id: string): Promise<AuditStreamDelivery | undefined>;
 
   getBlockedDomains(): Promise<DomainBlocklist[]>;
   addBlockedDomain(entry: InsertDomainBlocklist): Promise<DomainBlocklist>;
@@ -1567,6 +1582,88 @@ export class DatabaseStorage implements IStorage {
     ]);
 
     return { rows, total: countResult[0]?.count ?? 0 };
+  }
+
+  // Audit streaming
+  async getAuditStreamConfig(orgId: string): Promise<AuditStreamConfig | undefined> {
+    const [row] = await db.select().from(auditStreamConfigs)
+      .where(eq(auditStreamConfigs.organizationId, orgId)).limit(1);
+    return row;
+  }
+
+  async getAuditStreamConfigById(id: string): Promise<AuditStreamConfig | undefined> {
+    const [row] = await db.select().from(auditStreamConfigs)
+      .where(eq(auditStreamConfigs.id, id)).limit(1);
+    return row;
+  }
+
+  async listEnabledAuditStreamConfigs(): Promise<AuditStreamConfig[]> {
+    return db.select().from(auditStreamConfigs).where(eq(auditStreamConfigs.enabled, true));
+  }
+
+  async upsertAuditStreamConfig(
+    orgId: string,
+    patch: Partial<InsertAuditStreamConfig> & { secretEncrypted?: string | null },
+  ): Promise<AuditStreamConfig> {
+    const existing = await this.getAuditStreamConfig(orgId);
+    const now = new Date();
+    if (existing) {
+      const update: Partial<typeof auditStreamConfigs.$inferInsert> = { updatedAt: now };
+      if (patch.destinationType !== undefined) update.destinationType = patch.destinationType;
+      if (patch.endpoint !== undefined) update.endpoint = patch.endpoint;
+      if (patch.options !== undefined) update.options = patch.options ?? null;
+      if (patch.enabled !== undefined) update.enabled = patch.enabled;
+      if (patch.batchSize !== undefined) update.batchSize = patch.batchSize;
+      if (patch.secretEncrypted !== undefined) update.secretEncrypted = patch.secretEncrypted;
+      // Re-enabling after a long disabled period: skip the gap by jumping the
+      // cursor forward to "now" so we don't backfill stale events.
+      if (patch.enabled === true && !existing.enabled) {
+        update.cursorTimestamp = now;
+        update.cursorId = null;
+        update.consecutiveFailures = 0;
+      }
+      const [updated] = await db.update(auditStreamConfigs)
+        .set(update)
+        .where(eq(auditStreamConfigs.id, existing.id))
+        .returning();
+      return updated;
+    }
+    const [created] = await db.insert(auditStreamConfigs).values({
+      organizationId: orgId,
+      destinationType: patch.destinationType ?? "webhook",
+      endpoint: patch.endpoint ?? "",
+      options: patch.options ?? null,
+      enabled: patch.enabled ?? true,
+      batchSize: patch.batchSize ?? 100,
+      secretEncrypted: patch.secretEncrypted ?? null,
+      cursorTimestamp: now,
+    }).returning();
+    return created;
+  }
+
+  async deleteAuditStreamConfig(orgId: string): Promise<void> {
+    const existing = await this.getAuditStreamConfig(orgId);
+    if (!existing) return;
+    await db.delete(auditStreamDeliveries).where(eq(auditStreamDeliveries.configId, existing.id));
+    await db.delete(auditStreamConfigs).where(eq(auditStreamConfigs.id, existing.id));
+  }
+
+  async recordAuditStreamDelivery(entry: InsertAuditStreamDelivery): Promise<AuditStreamDelivery> {
+    const [row] = await db.insert(auditStreamDeliveries).values(entry).returning();
+    return row;
+  }
+
+  async getAuditStreamDeliveries(configId: string, limit = 50): Promise<AuditStreamDelivery[]> {
+    return db.select().from(auditStreamDeliveries)
+      .where(eq(auditStreamDeliveries.configId, configId))
+      .orderBy(desc(auditStreamDeliveries.createdAt))
+      .limit(limit);
+  }
+
+  async getAuditStreamDeliveryById(id: string): Promise<AuditStreamDelivery | undefined> {
+    const [row] = await db.select().from(auditStreamDeliveries)
+      .where(eq(auditStreamDeliveries.id, id)).limit(1);
+    return row;
   }
 
   async getBlockedDomains(): Promise<DomainBlocklist[]> {

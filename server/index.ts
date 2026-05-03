@@ -1120,6 +1120,14 @@ async function backfillOrgMemberships() {
     console.error('[Startup] Failed to start audit retention scheduler:', err);
   }
 
+  try {
+    const { startAuditStreamer } = await import('./services/audit-streamer');
+    startAuditStreamer();
+    log('Audit streaming worker started');
+  } catch (err) {
+    console.error('[Startup] Failed to start audit streamer:', err);
+  }
+
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
     const status = err.status || err.statusCode || 500;
     const message = err.message || "Internal Server Error";

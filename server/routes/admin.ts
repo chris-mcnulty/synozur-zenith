@@ -8,6 +8,16 @@ import { buildRequiredFieldsByTenantId, evaluateMetadataCompleteness } from "../
 import { getAccessibleTenantConnectionIds, getOwnedTenantConnectionIds } from "./scope-helpers";
 import { logAuditEvent, AUDIT_ACTIONS } from "../services/audit-logger";
 import { auditDiff } from "../services/audit-diff";
+import { requireFeature } from "../services/feature-gate";
+import { AUDIT_STREAM_DESTINATIONS, type AuditStreamDestination } from "@shared/schema";
+import {
+  encryptStreamSecret,
+  publicConfigShape,
+  sendTestDelivery,
+  validateStreamEndpoint,
+  replayDelivery,
+} from "../services/audit-streamer";
+import { z } from "zod";
 
 const router = Router();
 
@@ -276,6 +286,173 @@ router.get("/api/audit-log", requireAuth(), requireRole(ZENITH_ROLES.PLATFORM_OW
     res.status(500).json({ error: err.message });
   }
 });
+
+// Audit Streaming — per-org SIEM config + delivery health, gated PROFESSIONAL+.
+const auditStreamConfigBodySchema = z.object({
+  destinationType: z.enum(AUDIT_STREAM_DESTINATIONS as unknown as [AuditStreamDestination, ...AuditStreamDestination[]]),
+  endpoint: z.string().url(),
+  secret: z.string().min(1).max(4096).optional().nullable(),
+  options: z.record(z.unknown()).optional().nullable(),
+  enabled: z.boolean().optional(),
+  batchSize: z.number().int().min(1).max(1000).optional(),
+});
+
+function resolveStreamingOrgId(req: AuthenticatedRequest): string | undefined {
+  return req.activeOrganizationId || req.user?.organizationId || undefined;
+}
+
+router.get(
+  "/api/audit-streaming/config",
+  requireAuth(),
+  requireRole(ZENITH_ROLES.PLATFORM_OWNER, ZENITH_ROLES.TENANT_ADMIN),
+  requireFeature("auditStreaming"),
+  async (req: AuthenticatedRequest, res) => {
+    const orgId = resolveStreamingOrgId(req);
+    if (!orgId) return res.status(400).json({ error: "No active organization" });
+    const cfg = await storage.getAuditStreamConfig(orgId);
+    res.json({ config: cfg ? publicConfigShape(cfg) : null });
+  },
+);
+
+router.put(
+  "/api/audit-streaming/config",
+  requireAuth(),
+  requireRole(ZENITH_ROLES.PLATFORM_OWNER, ZENITH_ROLES.TENANT_ADMIN),
+  requireFeature("auditStreaming"),
+  async (req: AuthenticatedRequest, res) => {
+    const orgId = resolveStreamingOrgId(req);
+    if (!orgId) return res.status(400).json({ error: "No active organization" });
+
+    const parsed = auditStreamConfigBodySchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: "Invalid configuration", issues: parsed.error.issues });
+    }
+    const body = parsed.data;
+
+    const endpointCheck = await validateStreamEndpoint(body.endpoint);
+    if (!endpointCheck.ok) {
+      return res.status(400).json({ error: endpointCheck.reason });
+    }
+
+    // Omitted secret = keep existing; empty string/null = clear.
+    let secretEncrypted: string | null | undefined = undefined;
+    if (body.secret === null || body.secret === "") {
+      secretEncrypted = null;
+    } else if (typeof body.secret === "string") {
+      secretEncrypted = encryptStreamSecret(body.secret);
+    }
+
+    const cfg = await storage.upsertAuditStreamConfig(orgId, {
+      destinationType: body.destinationType,
+      endpoint: body.endpoint,
+      options: body.options ?? null,
+      enabled: body.enabled ?? true,
+      batchSize: body.batchSize ?? 100,
+      ...(secretEncrypted !== undefined ? { secretEncrypted } : {}),
+    });
+
+    await logAuditEvent(req, {
+      action: AUDIT_ACTIONS.PLATFORM_SETTINGS_UPDATED,
+      resource: "audit_streaming_config",
+      resourceId: cfg.id,
+      organizationId: orgId,
+      details: {
+        destinationType: cfg.destinationType,
+        endpoint: cfg.endpoint,
+        enabled: cfg.enabled,
+        batchSize: cfg.batchSize,
+        secretRotated: secretEncrypted !== undefined,
+      },
+    });
+
+    res.json({ config: publicConfigShape(cfg) });
+  },
+);
+
+router.delete(
+  "/api/audit-streaming/config",
+  requireAuth(),
+  requireRole(ZENITH_ROLES.PLATFORM_OWNER, ZENITH_ROLES.TENANT_ADMIN),
+  requireFeature("auditStreaming"),
+  async (req: AuthenticatedRequest, res) => {
+    const orgId = resolveStreamingOrgId(req);
+    if (!orgId) return res.status(400).json({ error: "No active organization" });
+    const existing = await storage.getAuditStreamConfig(orgId);
+    await storage.deleteAuditStreamConfig(orgId);
+    if (existing) {
+      await logAuditEvent(req, {
+        action: AUDIT_ACTIONS.PLATFORM_SETTINGS_UPDATED,
+        resource: "audit_streaming_config",
+        resourceId: existing.id,
+        organizationId: orgId,
+        details: { deleted: true, destinationType: existing.destinationType },
+      });
+    }
+    res.json({ ok: true });
+  },
+);
+
+router.post(
+  "/api/audit-streaming/test",
+  requireAuth(),
+  requireRole(ZENITH_ROLES.PLATFORM_OWNER, ZENITH_ROLES.TENANT_ADMIN),
+  requireFeature("auditStreaming"),
+  async (req: AuthenticatedRequest, res) => {
+    const orgId = resolveStreamingOrgId(req);
+    if (!orgId) return res.status(400).json({ error: "No active organization" });
+    const cfg = await storage.getAuditStreamConfig(orgId);
+    if (!cfg) return res.status(404).json({ error: "No streaming configuration" });
+    const result = await sendTestDelivery(cfg);
+    res.json(result);
+  },
+);
+
+router.post(
+  "/api/audit-streaming/deliveries/:id/replay",
+  requireAuth(),
+  requireRole(ZENITH_ROLES.PLATFORM_OWNER, ZENITH_ROLES.TENANT_ADMIN),
+  requireFeature("auditStreaming"),
+  async (req: AuthenticatedRequest, res) => {
+    const orgId = resolveStreamingOrgId(req);
+    if (!orgId) return res.status(400).json({ error: "No active organization" });
+    const cfg = await storage.getAuditStreamConfig(orgId);
+    if (!cfg) return res.status(404).json({ error: "No streaming configuration" });
+    const delivery = await storage.getAuditStreamDeliveryById(req.params.id as string);
+    if (!delivery || delivery.configId !== cfg.id) {
+      return res.status(404).json({ error: "Delivery not found" });
+    }
+    try {
+      const result = await replayDelivery(delivery.id);
+      await logAuditEvent(req, {
+        action: AUDIT_ACTIONS.PLATFORM_SETTINGS_UPDATED,
+        resource: "audit_streaming_delivery",
+        resourceId: delivery.id,
+        organizationId: orgId,
+        details: { replayed: true, ok: result.ok, deliveredCount: result.deliveredCount },
+      });
+      res.json(result);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      res.status(500).json({ error: msg });
+    }
+  },
+);
+
+router.get(
+  "/api/audit-streaming/deliveries",
+  requireAuth(),
+  requireRole(ZENITH_ROLES.PLATFORM_OWNER, ZENITH_ROLES.TENANT_ADMIN, ZENITH_ROLES.AUDITOR),
+  requireFeature("auditStreaming"),
+  async (req: AuthenticatedRequest, res) => {
+    const orgId = resolveStreamingOrgId(req);
+    if (!orgId) return res.status(400).json({ error: "No active organization" });
+    const cfg = await storage.getAuditStreamConfig(orgId);
+    if (!cfg) return res.json({ deliveries: [] });
+    const limit = Math.min(parseInt((req.query.limit as string) || "50", 10) || 50, 200);
+    const deliveries = await storage.getAuditStreamDeliveries(cfg.id, limit);
+    res.json({ deliveries });
+  },
+);
 
 // ── Organization & Service Plan ──
 router.get("/api/organization", requireAuth(), async (req: AuthenticatedRequest, res) => {

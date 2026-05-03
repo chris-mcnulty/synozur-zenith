@@ -37,6 +37,7 @@ export function requireFeature(feature: keyof typeof PLAN_FEATURES.TRIAL) {
         copilotPromptIntelligence: "Copilot Prompt Intelligence",
         m365OverviewReport: "M365 30-Day Overview Report",
         lifecycleReview: "Site Lifecycle Review Queue",
+        auditStreaming: "Audit Streaming to SIEM",
       };
       const label = featureLabels[feature] || feature;
       await logAuditEvent(req, {
