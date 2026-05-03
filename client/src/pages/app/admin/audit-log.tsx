@@ -1,4 +1,4 @@
-import { Fragment, useState, useCallback, useEffect } from "react";
+import { Fragment, useState, useCallback, useEffect, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -339,11 +339,16 @@ function PerWorkspaceChangesBlock({ entryId, items }: { entryId: string; items: 
 }
 
 export default function AuditLogPage() {
+  const initialParams = useMemo(() => new URLSearchParams(typeof window !== "undefined" ? window.location.search : ""), []);
+  const initialResourceId = initialParams.get("resourceId") || "";
+  const initialResource = initialParams.get("resource") || "";
+
   const [page, setPage] = useState(1);
   const [limit] = useState(50);
   const [filters, setFilters] = useState({
     action: "",
-    resource: "",
+    resource: initialResource,
+    resourceId: initialResourceId,
     userEmail: "",
     result: "",
     startDate: "",
@@ -361,6 +366,7 @@ export default function AuditLogPage() {
     params.set("limit", String(limit));
     if (f.action && f.action !== "ALL") params.set("action", f.action);
     if (f.resource && f.resource !== "ALL") params.set("resource", f.resource);
+    if (f.resourceId) params.set("resourceId", f.resourceId);
     if (f.userEmail) params.set("userEmail", f.userEmail);
     if (f.result && f.result !== "ALL") params.set("result", f.result);
     if (f.startDate) params.set("startDate", f.startDate);
@@ -384,7 +390,7 @@ export default function AuditLogPage() {
   }
 
   function resetFilters() {
-    const empty = { action: "", resource: "", userEmail: "", result: "", startDate: "", endDate: "" };
+    const empty = { action: "", resource: "", resourceId: "", userEmail: "", result: "", startDate: "", endDate: "" };
     setFilters(empty);
     setApplied(empty);
     setPage(1);
@@ -592,6 +598,13 @@ export default function AuditLogPage() {
             </div>
           </div>
 
+          {applied.resourceId && (
+            <div className="mt-3 flex items-center gap-2 text-xs text-primary bg-primary/5 border border-primary/20 rounded-md px-3 py-2" data-testid="banner-filtered-by-resource">
+              <Filter className="w-3.5 h-3.5 shrink-0" />
+              Filtered to workspace: <span className="font-mono font-medium">{applied.resourceId}</span>
+              <Button size="sm" variant="ghost" className="ml-auto h-6 px-2 text-xs" onClick={() => { setFilters(f => ({ ...f, resourceId: "" })); setApplied(a => ({ ...a, resourceId: "" })); }} data-testid="button-clear-resource-filter">Clear</Button>
+            </div>
+          )}
           <div className="flex gap-2 mt-4">
             <Button size="sm" onClick={applyFilters} data-testid="button-apply-filters">Apply Filters</Button>
             <Button size="sm" variant="ghost" onClick={resetFilters} data-testid="button-reset-filters">Reset</Button>

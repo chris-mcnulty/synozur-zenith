@@ -314,6 +314,7 @@ export interface IStorage {
     onlyNullTenant?: boolean;
     action?: string;
     resource?: string;
+    resourceId?: string;
     userId?: string;
     userEmail?: string;
     result?: string;
@@ -323,6 +324,8 @@ export interface IStorage {
     limit?: number;
     offset?: number;
   }): Promise<{ rows: AuditLog[]; total: number }>;
+
+  getAuditEntriesForResource(resourceId: string, actions: string[], limit?: number): Promise<AuditLog[]>;
 
   getAuditStreamConfig(orgId: string): Promise<AuditStreamConfig | undefined>;
   getAuditStreamConfigById(id: string): Promise<AuditStreamConfig | undefined>;
@@ -1814,6 +1817,7 @@ export class DatabaseStorage implements IStorage {
     onlyNullTenant?: boolean;
     action?: string;
     resource?: string;
+    resourceId?: string;
     userId?: string;
     userEmail?: string;
     result?: string;
@@ -1823,7 +1827,7 @@ export class DatabaseStorage implements IStorage {
     limit?: number;
     offset?: number;
   } = {}): Promise<{ rows: AuditLog[]; total: number }> {
-    const { orgId, tenantConnectionId, tenantConnectionIds, onlyNullTenant, action, resource, userId, userEmail, result, startDate, endDate, limit = 100, offset = 0 } = filters;
+    const { orgId, tenantConnectionId, tenantConnectionIds, onlyNullTenant, action, resource, resourceId, userId, userEmail, result, startDate, endDate, limit = 100, offset = 0 } = filters;
     const conditions: any[] = [];
 
     if (orgId) conditions.push(eq(auditLog.organizationId, orgId));
@@ -1842,6 +1846,7 @@ export class DatabaseStorage implements IStorage {
     }
     if (action) conditions.push(eq(auditLog.action, action));
     if (resource) conditions.push(eq(auditLog.resource, resource));
+    if (resourceId) conditions.push(eq(auditLog.resourceId, resourceId));
     if (userId) conditions.push(eq(auditLog.userId, userId));
     if (userEmail) conditions.push(ilike(auditLog.userEmail, `%${userEmail}%`));
     if (result) conditions.push(eq(auditLog.result, result));
@@ -1865,6 +1870,17 @@ export class DatabaseStorage implements IStorage {
     ]);
 
     return { rows, total: countResult[0]?.count ?? 0 };
+  }
+
+  async getAuditEntriesForResource(resourceId: string, actions: string[], limit = 20): Promise<AuditLog[]> {
+    const conditions: any[] = [eq(auditLog.resourceId, resourceId)];
+    if (actions.length > 0) {
+      conditions.push(inArray(auditLog.action, actions));
+    }
+    return db.select().from(auditLog)
+      .where(and(...conditions))
+      .orderBy(desc(auditLog.createdAt))
+      .limit(limit);
   }
 
   // Audit streaming

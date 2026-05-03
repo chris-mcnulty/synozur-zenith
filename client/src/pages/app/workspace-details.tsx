@@ -345,6 +345,18 @@ export default function WorkspaceDetailsPage() {
     return err.message || fallback;
   };
 
+  const canViewAudit =
+    effectiveRole === "platform_owner" ||
+    effectiveRole === "tenant_admin" ||
+    effectiveRole === "governance_admin" ||
+    effectiveRole === "read_only_auditor";
+
+  const { data: ownerAuditData, isLoading: ownerAuditLoading } = useQuery<{ entries: Array<{ id: string; action: string; userEmail: string | null; details: Record<string, any> | null; result: string; createdAt: string }> }>({
+    queryKey: [`/api/workspaces/${id}/owner-audit`],
+    enabled: !!id && canViewAudit,
+    staleTime: 30_000,
+  });
+
   const addOwnerMutation = useMutation({
     mutationFn: async (user: { id: string; userPrincipalName?: string; displayName: string }) => {
       const res = await apiRequest("POST", `/api/workspaces/${id}/owners`, { userId: user.id });
@@ -353,12 +365,14 @@ export default function WorkspaceDetailsPage() {
     onSuccess: (_data, user) => {
       queryClient.invalidateQueries({ queryKey: [`/api/workspaces/${id}`] });
       queryClient.invalidateQueries({ queryKey: [`/api/workspaces/${id}/policy-results`] });
+      queryClient.invalidateQueries({ queryKey: [`/api/workspaces/${id}/owner-audit`] });
       queryClient.invalidateQueries({ queryKey: ["/api/workspaces"] });
       setOwnerSearch("");
       setOwnerSearchOpen(false);
       toast({ title: "Owner added", description: `${user.displayName} is now an owner of this site.` });
     },
     onError: (err: any) => {
+      queryClient.invalidateQueries({ queryKey: [`/api/workspaces/${id}/owner-audit`] });
       toast({ title: "Could not add owner", description: parseErrorMessage(err, "Failed to add owner."), variant: "destructive" });
     },
   });
@@ -372,11 +386,13 @@ export default function WorkspaceDetailsPage() {
     onSuccess: (_data, owner) => {
       queryClient.invalidateQueries({ queryKey: [`/api/workspaces/${id}`] });
       queryClient.invalidateQueries({ queryKey: [`/api/workspaces/${id}/policy-results`] });
+      queryClient.invalidateQueries({ queryKey: [`/api/workspaces/${id}/owner-audit`] });
       queryClient.invalidateQueries({ queryKey: ["/api/workspaces"] });
       setConfirmRemoveOwner(null);
       toast({ title: "Owner removed", description: `${owner.displayName} is no longer an owner of this site.` });
     },
     onError: (err: any) => {
+      queryClient.invalidateQueries({ queryKey: [`/api/workspaces/${id}/owner-audit`] });
       toast({ title: "Could not remove owner", description: parseErrorMessage(err, "Failed to remove owner."), variant: "destructive" });
       setConfirmRemoveOwner(null);
     },
@@ -1280,6 +1296,77 @@ export default function WorkspaceDetailsPage() {
                       );
                     })()}
                   </div>
+
+                  {canViewAudit && <Separator />}
+
+                  {canViewAudit && <div data-testid="section-ownership-activity">
+                    <div className="flex items-center justify-between mb-3 gap-2">
+                      <h3 className="text-sm font-semibold flex items-center gap-2">
+                        <Clock className="w-4 h-4 text-primary" />
+                        Ownership activity
+                      </h3>
+                      {workspace.tenantConnectionId && (
+                        <Link
+                          to={`/app/admin/audit-log?resource=workspace&resourceId=${workspace.id}`}
+                          className="text-[11px] text-primary hover:underline inline-flex items-center gap-0.5"
+                          data-testid="link-ownership-audit-full"
+                        >
+                          View full audit log
+                          <ExternalLink className="w-3 h-3" />
+                        </Link>
+                      )}
+                    </div>
+                    {ownerAuditLoading ? (
+                      <div className="flex items-center gap-2 text-xs text-muted-foreground py-3" data-testid="loading-ownership-activity">
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading activity…
+                      </div>
+                    ) : !ownerAuditData?.entries?.length ? (
+                      <div className="text-xs text-muted-foreground italic py-2" data-testid="text-no-ownership-activity">
+                        No ownership changes recorded yet.
+                      </div>
+                    ) : (
+                      <div className="space-y-1.5" data-testid="list-ownership-activity">
+                        {ownerAuditData.entries.map((entry, idx) => {
+                          const isAdded = entry.action === 'WORKSPACE_OWNER_ADDED';
+                          const isSuccess = entry.result === 'SUCCESS';
+                          const targetUpn = entry.details?.targetUserPrincipalName || entry.details?.userPrincipalName || entry.details?.targetUserId || '—';
+                          const actor = entry.userEmail || '—';
+                          const ts = entry.createdAt ? new Date(entry.createdAt).toLocaleString() : '—';
+                          return (
+                            <div
+                              key={entry.id}
+                              className={`flex items-start gap-2.5 text-xs p-2 rounded-lg ${isSuccess ? (isAdded ? 'bg-emerald-500/5' : 'bg-amber-500/5') : 'bg-destructive/5 border border-destructive/15'}`}
+                              data-testid={`ownership-activity-row-${idx}`}
+                            >
+                              {isSuccess ? (
+                                isAdded
+                                  ? <UserPlus className="w-3.5 h-3.5 text-emerald-500 shrink-0 mt-0.5" />
+                                  : <XIcon className="w-3.5 h-3.5 text-amber-500 shrink-0 mt-0.5" />
+                              ) : (
+                                <AlertTriangle className="w-3.5 h-3.5 text-destructive shrink-0 mt-0.5" />
+                              )}
+                              <div className="min-w-0 flex-1">
+                                <div className="flex items-center gap-1.5 flex-wrap">
+                                  <span className={`font-medium ${isSuccess ? (isAdded ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400') : 'text-destructive'}`}>
+                                    {isAdded ? 'Owner added' : 'Owner removed'}
+                                  </span>
+                                  <Badge variant="outline" className={`text-[9px] px-1 py-0 h-4 ${isSuccess ? 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20' : 'bg-destructive/10 text-destructive border-destructive/20'}`} data-testid={`ownership-activity-result-${idx}`}>
+                                    {isSuccess ? 'Success' : (entry.details?.errorCode || 'Failure')}
+                                  </Badge>
+                                </div>
+                                <div className="text-muted-foreground mt-0.5 truncate">
+                                  <span className="font-medium text-foreground/70" data-testid={`ownership-activity-target-${idx}`}>{targetUpn}</span>
+                                  {' · by '}
+                                  <span data-testid={`ownership-activity-actor-${idx}`}>{actor}</span>
+                                </div>
+                              </div>
+                              <span className="text-muted-foreground whitespace-nowrap shrink-0 text-[10px] mt-0.5" data-testid={`ownership-activity-ts-${idx}`}>{ts}</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>}
 
                   <AlertDialog open={!!confirmRemoveMember} onOpenChange={(o) => { if (!o) setConfirmRemoveMember(null); }}>
                     <AlertDialogContent data-testid="dialog-confirm-remove-member">

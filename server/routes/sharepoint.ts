@@ -939,6 +939,21 @@ router.get("/api/tenants/:tenantConnectionId/users/search", requireRole(ZENITH_R
   res.json({ users: result.users });
 });
 
+router.get("/api/workspaces/:id/owner-audit", requireAuth(), requirePermission('audit:read'), async (req: AuthenticatedRequest, res) => {
+  if (!(await isWorkspaceInScope(req, req.params.id))) {
+    return res.status(404).json({ message: "Workspace not found" });
+  }
+  const workspace = await storage.getWorkspace(req.params.id);
+  if (!workspace) return res.status(404).json({ message: "Workspace not found" });
+
+  const entries = await storage.getAuditEntriesForResource(
+    workspace.id,
+    ['WORKSPACE_OWNER_ADDED', 'WORKSPACE_OWNER_REMOVED'],
+    20,
+  );
+  res.json({ entries });
+});
+
 router.post("/api/workspaces/:id/owners", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN), requireFeature("ownershipManagement"), async (req: AuthenticatedRequest, res) => {
   if (!(await isWorkspaceInScope(req, req.params.id))) {
     return res.status(404).json({ message: "Workspace not found" });
@@ -994,6 +1009,7 @@ router.post("/api/workspaces/:id/owners", requireRole(ZENITH_ROLES.GOVERNANCE_AD
   let userId = parsed.data.userId;
   let resolvedUpn = parsed.data.userPrincipalName;
   if (!userId && parsed.data.userPrincipalName) {
+    // Lookup by UPN → resolve to id
     try {
       const lookupRes = await fetch(`https://graph.microsoft.com/v1.0/users/${encodeURIComponent(parsed.data.userPrincipalName)}?$select=id,displayName,mail,userPrincipalName`, {
         headers: { Authorization: `Bearer ${graphToken}` },
@@ -1008,6 +1024,17 @@ router.post("/api/workspaces/:id/owners", requireRole(ZENITH_ROLES.GOVERNANCE_AD
       await storage.createAuditEntry({ ...auditBase, details: { workspaceName: workspace.displayName, userPrincipalName: parsed.data.userPrincipalName, error: 'User not found in directory' }, result: 'FAILURE' });
       return res.status(404).json({ message: "User not found in this tenant's directory.", errorCode: "USER_NOT_FOUND" });
     }
+  } else if (userId && !resolvedUpn) {
+    // UI sent only userId — resolve UPN eagerly so all audit entries carry a human-readable identifier.
+    try {
+      const lookupRes = await fetch(`https://graph.microsoft.com/v1.0/users/${encodeURIComponent(userId)}?$select=id,mail,userPrincipalName`, {
+        headers: { Authorization: `Bearer ${graphToken}` },
+      });
+      if (lookupRes.ok) {
+        const lookupData = await lookupRes.json();
+        resolvedUpn = lookupData.userPrincipalName || lookupData.mail;
+      }
+    } catch {}
   }
 
   const result = await addGroupOwner(graphToken, groupId, userId!);
@@ -1023,6 +1050,12 @@ router.post("/api/workspaces/:id/owners", requireRole(ZENITH_ROLES.GOVERNANCE_AD
   }
 
   const refreshed = await refreshOwnersFromGraph(graphToken, workspace.id, workspace.m365ObjectId);
+
+  // If the UI sent only a userId (no UPN), derive the UPN from the refreshed owner list.
+  if (!resolvedUpn) {
+    const match = refreshed.owners.find((o: any) => o.id === userId);
+    if (match) resolvedUpn = match.userPrincipalName || match.mail;
+  }
 
   await storage.createAuditEntry({ ...auditBase, details: { workspaceName: workspace.displayName, targetUserId: userId, targetUserPrincipalName: resolvedUpn, ownerCount: refreshed.count }, result: 'SUCCESS' });
 

@@ -201,7 +201,7 @@ router.get("/api/dashboard", requireAuth(), async (req: AuthenticatedRequest, re
 });
 
 // ── Audit Log ──
-router.get("/api/audit-log", requireAuth(), requireRole(ZENITH_ROLES.PLATFORM_OWNER, ZENITH_ROLES.TENANT_ADMIN, ZENITH_ROLES.AUDITOR), async (req: AuthenticatedRequest, res) => {
+router.get("/api/audit-log", requireAuth(), requireRole(ZENITH_ROLES.PLATFORM_OWNER, ZENITH_ROLES.TENANT_ADMIN, ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.AUDITOR), async (req: AuthenticatedRequest, res) => {
   try {
     const orgId = req.user?.role === ZENITH_ROLES.PLATFORM_OWNER
       ? (req.query.orgId as string | undefined)
@@ -210,6 +210,7 @@ router.get("/api/audit-log", requireAuth(), requireRole(ZENITH_ROLES.PLATFORM_OW
     const {
       action,
       resource,
+      resourceId,
       userId,
       userEmail,
       result,
@@ -272,6 +273,7 @@ router.get("/api/audit-log", requireAuth(), requireRole(ZENITH_ROLES.PLATFORM_OW
       onlyNullTenant: restrictToNullTenant,
       action: action || undefined,
       resource: resource || undefined,
+      resourceId: resourceId || undefined,
       userId: userId || undefined,
       userEmail: userEmail || undefined,
       result: result || undefined,
