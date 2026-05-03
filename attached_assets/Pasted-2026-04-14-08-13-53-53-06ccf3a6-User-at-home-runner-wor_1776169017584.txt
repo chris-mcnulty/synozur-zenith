@@ -1,0 +1,152 @@
+2026-04-14 08:13:53.53
+06ccf3a6
+User
+at /home/runner/workspace/dist/index.cjs:65:14993
+2026-04-14 08:15:30.08
+06ccf3a6
+User
+12:15:30 PM [express] GET /api/organization 304 in 72ms :: {"id":"742dff7e-4237-49c4-bf7e-a43e9c94ff41","name":"Synozur","domain":"synozur.com","servicePlan":"ENTERPRISE","planStartedAt":"2026-03-06T21:04:40.320Z","supportEmail":null,"azureTenantId":"b4fbeaf7-1c91-43bb-8031-49eb8d4175ee","enforceSso":false,"allowLocalAuth":true,"allowedDomains":["synozur.com"],"inviteOnly":false,"createdAt":"2026-03-06T21:04:04.080Z","features":{"label":"Unlimited Enterprise","m365WriteBack":true,"provisioning":true,"inventorySync":true,"copilotReadiness":true,"lifecycleAutomation":true,"selfServicePortal":true,"advancedReporting":true,"dataMasking":true,"csvExport":true,"mspAccess":true,"contentGovernanceReporting":"full","sharingLinkManagement":"full","governanceReviews":"full","licensingDashboard":"full","licensingOptimization":"full","emailContentStorageReport":true,"iaAssessment":true,"contentIntensityHeatmap":true,"copilotPromptIntelligence":true,"trendRetentionDays":-1,"maxUsers":-1,"maxTenants":-1,"maxSites":-1,"auditRetentionDays":-1}}
+2026-04-14 08:15:30.25
+06ccf3a6
+User
+12:15:30 PM [express] GET /api/auth/me 304 in 98ms :: {"user":{"id":"eea51c43-2f7a-4173-9b17-19327e49ffaf","email":"chris.mcnulty@synozur.com","name":"Chris McNulty","role":"platform_owner","organizationId":"742dff7e-4237-49c4-bf7e-a43e9c94ff41","emailVerified":true,"authProvider":"entra","azureObjectId":"8b60ffa0-aec0-4a9d-8ffe-d558c30d4799","azureTenantId":"b4fbeaf7-1c91-43bb-8031-49eb8d4175ee","lastLoginAt":"2026-04-14T12:10:40.724Z","createdAt":"2026-03-06T21:04:04.130Z","effectiveRole":"platform_owner"},"organization":{"id":"742dff7e-4237-49c4-bf7e-a43e9c94ff41","name":"Synozur","domain":"synozur.com","servicePlan":"ENTERPRISE","planStartedAt":"2026-03-06T21:04:40.320Z","supportEmail":null,"azureTenantId":"b4fbeaf7-1c91-43bb-8031-49eb8d4175ee","enforceSso":false,"allowLocalAuth":true,"allowedDomains":["synozur.com"],"inviteOnly":false,"createdAt":"2026-03-06T21:04:04.080Z"},"activeOrganizationId":"742dff7e-4237-49c4-bf7e-a43e9c94ff41","membershipCount":1}
+2026-04-14 08:15:30.43
+06ccf3a6
+User
+12:15:30 PM [express] GET /api/admin/tenants 304 in 223ms :: [{"id":"e98fd547-0e7f-466d-af1b-412ab75355bd","tenantId":"b4fbeaf7-1c91-43bb-8031-49eb8d4175ee","tenantName":"The Synozur Alliance","domain":"synozur.onmicrosoft.com","organizationId":"742dff7e-4237-49c4-bf7e-a43e9c94ff41","ownershipType":"Hybrid","installMode":"MSP","status":"ACTIVE","lastSyncAt":"2026-04-13T15:28:36.276Z","lastSyncStatus":"SUCCESS","lastSyncSiteCount":88,"consentGranted":true,"isDemo":false,"dataMaskingEnabled":false,"onedriveInventoryEnabled":true,"recordingsDiscoveryEnabled":true,"teamsDiscoveryEnabled":true,"telemetryEnabled":true,"speDiscoveryEnabled":true,"contentGovernanceEnabled":true,"licensingEnabled":true,"createdAt":"2026-03-06T21:08:07.057Z"},{"id":"76f78e8d-7cc7-4c80-ad51-359b241ac481","tenantId":"f4c92057-748b-4243-9c93-68c50551ab02","tenantName":"reveillesoftware","domain":"reveillesoftware.com","organizationId":"fd346520-20f7-4238-8900-38aa0394445c","ownershipType":"Customer","installMode":"CUSTOMER","status":"ACTIVE","lastSyncAt":"2026-04-09T16:59:27.553Z","lastSyncStatus":"SUCCESS_WITH_WARNINGS","lastSyncSiteCount":53,"consentGranted":true,"isDemo":false,"dataMaskingEnabled":true,"onedriveInventoryEnabled":false,"recordingsDiscoveryEnabled":false,"teamsDiscoveryEnabled":false,"telemetryEnabled":false,"speDiscoveryEnabled":false,"contentGovernanceEnabled":false,"licensingEnabled":false,"createdAt":"2026-03-25T19:57:55.401Z","isGrantedAccess":true},{"id":"93d14f36-3111-4508-b13f-808e9c7ab8b0","tenantId":"e8ae3614-c17a-4336-904e-d141718c94f1","tenantName":"Cascadia Oceanic","domain":"chrismcnulty.net","organizationId":"b640eff0-49d1-43ff-a89c-e112a8e88025","ownershipType":"Customer","installMode":"CUSTOMER","status":"ACTIVE","lastSyncAt":"2026-04-09T19:46:51.997Z","lastSyncStatus":"SUCCESS_WITH_WARNINGS","lastSyncSiteCount":10,"consentGranted":true,"isDemo":false,"dataMaskingEnabled":true,"onedriveInventoryEnabled":true,"recordingsDiscoveryEnabled":true,"teamsDiscoveryEnabled":true,"telemetryEnabled":true,"speDiscoveryEnabled":true,"contentGovernanceEnabled":true,"licensingEnabled":true,"createdAt":"2026-04-09T19:43:20.718Z","isGrantedAccess":true}]
+2026-04-14 08:15:30.89
+06ccf3a6
+User
+params: e98fd547-0e7f-466d-af1b-412ab75355bd,COMPLETED,1
+2026-04-14 08:15:30.89
+06ccf3a6
+User
+at async /home/runner/workspace/dist/index.cjs:72:40740
+2026-04-14 08:15:30.89
+06ccf3a6
+User
+at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+2026-04-14 08:15:30.89
+06ccf3a6
+User
+at async /home/runner/workspace/dist/index.cjs:714:4535 {
+2026-04-14 08:15:30.89
+06ccf3a6
+User
+... 2 lines matching cause stack trace ...
+2026-04-14 08:15:30.89
+06ccf3a6
+User
+cause: error: relation "copilot_prompt_assessments" does not exist
+2026-04-14 08:15:30.89
+06ccf3a6
+User
+at async q4 (/home/runner/workspace/dist/index.cjs:670:26309)
+2026-04-14 08:15:30.89
+06ccf3a6
+User
+at async t.getLatestCopilotPromptAssessment (/home/runner/workspace/dist/index.cjs:98:13416)
+2026-04-14 08:15:30.89
+06ccf3a6
+User
+at async /home/runner/workspace/dist/index.cjs:714:4535 {
+2026-04-14 08:15:30.89
+06ccf3a6
+User
+severity: 'ERROR',
+2026-04-14 08:15:30.89
+06ccf3a6
+User
+params: [ 'e98fd547-0e7f-466d-af1b-412ab75355bd', 'COMPLETED', 1 ],
+2026-04-14 08:15:30.89
+06ccf3a6
+User
+length: 126,
+2026-04-14 08:15:30.89
+06ccf3a6
+User
+at async _0.queryWithCache (/home/runner/workspace/dist/index.cjs:72:37240)
+2026-04-14 08:15:30.89
+06ccf3a6
+User
+at async /home/runner/workspace/dist/index.cjs:72:40949
+2026-04-14 08:15:30.89
+06ccf3a6
+User
+query: 'select "id", "organization_id", "tenant_connection_id", "status", "triggered_by", "interaction_count", "user_count", "date_range_start", "date_range_end", "org_summary", "department_breakdown", "user_breakdown", "executive_summary", "recommendations", "model_used", "tokens_used", "started_at", "completed_at", "error", "created_at" from "copilot_prompt_assessments" where ("copilot_prompt_assessments"."tenant_connection_id" = $1 and "copilot_prompt_assessments"."status" = $2) order by "copilot_prompt_assessments"."created_at" desc limit $3',
+2026-04-14 08:15:30.89
+06ccf3a6
+User
+at /home/runner/workspace/dist/index.cjs:65:14993
+2026-04-14 08:15:30.89
+06ccf3a6
+User
+at async /home/runner/workspace/dist/index.cjs:72:40740
+2026-04-14 08:15:30.89
+06ccf3a6
+User
+at async /home/runner/workspace/dist/index.cjs:72:40740
+2026-04-14 08:15:30.89
+06ccf3a6
+User
+at /home/runner/workspace/dist/index.cjs:65:14993
+2026-04-14 08:15:30.89
+06ccf3a6
+User
+query: 'select "id", "organization_id", "tenant_connection_id", "status", "triggered_by", "interaction_count", "user_count", "date_range_start", "date_range_end", "org_summary", "department_breakdown", "user_breakdown", "executive_summary", "recommendations", "model_used", "tokens_used", "started_at", "completed_at", "error", "created_at" from "copilot_prompt_assessments" where ("copilot_prompt_assessments"."tenant_connection_id" = $1 and "copilot_prompt_assessments"."status" = $2) order by "copilot_prompt_assessments"."created_at" desc limit $3',
+2026-04-14 08:15:30.89
+06ccf3a6
+User
+at async /home/runner/workspace/dist/index.cjs:72:40949
+2026-04-14 08:15:30.89
+06ccf3a6
+User
+at async _0.queryWithCache (/home/runner/workspace/dist/index.cjs:72:37240)
+2026-04-14 08:15:30.89
+06ccf3a6
+User
+length: 126,
+2026-04-14 08:15:30.89
+06ccf3a6
+User
+params: [ 'e98fd547-0e7f-466d-af1b-412ab75355bd', 'COMPLETED', 1 ],
+2026-04-14 08:15:30.89
+06ccf3a6
+User
+severity: 'ERROR',
+2026-04-14 08:15:30.89
+06ccf3a6
+User
+at async /home/runner/workspace/dist/index.cjs:714:4535 {
+2026-04-14 08:15:30.89
+06ccf3a6
+User
+at async t.getLatestCopilotPromptAssessment (/home/runner/workspace/dist/index.cjs:98:13416)
+2026-04-14 08:15:30.89
+06ccf3a6
+User
+at async q4 (/home/runner/workspace/dist/index.cjs:670:26309)
+2026-04-14 08:15:30.89
+06ccf3a6
+User
+cause: error: relation "copilot_prompt_assessments" does not exist
+2026-04-14 08:15:30.89
+06ccf3a6
+User
+... 2 lines matching cause stack trace ...
+2026-04-14 08:15:30.89
+06ccf3a6
+User
+at async /home/runner/workspace/dist/index.cjs:714:4535 {
+2026-04-14 08:15:30.89
+06ccf3a6
+User
+at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+2026-04-14 08:15:30.89
+06ccf3a6
+User
+at async /home/runner/workspace/dist/index.cjs:72:40740
+2026-04-14 08:15:30.89
+06ccf3a6
+User
+params: e98fd547-0e7f-466d-af1b-412ab7

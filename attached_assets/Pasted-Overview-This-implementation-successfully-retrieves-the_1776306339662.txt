@@ -1,0 +1,240 @@
+Overview
+This implementation successfully retrieves the full history of Microsoft 365 Copilot prompts and AI responses (per-user, per-session, per-request-pair) via the Microsoft Graph Beta API, specifically the getAllEnterpriseInteractions endpoint. The data is stored in a PostgreSQL database and exposed via REST API endpoints with session/pair drill-down.
+
+The key insight that made this work where other agents failed: the API is per-user — you must enumerate every licensed member user first, then call the interaction history endpoint individually for each one. There is no tenant-wide single-call endpoint.
+
+Prerequisites
+1. Azure AD App Registration Permissions
+Your app registration needs this Application permission (not Delegated):
+
+Permission	API	Purpose
+AiEnterpriseInteraction.Read.All	Microsoft Graph	Read all Copilot interaction history
+User.Read.All	Microsoft Graph	Enumerate tenant users
+Admin consent is required for both.
+
+2. The Graph API Endpoint (Beta)
+Code
+GET https://graph.microsoft.com/beta/copilot/users/{userId}/interactionHistory/getAllEnterpriseInteractions
+This is a beta endpoint (not v1.0).
+Must be called per-user, not tenant-wide.
+Supports $filter on createdDateTime for incremental collection.
+Supports $top and @odata.nextLink pagination.
+Token Acquisition (Client Credentials Flow)
+TypeScript
+// server/azureAuth.ts
+
+const tokenCache = new Map<string, { accessToken: string; expiresAt: number }>();
+
+export async function getClientCredentialsToken(azureTenantId: string): Promise<string> {
+  const cached = tokenCache.get(azureTenantId);
+  if (cached && cached.expiresAt > Date.now() + 60_000) {
+    return cached.accessToken; // reuse cached token, refresh 60s before expiry
+  }
+
+  const body = new URLSearchParams({
+    client_id: process.env.AZURE_CLIENT_ID!,
+    client_secret: process.env.AZURE_CLIENT_SECRET!,
+    scope: "https://graph.microsoft.com/.default",
+    grant_type: "client_credentials",
+  });
+
+  const response = await fetch(
+    `https://login.microsoftonline.com/${azureTenantId}/oauth2/v2.0/token`,
+    { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: body.toString() }
+  );
+
+  const data = await response.json();
+  tokenCache.set(azureTenantId, {
+    accessToken: data.access_token,
+    expiresAt: Date.now() + (data.expires_in || 3600) * 1000,
+  });
+  return data.access_token;
+}
+Database Schema
+TypeScript
+// shared/schema.ts (Drizzle ORM + PostgreSQL)
+
+export const copilotInteractions = pgTable("copilot_interactions", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id").notNull().references(() => tenants.id),
+  interactionId: text("interaction_id").notNull().unique(),   // Graph API interaction ID — unique constraint prevents duplicates
+  requestId: text("request_id"),     // Groups a userPrompt ↔ aiResponse pair
+  sessionId: text("session_id"),     // Groups a full conversation thread
+  interactionType: text("interaction_type").notNull(), // "userPrompt" | "aiResponse"
+  appClass: text("app_class"),       // e.g. "IPM.SkypeTeams.Message.Copilot.Word"
+  userId: text("user_id"),           // UPN of the user
+  userName: text("user_name"),
+  bodyContent: text("body_content"), // The prompt text or AI response text
+  bodyContentType: text("body_content_type"),
+  contexts: jsonb("contexts").$type<any[]>(),
+  attachments: jsonb("attachments").$type<any[]>(),
+  links: jsonb("links").$type<any[]>(),
+  mentions: jsonb("mentions").$type<any[]>(),
+  rawData: jsonb("raw_data").$type<Record<string, any>>(),
+  createdAt: timestamp("created_at").notNull(),
+  collectedAt: timestamp("collected_at").notNull().defaultNow(),
+});
+Key design decisions:
+
+interactionId has a UNIQUE constraint — re-running the collector is idempotent (duplicates are silently skipped).
+requestId links a user prompt to its AI response (same ID on both).
+sessionId links all turns in a conversation thread.
+Core Collector
+TypeScript
+// server/collectors/copilotInteractions.ts
+
+export async function collectCopilotInteractions(tenantId: string): Promise<{
+  usersProcessed: number;
+  interactionsCollected: number;
+  errors: string[];
+}> {
+  const errors: string[] = [];
+  let usersProcessed = 0;
+  let interactionsCollected = 0;
+
+  // Step 1: Get an access token for this tenant
+  const tenant = await storage.getTenant(tenantId);
+  const token = await getClientCredentialsToken(tenant.azureTenantId);
+
+  // Step 2: Get the list of member users (skip guests and #EXT# external accounts)
+  //   Option A: reuse from siteUsers report if already collected (preferred — avoids an extra Graph call)
+  //   Option B: call Graph directly
+  let users = await getUsersFromReportOrGraph(token, tenantId);
+
+  // Step 3: For each user, determine their last-collected interaction date
+  //         (enables incremental collection — don't re-fetch what we already have)
+  for (const user of users) {
+    const lastDate = await storage.getLatestCopilotInteractionDateForUser(tenantId, user.userPrincipalName);
+
+    // Build $filter for incremental collection
+    const filterParam = lastDate
+      ? `&$filter=createdDateTime gt ${lastDate.toISOString()}`
+      : "";
+
+    // Step 4: Paginate through this user's interaction history
+    let url: string | null =
+      `https://graph.microsoft.com/beta/copilot/users/${user.id}/interactionHistory/getAllEnterpriseInteractions?$top=100${filterParam}`;
+
+    while (url) {
+      const resp = await fetch(url, { headers: { Authorization: `****** } });
+
+      // 403 = no Copilot license or missing permission for this user — skip gracefully
+      // 404 = user has no mailbox / not provisioned — skip gracefully
+      if (resp.status === 403 || resp.status === 404) break;
+
+      const data = await resp.json();
+
+      for (const interaction of data.value || []) {
+        try {
+          await storage.createCopilotInteraction({
+            tenantId,
+            interactionId: interaction.id,           // unique — DB constraint deduplicates
+            requestId: interaction.requestId,         // prompt ↔ response pairing key
+            sessionId: interaction.sessionId,         // conversation thread key
+            interactionType: interaction.interactionType, // "userPrompt" or "aiResponse"
+            appClass: interaction.appClass,           // which Copilot surface
+            userId: user.userPrincipalName,
+            userName: user.displayName,
+            bodyContent: interaction.body?.content,
+            bodyContentType: interaction.body?.contentType,
+            contexts: interaction.contexts,
+            attachments: interaction.attachments,
+            links: interaction.links,
+            mentions: interaction.mentions,
+            rawData: interaction,
+            createdAt: new Date(interaction.createdDateTime),
+          });
+          interactionsCollected++;
+        } catch (err: any) {
+          // Ignore unique constraint violations (already collected)
+          if (err.message?.includes("duplicate") || err.message?.includes("unique")) continue;
+          errors.push(`Failed to save ${interaction.id}: ${err.message}`);
+        }
+      }
+
+      // Follow pagination
+      url = data["@odata.nextLink"] || null;
+      if (url) await delay(100); // rate-limit courtesy delay
+    }
+
+    usersProcessed++;
+    await delay(300); // stagger per-user calls to avoid throttling
+  }
+
+  return { usersProcessed, interactionsCollected, errors };
+}
+Scheduler Integration
+The collector runs every hour via a Node.js setInterval, only for tenants with admin consent (consentStatus === "Connected"):
+
+TypeScript
+// server/scheduler.ts
+
+// Runs on a 1-hour interval; initial run staggered 65s after server start
+copilotInteractionsInterval = setInterval(() => runCopilotInteractionsJob(), 60 * 60 * 1000);
+setTimeout(() => runCopilotInteractionsNow(), 65_000);
+
+// Manual trigger available via API: POST /api/scheduler/trigger?jobType=copilotInteractions
+REST API Endpoints
+TypeScript
+// server/routes.ts
+
+// List interactions with optional filters
+GET /api/tenants/:tenantId/copilot-interactions
+  ?userId=   ?appClass=   ?sessionId=   ?limit=
+
+// Aggregate stats (totals, unique users/sessions, app breakdown, success rate)
+GET /api/tenants/:tenantId/copilot-interactions/stats
+
+// Session list (paginated, sortable, filterable by status/user/app/date)
+GET /api/tenants/:tenantId/copilot-interactions/session-list
+  ?appClass=   ?userId=   ?status=success|partial|failed
+  ?dateFrom=   ?dateTo=   ?offset=   ?limit=   ?sortBy=turns|userId|latestTime   ?sortOrder=asc|desc
+
+// Full conversation thread for a session
+GET /api/tenants/:tenantId/copilot-interactions/sessions/:sessionId
+
+// Prompt ↔ response pair
+GET /api/tenants/:tenantId/copilot-interactions/pairs/:requestId
+Session-Grouped SQL Query
+The most powerful query: groups raw userPrompt/aiResponse rows into session-level summaries with response rate ("success rate") filtering — all in a single round-trip using a window function for the total count:
+
+SQL
+-- server/storage.ts  getCopilotSessions()
+SELECT
+  session_id                                           AS "sessionId",
+  max(CASE WHEN interaction_type = 'userPrompt' THEN user_id END)   AS "userId",
+  max(CASE WHEN interaction_type = 'userPrompt' THEN user_name END) AS "userName",
+  max(app_class)                                       AS "appClass",
+  count(CASE WHEN interaction_type = 'userPrompt' THEN 1 END)::int  AS "turns",
+  max(created_at)::text                                AS "latestTime",
+  -- First prompt text in the session (for preview)
+  (array_agg(body_content ORDER BY created_at)
+     FILTER (WHERE interaction_type = 'userPrompt'))[1] AS "firstPrompt",
+  count(CASE WHEN interaction_type = 'userPrompt' THEN 1 END)::int  AS "promptCount",
+  count(DISTINCT CASE WHEN interaction_type = 'aiResponse' THEN request_id END)::int AS "responseCount",
+  count(*) OVER()                                      AS "totalCount"   -- no extra COUNT query needed
+FROM copilot_interactions
+WHERE tenant_id = $1
+  -- optional: AND app_class = $2, AND user_id ILIKE $3, AND created_at >= $4, etc.
+GROUP BY session_id
+-- Status filter via HAVING:
+-- success:  HAVING prompts <= answered_responses
+-- partial:  HAVING prompts > answered_responses AND answered_responses > 0
+-- failed:   HAVING answered_responses = 0
+HAVING ...
+ORDER BY max(created_at) DESC   -- or turns, userId
+LIMIT 25 OFFSET 0;
+Session status logic:
+
+success — every prompt has a matching AI response
+partial — some but not all prompts were answered
+failed — no AI responses at all (Copilot didn't respond)
+Key Lessons Learned
+Challenge	Solution
+No tenant-wide endpoint	Must enumerate users first, then call per-user
+Guest/external users cause 404	Filter out #EXT# UPNs and userType === "guest" before iterating
+Re-running collects duplicates	UNIQUE constraint on interactionId; catch and skip on insert
+Rate limiting across many users	100ms delay between pages, 300ms between users
+Incremental collection	Track MAX(created_at) per user; use $filter=createdDateTime gt {date}
+Token for multi-tenant	Per-tenant azureTenantId in DB; cached token per tenant with 60s pre-expiry refresh
+Copilot not licensed for all users	Gracefully skip 403/404 without crashing or logging noise

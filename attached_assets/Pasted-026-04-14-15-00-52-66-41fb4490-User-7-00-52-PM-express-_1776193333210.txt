@@ -1,0 +1,52 @@
+026-04-14 15:00:52.66
+41fb4490
+User
+7:00:52 PM [express] GET /api/copilot-prompt-intelligence/assessments 200 in 149ms :: {"rows":[],"total":0,"limit":20,"offset":0}
+2026-04-14 15:00:58.48
+41fb4490
+User
+7:00:58 PM [express] POST /api/copilot-prompt-intelligence/sync 202 in 202ms :: {"syncRunId":"80dd80fc-c680-4a6d-8be6-051ed8635d2d","message":"Copilot interaction sync started","tenantConnectionId":"e98fd547-0e7f-466d-af1b-412ab75355bd"}
+2026-04-14 15:01:02.27
+41fb4490
+User
+[copilot-interaction-sync] user=eefecda3-9672-40b1-acc2-bd012bec91b4 $filter rejected ({"error":{"code":"BadRequest","message":"Invalid '$filterTransformer' query. Missing 'createdDateTime' value.","innerError":{"date":"2026-04); falling back to unfiltered paging (max 10 pages)
+2026-04-14 15:01:02.27
+41fb4490
+User
+[copilot-interaction-sync] user=eefecda3-9672-40b1-acc2-bd012bec91b4 $filter rejected ({"error":{"code":"BadRequest","message":"Invalid '$filterTransformer' query. Missing 'createdDateTime' value.","innerError":{"date":"2026-04); falling back to unfiltered paging (max 10 pages)
+2026-04-14 15:01:43.21
+41fb4490
+User
+[graph] HTTP 429; retrying in 1s (attempt 1/5)
+2026-04-14 15:01:43.64
+41fb4490
+User
+7:01:43 PM [express] GET /api/admin/tenants 304 in 177ms :: [{"id":"e98fd547-0e7f-466d-af1b-412ab75355bd","tenantId":"b4fbeaf7-1c91-43bb-8031-49eb8d4175ee","tenantName":"The Synozur Alliance","domain":"synozur.onmicrosoft.com","organizationId":"742dff7e-4237-49c4-bf7e-a43e9c94ff41","ownershipType":"Hybrid","installMode":"MSP","status":"ACTIVE","lastSyncAt":"2026-04-13T15:28:36.276Z","lastSyncStatus":"SUCCESS","lastSyncSiteCount":88,"consentGranted":true,"isDemo":false,"dataMaskingEnabled":false,"onedriveInventoryEnabled":true,"recordingsDiscoveryEnabled":true,"teamsDiscoveryEnabled":true,"telemetryEnabled":true,"speDiscoveryEnabled":true,"contentGovernanceEnabled":true,"licensingEnabled":true,"createdAt":"2026-03-06T21:08:07.057Z"},{"id":"76f78e8d-7cc7-4c80-ad51-359b241ac481","tenantId":"f4c92057-748b-4243-9c93-68c50551ab02","tenantName":"reveillesoftware","domain":"reveillesoftware.com","organizationId":"fd346520-20f7-4238-8900-38aa0394445c","ownershipType":"Customer","installMode":"CUSTOMER","status":"ACTIVE","lastSyncAt":"2026-04-09T16:59:27.553Z","lastSyncStatus":"SUCCESS_WITH_WARNINGS","lastSyncSiteCount":53,"consentGranted":true,"isDemo":false,"dataMaskingEnabled":true,"onedriveInventoryEnabled":false,"recordingsDiscoveryEnabled":false,"teamsDiscoveryEnabled":false,"telemetryEnabled":false,"speDiscoveryEnabled":false,"contentGovernanceEnabled":false,"licensingEnabled":false,"createdAt":"2026-03-25T19:57:55.401Z","isGrantedAccess":true},{"id":"93d14f36-3111-4508-b13f-808e9c7ab8b0","tenantId":"e8ae3614-c17a-4336-904e-d141718c94f1","tenantName":"Cascadia Oceanic","domain":"chrismcnulty.net","organizationId":"b640eff0-49d1-43ff-a89c-e112a8e88025","ownershipType":"Customer","installMode":"CUSTOMER","status":"ACTIVE","lastSyncAt":"2026-04-09T19:46:51.997Z","lastSyncStatus":"SUCCESS_WITH_WARNINGS","lastSyncSiteCount":10,"consentGranted":true,"isDemo":false,"dataMaskingEnabled":true,"onedriveInventoryEnabled":true,"recordingsDiscoveryEnabled":true,"teamsDiscoveryEnabled":true,"telemetryEnabled":true,"speDiscoveryEnabled":true,"contentGovernanceEnabled":true,"licensingEnabled":true,"createdAt":"2026-04-09T19:43:20.718Z","isGrantedAccess":true}]
+2026-04-14 15:01:43.72
+41fb4490
+User
+7:01:43 PM [express] GET /api/organization 304 in 60ms :: {"id":"742dff7e-4237-49c4-bf7e-a43e9c94ff41","name":"Synozur","domain":"synozur.com","servicePlan":"ENTERPRISE","planStartedAt":"2026-03-06T21:04:40.320Z","supportEmail":null,"azureTenantId":"b4fbeaf7-1c91-43bb-8031-49eb8d4175ee","enforceSso":false,"allowLocalAuth":true,"allowedDomains":["synozur.com"],"inviteOnly":false,"createdAt":"2026-03-06T21:04:04.080Z","features":{"label":"Unlimited Enterprise","m365WriteBack":true,"provisioning":true,"inventorySync":true,"copilotReadiness":true,"lifecycleAutomation":true,"selfServicePortal":true,"advancedReporting":true,"dataMasking":true,"csvExport":true,"mspAccess":true,"contentGovernanceReporting":"full","sharingLinkManagement":"full","governanceReviews":"full","licensingDashboard":"full","licensingOptimization":"full","emailContentStorageReport":true,"iaAssessment":true,"contentIntensityHeatmap":true,"copilotPromptIntelligence":true,"trendRetentionDays":-1,"maxUsers":-1,"maxTenants":-1,"maxSites":-1,"auditRetentionDays":-1}}
+2026-04-14 15:01:43.87
+41fb4490
+User
+7:01:43 PM [express] GET /api/auth/me 304 in 89ms :: {"user":{"id":"eea51c43-2f7a-4173-9b17-19327e49ffaf","email":"chris.mcnulty@synozur.com","name":"Chris McNulty","role":"platform_owner","organizationId":"742dff7e-4237-49c4-bf7e-a43e9c94ff41","emailVerified":true,"authProvider":"entra","azureObjectId":"8b60ffa0-aec0-4a9d-8ffe-d558c30d4799","azureTenantId":"b4fbeaf7-1c91-43bb-8031-49eb8d4175ee","lastLoginAt":"2026-04-14T19:00:47.341Z","createdAt":"2026-03-06T21:04:04.130Z","effectiveRole":"platform_owner"},"organization":{"id":"742dff7e-4237-49c4-bf7e-a43e9c94ff41","name":"Synozur","domain":"synozur.com","servicePlan":"ENTERPRISE","planStartedAt":"2026-03-06T21:04:40.320Z","supportEmail":null,"azureTenantId":"b4fbeaf7-1c91-43bb-8031-49eb8d4175ee","enforceSso":false,"allowLocalAuth":true,"allowedDomains":["synozur.com"],"inviteOnly":false,"createdAt":"2026-03-06T21:04:04.080Z"},"activeOrganizationId":"742dff7e-4237-49c4-bf7e-a43e9c94ff41","membershipCount":1}
+2026-04-14 15:01:44.14
+41fb4490
+User
+7:01:44 PM [express] GET /api/copilot-prompt-intelligence/assessments 304 in 340ms :: {"rows":[],"total":0,"limit":20,"offset":0}
+2026-04-14 15:01:44.14
+41fb4490
+User
+7:01:44 PM [express] GET /api/copilot-prompt-intelligence/assessments/latest 404 in 332ms :: {"message":"No completed assessment found"}
+2026-04-14 15:01:44.87
+41fb4490
+User
+[graph] HTTP 429; retrying in 2s (attempt 2/5)
+2026-04-14 15:01:47.51
+41fb4490
+User
+[graph] HTTP 429; retrying in 4s (attempt 3/5)
+2026-04-14 15:01:52.29
+41fb4490
+User
+[graph] HTTP 429; retrying in 8s (attempt 4/5)

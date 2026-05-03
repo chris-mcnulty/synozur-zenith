@@ -1,0 +1,33 @@
+Improvement 1 — Progress tracking (small, ~30 min)
+Problem: Today items_processed and items_total are NULL, so there's no way to see how far the scan got before a restart.
+
+Changes:
+
+In runSharingLinkDiscovery, before the main SharePoint loop, count the workspaces and OneDrive drives → set itemsTotal on the job row.
+After each site/drive is processed, increment itemsProcessed and update progressLabel (e.g. "SharePoint sites: 47/120" then "OneDrive drives: 12/45").
+Use storage.updateScheduledJobRunProgress (or add it if not present — it's a one-line method).
+Result: The Job Monitor / Data Freshness pages show a live progress bar. Even when a deploy kills the run, you'll see exactly which site it was on. Zero risk of breakage.
+
+Improvement 2 — Resumability across restarts (medium, ~2 hr)
+Problem: A deploy mid-run wastes 1–3 hours of Graph calls. The next run starts from site #1.
+
+Approach: Add a per-run "checkpoint cursor" so a restarted run can pick up where the killed one left off.
+
+Changes:
+
+Schema — add two nullable columns to sharing_link_discovery_runs:
+lastProcessedSpoSiteId text
+lastProcessedOneDriveId text
+phase text ('spo' | 'onedrive' | 'cleanup' | 'done')
+Discovery logic — at the start of runSharingLinkDiscovery:
+Look for the most recent failed/orphaned run for this tenant from the last ~6 hours.
+If found and the failure reason was "Process restarted — job orphaned", resume from its checkpoint instead of starting fresh: skip already-processed sites and start from the saved cursor.
+Otherwise, start a brand-new run from the beginning.
+Checkpointing — every N sites (say, every 10), write the current lastProcessedSpoSiteId (or OneDrive id) and phase to the DB row. Cheap, async, fire-and-forget.
+Startup reconciler — keep marking orphans as failed, but the message becomes "Process restarted — job orphaned (resumable)" so the UI/user knows it'll be picked up automatically on the next run.
+Fresh full scans — keep a way to force a full rescan (e.g. an ignoreCheckpoint: true option on the dispatcher), used when explicitly clicking "Full rescan" from the inventory page (we can default the dataset-freshness button to "resumable").
+Result: A deploy at minute 90 of a 180-min run only loses ~10 minutes (back to the last checkpoint), not the whole 3 hours. Successive deploys will eventually walk the whole tenant even with frequent restarts.
+
+Risks I'm flagging upfront
+Stale-link cleanup (lines 200–218) marks any link not seen in the last 5 minutes as inactive. With resumable scans, we need to switch this to "not seen since the run started" (per the resumed run's start time, not the resumed-into run's start time) — otherwise, mid-resume cleanup would mark the not-yet-rescanned sites as inactive. This is the trickiest part and worth getting right.
+We need to handle the case where workspaces are added or removed between the killed run and the resume — the resumed run should re-snapshot the workspace list, not blindly use the old one.

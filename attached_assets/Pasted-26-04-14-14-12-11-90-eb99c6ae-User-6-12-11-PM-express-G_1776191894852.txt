@@ -1,0 +1,100 @@
+26-04-14 14:12:11.90
+eb99c6ae
+User
+6:12:11 PM [express] GET /api/copilot-prompt-intelligence/assessments 304 in 166ms :: {"rows":[],"total":0,"limit":20,"offset":0}
+2026-04-14 14:12:13.62
+eb99c6ae
+User
+6:12:13 PM [express] POST /api/copilot-prompt-intelligence/sync 202 in 232ms :: {"syncRunId":"0b6a9eb3-f3af-495d-9064-27d5d99688d0","message":"Copilot interaction sync started","tenantConnectionId":"e98fd547-0e7f-466d-af1b-412ab75355bd"}
+2026-04-14 14:12:27.96
+eb99c6ae
+User
+[copilot-interaction-sync] user=eefecda3-9672-40b1-acc2-bd012bec91b4 status=400 error=Graph 400 for user eefecda3-9672-40b1-acc2-bd012bec91b4: {"error":{"code":"BadRequest","message":"Invalid '$filterTransformer' query. Missing 'createdDateTime' value.","innerError":{"date":"2026-04-14
+2026-04-14 14:12:29.15
+eb99c6ae
+User
+[copilot-interaction-sync] user=8b60ffa0-aec0-4a9d-8ffe-d558c30d4799 status=400 error=Graph 400 for user 8b60ffa0-aec0-4a9d-8ffe-d558c30d4799: {"error":{"code":"BadRequest","message":"Invalid '$filterTransformer' query. Missing 'createdDateTime' value.","innerError":{"date":"2026-04-14
+2026-04-14 14:12:30.15
+eb99c6ae
+User
+[copilot-interaction-sync] user=ec5e59d1-019a-48db-a8e5-a34463cafd17 status=400 error=Graph 400 for user ec5e59d1-019a-48db-a8e5-a34463cafd17: {"error":{"code":"BadRequest","message":"Invalid '$filterTransformer' query. Missing 'createdDateTime' value.","innerError":{"date":"2026-04-14
+2026-04-14 14:12:31.36
+eb99c6ae
+User
+[copilot-interaction-sync] user=5659c5a4-5ee6-4b61-96f5-5a41e88d74d5 status=400 error=Graph 400 for user 5659c5a4-5ee6-4b61-96f5-5a41e88d74d5: {"error":{"code":"BadRequest","message":"Invalid '$filterTransformer' query. Missing 'createdDateTime' value.","innerError":{"date":"2026-04-14
+2026-04-14 14:12:32.76
+eb99c6ae
+User
+[copilot-interaction-sync] user=c4357556-ddcf-4af0-90ad-5a644548097a status=400 error=Graph 400 for user c4357556-ddcf-4af0-90ad-5a644548097a: {"error":{"code":"BadRequest","message":"Invalid '$filterTransformer' query. Missing 'createdDateTime' value.","innerError":{"date":"2026-04-14
+2026-04-14 14:12:33.46
+eb99c6ae
+User
+[copilot-interaction-sync] user=047abac2-4b01-492f-b33f-4ef795c80473 status=400 error=Graph 400 for user 047abac2-4b01-492f-b33f-4ef795c80473: {"error":{"code":"BadRequest","message":"Invalid '$filterTransformer' query. Missing 'createdDateTime' value.","innerError":{"date":"2026-04-14
+2026-04-14 14:12:34.55
+eb99c6ae
+User
+[copilot-interaction-sync] user=f23b94c9-ae6d-4539-b338-733afb9758bd status=400 error=Graph 400 for user f23b94c9-ae6d-4539-b338-733afb9758bd: {"error":{"code":"BadRequest","message":"Invalid '$filterTransformer' query. Missing 'createdDateTime' value.","innerError":{"date":"2026-04-14
+2026-04-14 14:12:37.25
+eb99c6ae
+User
+[copilot-interaction-sync] tenant=e98fd547-0e7f-466d-af1b-412ab75355bd users=7 captured=0 skipped=0 purged=0 errors=7
+2026-04-14 14:35:41.41
+eb99c6ae
+User
+6:35:41 PM [express] GET /api/admin/tenants 200 in 203ms :: [{"id":"e98fd547-0e7f-466d-af1b-412ab75355bd","tenantId":"b4fbeaf7-1c91-43bb-8031-49eb8d4175ee","tenantName":"The Synozur Alliance","domain":"synozur.onmicrosoft.com","organizationId":"742dff7e-4237-49c4-bf7e-a43e9c94ff41","ownershipType":"Hybrid","installMode":"MSP","status":"ACTIVE","lastSyncAt":"2026-04-13T15:28:36.276Z","lastSyncStatus":"SUCCESS","lastSyncSiteCount":88,"consentGranted":true,"isDemo":false,"dataMaskingEnabled":false,"onedriveInventoryEnabled":true,"recordingsDiscoveryEnabled":true,"teamsDiscoveryEnabled":true,"telemetryEnabled":true,"speDiscoveryEnabled":true,"contentGovernanceEnabled":true,"licensingEnabled":true,"createdAt":"2026-03-06T21:08:07.057Z"},{"id":"76f78e8d-7cc7-4c80-ad51-359b241ac481","tenantId":"f4c92057-748b-4243-9c93-68c50551ab02","tenantName":"reveillesoftware","domain":"reveillesoftware.com","organizationId":"fd346520-20f7-4238-8900-38aa0394445c","ownershipType":"Customer","installMode":"CUSTOMER","status":"ACTIVE","lastSyncAt":"2026-04-09T16:59:27.553Z","lastSyncStatus":"SUCCESS_WITH_WARNINGS","lastSyncSiteCount":53,"consentGranted":true,"isDemo":false,"dataMaskingEnabled":true,"onedriveInventoryEnabled":false,"recordingsDiscoveryEnabled":false,"teamsDiscoveryEnabled":false,"telemetryEnabled":false,"speDiscoveryEnabled":false,"contentGovernanceEnabled":false,"licensingEnabled":false,"createdAt":"2026-03-25T19:57:55.401Z","isGrantedAccess":true},{"id":"93d14f36-3111-4508-b13f-808e9c7ab8b0","tenantId":"e8ae3614-c17a-4336-904e-d141718c94f1","tenantName":"Cascadia Oceanic","domain":"chrismcnulty.net","organizationId":"b640eff0-49d1-43ff-a89c-e112a8e88025","ownershipType":"Customer","installMode":"CUSTOMER","status":"ACTIVE","lastSyncAt":"2026-04-09T19:46:51.997Z","lastSyncStatus":"SUCCESS_WITH_WARNINGS","lastSyncSiteCount":10,"consentGranted":true,"isDemo":false,"dataMaskingEnabled":true,"onedriveInventoryEnabled":true,"recordingsDiscoveryEnabled":true,"teamsDiscoveryEnabled":true,"telemetryEnabled":true,"speDiscoveryEnabled":true,"contentGovernanceEnabled":true,"licensingEnabled":true,"createdAt":"2026-04-09T19:43:20.718Z","isGrantedAccess":true}]
+2026-04-14 14:35:41.54
+eb99c6ae
+User
+6:35:41 PM [express] GET /api/organization 200 in 69ms :: {"id":"742dff7e-4237-49c4-bf7e-a43e9c94ff41","name":"Synozur","domain":"synozur.com","servicePlan":"ENTERPRISE","planStartedAt":"2026-03-06T21:04:40.320Z","supportEmail":null,"azureTenantId":"b4fbeaf7-1c91-43bb-8031-49eb8d4175ee","enforceSso":false,"allowLocalAuth":true,"allowedDomains":["synozur.com"],"inviteOnly":false,"createdAt":"2026-03-06T21:04:04.080Z","features":{"label":"Unlimited Enterprise","m365WriteBack":true,"provisioning":true,"inventorySync":true,"copilotReadiness":true,"lifecycleAutomation":true,"selfServicePortal":true,"advancedReporting":true,"dataMasking":true,"csvExport":true,"mspAccess":true,"contentGovernanceReporting":"full","sharingLinkManagement":"full","governanceReviews":"full","licensingDashboard":"full","licensingOptimization":"full","emailContentStorageReport":true,"iaAssessment":true,"contentIntensityHeatmap":true,"copilotPromptIntelligence":true,"trendRetentionDays":-1,"maxUsers":-1,"maxTenants":-1,"maxSites":-1,"auditRetentionDays":-1}}
+2026-04-14 14:35:41.58
+eb99c6ae
+User
+6:35:41 PM [express] GET /api/auth/me 200 in 101ms :: {"user":{"id":"eea51c43-2f7a-4173-9b17-19327e49ffaf","email":"chris.mcnulty@synozur.com","name":"Chris McNulty","role":"platform_owner","organizationId":"742dff7e-4237-49c4-bf7e-a43e9c94ff41","emailVerified":true,"authProvider":"entra","azureObjectId":"8b60ffa0-aec0-4a9d-8ffe-d558c30d4799","azureTenantId":"b4fbeaf7-1c91-43bb-8031-49eb8d4175ee","lastLoginAt":"2026-04-14T17:35:02.969Z","createdAt":"2026-03-06T21:04:04.130Z","effectiveRole":"platform_owner"},"organization":{"id":"742dff7e-4237-49c4-bf7e-a43e9c94ff41","name":"Synozur","domain":"synozur.com","servicePlan":"ENTERPRISE","planStartedAt":"2026-03-06T21:04:40.320Z","supportEmail":null,"azureTenantId":"b4fbeaf7-1c91-43bb-8031-49eb8d4175ee","enforceSso":false,"allowLocalAuth":true,"allowedDomains":["synozur.com"],"inviteOnly":false,"createdAt":"2026-03-06T21:04:04.080Z"},"activeOrganizationId":"742dff7e-4237-49c4-bf7e-a43e9c94ff41","membershipCount":1}
+2026-04-14 14:35:41.72
+eb99c6ae
+User
+6:35:41 PM [express] GET /api/copilot-prompt-intelligence/assessments/latest 404 in 162ms :: {"message":"No completed assessment found"}
+2026-04-14 14:35:41.93
+eb99c6ae
+User
+6:35:41 PM [express] GET /api/copilot-prompt-intelligence/assessments 304 in 347ms :: {"rows":[],"total":0,"limit":20,"offset":0}
+2026-04-14 14:35:44.12
+eb99c6ae
+User
+6:35:44 PM [express] POST /api/copilot-prompt-intelligence/sync 202 in 204ms :: {"syncRunId":"e996a58d-b3ac-4a59-9c92-a42768925ed6","message":"Copilot interaction sync started","tenantConnectionId":"e98fd547-0e7f-466d-af1b-412ab75355bd"}
+2026-04-14 14:35:45.66
+eb99c6ae
+User
+[copilot-interaction-sync] user=eefecda3-9672-40b1-acc2-bd012bec91b4 status=400 error=Graph 400 for user eefecda3-9672-40b1-acc2-bd012bec91b4: {"error":{"code":"BadRequest","message":"Invalid '$filterTransformer' query. Missing 'createdDateTime' value.","innerError":{"date":"2026-04-14
+2026-04-14 14:35:47.53
+eb99c6ae
+User
+[graph] HTTP 429; retrying in 1s (attempt 1/5)
+2026-04-14 14:35:49.15
+eb99c6ae
+User
+[copilot-interaction-sync] user=8b60ffa0-aec0-4a9d-8ffe-d558c30d4799 status=400 error=Graph 400 for user 8b60ffa0-aec0-4a9d-8ffe-d558c30d4799: {"error":{"code":"BadRequest","message":"Invalid '$filterTransformer' query. Missing 'createdDateTime' value.","innerError":{"date":"2026-04-14
+2026-04-14 14:35:50.45
+eb99c6ae
+User
+[copilot-interaction-sync] user=ec5e59d1-019a-48db-a8e5-a34463cafd17 status=400 error=Graph 400 for user ec5e59d1-019a-48db-a8e5-a34463cafd17: {"error":{"code":"BadRequest","message":"Invalid '$filterTransformer' query. Missing 'createdDateTime' value.","innerError":{"date":"2026-04-14
+2026-04-14 14:35:52.85
+eb99c6ae
+User
+[copilot-interaction-sync] user=5659c5a4-5ee6-4b61-96f5-5a41e88d74d5 status=400 error=Graph 400 for user 5659c5a4-5ee6-4b61-96f5-5a41e88d74d5: {"error":{"code":"BadRequest","message":"Invalid '$filterTransformer' query. Missing 'createdDateTime' value.","innerError":{"date":"2026-04-14
+2026-04-14 14:35:54.35
+eb99c6ae
+User
+[copilot-interaction-sync] user=c4357556-ddcf-4af0-90ad-5a644548097a status=400 error=Graph 400 for user c4357556-ddcf-4af0-90ad-5a644548097a: {"error":{"code":"BadRequest","message":"Invalid '$filterTransformer' query. Missing 'createdDateTime' value.","innerError":{"date":"2026-04-14
+2026-04-14 14:35:57.86
+eb99c6ae
+User
+[copilot-interaction-sync] user=047abac2-4b01-492f-b33f-4ef795c80473 status=400 error=Graph 400 for user 047abac2-4b01-492f-b33f-4ef795c80473: {"error":{"code":"BadRequest","message":"Invalid '$filterTransformer' query. Missing 'createdDateTime' value.","innerError":{"date":"2026-04-14
+2026-04-14 14:35:58.55
+eb99c6ae
+User
+[copilot-interaction-sync] user=f23b94c9-ae6d-4539-b338-733afb9758bd status=400 error=Graph 400 for user f23b94c9-ae6d-4539-b338-733afb9758bd: {"error":{"code":"BadRequest","message":"Invalid '$filterTransformer' query. Missing 'createdDateTime' value.","innerError":{"date":"2026-04-14
+2026-04-14 14:36:00.75
+eb99c6ae
+User
+[copilot-interaction-sync] tenant=e
