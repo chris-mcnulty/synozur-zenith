@@ -73,6 +73,189 @@ async function recordRowAudit(
   }
 }
 
+interface BulkFilterSpec {
+  search?: string;
+  tenantConnectionId?: string;
+  selectionMode?: "explicit" | "all-matching";
+  totalMatching?: number;
+  filters?: {
+    type?: string;
+    sensitivity?: string;
+    metadata?: string;
+    department?: string;
+    size?: string;
+    age?: string;
+    status?: string;
+    outcomes?: Record<string, string>;
+  };
+}
+
+async function resolveWorkspaceIdsFromFilter(
+  req: AuthenticatedRequest,
+  filterCriteria: BulkFilterSpec,
+  res: Response,
+): Promise<{ ok: false } | { ok: true; workspaces: Map<string, Workspace> }> {
+  const allowedIds = await getAccessibleTenantConnectionIds(req);
+  const organizationId = req.user?.organizationId || null;
+
+  const allWorkspaces = await storage.getWorkspaces(
+    filterCriteria.search,
+    filterCriteria.tenantConnectionId,
+    filterCriteria.tenantConnectionId ? undefined : (organizationId ?? undefined),
+  );
+
+  const scopedWorkspaces = allowedIds !== null
+    ? allWorkspaces.filter(ws => ws.tenantConnectionId && allowedIds.includes(ws.tenantConnectionId))
+    : allWorkspaces;
+
+  const f = filterCriteria.filters || {};
+  let filtered = scopedWorkspaces;
+
+  if (f.type && f.type !== "all") {
+    filtered = filtered.filter(ws => ws.type.toLowerCase() === f.type!.toLowerCase());
+  }
+
+  if (f.sensitivity && f.sensitivity !== "all") {
+    if (f.sensitivity === "__none__" || f.sensitivity === "__blank__") {
+      filtered = filtered.filter(ws => !ws.sensitivityLabelId);
+    } else if (f.sensitivity === "__not_blank__") {
+      filtered = filtered.filter(ws => !!ws.sensitivityLabelId);
+    } else {
+      filtered = filtered.filter(ws => ws.sensitivityLabelId === f.sensitivity);
+    }
+  }
+
+  if (f.department && f.department !== "all") {
+    if (f.department === "__blank__") {
+      filtered = filtered.filter(ws => !ws.department);
+    } else if (f.department === "__not_blank__") {
+      filtered = filtered.filter(ws => !!ws.department);
+    } else {
+      filtered = filtered.filter(ws => ws.department === f.department);
+    }
+  }
+
+  if (f.size && f.size !== "all") {
+    const MB = 1024 * 1024;
+    const GB = 1024 * MB;
+    if (f.size === "__blank__") {
+      filtered = filtered.filter(ws => ws.storageUsedBytes == null);
+    } else if (f.size === "__not_blank__") {
+      filtered = filtered.filter(ws => ws.storageUsedBytes != null);
+    } else {
+      filtered = filtered.filter(ws => {
+        const bytes = ws.storageUsedBytes ?? 0;
+        switch (f.size) {
+          case "lt10mb": return bytes < 10 * MB;
+          case "10to100mb": return bytes >= 10 * MB && bytes < 100 * MB;
+          case "100mbto1gb": return bytes >= 100 * MB && bytes < GB;
+          case "gt1gb": return bytes >= GB;
+          default: return true;
+        }
+      });
+    }
+  }
+
+  if (f.age && f.age !== "all") {
+    const now = Date.now();
+    const DAY = 86400000;
+    if (f.age === "__blank__") {
+      filtered = filtered.filter(ws => !ws.siteCreatedDate);
+    } else if (f.age === "__not_blank__") {
+      filtered = filtered.filter(ws => !!ws.siteCreatedDate);
+    } else {
+      filtered = filtered.filter(ws => {
+        if (!ws.siteCreatedDate) return false;
+        const created = new Date(ws.siteCreatedDate).getTime();
+        const age = now - created;
+        switch (f.age) {
+          case "lt30d": return age < 30 * DAY;
+          case "1to6m": return age >= 30 * DAY && age < 180 * DAY;
+          case "6to12m": return age >= 180 * DAY && age < 365 * DAY;
+          case "gt1y": return age >= 365 * DAY;
+          default: return true;
+        }
+      });
+    }
+  }
+
+  if (f.status && f.status !== "all") {
+    filtered = filtered.filter(ws => {
+      const lockState = ws.lockState || "Unlock";
+      const lifecycle = (ws as any).lifecycleState ?? undefined;
+      switch (f.status) {
+        case "active": return lockState === "Unlock" && !ws.isDeleted && !ws.isArchived && lifecycle !== "PendingArchive";
+        case "locked": return lockState === "NoAccess";
+        case "readonly": return lockState === "ReadOnly";
+        case "noadd": return lockState === "NoAdditions";
+        case "deleted": return ws.isDeleted === true;
+        case "archived": return ws.isArchived === true && lifecycle !== "PendingArchive";
+        case "pendingarchive": return lifecycle === "PendingArchive";
+        case "pendingrestore": return lifecycle === "PendingRestore";
+        default: return true;
+      }
+    });
+  }
+
+  if (f.metadata && f.metadata !== "all" && filterCriteria.tenantConnectionId) {
+    try {
+      const conn = await storage.getTenantConnection(filterCriteria.tenantConnectionId);
+      if (conn) {
+        const metaEntries = await storage.getDataDictionary(conn.tenantId, "required_metadata_field");
+        const requiredKeys: string[] = metaEntries.length > 0
+          ? metaEntries.map(e => e.value)
+          : ["department", "costCenter"];
+        filtered = filtered.filter(ws => {
+          const filled = requiredKeys.filter(k => !!(ws as any)[k]).length;
+          if (f.metadata === "complete") return filled === requiredKeys.length;
+          if (f.metadata === "missing") return filled < requiredKeys.length;
+          return true;
+        });
+      }
+    } catch (err: any) {
+      console.warn(`[bulk-filter] Could not resolve metadata filter: ${err.message}`);
+    }
+  }
+
+  if (f.outcomes && Object.keys(f.outcomes).length > 0 && organizationId) {
+    try {
+      const orgOutcomes = await storage.getPolicyOutcomes(organizationId);
+      const outcomeFieldMap = new Map(orgOutcomes.map(o => [o.key, o.workspaceField]));
+      for (const [key, val] of Object.entries(f.outcomes)) {
+        if (!val || val === "all") continue;
+        const workspaceField = outcomeFieldMap.get(key);
+        if (!workspaceField) continue;
+        filtered = filtered.filter(ws => {
+          const fieldVal = (ws as any)[workspaceField];
+          if (val === "pass") return fieldVal === true;
+          if (val === "fail") return fieldVal !== true;
+          return true;
+        });
+      }
+    } catch (err: any) {
+      console.warn(`[bulk-filter] Could not resolve outcome filters: ${err.message}`);
+    }
+  }
+
+  if (filtered.length === 0) {
+    res.status(400).json({ message: "No workspaces match the specified filter" });
+    return { ok: false };
+  }
+
+  if (filtered.length > MAX_BULK_SIZE) {
+    res.status(400).json({
+      message: `Filter matches ${filtered.length} workspaces, exceeding the bulk limit of ${MAX_BULK_SIZE}. Narrow your filter and try again.`,
+    });
+    return { ok: false };
+  }
+
+  const map = new Map<string, Workspace>();
+  for (const ws of filtered) {
+    map.set(ws.id, ws);
+  }
+  return { ok: true, workspaces: map };
+}
+
 async function loadAndValidateScope(
   req: AuthenticatedRequest,
   workspaceIds: string[],
@@ -107,6 +290,18 @@ async function loadAndValidateScope(
   }
 
   return { ok: true, workspaces: map };
+}
+
+async function loadAndValidateScopeOrFilter(
+  req: AuthenticatedRequest,
+  workspaceIds: string[],
+  filterCriteria: BulkFilterSpec | undefined,
+  res: Response,
+): Promise<{ ok: false } | { ok: true; workspaces: Map<string, Workspace> }> {
+  if (filterCriteria?.selectionMode === "all-matching") {
+    return resolveWorkspaceIdsFromFilter(req, filterCriteria, res);
+  }
+  return loadAndValidateScope(req, workspaceIds, res);
 }
 
 async function runBatched(
@@ -193,7 +388,7 @@ function buildResponse(action: string, results: RowResult[], rollupAuditId: stri
 }
 
 const baseBulkSchema = {
-  workspaceIds: z.array(z.string()).min(1),
+  workspaceIds: z.array(z.string()),
   filterCriteria: z.any().optional(),
 };
 
@@ -213,7 +408,7 @@ router.post(
     }
     const { workspaceIds, payload, filterCriteria } = parsed.data;
 
-    const validated = await loadAndValidateScope(req, workspaceIds, res);
+    const validated = await loadAndValidateScopeOrFilter(req, workspaceIds, filterCriteria as BulkFilterSpec | undefined, res);
     if (!validated.ok) return;
     const { workspaces } = validated;
     const auditBase = buildAuditBase(req);
@@ -273,7 +468,7 @@ router.post(
       return ctx;
     };
 
-    const results = await runBatched(workspaceIds, WRITE_BATCH, async (id) => {
+    const results = await runBatched(Array.from(workspaces.keys()), WRITE_BATCH, async (id) => {
       const ws = workspaces.get(id);
       if (!ws) {
         await recordRowAudit(auditBase, ACTION, id, null, { error: "Workspace not found", newLabelId: payload.sensitivityLabelId }, "FAILURE");
@@ -381,7 +576,7 @@ router.post(
     }
     const { workspaceIds, payload, filterCriteria } = parsed.data;
 
-    const validated = await loadAndValidateScope(req, workspaceIds, res);
+    const validated = await loadAndValidateScopeOrFilter(req, workspaceIds, filterCriteria as BulkFilterSpec | undefined, res);
     if (!validated.ok) return;
     const { workspaces } = validated;
     const auditBase = buildAuditBase(req);
@@ -414,7 +609,7 @@ router.post(
       return r;
     };
 
-    const results = await runBatched(workspaceIds, WRITE_BATCH, async (id) => {
+    const results = await runBatched(Array.from(workspaces.keys()), WRITE_BATCH, async (id) => {
       const ws = workspaces.get(id);
       if (!ws) {
         await recordRowAudit(auditBase, ACTION, id, null, { error: "Workspace not found", newLabelId: payload.retentionLabelId }, "FAILURE");
@@ -489,7 +684,7 @@ router.post(
       return res.status(400).json({ message: "Provide at least one of department, costCenter, projectCode" });
     }
 
-    const validated = await loadAndValidateScope(req, workspaceIds, res);
+    const validated = await loadAndValidateScopeOrFilter(req, workspaceIds, filterCriteria as BulkFilterSpec | undefined, res);
     if (!validated.ok) return;
     const { workspaces } = validated;
     const auditBase = buildAuditBase(req);
@@ -539,7 +734,7 @@ router.post(
       return ctx;
     };
 
-    const results = await runBatched(workspaceIds, WRITE_BATCH, async (id) => {
+    const results = await runBatched(Array.from(workspaces.keys()), WRITE_BATCH, async (id) => {
       const ws = workspaces.get(id);
       if (!ws) {
         await recordRowAudit(auditBase, ACTION, id, null, { error: "Workspace not found", mode: payload.mode }, "FAILURE");
@@ -674,7 +869,7 @@ router.post(
     }
     const { workspaceIds, payload, filterCriteria } = parsed.data;
 
-    const validated = await loadAndValidateScope(req, workspaceIds, res);
+    const validated = await loadAndValidateScopeOrFilter(req, workspaceIds, filterCriteria as BulkFilterSpec | undefined, res);
     if (!validated.ok) return;
     const { workspaces } = validated;
     const auditBase = buildAuditBase(req);
@@ -738,7 +933,7 @@ router.post(
       return { token, userId: resolvedUserId };
     };
 
-    const results = await runBatched(workspaceIds, WRITE_BATCH, async (id) => {
+    const results = await runBatched(Array.from(workspaces.keys()), WRITE_BATCH, async (id) => {
       const ws = workspaces.get(id);
       if (!ws) {
         await recordRowAudit(auditBase, ACTION, id, null, { error: "Workspace not found", role: payload.role, userPrincipalName: payload.userPrincipalName }, "FAILURE");
@@ -831,7 +1026,7 @@ router.post(
     const reason = payload.reason.trim();
     const archivedBy = req.user?.email || req.user?.id || null;
 
-    const validated = await loadAndValidateScope(req, workspaceIds, res);
+    const validated = await loadAndValidateScopeOrFilter(req, workspaceIds, filterCriteria as BulkFilterSpec | undefined, res);
     if (!validated.ok) return;
     const { workspaces } = validated;
     const auditBase = buildAuditBase(req);
@@ -864,7 +1059,7 @@ router.post(
       }
     };
 
-    const results = await runBatched(workspaceIds, WRITE_BATCH, async (id) => {
+    const results = await runBatched(Array.from(workspaces.keys()), WRITE_BATCH, async (id) => {
       const ws = workspaces.get(id);
       if (!ws) {
         await recordRowAudit(auditBase, ACTION, id, null, { error: "Workspace not found" }, "FAILURE");
@@ -970,7 +1165,7 @@ router.post(
     }
     const { workspaceIds, payload, filterCriteria } = parsed.data;
 
-    const validated = await loadAndValidateScope(req, workspaceIds, res);
+    const validated = await loadAndValidateScopeOrFilter(req, workspaceIds, filterCriteria as BulkFilterSpec | undefined, res);
     if (!validated.ok) return;
     const { workspaces } = validated;
     const auditBase = buildAuditBase(req);
@@ -985,7 +1180,7 @@ router.post(
       sgInitError = err.message || "SendGrid not configured";
     }
 
-    const results = await runBatched(workspaceIds, WRITE_BATCH, async (id) => {
+    const results = await runBatched(Array.from(workspaces.keys()), WRITE_BATCH, async (id) => {
       const ws = workspaces.get(id);
       if (!ws) {
         await recordRowAudit(auditBase, ACTION, id, null, { error: "Workspace not found" }, "FAILURE");

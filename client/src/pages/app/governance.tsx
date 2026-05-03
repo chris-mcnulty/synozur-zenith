@@ -120,7 +120,7 @@ export default function GovernancePage() {
   const [isPaginatedMode, setIsPaginatedMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [selectedWorkspacesById, setSelectedWorkspacesById] = useState<Map<string, Workspace>>(new Map());
-  const [isSelectingAllMatching, setIsSelectingAllMatching] = useState(false);
+  const [isAllMatchingSelected, setIsAllMatchingSelected] = useState(false);
   const [isBulkEditOpen, setIsBulkEditOpen] = useState(false);
   const [showFilterDrawer, setShowFilterDrawer] = useState(false);
   const [groupByHubs, setGroupByHubs] = useState(false);
@@ -449,9 +449,15 @@ export default function GovernancePage() {
   const clearSelection = () => {
     setSelectedIds(new Set());
     setSelectedWorkspacesById(new Map());
+    setIsAllMatchingSelected(false);
   };
 
   const toggleSelectAll = () => {
+    if (isAllMatchingSelected) {
+      // Exit all-matching mode and deselect everything.
+      clearSelection();
+      return;
+    }
     if (allVisibleSelected) {
       // Deselect only this page's rows; preserve cross-page selections.
       const next = new Set(selectedIds);
@@ -475,6 +481,19 @@ export default function GovernancePage() {
   };
 
   const toggleSelect = (id: string) => {
+    if (isAllMatchingSelected) {
+      // Exit all-matching mode and return to explicit selection with only
+      // the current page selected (minus the row the user just clicked).
+      const next = new Set(selectedIds);
+      const nextMap = new Map(selectedWorkspacesById);
+      // Remove the clicked row (treat click as "deselect this one").
+      next.delete(id);
+      nextMap.delete(id);
+      setSelectedIds(next);
+      setSelectedWorkspacesById(nextMap);
+      setIsAllMatchingSelected(false);
+      return;
+    }
     const newSet = new Set(selectedIds);
     const newMap = new Map(selectedWorkspacesById);
     if (newSet.has(id)) {
@@ -497,58 +516,12 @@ export default function GovernancePage() {
     return p;
   };
 
-  const handleSelectAllMatching = async () => {
-    if (isSelectingAllMatching) return;
-    // Defensive guard: this affordance must never run while client-side
-    // filter chips are active, because the server endpoint cannot evaluate
-    // them. The button is hidden in that case, but we re-check here.
-    if (clientFiltersActive) {
-      toast({
-        title: "Clear filters first",
-        description: "“Select all matching” only works when no client-side filters are active.",
-        variant: "destructive",
-      });
-      return;
-    }
-    setIsSelectingAllMatching(true);
-    try {
-      const total = paginatedTotal;
-      if (total === 0) return;
-      const pageSize = 500;
-      const newIds = new Set(selectedIds);
-      const newMap = new Map(selectedWorkspacesById);
-      let page = 1;
-      let collected = 0;
-      while (collected < total) {
-        const params = buildFilterParams({ page: String(page), pageSize: String(pageSize) });
-        const result: unknown = await fetch(`/api/workspaces?${params.toString()}`).then(r => r.json());
-        const items: Workspace[] = (() => {
-          if (Array.isArray(result)) return result as Workspace[];
-          if (result && typeof result === "object" && Array.isArray((result as { items?: unknown }).items)) {
-            return (result as { items: Workspace[] }).items;
-          }
-          return [];
-        })();
-        if (items.length === 0) break;
-        for (const ws of items) {
-          newIds.add(ws.id);
-          newMap.set(ws.id, ws);
-        }
-        collected += items.length;
-        page += 1;
-        if (items.length < pageSize) break;
-      }
-      setSelectedIds(newIds);
-      setSelectedWorkspacesById(newMap);
-      toast({
-        title: "Selection expanded",
-        description: `${newIds.size.toLocaleString()} workspace${newIds.size === 1 ? "" : "s"} selected across all matching pages.`,
-      });
-    } catch (err: any) {
-      toast({ title: "Could not select all matching", description: err.message, variant: "destructive" });
-    } finally {
-      setIsSelectingAllMatching(false);
-    }
+  const handleSelectAllMatching = () => {
+    setIsAllMatchingSelected(true);
+    toast({
+      title: "All matching sites selected",
+      description: `${totalMatching.toLocaleString()} site${totalMatching === 1 ? "" : "s"} will be targeted when you apply a bulk action.`,
+    });
   };
 
   const handleBulkSave = () => {
@@ -833,13 +806,15 @@ export default function GovernancePage() {
       lastFilterSignatureRef.current = filterSignature;
       setSelectedIds(new Set());
       setSelectedWorkspacesById(new Map());
+      setIsAllMatchingSelected(false);
     }
   }, [filterSignature]);
 
-  // filterStatus is applied client-side via the lock-state filter below, so
-  // it must count as a client-side filter for the "Select all matching"
-  // affordance. Treating "active" as neutral would silently include
-  // archived/deleted/locked rows fetched from the server.
+  // Client-side filter chips narrow the visible rows but are NOT reflected in
+  // `paginatedTotal` (which only knows about search + tenant scope). If any
+  // chip is active the "Select all N matching" link would show an inaccurate N,
+  // so we suppress it. The server resolver still handles these filter types
+  // for any explicit all-matching request that gets through.
   const clientFiltersActive =
     filterType !== "all" ||
     filterSensitivity !== "all" ||
@@ -862,11 +837,12 @@ export default function GovernancePage() {
     filteredAndSortedWorkspaces.length > 0 && visiblePageSelectedCount === filteredAndSortedWorkspaces.length;
   const someVisibleSelected = visiblePageSelectedCount > 0 && !allVisibleSelected;
   const totalMatching = showPagination ? paginatedTotal : filteredAndSortedWorkspaces.length;
-  // Only offer "Select all matching" when the visible filter is exactly
-  // representable on the server (search + tenant). The grid's other filter
-  // chips are client-side only, so if any are active we cannot guarantee
-  // server-fetched ids match the visible grid — hide the affordance and
-  // require explicit per-page selection instead.
+  // Only show the "Select all N matching" affordance when:
+  //   • the grid is paginated (otherwise the current page IS all matches)
+  //   • no client-side filter chips are active (paginatedTotal would be wrong)
+  //   • the user has selected everything on the visible page
+  //   • there are more matches than currently selected
+  // When `isAllMatchingSelected` the link is already acted on — hide it.
   const hasMoreMatchingThanSelected =
     showPagination &&
     !clientFiltersActive &&
@@ -1061,11 +1037,11 @@ export default function GovernancePage() {
       <TableRow
         key={ws.id}
         data-testid={`row-workspace-${ws.id}`}
-        className={`group transition-colors relative ${selectedIds.has(ws.id) ? 'bg-primary/5 hover:bg-primary/10' : 'hover:bg-muted/20'}`}
+        className={`group transition-colors relative ${(isAllMatchingSelected || selectedIds.has(ws.id)) ? 'bg-primary/5 hover:bg-primary/10' : 'hover:bg-muted/20'}`}
       >
         <TableCell className="pl-4 relative z-20" onClick={(e) => e.stopPropagation()}>
           <Checkbox
-            checked={selectedIds.has(ws.id)}
+            checked={isAllMatchingSelected ? true : selectedIds.has(ws.id)}
             onCheckedChange={() => toggleSelect(ws.id)}
             aria-label={`Select ${ws.displayName}`}
             data-testid={`checkbox-workspace-${ws.id}`}
@@ -1562,26 +1538,26 @@ export default function GovernancePage() {
         </Button>
       </div>
 
-      {selectedIds.size > 0 && (
+      {(selectedIds.size > 0 || isAllMatchingSelected) && (
         <div
           className="sticky top-0 z-30 bg-primary/10 border border-primary/20 rounded-xl p-3 flex items-center justify-between flex-wrap gap-y-2 animate-in fade-in slide-in-from-top-2 backdrop-blur-sm"
           data-testid="bulk-action-bar"
         >
           <div className="flex items-center gap-3 flex-wrap">
-            <Badge className="bg-primary text-primary-foreground" data-testid="badge-selected-count">{selectedIds.size}</Badge>
-            <span className="text-sm font-medium text-primary">workspaces selected</span>
-            {hasMoreMatchingThanSelected && (
+            <Badge className="bg-primary text-primary-foreground" data-testid="badge-selected-count">
+              {isAllMatchingSelected ? totalMatching : selectedIds.size}
+            </Badge>
+            <span className="text-sm font-medium text-primary">
+              {isAllMatchingSelected ? `of ${totalMatching.toLocaleString()} matching sites selected` : "workspaces selected"}
+            </span>
+            {hasMoreMatchingThanSelected && !isAllMatchingSelected && (
               <Button
                 variant="link"
                 size="sm"
                 className="h-6 px-1 text-xs text-primary"
                 onClick={handleSelectAllMatching}
-                disabled={isSelectingAllMatching}
                 data-testid="button-select-all-matching"
               >
-                {isSelectingAllMatching ? (
-                  <Loader2 className="w-3 h-3 mr-1 animate-spin" />
-                ) : null}
                 Select all {totalMatching.toLocaleString()} matching
               </Button>
             )}
@@ -1590,48 +1566,54 @@ export default function GovernancePage() {
             <Button variant="outline" size="sm" onClick={clearSelection} className="h-8 border-primary/20 text-primary hover:bg-primary/10">
               <X className="w-4 h-4 mr-1" /> Clear
             </Button>
-            <Button size="sm" onClick={() => setIsBulkEditOpen(true)} className="h-8 gap-2 shadow-sm shadow-primary/20">
-              <CheckSquare className="w-4 h-4" /> Bulk Edit Properties
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => openHubAssignDialog(Array.from(selectedIds))}
-              className="h-8 gap-2 border-primary/20 text-primary hover:bg-primary/10"
-              data-testid="button-bulk-hub-assign"
-            >
-              <Network className="w-4 h-4" /> Assign to Hub
-            </Button>
-            <UpgradeGate
-              feature="m365WriteBack"
-              fallback={
-                <Button
-                  size="sm"
-                  variant="outline"
-                  disabled
-                  className="h-8 gap-2 opacity-60"
-                  data-testid="button-sync-metadata-locked"
-                >
-                  <Lock className="w-4 h-4" />
-                  Sync Metadata to SharePoint
-                </Button>
-              }
-            >
+            {!isAllMatchingSelected && (
+              <Button size="sm" onClick={() => setIsBulkEditOpen(true)} className="h-8 gap-2 shadow-sm shadow-primary/20">
+                <CheckSquare className="w-4 h-4" /> Bulk Edit Properties
+              </Button>
+            )}
+            {!isAllMatchingSelected && (
               <Button
                 size="sm"
                 variant="outline"
-                onClick={() => writebackMutation.mutate(Array.from(selectedIds))}
-                disabled={writebackMutation.isPending}
+                onClick={() => openHubAssignDialog(Array.from(selectedIds))}
                 className="h-8 gap-2 border-primary/20 text-primary hover:bg-primary/10"
-                data-testid="button-sync-metadata"
+                data-testid="button-bulk-hub-assign"
               >
-                {writebackMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
-                Sync Metadata to SharePoint
+                <Network className="w-4 h-4" /> Assign to Hub
               </Button>
-            </UpgradeGate>
+            )}
+            {!isAllMatchingSelected && (
+              <UpgradeGate
+                feature="m365WriteBack"
+                fallback={
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled
+                    className="h-8 gap-2 opacity-60"
+                    data-testid="button-sync-metadata-locked"
+                  >
+                    <Lock className="w-4 h-4" />
+                    Sync Metadata to SharePoint
+                  </Button>
+                }
+              >
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => writebackMutation.mutate(Array.from(selectedIds))}
+                  disabled={writebackMutation.isPending}
+                  className="h-8 gap-2 border-primary/20 text-primary hover:bg-primary/10"
+                  data-testid="button-sync-metadata"
+                >
+                  {writebackMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
+                  Sync Metadata to SharePoint
+                </Button>
+              </UpgradeGate>
+            )}
             <BulkActionsExtras
-              selectedIds={selectedIds}
-              selectedWorkspacesById={selectedWorkspacesById}
+              selectedIds={isAllMatchingSelected ? new Set<string>() : selectedIds}
+              selectedWorkspacesById={isAllMatchingSelected ? new Map<string, Workspace>() : selectedWorkspacesById}
               tenantConnectionId={tenantConnectionId}
               filterCriteria={{
                 search: debouncedSearch || undefined,
@@ -1647,7 +1629,7 @@ export default function GovernancePage() {
                   outcomes: outcomeFilters,
                 },
                 totalMatching,
-                selectionMode: hasMoreMatchingThanSelected || selectedIds.size < totalMatching ? "explicit" : "all-matching",
+                selectionMode: isAllMatchingSelected ? "all-matching" : "explicit",
               }}
               onClearSelection={clearSelection}
             />
@@ -1699,9 +1681,9 @@ export default function GovernancePage() {
                   <TableRow className="hover:bg-transparent">
                     <TableHead className="w-[40px] pl-4">
                       <Checkbox
-                        checked={allVisibleSelected ? true : someVisibleSelected ? "indeterminate" : false}
+                        checked={isAllMatchingSelected ? true : allVisibleSelected ? true : someVisibleSelected ? "indeterminate" : false}
                         onCheckedChange={toggleSelectAll}
-                        aria-label="Select all on this page"
+                        aria-label={isAllMatchingSelected ? "Clear all-matching selection" : "Select all on this page"}
                         data-testid="checkbox-select-all-page"
                       />
                     </TableHead>

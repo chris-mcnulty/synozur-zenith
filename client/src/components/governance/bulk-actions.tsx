@@ -143,8 +143,11 @@ export function BulkActionsExtras(props: BulkActionsExtrasProps) {
     setActiveAction(action);
   };
 
+  const isAllMatchingMode = !retryIds && props.filterCriteria?.selectionMode === "all-matching";
   const targetIds = retryIds && retryIds.length > 0 ? retryIds : Array.from(props.selectedIds);
-  const targetCount = targetIds.length;
+  const targetCount = isAllMatchingMode
+    ? (props.filterCriteria?.totalMatching ?? 0)
+    : targetIds.length;
   const targetWorkspaces = useMemo(
     () => targetIds.map(id => props.selectedWorkspacesById.get(id)).filter((w): w is Workspace => !!w),
     [targetIds, props.selectedWorkspacesById],
@@ -172,7 +175,7 @@ export function BulkActionsExtras(props: BulkActionsExtrasProps) {
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-64">
-          <DropdownMenuLabel>Bulk actions ({props.selectedIds.size})</DropdownMenuLabel>
+          <DropdownMenuLabel>Bulk actions ({targetCount})</DropdownMenuLabel>
           <DropdownMenuSeparator />
           <DropdownMenuItem
             onSelect={() => setActiveAction("label")}
