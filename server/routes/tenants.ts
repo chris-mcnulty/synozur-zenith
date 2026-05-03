@@ -9,6 +9,7 @@ import { requireAuth, requireRole, requirePermission, type AuthenticatedRequest 
 import { encryptToken, decryptToken, isEncryptionConfigured, isEncrypted } from "../utils/encryption";
 import { requireFeature } from "../services/feature-gate";
 import { logAuditEvent, logAccessDenied, AUDIT_ACTIONS, type AuditAction } from "../services/audit-logger";
+import { auditDiff } from "../services/audit-diff";
 import { enableDataMasking, disableDataMasking } from "../services/data-masking-toggle";
 
 const router = Router();
@@ -430,24 +431,18 @@ router.patch("/api/admin/tenants/:id", requireRole(ZENITH_ROLES.TENANT_ADMIN), a
   const connection = await storage.updateTenantConnection(req.params.id, updates);
   if (!connection) return res.status(404).json({ message: "Tenant connection not found" });
 
-  // Audit any meaningful field change. clientSecret values are masked.
+  // Audit any meaningful field change. clientSecret values are redacted.
   const AUDITABLE_FIELDS = [
     "status", "tenantName", "domain", "displayName", "clientId", "clientSecret",
     "organizationId", "ownerUserId", "isMspManaged", "consentedScopes", "notes",
     "consentStatus", "consentTenantId",
   ] as const;
-  type AuditableField = typeof AUDITABLE_FIELDS[number];
-  const body = req.body as Partial<Record<AuditableField, unknown>>;
-  const existingRecord = existing as unknown as Record<AuditableField, unknown>;
-  const changedFields: Record<string, { from: unknown; to: unknown }> = {};
+  const body = req.body as Record<string, unknown>;
+  const nextValues: Record<string, unknown> = {};
   for (const f of AUDITABLE_FIELDS) {
-    if (f in body && body[f] !== existingRecord[f]) {
-      changedFields[f] = {
-        from: f === "clientSecret" ? "***" : existingRecord[f],
-        to: f === "clientSecret" ? "***" : body[f],
-      };
-    }
+    if (f in body) nextValues[f] = body[f];
   }
+  const changes = auditDiff(existing as unknown as Record<string, unknown>, nextValues);
 
   if ('status' in req.body && req.body.status !== existing.status) {
     const statusActionMap: Record<string, AuditAction> = {
@@ -461,15 +456,15 @@ router.patch("/api/admin/tenants/:id", requireRole(ZENITH_ROLES.TENANT_ADMIN), a
       resource: 'tenant_connection',
       resourceId: String(req.params.id),
       tenantConnectionId: String(req.params.id),
-      details: { tenantName: existing.tenantName, previousStatus: existing.status, newStatus: req.body.status, changedFields },
+      details: { tenantName: existing.tenantName, previousStatus: existing.status, newStatus: req.body.status, changes },
     });
-  } else if (Object.keys(changedFields).length > 0) {
+  } else if (Object.keys(changes).length > 0) {
     await logAuditEvent(req, {
       action: AUDIT_ACTIONS.TENANT_UPDATED,
       resource: 'tenant_connection',
       resourceId: String(req.params.id),
       tenantConnectionId: String(req.params.id),
-      details: { tenantName: existing.tenantName, changedFields },
+      details: { tenantName: existing.tenantName, changes },
     });
   }
 
@@ -1158,12 +1153,13 @@ router.patch("/api/admin/tenants/:tenantConnectionId/custom-fields/:fieldId", re
     if (req.body.filterable !== undefined) updates.filterable = req.body.filterable;
     if (req.body.sortOrder !== undefined) updates.sortOrder = req.body.sortOrder;
     const updated = await storage.updateCustomFieldDefinition(req.params.fieldId, updates);
+    const changes = auditDiff(field as unknown as Record<string, unknown>, updates);
     await logAuditEvent(req, {
       action: AUDIT_ACTIONS.CUSTOM_FIELD_UPDATED,
       resource: 'custom_field_definition',
       resourceId: req.params.fieldId,
       tenantConnectionId: conn.id,
-      details: { fieldName: field.fieldName, changedFields: Object.keys(updates) },
+      details: { fieldName: field.fieldName, changedFields: Object.keys(updates), changes },
     });
     res.json(updated);
   } catch (err: any) {

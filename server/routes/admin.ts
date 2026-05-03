@@ -7,6 +7,7 @@ import { invalidateDefaultSignupPlanCache } from "../utils/platformSettingsCache
 import { buildRequiredFieldsByTenantId, evaluateMetadataCompleteness } from "../services/metadata-completeness";
 import { getAccessibleTenantConnectionIds, getOwnedTenantConnectionIds } from "./scope-helpers";
 import { logAuditEvent, AUDIT_ACTIONS } from "../services/audit-logger";
+import { auditDiff } from "../services/audit-diff";
 
 const router = Router();
 
@@ -414,7 +415,12 @@ router.patch("/api/admin/organizations/:id/plan", requireRole(ZENITH_ROLES.PLATF
     resource: 'organization',
     resourceId: id,
     organizationId: req.user!.organizationId,
-    details: { targetOrg: target.name, fromPlan: target.servicePlan, toPlan: plan },
+    details: {
+      targetOrg: target.name,
+      fromPlan: target.servicePlan,
+      toPlan: plan,
+      changes: auditDiff({ servicePlan: target.servicePlan }, { servicePlan: plan }),
+    },
     result: 'SUCCESS',
     ipAddress: req.ip || null,
   });
@@ -438,7 +444,11 @@ router.patch("/api/organization/plan", requireRole(ZENITH_ROLES.PLATFORM_OWNER, 
       resource: 'organization',
       resourceId: org.id,
       organizationId: org.id,
-      details: { fromPlan: previousPlan, toPlan: plan },
+      details: {
+        fromPlan: previousPlan,
+        toPlan: plan,
+        changes: auditDiff({ servicePlan: previousPlan }, { servicePlan: plan }),
+      },
     });
   }
   res.json({ ...updated, features });
@@ -508,18 +518,20 @@ router.patch("/api/admin/platform/settings", requireRole(ZENITH_ROLES.PLATFORM_O
       }
     }
 
+    const before = await storage.getPlatformSettings();
     const updated = await storage.updatePlatformSettings(patch);
     invalidateDefaultSignupPlanCache();
+    const nextValues: Record<string, unknown> = {};
+    if (patch.defaultSignupPlan !== undefined) nextValues.defaultSignupPlan = patch.defaultSignupPlan;
+    if (patch.plannerPlanId !== undefined) nextValues.plannerPlanId = patch.plannerPlanId;
+    if (patch.plannerBucketId !== undefined) nextValues.plannerBucketId = patch.plannerBucketId;
+    const changes = auditDiff(before as unknown as Record<string, unknown>, nextValues);
     await logAuditEvent(req, {
       action: AUDIT_ACTIONS.PLATFORM_SETTINGS_UPDATED,
       resource: 'platform_settings',
       details: {
-        changedFields: Object.keys(patch).filter(k => k !== 'updatedBy'),
-        values: {
-          defaultSignupPlan: patch.defaultSignupPlan,
-          plannerPlanId: patch.plannerPlanId,
-          plannerBucketId: patch.plannerBucketId,
-        },
+        changedFields: Object.keys(nextValues),
+        changes,
       },
     });
     res.json(updated);

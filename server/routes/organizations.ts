@@ -4,6 +4,7 @@ import { AuthenticatedRequest, requireAuth, requirePermission } from '../middlew
 import { ZENITH_ROLES, type ZenithRole } from '@shared/schema';
 import { getAppToken, searchEntraUsers } from '../services/graph';
 import { logAccessDenied } from '../services/audit-logger';
+import { auditDiff } from '../services/audit-diff';
 
 const router = Router();
 
@@ -328,7 +329,9 @@ router.patch('/api/orgs/:id/settings', requireAuth(), requirePermission('setting
       return res.status(400).json({ error: 'No valid settings provided' });
     }
 
+    const before = await storage.getOrganization(orgId);
     const updated = await storage.updateOrganizationSettings(orgId, updates);
+    const changes = auditDiff(before as unknown as Record<string, unknown> | undefined, updates);
 
     await storage.createAuditEntry({
       userId: adminUser.id,
@@ -337,7 +340,7 @@ router.patch('/api/orgs/:id/settings', requireAuth(), requirePermission('setting
       resource: 'organization',
       resourceId: orgId,
       organizationId: orgId,
-      details: { updates, updatedBy: adminUser.email },
+      details: { updates, updatedBy: adminUser.email, changes },
       result: 'SUCCESS',
       ipAddress: req.ip || null,
     });

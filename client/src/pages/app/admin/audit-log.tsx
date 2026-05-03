@@ -12,6 +12,15 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { UpgradeGate } from "@/components/upgrade-gate";
 import { useTenant } from "@/lib/tenant-context";
 
+type AuditChange = { from: unknown; to: unknown };
+type AuditChanges = Record<string, AuditChange>;
+type PerWorkspaceChange = { id: string; displayName: string | null; changes: AuditChanges };
+
+type AuditLogDetails = Record<string, unknown> & {
+  changes?: AuditChanges;
+  perWorkspaceChanges?: PerWorkspaceChange[];
+};
+
 type AuditLogEntry = {
   id: string;
   userId: string | null;
@@ -21,11 +30,52 @@ type AuditLogEntry = {
   resourceId: string | null;
   organizationId: string | null;
   tenantConnectionId: string | null;
-  details: Record<string, any> | null;
+  details: AuditLogDetails | null;
   result: string;
   ipAddress: string | null;
   createdAt: string;
 };
+
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+function isAuditChange(v: unknown): v is AuditChange {
+  return isPlainObject(v) && "from" in v && "to" in v;
+}
+
+function getChanges(details: AuditLogDetails | null | undefined): AuditChanges | undefined {
+  if (!details) return undefined;
+  const raw = details.changes;
+  if (!isPlainObject(raw)) return undefined;
+  const out: AuditChanges = {};
+  for (const [k, v] of Object.entries(raw)) {
+    if (isAuditChange(v)) out[k] = v;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+function getPerWorkspaceChanges(details: AuditLogDetails | null | undefined): PerWorkspaceChange[] | undefined {
+  if (!details) return undefined;
+  const raw = details.perWorkspaceChanges;
+  if (!Array.isArray(raw)) return undefined;
+  const out: PerWorkspaceChange[] = [];
+  for (const item of raw) {
+    if (!isPlainObject(item)) continue;
+    const id = typeof item.id === "string" ? item.id : null;
+    if (!id) continue;
+    const displayName = typeof item.displayName === "string" ? item.displayName : null;
+    const changesRaw = item.changes;
+    if (!isPlainObject(changesRaw)) continue;
+    const changes: AuditChanges = {};
+    for (const [k, v] of Object.entries(changesRaw)) {
+      if (isAuditChange(v)) changes[k] = v;
+    }
+    if (Object.keys(changes).length === 0) continue;
+    out.push({ id, displayName, changes });
+  }
+  return out.length > 0 ? out : undefined;
+}
 
 type AuditLogResponse = {
   rows: AuditLogEntry[];
@@ -213,6 +263,74 @@ function downloadJson(rows: AuditLogEntry[]) {
   link.download = `audit-log-${new Date().toISOString().slice(0, 10)}.json`;
   link.click();
   URL.revokeObjectURL(url);
+}
+
+function formatDiffValue(v: unknown): string {
+  if (v === undefined) return "—";
+  if (v === null) return "null";
+  if (typeof v === "string") return v === "" ? '""' : v;
+  if (typeof v === "number" || typeof v === "boolean") return String(v);
+  try {
+    return JSON.stringify(v);
+  } catch {
+    return String(v);
+  }
+}
+
+function ChangesBlock({ entryId, changes }: { entryId: string; changes: AuditChanges }) {
+  const fields = Object.keys(changes);
+  return (
+    <div className="space-y-2" data-testid={`changes-${entryId}`}>
+      <div className="text-xs font-medium text-foreground/80">Changes</div>
+      <div className="rounded-lg border border-border/50 overflow-hidden">
+        <table className="w-full text-xs">
+          <thead className="bg-muted/30 text-muted-foreground">
+            <tr>
+              <th className="text-left px-3 py-1.5 font-medium w-1/4">Field</th>
+              <th className="text-left px-3 py-1.5 font-medium">Before</th>
+              <th className="text-left px-3 py-1.5 font-medium">After</th>
+            </tr>
+          </thead>
+          <tbody>
+            {fields.map(field => (
+              <tr key={field} className="border-t border-border/40" data-testid={`change-row-${entryId}-${field}`}>
+                <td className="px-3 py-1.5 font-mono">{field}</td>
+                <td className="px-3 py-1.5 font-mono text-red-500/80 break-all" data-testid={`change-from-${entryId}-${field}`}>
+                  {formatDiffValue(changes[field].from)}
+                </td>
+                <td className="px-3 py-1.5 font-mono text-emerald-500/80 break-all" data-testid={`change-to-${entryId}-${field}`}>
+                  {formatDiffValue(changes[field].to)}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function PerWorkspaceChangesBlock({ entryId, items }: { entryId: string; items: PerWorkspaceChange[] }) {
+  const visible = items.filter(i => i.changes && Object.keys(i.changes).length > 0).slice(0, 25);
+  if (visible.length === 0) return null;
+  return (
+    <div className="space-y-2" data-testid={`per-workspace-changes-${entryId}`}>
+      <div className="text-xs font-medium text-foreground/80">
+        Per-workspace changes {items.length > visible.length && (<span className="text-muted-foreground">(showing first {visible.length} of {items.length})</span>)}
+      </div>
+      <div className="space-y-2">
+        {visible.map(item => (
+          <div key={item.id} className="rounded-lg border border-border/50 p-2 space-y-1.5">
+            <div className="text-xs text-muted-foreground">
+              <span className="font-medium text-foreground/80">{item.displayName ?? "(unnamed)"}</span>{" "}
+              <span className="font-mono">{item.id.slice(0, 8)}…</span>
+            </div>
+            <ChangesBlock entryId={`${entryId}-${item.id}`} changes={item.changes} />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 export default function AuditLogPage() {
@@ -564,6 +682,14 @@ export default function AuditLogPage() {
                                   </span>
                                 )}
                               </div>
+                              {(() => {
+                                const changes = getChanges(entry.details);
+                                return changes ? <ChangesBlock entryId={entry.id} changes={changes} /> : null;
+                              })()}
+                              {(() => {
+                                const items = getPerWorkspaceChanges(entry.details);
+                                return items ? <PerWorkspaceChangesBlock entryId={entry.id} items={items} /> : null;
+                              })()}
                               <pre
                                 className="text-xs bg-background/60 border border-border/50 rounded-lg p-3 overflow-x-auto max-h-72 font-mono"
                                 data-testid={`text-details-${entry.id}`}

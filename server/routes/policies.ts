@@ -3,6 +3,7 @@ import { requireAuth, requireRole, type AuthenticatedRequest } from "../middlewa
 import { ZENITH_ROLES, insertGovernancePolicySchema, insertPolicyOutcomeSchema, type PolicyRuleDefinition, type GovernancePolicy } from "@shared/schema";
 import { storage } from "../storage";
 import { logAuditEvent, logAccessDenied, AUDIT_ACTIONS } from "../services/audit-logger";
+import { auditDiff } from "../services/audit-diff";
 import { evaluatePolicy, evaluationResultsToCopilotRules, formatPolicyBagValue, type EvaluationContext } from "../services/policy-engine";
 import { getOrgTenantConnectionIds, getTenantConnectionIdsForOrg, getOwnedTenantConnectionIdsForOrg, getOwnedTenantConnectionIds, isWorkspaceInScope } from "./scope-helpers";
 import { requireFeature } from "../services/feature-gate";
@@ -151,12 +152,13 @@ router.patch("/api/policies/:id", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZEN
   if (req.body.propertyBagValueFormat !== undefined) updates.propertyBagValueFormat = req.body.propertyBagValueFormat;
 
   const updated = await storage.updateGovernancePolicy(req.params.id, updates as any);
+  const changes = auditDiff(existing as unknown as Record<string, unknown>, updates);
   await logAuditEvent(req, {
     action: AUDIT_ACTIONS.POLICY_UPDATED,
     resource: 'governance_policy',
     resourceId: req.params.id,
     organizationId: existing.organizationId || null,
-    details: { name: existing.name, changedFields: Object.keys(updates) },
+    details: { name: existing.name, changedFields: Object.keys(updates), changes },
   });
   res.json(updated);
 });
@@ -243,12 +245,13 @@ router.patch("/api/policy-outcomes/:id", requireRole(ZENITH_ROLES.GOVERNANCE_ADM
   }
   if (req.body.sortOrder !== undefined) updates.sortOrder = req.body.sortOrder;
   const updated = await storage.updatePolicyOutcome(req.params.id, updates as any);
+  const changes = auditDiff(existing as unknown as Record<string, unknown>, updates);
   await logAuditEvent(req, {
     action: AUDIT_ACTIONS.POLICY_OUTCOME_UPDATED,
     resource: 'policy_outcome',
     resourceId: req.params.id,
     organizationId: existing.organizationId || null,
-    details: { name: existing.name, changedFields: Object.keys(updates) },
+    details: { name: existing.name, changedFields: Object.keys(updates), changes },
   });
   res.json(updated);
 });

@@ -4,6 +4,7 @@ import { ZENITH_ROLES, FEATURE_TOGGLES, FEATURE_TOGGLE_LABELS, type FeatureToggl
 import { requireAuth, requireRole, type AuthenticatedRequest } from "../middleware/rbac";
 import { cancelDiscovery } from "../services/discovery-cancellation";
 import { logAuditEvent, logAccessDenied, AUDIT_ACTIONS } from "../services/audit-logger";
+import { auditDiff } from "../services/audit-diff";
 
 const router = Router();
 
@@ -101,8 +102,7 @@ router.patch(
       details: {
         feature,
         label: FEATURE_TOGGLE_LABELS[feature],
-        before: { enabled: previous },
-        after: { enabled },
+        changes: auditDiff({ enabled: previous }, { enabled }),
       },
     });
     res.json({

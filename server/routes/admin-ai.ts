@@ -16,6 +16,7 @@ import { storage } from '../storage';
 import { extractTextFromBuffer, mimeToFileType } from '../services/ai-document-extraction';
 import { assembleGroundingContext } from '../services/ai-grounding';
 import { logAuditEvent, logAccessDenied, AUDIT_ACTIONS } from '../services/audit-logger';
+import { auditDiff } from '../services/audit-diff';
 
 async function assertOrgScope(req: AuthenticatedRequest, orgId: string, reason: string): Promise<boolean> {
   if (req.user?.role === ZENITH_ROLES.PLATFORM_OWNER) return true;
@@ -343,8 +344,10 @@ router.patch(
         details: {
           scope: doc.scope,
           name: doc.name,
-          before: { isActive: before?.isActive },
-          after: { isActive: doc.isActive },
+          changes: auditDiff(
+            before as unknown as Record<string, unknown> | undefined,
+            { isActive: doc.isActive },
+          ),
         },
       });
       res.json(doc);
@@ -500,8 +503,10 @@ router.patch(
         details: {
           scope: doc.scope,
           name: doc.name,
-          before: { isActive: before.isActive },
-          after: { isActive: doc.isActive },
+          changes: auditDiff(
+            before as unknown as Record<string, unknown>,
+            { isActive: doc.isActive },
+          ),
         },
       });
       res.json(doc);

@@ -13,6 +13,7 @@ import type { Workspace, PolicyOutcome, GovernancePolicy } from "@shared/schema"
 import { getActiveOrgId, getOrgTenantConnectionIds, getAccessibleTenantConnectionIds, getOwnedTenantConnectionIds, isWorkspaceInScope, assertTenantInScope } from "./scope-helpers";
 import { runIASync } from "../services/ia-sync";
 import { logAuditEvent, logAccessDenied, AUDIT_ACTIONS } from "../services/audit-logger";
+import { auditDiff } from "../services/audit-diff";
 import {
   runSharePointTenantSync,
   getEffectiveClientSecret,
@@ -1692,6 +1693,7 @@ router.patch("/api/workspaces/bulk/update", requireRole(ZENITH_ROLES.GOVERNANCE_
   }
 
   const beforeSnapshots: Array<{ id: string; displayName: string | null; values: Record<string, unknown> }> = [];
+  const perWorkspaceChanges: Array<{ id: string; displayName: string | null; changes: ReturnType<typeof auditDiff> }> = [];
   for (const wsId of ids) {
     const ws = workspaceMap.get(wsId);
     if (!ws) continue;
@@ -1700,6 +1702,11 @@ router.patch("/api/workspaces/bulk/update", requireRole(ZENITH_ROLES.GOVERNANCE_
       values[f] = (ws as Record<string, unknown>)[f];
     }
     beforeSnapshots.push({ id: ws.id, displayName: ws.displayName, values });
+    perWorkspaceChanges.push({
+      id: ws.id,
+      displayName: ws.displayName,
+      changes: auditDiff(ws as unknown as Record<string, unknown>, updates),
+    });
   }
   await logAuditEvent(req, {
     action: AUDIT_ACTIONS.WORKSPACE_BULK_UPDATED,
@@ -1711,6 +1718,7 @@ router.patch("/api/workspaces/bulk/update", requireRole(ZENITH_ROLES.GOVERNANCE_
       workspaceIds: ids,
       before: beforeSnapshots,
       after: updates,
+      perWorkspaceChanges,
     },
   });
 
@@ -1830,6 +1838,11 @@ router.patch("/api/workspaces/bulk/hub-assignment", requireRole(ZENITH_ROLES.GOV
   const syncedCount = spoSyncResults.filter(r => r.success).length;
 
   const hubBefore = targetWorkspaces.map(ws => ({ id: ws.id, displayName: ws.displayName, hubSiteId: ws.hubSiteId }));
+  const hubPerWorkspaceChanges = targetWorkspaces.map(ws => ({
+    id: ws.id,
+    displayName: ws.displayName,
+    changes: auditDiff({ hubSiteId: ws.hubSiteId }, { hubSiteId: hubSiteId || null }),
+  }));
   await logAuditEvent(req, {
     action: AUDIT_ACTIONS.HUB_ASSIGNMENT_CHANGED,
     resource: 'workspace',
@@ -1838,6 +1851,7 @@ router.patch("/api/workspaces/bulk/hub-assignment", requireRole(ZENITH_ROLES.GOV
       workspaceIds,
       before: hubBefore,
       after: { hubSiteId: hubSiteId || null },
+      perWorkspaceChanges: hubPerWorkspaceChanges,
       spoSync: { attempted: spoSyncResults.length, succeeded: syncedCount, failed: spoSyncResults.length - syncedCount },
     },
     result: noneSynced && spoSyncResults.length > 0 ? 'FAILURE' : 'SUCCESS',
@@ -1889,6 +1903,7 @@ router.put("/api/workspaces/:id/copilot-rules", requireRole(ZENITH_ROLES.GOVERNA
       workspaceName: ws?.displayName,
       before: previousRules,
       after: created,
+      changes: auditDiff({ rules: previousRules }, { rules: created }),
     },
   });
   res.json(created);
