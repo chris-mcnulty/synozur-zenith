@@ -90,6 +90,11 @@ interface BulkActionResult {
   success: boolean;
   error?: string;
   errorCode?: string;
+  graphPushed?: boolean;
+  graphPushError?: string;
+  writebackSkipped?: boolean;
+  groupPushed?: boolean;
+  groupPushError?: string;
 }
 
 interface BulkActionResponse {
@@ -981,16 +986,34 @@ function BulkResultDrawer({
                 <CheckCircle2 className="w-4 h-4" /> Succeeded ({succeeded.length})
               </h4>
               <ul className="space-y-1 max-h-64 overflow-y-auto">
-                {succeeded.map(r => (
-                  <li
-                    key={r.workspaceId}
-                    className="text-sm text-muted-foreground truncate px-3 py-1"
-                    data-testid={`result-success-${r.workspaceId}`}
-                  >
-                    <CheckCircle2 className="w-3 h-3 text-emerald-500 inline mr-1.5" />
-                    {r.displayName}
-                  </li>
-                ))}
+                {succeeded.map(r => {
+                  const hasGraphWarning = r.groupPushError || (r.graphPushError && !r.graphPushed);
+                  return (
+                    <li
+                      key={r.workspaceId}
+                      className={`text-sm px-3 py-1 ${hasGraphWarning ? "rounded-md border border-amber-200 bg-amber-50 py-1.5" : "text-muted-foreground truncate"}`}
+                      data-testid={`result-success-${r.workspaceId}`}
+                    >
+                      <div className="flex items-center gap-1.5">
+                        <CheckCircle2 className="w-3 h-3 text-emerald-500 shrink-0" />
+                        <span className={hasGraphWarning ? "font-medium text-foreground truncate" : "truncate"}>{r.displayName}</span>
+                        {r.writebackSkipped && (
+                          <span className="text-xs text-muted-foreground ml-auto shrink-0">(local only)</span>
+                        )}
+                      </div>
+                      {r.graphPushError && !r.graphPushed && (
+                        <div className="text-xs text-amber-700 mt-0.5 ml-[18px]">
+                          M365 push: {r.graphPushError}
+                        </div>
+                      )}
+                      {r.groupPushError && (
+                        <div className="text-xs text-amber-700 mt-0.5 ml-[18px]">
+                          Group sync: {r.groupPushError}
+                        </div>
+                      )}
+                    </li>
+                  );
+                })}
               </ul>
             </section>
           )}

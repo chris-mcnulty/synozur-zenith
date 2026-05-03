@@ -5037,3 +5037,89 @@ export async function fetchMessageAttachmentsMeta(
 
   return { attachments, status: res.status };
 }
+
+/**
+ * Apply (or remove) a Microsoft Purview retention label to a SharePoint site's
+ * default document library root folder via the Graph API.
+ *
+ * The Graph drive/root/retentionLabel endpoint identifies labels by name, not
+ * by GUID, so callers must resolve the GUID → name before calling this function.
+ *
+ * @param graphToken  Delegated or application Graph bearer token.
+ * @param siteUrl     Full HTTPS URL of the SharePoint site.
+ * @param labelName   Purview retention label name to apply, or null to remove.
+ */
+export async function applyRetentionLabelToSite(
+  graphToken: string,
+  siteUrl: string,
+  labelName: string | null,
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const urlObj = new URL(siteUrl);
+    const hostname = urlObj.hostname;
+    const sitePath = urlObj.pathname || "/";
+
+    // Resolve the Graph site ID from the site URL.
+    const siteRes = await fetch(
+      `https://graph.microsoft.com/v1.0/sites/${hostname}:${sitePath}`,
+      { headers: { Authorization: `Bearer ${graphToken}` } },
+    );
+    if (!siteRes.ok) {
+      const errText = await siteRes.text();
+      let detail = errText;
+      try {
+        const parsed = JSON.parse(errText);
+        detail = parsed.error?.message || parsed.message || errText;
+      } catch {}
+      return { success: false, error: `Could not resolve site ID (Graph ${siteRes.status}): ${detail.substring(0, 200)}` };
+    }
+    const siteData = await siteRes.json();
+    const siteId: string | undefined = siteData.id;
+    if (!siteId) {
+      return { success: false, error: "Site ID not returned by Graph — check siteUrl and Graph permissions" };
+    }
+
+    if (labelName === null) {
+      // Remove the retention label from the drive root.
+      const delRes = await fetch(
+        `https://graph.microsoft.com/v1.0/sites/${siteId}/drive/root/retentionLabel`,
+        { method: "DELETE", headers: { Authorization: `Bearer ${graphToken}` } },
+      );
+      if (delRes.ok || delRes.status === 204 || delRes.status === 404) {
+        return { success: true };
+      }
+      const errText = await delRes.text();
+      let detail = errText;
+      try {
+        const parsed = JSON.parse(errText);
+        detail = parsed.error?.message || parsed.message || errText;
+      } catch {}
+      return { success: false, error: `Graph API ${delRes.status} removing retention label: ${detail.substring(0, 200)}` };
+    }
+
+    // Apply retention label by name to the drive root.
+    const patchRes = await fetch(
+      `https://graph.microsoft.com/v1.0/sites/${siteId}/drive/root/retentionLabel`,
+      {
+        method: "PATCH",
+        headers: {
+          Authorization: `Bearer ${graphToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ name: labelName }),
+      },
+    );
+    if (patchRes.ok || patchRes.status === 204) {
+      return { success: true };
+    }
+    const errText = await patchRes.text();
+    let detail = errText;
+    try {
+      const parsed = JSON.parse(errText);
+      detail = parsed.error?.message || parsed.message || errText;
+    } catch {}
+    return { success: false, error: `Graph API ${patchRes.status} applying retention label: ${detail.substring(0, 200)}` };
+  } catch (err: any) {
+    return { success: false, error: err.message };
+  }
+}

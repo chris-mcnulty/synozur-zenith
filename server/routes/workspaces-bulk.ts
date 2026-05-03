@@ -13,8 +13,12 @@ import {
   archiveSite,
   applySensitivityLabelToSite,
   removeSensitivityLabelFromSite,
+  assignSensitivityLabelToGroup,
+  removeSensitivityLabelFromGroup,
+  getGroupIdForSite,
+  applyRetentionLabelToSite,
 } from "../services/graph";
-import { getEffectiveClientSecret, evaluateAllPoliciesForWorkspace } from "../services/sharepoint-sync";
+import { getEffectiveClientSecret, evaluateAllPoliciesForWorkspace, getDelegatedTokenForRetention } from "../services/sharepoint-sync";
 import { writeSitePropertyBag } from "../services/graph";
 import { getUncachableSendGridClient } from "../services/sendgrid-client";
 import { getDelegatedSpoToken } from "../routes-entra";
@@ -32,6 +36,11 @@ interface RowResult {
   error?: string;
   errorCode?: string;
   tenantConnectionId?: string | null;
+  graphPushed?: boolean;
+  graphPushError?: string;
+  writebackSkipped?: boolean;
+  groupPushed?: boolean;
+  groupPushError?: string;
 }
 
 interface AuditBase {
@@ -382,6 +391,11 @@ function buildResponse(action: string, results: RowResult[], rollupAuditId: stri
       success: r.success,
       error: r.error,
       errorCode: r.errorCode,
+      graphPushed: r.graphPushed,
+      graphPushError: r.graphPushError,
+      writebackSkipped: r.writebackSkipped,
+      groupPushed: r.groupPushed,
+      groupPushError: r.groupPushError,
     })),
     rollupAuditId,
   };
@@ -421,6 +435,8 @@ router.post(
       spoHost?: string;
       spoToken?: string | null;
       spoTokenError?: string;
+      graphToken?: string | null;
+      graphTokenError?: string;
     }
     const tenantCtxCache = new Map<string, TenantLabelContext>();
 
@@ -455,13 +471,22 @@ router.post(
         ? conn.domain
         : `${conn.domain.replace(/\..*$/, "")}.sharepoint.com`;
       if (ctx.writeBackEnabled && ctx.labelValid && req.user?.id) {
+        // Delegated SPO token — required for applySensitivityLabelToSite (CSOM).
         try {
-          ctx.spoToken = await getDelegatedSpoToken(req.user.id, ctx.spoHost);
+          ctx.spoToken = await getDelegatedSpoToken(req.user.id, ctx.spoHost!);
           if (!ctx.spoToken) {
             ctx.spoTokenError = "No delegated SharePoint token available — sign in via SSO with a SharePoint admin account to push labels.";
           }
         } catch (err: any) {
           ctx.spoTokenError = `Failed to acquire SharePoint token: ${err.message}`;
+        }
+        // App token (client credentials) — required for assignSensitivityLabelToGroup.
+        try {
+          const clientId = conn.clientId || process.env.AZURE_CLIENT_ID!;
+          const clientSecret = getEffectiveClientSecret(conn);
+          ctx.graphToken = await getAppToken(conn.tenantId, clientId, clientSecret);
+        } catch (err: any) {
+          ctx.graphTokenError = `Failed to acquire Graph app token: ${err.message}`;
         }
       }
       tenantCtxCache.set(tenantConnectionId, ctx);
@@ -494,6 +519,8 @@ router.post(
       let pushed = false;
       let pushError: string | undefined;
       let writebackSkipped = false;
+      let groupPushed = false;
+      let groupPushError: string | undefined;
 
       if (!ctx.writeBackEnabled) {
         writebackSkipped = true;
@@ -514,6 +541,46 @@ router.post(
           if (!res.success) pushError = res.error;
         } catch (err: any) {
           pushError = err.message;
+        }
+
+        // For M365 group-connected workspaces, also apply or clear the label at
+        // the group level via Graph so that the group and site stay in sync.
+        // This is a best-effort secondary push: its failure is recorded in the
+        // audit row and response but does not block the overall row success.
+        if (pushed && ws.m365ObjectId) {
+          if (!ctx.graphToken) {
+            groupPushError = ctx.graphTokenError || "No Graph token available for group label sync";
+          } else {
+            // Resolve the actual M365 group ID from the site's drive owner.
+            // ws.m365ObjectId is the Graph site ID, not the group ID.
+            let resolvedGroupId: string | undefined;
+            let resolveError: string | undefined;
+            try {
+              const grpIdResult = await getGroupIdForSite(ctx.graphToken, ws.m365ObjectId);
+              resolvedGroupId = grpIdResult.groupId;
+              resolveError = grpIdResult.error;
+            } catch (err: any) {
+              resolveError = err.message;
+            }
+
+            if (resolvedGroupId) {
+              try {
+                const grpRes = payload.sensitivityLabelId
+                  ? await assignSensitivityLabelToGroup(ctx.graphToken, resolvedGroupId, payload.sensitivityLabelId)
+                  : await removeSensitivityLabelFromGroup(ctx.graphToken, resolvedGroupId);
+                groupPushed = !!grpRes.success;
+                if (!grpRes.success) groupPushError = grpRes.error;
+              } catch (err: any) {
+                groupPushError = err.message;
+              }
+            } else {
+              // Site has no associated M365 group — skip group push silently
+              // (communication sites and classic sites are group-less).
+              if (resolveError && resolveError !== "No M365 Group associated with this site") {
+                groupPushError = resolveError;
+              }
+            }
+          }
         }
       }
 
@@ -547,8 +614,18 @@ router.post(
           pushed,
           writebackSkipped,
           ...(pushError ? { pushError } : {}),
+          ...(ws.m365ObjectId ? { groupPushed, ...(groupPushError ? { groupPushError } : {}) } : {}),
         }, "SUCCESS");
-        return { workspaceId: ws.id, displayName: ws.displayName, success: true, tenantConnectionId: ws.tenantConnectionId };
+        return {
+          workspaceId: ws.id,
+          displayName: ws.displayName,
+          success: true,
+          tenantConnectionId: ws.tenantConnectionId,
+          graphPushed: pushed,
+          writebackSkipped,
+          groupPushed: groupPushed || undefined,
+          groupPushError,
+        };
       } catch (err: any) {
         await recordRowAudit(auditBase, ACTION, ws.id, ws.tenantConnectionId, { ...baseDetails, error: err.message }, "FAILURE");
         return { workspaceId: ws.id, displayName: ws.displayName, success: false, error: err.message, tenantConnectionId: ws.tenantConnectionId };
@@ -582,31 +659,63 @@ router.post(
     const auditBase = buildAuditBase(req);
     const ACTION = "RETENTION_LABEL_ASSIGNED";
 
-    // Per-tenant validation of the chosen retention label against the synced
-    // retention label set, so a crafted retentionLabelId cannot be persisted.
-    type RetValidation = { ok: boolean; error?: string };
-    const retentionValidByTenant = new Map<string, RetValidation>();
-    const validateRetentionForTenant = async (tenantConnectionId: string): Promise<RetValidation> => {
-      const cached = retentionValidByTenant.get(tenantConnectionId);
+    // Per-tenant context: validate the chosen retention label, resolve its name
+    // for the Graph API, and gate Graph writeback on the m365WriteBack feature.
+    interface TenantRetentionContext {
+      writeBackEnabled: boolean;
+      labelValid: boolean;
+      labelError?: string;
+      labelName?: string | null;
+      graphToken?: string | null;
+      graphTokenError?: string;
+    }
+    const tenantRetCtxCache = new Map<string, TenantRetentionContext>();
+
+    const getTenantRetentionContext = async (tenantConnectionId: string): Promise<TenantRetentionContext> => {
+      const cached = tenantRetCtxCache.get(tenantConnectionId);
       if (cached) return cached;
-      if (payload.retentionLabelId === null) {
-        const ok: RetValidation = { ok: true };
-        retentionValidByTenant.set(tenantConnectionId, ok);
-        return ok;
-      }
+      const ctx: TenantRetentionContext = { writeBackEnabled: false, labelValid: false };
       const conn = await storage.getTenantConnection(tenantConnectionId);
       if (!conn) {
-        const r = { ok: false, error: "Tenant connection not found" };
-        retentionValidByTenant.set(tenantConnectionId, r);
-        return r;
+        ctx.labelError = "Tenant connection not found";
+        tenantRetCtxCache.set(tenantConnectionId, ctx);
+        return ctx;
       }
-      const labels = await storage.getRetentionLabelsByTenantId(conn.tenantId);
-      const target = labels.find(l => l.labelId === payload.retentionLabelId);
-      const r = target
-        ? { ok: true }
-        : { ok: false, error: "Retention label not found in synced labels for this tenant" };
-      retentionValidByTenant.set(tenantConnectionId, r);
-      return r;
+      const orgId = conn.organizationId || req.user?.organizationId;
+      const org = orgId ? await storage.getOrganization(orgId) : null;
+      const plan = (org?.servicePlan || "TRIAL") as ServicePlanTier;
+      ctx.writeBackEnabled = getPlanFeatures(plan).m365WriteBack;
+
+      if (payload.retentionLabelId === null) {
+        ctx.labelValid = true;
+        ctx.labelName = null;
+      } else {
+        const labels = await storage.getRetentionLabelsByTenantId(conn.tenantId);
+        const target = labels.find(l => l.labelId === payload.retentionLabelId);
+        if (!target) {
+          ctx.labelError = "Retention label not found in synced labels for this tenant";
+        } else {
+          ctx.labelValid = true;
+          ctx.labelName = target.name;
+        }
+      }
+
+      if (ctx.writeBackEnabled && ctx.labelValid) {
+        // Delegated Graph token — required for the drive/root/retentionLabel endpoint.
+        // Falls back to any org-level token when the current user doesn't have one.
+        try {
+          const orgId = conn.organizationId || req.user?.organizationId;
+          ctx.graphToken = await getDelegatedTokenForRetention(req.user?.id, orgId ?? undefined);
+          if (!ctx.graphToken) {
+            ctx.graphTokenError = "No delegated Graph token available — sign in via SSO to push retention labels to M365.";
+          }
+        } catch (err: any) {
+          ctx.graphTokenError = `Failed to acquire Graph token: ${err.message}`;
+        }
+      }
+
+      tenantRetCtxCache.set(tenantConnectionId, ctx);
+      return ctx;
     };
 
     const results = await runBatched(Array.from(workspaces.keys()), WRITE_BATCH, async (id) => {
@@ -619,28 +728,79 @@ router.post(
         await recordRowAudit(auditBase, ACTION, ws.id, null, { workspaceName: ws.displayName, error: "No tenant connection" }, "FAILURE");
         return { workspaceId: ws.id, displayName: ws.displayName, success: false, error: "No tenant connection" };
       }
-      const v = await validateRetentionForTenant(ws.tenantConnectionId);
-      if (!v.ok) {
+
+      const ctx = await getTenantRetentionContext(ws.tenantConnectionId);
+      if (!ctx.labelValid) {
         await recordRowAudit(auditBase, ACTION, ws.id, ws.tenantConnectionId, {
           workspaceName: ws.displayName,
           newLabelId: payload.retentionLabelId,
-          error: v.error,
+          error: ctx.labelError,
         }, "FAILURE");
-        return { workspaceId: ws.id, displayName: ws.displayName, success: false, error: v.error, tenantConnectionId: ws.tenantConnectionId };
+        return { workspaceId: ws.id, displayName: ws.displayName, success: false, error: ctx.labelError, tenantConnectionId: ws.tenantConnectionId };
       }
+
+      const baseDetails = {
+        workspaceName: ws.displayName,
+        previousLabelId: ws.retentionLabelId || null,
+        newLabelId: payload.retentionLabelId,
+      };
+
+      // ── Graph writeback ──────────────────────────────────────────────────
+      let pushed = false;
+      let pushError: string | undefined;
+      let writebackSkipped = false;
+
+      if (!ctx.writeBackEnabled) {
+        writebackSkipped = true;
+      } else if (ctx.graphTokenError) {
+        pushError = ctx.graphTokenError;
+      } else if (!ctx.graphToken) {
+        pushError = "No Graph token available — cannot push retention label to M365";
+      } else if (!ws.siteUrl) {
+        pushError = "Workspace has no siteUrl — cannot push retention label to M365";
+      } else {
+        try {
+          const result = await applyRetentionLabelToSite(ctx.graphToken, ws.siteUrl, ctx.labelName ?? null);
+          pushed = !!result.success;
+          if (!result.success) pushError = result.error;
+        } catch (err: any) {
+          pushError = err.message;
+        }
+      }
+
+      // Hard-fail when writeback was attempted but failed, consistent with the
+      // bulk label handler and the single-row 502 pattern.
+      if (ctx.writeBackEnabled && !pushed && !writebackSkipped) {
+        await recordRowAudit(auditBase, ACTION, ws.id, ws.tenantConnectionId, {
+          ...baseDetails,
+          pushed: false,
+          error: pushError,
+        }, "FAILURE");
+        return { workspaceId: ws.id, displayName: ws.displayName, success: false, error: pushError || "Retention label push failed", tenantConnectionId: ws.tenantConnectionId };
+      }
+
+      // ── DB write ─────────────────────────────────────────────────────────
       try {
         const updates: Partial<InsertWorkspace> = { retentionLabelId: payload.retentionLabelId };
         await storage.updateWorkspace(ws.id, updates);
         await recordRowAudit(auditBase, ACTION, ws.id, ws.tenantConnectionId, {
-          workspaceName: ws.displayName,
-          previousLabelId: ws.retentionLabelId || null,
-          newLabelId: payload.retentionLabelId,
+          ...baseDetails,
+          pushed,
+          writebackSkipped,
+          ...(pushError ? { pushError } : {}),
         }, "SUCCESS");
-        return { workspaceId: ws.id, displayName: ws.displayName, success: true, tenantConnectionId: ws.tenantConnectionId };
+        return {
+          workspaceId: ws.id,
+          displayName: ws.displayName,
+          success: true,
+          tenantConnectionId: ws.tenantConnectionId,
+          graphPushed: pushed,
+          writebackSkipped,
+          graphPushError: pushError,
+        };
       } catch (err: any) {
         await recordRowAudit(auditBase, ACTION, ws.id, ws.tenantConnectionId, {
-          workspaceName: ws.displayName,
-          newLabelId: payload.retentionLabelId,
+          ...baseDetails,
           error: err.message,
         }, "FAILURE");
         return { workspaceId: ws.id, displayName: ws.displayName, success: false, error: err.message, tenantConnectionId: ws.tenantConnectionId };
