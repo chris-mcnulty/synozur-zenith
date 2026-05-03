@@ -4,5 +4,9 @@ dist
 server/public
 vite.config.ts.*
 *.tar.gz
+playwright-report/
 attached_assets/playwright-report/
 test-results/
+attached_assets/*.png
+attached_assets/*.jpg
+attached_assets/*.jpeg

@@ -135,7 +135,10 @@ async function ensureTenantConnectionsSchema() {
       "ALTER TABLE tenant_connections ADD COLUMN IF NOT EXISTS content_governance_enabled boolean NOT NULL DEFAULT false",
       "ALTER TABLE tenant_connections ADD COLUMN IF NOT EXISTS licensing_enabled boolean NOT NULL DEFAULT false",
       "ALTER TABLE tenant_connections ADD COLUMN IF NOT EXISTS lifecycle_scan_schedule_enabled boolean NOT NULL DEFAULT true",
-    "ALTER TABLE tenant_connections ADD COLUMN IF NOT EXISTS copilot_sync_schedule_enabled boolean NOT NULL DEFAULT true",
+      "ALTER TABLE tenant_connections ADD COLUMN IF NOT EXISTS copilot_sync_schedule_enabled boolean NOT NULL DEFAULT true",
+      "ALTER TABLE tenant_connections ADD COLUMN IF NOT EXISTS status_reason text",
+      "ALTER TABLE tenant_connections ADD COLUMN IF NOT EXISTS status_changed_at timestamp",
+      "ALTER TABLE tenant_connections ADD COLUMN IF NOT EXISTS status_changed_by text",
     ];
 
     for (const stmt of alterStatements) {
