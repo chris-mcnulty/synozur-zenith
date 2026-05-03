@@ -6,12 +6,15 @@ import {
   ChevronDown,
   Copy,
   Globe2,
+  Home,
   Link2,
   MoreHorizontal,
   Pencil,
   Pin,
   PinOff,
   Sparkles,
+  Star,
+  StarOff,
   Trash2,
   User as UserIcon,
 } from "lucide-react";
@@ -176,6 +179,38 @@ export function SavedViewsBar({
     onError: (err: Error) => toast({ title: "Could not update view", description: err.message, variant: "destructive" }),
   });
 
+  const setDefaultMutation = useMutation({
+    mutationFn: async (vars: { id: string; isDefault: boolean }) => {
+      if (vars.isDefault) {
+        const res = await fetch(`/api/saved-views/${vars.id}/default`, {
+          method: "POST",
+          credentials: "include",
+        });
+        if (!res.ok) throw new Error((await res.json()).error || "Failed to set default");
+        return res.json();
+      } else {
+        const view = all.find((v) => v.id === vars.id);
+        if (!view) return null;
+        const res = await fetch(`/api/saved-views/default?page=${encodeURIComponent(view.page)}`, {
+          method: "DELETE",
+          credentials: "include",
+        });
+        if (!res.ok && res.status !== 204) throw new Error((await res.json()).error || "Failed to clear default");
+        return null;
+      }
+    },
+    onSuccess: (_data, vars) => {
+      invalidateViews();
+      toast({
+        title: vars.isDefault ? "Default view set" : "Default view cleared",
+        description: vars.isDefault
+          ? "Team members landing on this page will see this view applied automatically."
+          : "No default view is set for this page.",
+      });
+    },
+    onError: (err: Error) => toast({ title: "Could not update default", description: err.message, variant: "destructive" }),
+  });
+
   const handleCopyLink = (viewId?: string) => {
     if (typeof navigator === "undefined") return;
     const url = viewId
@@ -251,6 +286,7 @@ export function SavedViewsBar({
                         onRename={() => setRenameView(v)}
                         onDelete={() => setConfirmDelete(v)}
                         onCopyLink={() => handleCopyLink(v.id)}
+                        onSetDefault={canShareOrg ? () => setDefaultMutation.mutate({ id: v.id, isDefault: !v.isDefault }) : undefined}
                         canEdit={v.isOwner || canShareOrg}
                         canShareOrg={canShareOrg}
                       />
@@ -397,6 +433,7 @@ function ViewMenuItem({
   onRename,
   onDelete,
   onCopyLink,
+  onSetDefault,
   canEdit,
   canShareOrg: _canShareOrg,
 }: {
@@ -408,6 +445,7 @@ function ViewMenuItem({
   onRename?: () => void;
   onDelete?: () => void;
   onCopyLink?: () => void;
+  onSetDefault?: () => void;
   canEdit: boolean;
   canShareOrg: boolean;
 }) {
@@ -423,7 +461,18 @@ function ViewMenuItem({
       >
         {isActive ? <Check className="w-3.5 h-3.5 text-primary" /> : <span className="w-3.5" />}
         <span className="truncate flex-1">{view.name}</span>
-        {view.scope === "ORG" && (
+        {view.isDefault && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Badge variant="outline" className="text-[9px] py-0 h-4 bg-amber-500/10 text-amber-700 border-amber-500/30 gap-0.5">
+                <Home className="w-2.5 h-2.5" />
+                Default
+              </Badge>
+            </TooltipTrigger>
+            <TooltipContent>This view is automatically applied for all team members on this page</TooltipContent>
+          </Tooltip>
+        )}
+        {view.scope === "ORG" && !view.isDefault && (
           <Tooltip>
             <TooltipTrigger asChild>
               <Badge variant="outline" className="text-[9px] py-0 h-4">Org</Badge>
@@ -450,11 +499,19 @@ function ViewMenuItem({
             <MoreHorizontal className="w-3.5 h-3.5" />
           </button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="w-44">
+        <DropdownMenuContent align="end" className="w-52">
           {!view.isBuiltIn && onPin && (
             <DropdownMenuItem onClick={() => onPin(!view.isPinned)} data-testid={`menu-pin-${view.id}`}>
               {view.isPinned ? <PinOff className="w-3.5 h-3.5 mr-2" /> : <Pin className="w-3.5 h-3.5 mr-2" />}
               {view.isPinned ? "Unpin" : "Pin"}
+            </DropdownMenuItem>
+          )}
+          {onSetDefault && (
+            <DropdownMenuItem onClick={onSetDefault} data-testid={`menu-set-default-${view.id}`}>
+              {view.isDefault
+                ? <><StarOff className="w-3.5 h-3.5 mr-2" /> Remove default</>
+                : <><Star className="w-3.5 h-3.5 mr-2" /> Set as page default</>
+              }
             </DropdownMenuItem>
           )}
           {onCopyLink && (

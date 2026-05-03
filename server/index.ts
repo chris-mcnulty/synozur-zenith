@@ -1008,6 +1008,29 @@ async function ensureTenantConnectionsSchema() {
       );
     `);
 
+    // ── BL-047: Saved Views (task-110 / task-111) ──────────────────────────
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS saved_views (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        organization_id varchar NOT NULL,
+        owner_user_id varchar NOT NULL,
+        page text NOT NULL,
+        name text NOT NULL,
+        filter_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+        sort_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+        columns_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+        scope text NOT NULL DEFAULT 'PRIVATE',
+        pinned_by_user_ids text[] NOT NULL DEFAULT '{}'::text[],
+        is_default boolean NOT NULL DEFAULT false,
+        created_at timestamp NOT NULL DEFAULT now(),
+        updated_at timestamp NOT NULL DEFAULT now()
+      );
+      CREATE INDEX IF NOT EXISTS ix_saved_views_org_page ON saved_views (organization_id, page);
+      CREATE INDEX IF NOT EXISTS ix_saved_views_owner ON saved_views (owner_user_id, page);
+      CREATE INDEX IF NOT EXISTS ix_saved_views_default ON saved_views (organization_id, page, is_default)
+        WHERE is_default = true;
+    `);
+
     log('Schema migration ensureTenantConnectionsSchema completed');
   } catch (err) {
     console.error('[Migration] Failed to ensure tenant_connections schema:', err);

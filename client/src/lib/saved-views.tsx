@@ -23,6 +23,7 @@ export type SavedViewWire = {
   isPinned: boolean;
   isBuiltIn: boolean;
   isOwner: boolean;
+  isDefault: boolean;
   createdAt: string | null;
   updatedAt: string | null;
 };
@@ -189,6 +190,7 @@ export function useSavedViewController<TState extends ViewState>(opts: {
 
   // On first mount (after the views list has resolved if a view id is present
   // in the URL), pull initial state.
+  // Priority: 1) ?view= URL param, 2) ?vs= URL state, 3) org default view.
   useEffect(() => {
     if (initialAppliedRef.current) return;
     if (!enabled) return;
@@ -214,7 +216,22 @@ export function useSavedViewController<TState extends ViewState>(opts: {
       initialAppliedRef.current = true;
       return;
     }
-    initialAppliedRef.current = true;
+    // No URL params — check for an org default view and apply it silently.
+    if (list.data) {
+      const defaultView = list.data.shared.find((v) => v.isDefault);
+      if (defaultView) {
+        applyState({
+          filterJson: defaultView.filterJson || {},
+          sortJson: defaultView.sortJson || {},
+          columnsJson: defaultView.columnsJson || {},
+        });
+        setActiveViewId(defaultView.id);
+        setViewIdInUrl(defaultView.id);
+      }
+      initialAppliedRef.current = true;
+      return;
+    }
+    // Views haven't loaded yet — wait for them before committing.
   }, [list.data, enabled, applyState]);
 
   const applyView = useCallback(

@@ -41,6 +41,7 @@ function viewToWire(view: SavedView, currentUserId: string) {
     isPinned: (view.pinnedByUserIds ?? []).includes(currentUserId),
     isBuiltIn: false,
     isOwner: view.ownerUserId === currentUserId,
+    isDefault: view.isDefault ?? false,
   };
 }
 
@@ -60,6 +61,7 @@ function builtInToWire(b: (typeof BUILT_IN_SAVED_VIEWS)[number]) {
     isPinned: false,
     isBuiltIn: true,
     isOwner: false,
+    isDefault: false,
     createdAt: null,
     updatedAt: null,
   };
@@ -348,6 +350,92 @@ router.post(
       });
 
       res.status(201).json(viewToWire(created, userId));
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  },
+);
+
+// ── Set / clear the page default view for the org (Tenant Admin only) ──
+router.post(
+  "/api/saved-views/:id/default",
+  requireAuth(),
+  async (req: AuthenticatedRequest, res) => {
+    try {
+      const id = req.params.id as string;
+      if (id.startsWith("builtin:")) {
+        return res.status(400).json({ error: "Built-in views cannot be set as default" });
+      }
+
+      const userId = req.user?.id ?? "";
+      const orgId = req.activeOrganizationId || req.user?.organizationId;
+      const role = req.effectiveRole || req.user?.role;
+
+      if (!isTenantAdminOrAbove(role)) {
+        return res.status(403).json({ error: "Only Tenant Admins can set a default view" });
+      }
+
+      const existing = await storage.getSavedView(id);
+      if (!existing) return res.status(404).json({ error: "View not found" });
+      if (existing.organizationId !== orgId) {
+        return res.status(403).json({ error: "Not allowed to modify this view" });
+      }
+      if (existing.scope !== "ORG") {
+        return res.status(400).json({ error: "Only org-shared views can be set as default" });
+      }
+
+      const updated = await storage.setDefaultSavedView(id, orgId!, existing.page);
+
+      await storage.createAuditEntry({
+        userId,
+        userEmail: (req.user?.email ?? null) as string | null,
+        action: "SAVED_VIEW_SET_DEFAULT",
+        resource: "saved_view",
+        resourceId: id,
+        organizationId: orgId!,
+        details: { page: existing.page, name: existing.name },
+        result: "SUCCESS",
+      });
+
+      res.json(updated ? viewToWire(updated, userId) : null);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  },
+);
+
+// ── Clear the page default view for the org (Tenant Admin only) ──
+router.delete(
+  "/api/saved-views/default",
+  requireAuth(),
+  async (req: AuthenticatedRequest, res) => {
+    try {
+      const page = pageQuery(req);
+      if (!page) return res.status(400).json({ error: "Unknown or missing page" });
+
+      const userId = req.user?.id ?? "";
+      const orgId = req.activeOrganizationId || req.user?.organizationId;
+      const role = req.effectiveRole || req.user?.role;
+
+      if (!orgId) return res.status(400).json({ error: "Missing organization context" });
+      if (!isTenantAdminOrAbove(role)) {
+        return res.status(403).json({ error: "Only Tenant Admins can clear the default view" });
+      }
+
+      await storage.setDefaultSavedView(null, orgId, page);
+
+      await storage.createAuditEntry({
+        userId,
+        userEmail: (req.user?.email ?? null) as string | null,
+        action: "SAVED_VIEW_CLEARED_DEFAULT",
+        resource: "saved_view",
+        resourceId: `${orgId}:${page}`,
+        organizationId: orgId,
+        details: { page },
+        result: "SUCCESS",
+      });
+
+      res.status(204).end();
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }

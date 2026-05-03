@@ -2233,6 +2233,7 @@ export const savedViews = pgTable("saved_views", {
   columnsJson: jsonb("columns_json").$type<{ visible?: string[]; hidden?: string[] } | Record<string, unknown>>().notNull().default(sql`'{}'::jsonb`),
   scope: text("scope").notNull().default("PRIVATE"),
   pinnedByUserIds: text("pinned_by_user_ids").array().notNull().default(sql`'{}'::text[]`),
+  isDefault: boolean("is_default").notNull().default(false),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });

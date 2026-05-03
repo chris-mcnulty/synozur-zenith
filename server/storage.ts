@@ -706,6 +706,8 @@ export interface IStorage {
   ): Promise<SavedView | undefined>;
   deleteSavedView(id: string): Promise<void>;
   setSavedViewPin(id: string, userId: string, pinned: boolean): Promise<SavedView | undefined>;
+  setDefaultSavedView(id: string | null, organizationId: string, page: string): Promise<SavedView | undefined>;
+  getDefaultSavedView(organizationId: string, page: string): Promise<SavedView | undefined>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -4853,6 +4855,116 @@ export class DatabaseStorage implements IStorage {
       db.select().from(galaxyUserAcknowledgements).where(where).orderBy(desc(galaxyUserAcknowledgements.createdAt)).limit(limit).offset(offset),
     ]);
     return { rows, total: countRes[0]?.count ?? 0 };
+  }
+
+  // ── Saved Views ──────────────────────────────────────────────────────────────
+
+  async listSavedViewsForUser(params: {
+    organizationId: string;
+    userId: string;
+    page: SavedViewPage;
+  }): Promise<SavedView[]> {
+    return db
+      .select()
+      .from(savedViews)
+      .where(
+        and(
+          eq(savedViews.page, params.page),
+          or(
+            and(eq(savedViews.organizationId, params.organizationId), eq(savedViews.scope, "ORG")),
+            and(eq(savedViews.ownerUserId, params.userId), eq(savedViews.scope, "PRIVATE")),
+          ),
+        ),
+      )
+      .orderBy(savedViews.name);
+  }
+
+  async getSavedView(id: string): Promise<SavedView | undefined> {
+    const [row] = await db.select().from(savedViews).where(eq(savedViews.id, id));
+    return row ?? undefined;
+  }
+
+  async createSavedView(data: InsertSavedView): Promise<SavedView> {
+    const [row] = await db.insert(savedViews).values(data as any).returning();
+    return row;
+  }
+
+  async updateSavedView(
+    id: string,
+    updates: Partial<Pick<InsertSavedView, "name" | "filterJson" | "sortJson" | "columnsJson" | "scope">>,
+  ): Promise<SavedView | undefined> {
+    const [row] = await db
+      .update(savedViews)
+      .set({ ...updates, updatedAt: new Date() } as any)
+      .where(eq(savedViews.id, id))
+      .returning();
+    return row ?? undefined;
+  }
+
+  async deleteSavedView(id: string): Promise<void> {
+    await db.delete(savedViews).where(eq(savedViews.id, id));
+  }
+
+  async setSavedViewPin(id: string, userId: string, pinned: boolean): Promise<SavedView | undefined> {
+    const [existing] = await db.select().from(savedViews).where(eq(savedViews.id, id));
+    if (!existing) return undefined;
+    const currentPins: string[] = existing.pinnedByUserIds ?? [];
+    const newPins = pinned
+      ? Array.from(new Set([...currentPins, userId]))
+      : currentPins.filter((uid) => uid !== userId);
+    const [row] = await db
+      .update(savedViews)
+      .set({ pinnedByUserIds: newPins, updatedAt: new Date() })
+      .where(eq(savedViews.id, id))
+      .returning();
+    return row ?? undefined;
+  }
+
+  /**
+   * Set (or clear) the default view for a given org + page combination.
+   * If `id` is non-null, clears any existing default for the org+page first,
+   * then marks the specified view as default. If `id` is null, just clears
+   * the current default.
+   */
+  async setDefaultSavedView(id: string | null, organizationId: string, page: string): Promise<SavedView | undefined> {
+    return db.transaction(async (tx) => {
+      // Clear existing default for this org + page
+      await tx
+        .update(savedViews)
+        .set({ isDefault: false, updatedAt: new Date() })
+        .where(
+          and(
+            eq(savedViews.organizationId, organizationId),
+            eq(savedViews.page, page),
+            eq(savedViews.isDefault, true),
+          ),
+        );
+
+      if (!id) return undefined;
+
+      const [row] = await tx
+        .update(savedViews)
+        .set({ isDefault: true, updatedAt: new Date() })
+        .where(eq(savedViews.id, id))
+        .returning();
+      return row ?? undefined;
+    });
+  }
+
+  async getDefaultSavedView(organizationId: string, page: string): Promise<SavedView | undefined> {
+    const [row] = await db
+      .select()
+      .from(savedViews)
+      .where(
+        and(
+          eq(savedViews.organizationId, organizationId),
+          eq(savedViews.page, page),
+          eq(savedViews.isDefault, true),
+          eq(savedViews.scope, "ORG"),
+        ),
+      )
+      .limit(1);
+    return row ?? undefined;
   }
 }
 
