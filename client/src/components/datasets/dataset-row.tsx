@@ -6,6 +6,7 @@
  */
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Progress } from "@/components/ui/progress";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -99,6 +100,36 @@ export function DatasetRow({
             <div className="opacity-70">
               Depends on: {dataset.dependsOn.join(", ")}
             </div>
+          )}
+          {dataset.activeJob &&
+            dataset.activeJob.itemsTotal != null &&
+            dataset.activeJob.itemsTotal > 0 && (
+              <div
+                className="space-y-1 pt-1"
+                data-testid={`progress-dataset-${dataset.key}`}
+              >
+                <Progress
+                  value={Math.round(
+                    ((dataset.activeJob.itemsProcessed ?? 0) /
+                      dataset.activeJob.itemsTotal) *
+                      100,
+                  )}
+                  className="h-1.5"
+                />
+                <div>
+                  {dataset.activeJob.progressLabel ?? "Working…"} —{" "}
+                  {dataset.activeJob.itemsProcessed ?? 0} /{" "}
+                  {dataset.activeJob.itemsTotal}
+                </div>
+              </div>
+            )}
+          {!isRefreshing && dataset.resumable && (
+            <Badge
+              className="bg-amber-500/10 text-amber-500 border-amber-500/20 mt-1"
+              data-testid={`badge-dataset-resumable-${dataset.key}`}
+            >
+              Will resume on next run
+            </Badge>
           )}
         </div>
       </div>

@@ -151,17 +151,6 @@ import {
   type InsertScheduledJobRun,
   type JobType,
   type JobStatus,
-  savedViews,
-  type SavedView,
-  type InsertSavedView,
-  type SavedViewPage,
-  type SavedViewScope,
-  workspaceComplianceScores,
-  type WorkspaceComplianceScore,
-  type InsertWorkspaceComplianceScore,
-  lifecycleScanRuns,
-  type LifecycleScanRun,
-  type InsertLifecycleScanRun,
 } from "@shared/schema";
 import {
   decryptRecord,
@@ -552,6 +541,19 @@ export interface IStorage {
     id: string,
     updates: Partial<InsertScheduledJobRun> & { completedAt?: Date | null; status?: JobStatus },
   ): Promise<ScheduledJobRun | undefined>;
+  /**
+   * Progress-only update for a running scheduled_job_runs row.
+   * Reusable helper for any long-running service to push live counts +
+   * label without having to thread the full update shape through.
+   */
+  updateScheduledJobRunProgress(
+    id: string,
+    progress: {
+      itemsTotal?: number | null;
+      itemsProcessed?: number | null;
+      progressLabel?: string | null;
+    },
+  ): Promise<void>;
   getScheduledJobRun(id: string): Promise<ScheduledJobRun | undefined>;
   listScheduledJobRuns(filters: {
     organizationId?: string | null;
@@ -574,21 +576,27 @@ export interface IStorage {
    * runs orphaned by a previous crash/restart.
    */
   reconcileOrphanedJobRuns(maxAgeMs?: number): Promise<number>;
-
-  // ── Saved Views ──
-  listSavedViewsForUser(params: {
-    organizationId: string;
-    userId: string;
-    page: SavedViewPage;
-  }): Promise<SavedView[]>;
-  getSavedView(id: string): Promise<SavedView | undefined>;
-  createSavedView(data: InsertSavedView): Promise<SavedView>;
-  updateSavedView(
-    id: string,
-    updates: Partial<Pick<InsertSavedView, "name" | "filterJson" | "sortJson" | "columnsJson" | "scope">>,
-  ): Promise<SavedView | undefined>;
-  deleteSavedView(id: string): Promise<void>;
-  setSavedViewPin(id: string, userId: string, pinned: boolean): Promise<SavedView | undefined>;
+  /**
+   * Same as above but for the legacy sharing_link_discovery_runs
+   * table. Preserves `resumable` so the next dispatch can pick up where
+   * the killed process left off.
+   */
+  reconcileOrphanedSharingLinkDiscoveryRuns(maxAgeMs?: number): Promise<number>;
+  getEarliestSharingLinkChainStart(
+    tenantConnectionId: string,
+    withinMs?: number,
+  ): Promise<Date | null>;
+  clearAllResumableSharingLinkDiscoveryRuns(
+    tenantConnectionId: string,
+  ): Promise<number>;
+  /**
+   * Returns the most recent resumable sharing-link-discovery run
+   * for a tenant within `withinMs`, or undefined if none.
+   */
+  getResumableSharingLinkDiscoveryRun(
+    tenantConnectionId: string,
+    withinMs?: number,
+  ): Promise<SharingLinkDiscoveryRun | undefined>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -2665,6 +2673,13 @@ export class DatabaseStorage implements IStorage {
     usersScanned?: number;
     itemsScanned?: number;
     errors?: Array<{ context: string; message: string }>;
+    phase?: string | null;
+    lastProcessedSpoSiteId?: string | null;
+    lastProcessedOneDriveId?: string | null;
+    resumable?: boolean;
+    itemsTotal?: number | null;
+    itemsProcessed?: number | null;
+    progressLabel?: string | null;
   }): Promise<SharingLinkDiscoveryRun | undefined> {
     const [result] = await db.update(sharingLinkDiscoveryRuns)
       .set(updates)
@@ -2679,6 +2694,89 @@ export class DatabaseStorage implements IStorage {
       .orderBy(desc(sharingLinkDiscoveryRuns.startedAt))
       .limit(1);
     return result;
+  }
+
+  /** Most recent resumable FAILED sharing-link-discovery run within `withinMs`. */
+  async getResumableSharingLinkDiscoveryRun(
+    tenantConnectionId: string,
+    withinMs: number = 6 * 60 * 60 * 1000,
+  ): Promise<SharingLinkDiscoveryRun | undefined> {
+    const cutoff = new Date(Date.now() - withinMs);
+    const [result] = await db.select().from(sharingLinkDiscoveryRuns)
+      .where(
+        and(
+          eq(sharingLinkDiscoveryRuns.tenantConnectionId, tenantConnectionId),
+          eq(sharingLinkDiscoveryRuns.resumable, true),
+          gte(sharingLinkDiscoveryRuns.startedAt, cutoff),
+        ),
+      )
+      .orderBy(desc(sharingLinkDiscoveryRuns.startedAt))
+      .limit(1);
+    return result;
+  }
+
+  /** Earliest startedAt across the current resume-chain (resumable or RUNNING). */
+  async getEarliestSharingLinkChainStart(
+    tenantConnectionId: string,
+    withinMs: number = 6 * 60 * 60 * 1000,
+  ): Promise<Date | null> {
+    const cutoff = new Date(Date.now() - withinMs);
+    const [row] = await db
+      .select({ startedAt: sharingLinkDiscoveryRuns.startedAt })
+      .from(sharingLinkDiscoveryRuns)
+      .where(
+        and(
+          eq(sharingLinkDiscoveryRuns.tenantConnectionId, tenantConnectionId),
+          gte(sharingLinkDiscoveryRuns.startedAt, cutoff),
+          sql`(${sharingLinkDiscoveryRuns.resumable} = true OR ${sharingLinkDiscoveryRuns.status} = 'RUNNING')`,
+        ),
+      )
+      .orderBy(sharingLinkDiscoveryRuns.startedAt)
+      .limit(1);
+    return row?.startedAt ?? null;
+  }
+
+  /** Clear resumable=true on every sharing-link run for a tenant (Full Rescan). */
+  async clearAllResumableSharingLinkDiscoveryRuns(
+    tenantConnectionId: string,
+  ): Promise<number> {
+    const rows = await db
+      .update(sharingLinkDiscoveryRuns)
+      .set({ resumable: false })
+      .where(
+        and(
+          eq(sharingLinkDiscoveryRuns.tenantConnectionId, tenantConnectionId),
+          eq(sharingLinkDiscoveryRuns.resumable, true),
+        ),
+      )
+      .returning({ id: sharingLinkDiscoveryRuns.id });
+    return rows.length;
+  }
+
+  /**
+   * Marks any RUNNING sharing_link_discovery_runs row older than
+   * `maxAgeMs` as FAILED. Preserves `resumable=true` so the next dispatch
+   * picks up where the killed process left off. Mirrors the
+   * `reconcileOrphanedJobRuns` pass that runs against scheduled_job_runs.
+   */
+  async reconcileOrphanedSharingLinkDiscoveryRuns(
+    maxAgeMs: number = 60 * 60 * 1000,
+  ): Promise<number> {
+    const cutoff = new Date(Date.now() - maxAgeMs);
+    const result = await db
+      .update(sharingLinkDiscoveryRuns)
+      .set({
+        status: 'FAILED',
+        completedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(sharingLinkDiscoveryRuns.status, 'RUNNING'),
+          lt(sharingLinkDiscoveryRuns.startedAt, cutoff),
+        ),
+      )
+      .returning({ id: sharingLinkDiscoveryRuns.id });
+    return result.length;
   }
 
   // ── Content Governance: Review Findings ──────────────────────────────────
@@ -4072,6 +4170,25 @@ export class DatabaseStorage implements IStorage {
     return row;
   }
 
+  async updateScheduledJobRunProgress(
+    id: string,
+    progress: {
+      itemsTotal?: number | null;
+      itemsProcessed?: number | null;
+      progressLabel?: string | null;
+    },
+  ): Promise<void> {
+    const updates: Record<string, unknown> = {};
+    if (progress.itemsTotal !== undefined) updates.itemsTotal = progress.itemsTotal;
+    if (progress.itemsProcessed !== undefined) updates.itemsProcessed = progress.itemsProcessed;
+    if (progress.progressLabel !== undefined) updates.progressLabel = progress.progressLabel;
+    if (Object.keys(updates).length === 0) return;
+    await db
+      .update(scheduledJobRuns)
+      .set(updates as Partial<InsertScheduledJobRun>)
+      .where(eq(scheduledJobRuns.id, id));
+  }
+
   async getScheduledJobRun(id: string): Promise<ScheduledJobRun | undefined> {
     const [row] = await db
       .select()
@@ -4157,84 +4274,46 @@ export class DatabaseStorage implements IStorage {
     return row?.completedAt ?? null;
   }
 
-  // ── BL-007: Lifecycle Compliance Scores & Scan Runs ─────────────────────
-  async upsertWorkspaceComplianceScore(data: InsertWorkspaceComplianceScore): Promise<WorkspaceComplianceScore> {
-    const [row] = await db.insert(workspaceComplianceScores)
-      .values(data)
-      .onConflictDoUpdate({
-        target: workspaceComplianceScores.workspaceId,
-        set: {
-          organizationId: data.organizationId ?? null,
-          tenantConnectionId: data.tenantConnectionId ?? null,
-          score: data.score ?? 0,
-          isStale: data.isStale ?? false,
-          isOrphaned: data.isOrphaned ?? false,
-          missingLabel: data.missingLabel ?? false,
-          missingMetadata: data.missingMetadata ?? false,
-          externallySharedUnclassified: data.externallySharedUnclassified ?? false,
-          daysSinceActivity: data.daysSinceActivity ?? null,
-          breakdown: data.breakdown ?? null,
-          computedAt: data.computedAt ?? new Date(),
-          scanRunId: data.scanRunId ?? null,
-        },
-      })
-      .returning();
-    return row;
-  }
-
-  async getWorkspaceComplianceScores(filters: {
-    organizationId?: string;
-    tenantConnectionIds?: string[];
-  }): Promise<WorkspaceComplianceScore[]> {
-    const conds: any[] = [];
-    if (filters.organizationId) conds.push(eq(workspaceComplianceScores.organizationId, filters.organizationId));
-    if (filters.tenantConnectionIds && filters.tenantConnectionIds.length > 0) {
-      conds.push(inArray(workspaceComplianceScores.tenantConnectionId, filters.tenantConnectionIds));
-    }
-    const where = conds.length ? and(...conds) : undefined;
-    return where ? db.select().from(workspaceComplianceScores).where(where) : db.select().from(workspaceComplianceScores);
-  }
-
-  async createLifecycleScanRun(data: InsertLifecycleScanRun): Promise<LifecycleScanRun> {
-    const [row] = await db.insert(lifecycleScanRuns).values(data).returning();
-    return row;
-  }
-
-  async updateLifecycleScanRun(id: string, updates: Partial<InsertLifecycleScanRun>): Promise<LifecycleScanRun | undefined> {
-    const [row] = await db.update(lifecycleScanRuns).set(updates as any).where(eq(lifecycleScanRuns.id, id)).returning();
-    return row;
-  }
-
-  async getLifecycleScanRuns(filters: { organizationId: string; tenantConnectionId?: string; limit?: number }): Promise<LifecycleScanRun[]> {
-    const conds: any[] = [eq(lifecycleScanRuns.organizationId, filters.organizationId)];
-    if (filters.tenantConnectionId) conds.push(eq(lifecycleScanRuns.tenantConnectionId, filters.tenantConnectionId));
-    return db.select().from(lifecycleScanRuns)
-      .where(and(...conds))
-      .orderBy(desc(lifecycleScanRuns.startedAt))
-      .limit(filters.limit ?? 60);
-  }
-
-  async getLatestLifecycleScanRun(filters: { organizationId: string; tenantConnectionId?: string | null }): Promise<LifecycleScanRun | undefined> {
-    const conds: any[] = [
-      eq(lifecycleScanRuns.organizationId, filters.organizationId),
-      eq(lifecycleScanRuns.status, "completed"),
-    ];
-    if (filters.tenantConnectionId) conds.push(eq(lifecycleScanRuns.tenantConnectionId, filters.tenantConnectionId));
-    const [row] = await db.select().from(lifecycleScanRuns)
-      .where(and(...conds))
-      .orderBy(desc(lifecycleScanRuns.startedAt))
-      .limit(1);
-    return row;
-  }
-
   async reconcileOrphanedJobRuns(maxAgeMs: number = 60 * 60 * 1000): Promise<number> {
     const cutoff = new Date(Date.now() - maxAgeMs);
-    const result = await db
+    const completedAt = new Date();
+
+    // Two-pass: sharing-link orphans with a resumable checkpoint get
+    // a "(resumable)" marker; everything else is marked fatal.
+    const resumableTenants = await db
+      .select({ tcid: sharingLinkDiscoveryRuns.tenantConnectionId })
+      .from(sharingLinkDiscoveryRuns)
+      .where(eq(sharingLinkDiscoveryRuns.resumable, true));
+    const resumableTcids = Array.from(
+      new Set(resumableTenants.map((r) => r.tcid).filter(Boolean) as string[]),
+    );
+
+    let resumablePass: { id: string }[] = [];
+    if (resumableTcids.length > 0) {
+      resumablePass = await db
+        .update(scheduledJobRuns)
+        .set({
+          status: 'failed',
+          errorMessage: 'Process restarted — job orphaned (resumable)',
+          completedAt,
+        })
+        .where(
+          and(
+            eq(scheduledJobRuns.status, 'running'),
+            lt(scheduledJobRuns.startedAt, cutoff),
+            eq(scheduledJobRuns.jobType, 'sharingLinkDiscovery'),
+            inArray(scheduledJobRuns.tenantConnectionId, resumableTcids),
+          ),
+        )
+        .returning({ id: scheduledJobRuns.id });
+    }
+
+    const fatalPass = await db
       .update(scheduledJobRuns)
       .set({
         status: 'failed',
         errorMessage: 'Process restarted — job orphaned',
-        completedAt: new Date(),
+        completedAt,
       })
       .where(
         and(
@@ -4243,89 +4322,8 @@ export class DatabaseStorage implements IStorage {
         ),
       )
       .returning({ id: scheduledJobRuns.id });
-    return result.length;
-  }
 
-  // ── Saved Views ──
-  async listSavedViewsForUser(params: {
-    organizationId: string;
-    userId: string;
-    page: SavedViewPage;
-  }): Promise<SavedView[]> {
-    return db
-      .select()
-      .from(savedViews)
-      .where(
-        and(
-          eq(savedViews.organizationId, params.organizationId),
-          eq(savedViews.page, params.page),
-          or(
-            eq(savedViews.ownerUserId, params.userId),
-            eq(savedViews.scope, "ORG"),
-          ),
-        ),
-      )
-      .orderBy(desc(savedViews.updatedAt));
-  }
-
-  async getSavedView(id: string): Promise<SavedView | undefined> {
-    const [row] = await db.select().from(savedViews).where(eq(savedViews.id, id));
-    return row ?? undefined;
-  }
-
-  async createSavedView(data: InsertSavedView): Promise<SavedView> {
-    const [row] = await db
-      .insert(savedViews)
-      .values({
-        organizationId: data.organizationId,
-        ownerUserId: data.ownerUserId,
-        page: data.page,
-        name: data.name,
-        filterJson: (data.filterJson ?? {}) as Record<string, unknown>,
-        sortJson: (data.sortJson ?? {}) as Record<string, unknown>,
-        columnsJson: (data.columnsJson ?? {}) as Record<string, unknown>,
-        scope: data.scope ?? "PRIVATE",
-        pinnedByUserIds: data.pinnedByUserIds ?? [],
-      })
-      .returning();
-    return row;
-  }
-
-  async updateSavedView(
-    id: string,
-    updates: Partial<Pick<InsertSavedView, "name" | "filterJson" | "sortJson" | "columnsJson" | "scope">>,
-  ): Promise<SavedView | undefined> {
-    const patch: Record<string, unknown> = { updatedAt: new Date() };
-    if (updates.name !== undefined) patch.name = updates.name;
-    if (updates.filterJson !== undefined) patch.filterJson = updates.filterJson;
-    if (updates.sortJson !== undefined) patch.sortJson = updates.sortJson;
-    if (updates.columnsJson !== undefined) patch.columnsJson = updates.columnsJson;
-    if (updates.scope !== undefined) patch.scope = updates.scope;
-    const [row] = await db
-      .update(savedViews)
-      .set(patch as any)
-      .where(eq(savedViews.id, id))
-      .returning();
-    return row ?? undefined;
-  }
-
-  async deleteSavedView(id: string): Promise<void> {
-    await db.delete(savedViews).where(eq(savedViews.id, id));
-  }
-
-  async setSavedViewPin(id: string, userId: string, pinned: boolean): Promise<SavedView | undefined> {
-    const existing = await this.getSavedView(id);
-    if (!existing) return undefined;
-    const current = existing.pinnedByUserIds ?? [];
-    const next = pinned
-      ? Array.from(new Set([...current, userId]))
-      : current.filter((u) => u !== userId);
-    const [row] = await db
-      .update(savedViews)
-      .set({ pinnedByUserIds: next, updatedAt: new Date() })
-      .where(eq(savedViews.id, id))
-      .returning();
-    return row ?? undefined;
+    return resumablePass.length + fatalPass.length;
   }
 }
 

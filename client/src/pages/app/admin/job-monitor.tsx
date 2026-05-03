@@ -67,6 +67,12 @@ interface DatasetFreshness {
   warningAfterHours: number;
   criticalAfterHours: number;
   dependsOn: string[];
+  activeJob: {
+    progressLabel: string | null;
+    itemsTotal: number | null;
+    itemsProcessed: number | null;
+  } | null;
+  resumable: boolean;
 }
 
 interface JobRunRow {
@@ -629,6 +635,31 @@ function DatasetFreshnessPanel({ tenantConnectionId }: { tenantConnectionId: str
                         <Loader2 className="w-3 h-3 animate-spin" />
                         Refresh running now
                       </div>
+                    )}
+                    {ds.activeJob && ds.activeJob.itemsTotal != null && ds.activeJob.itemsTotal > 0 && (
+                      <div
+                        className="space-y-1 pt-1"
+                        data-testid={`progress-dataset-${ds.key}`}
+                      >
+                        <Progress
+                          value={Math.round(
+                            ((ds.activeJob.itemsProcessed ?? 0) / ds.activeJob.itemsTotal) * 100,
+                          )}
+                          className="h-1.5"
+                        />
+                        <div className="opacity-80">
+                          {ds.activeJob.progressLabel ?? "Working…"} —{" "}
+                          {ds.activeJob.itemsProcessed ?? 0} / {ds.activeJob.itemsTotal}
+                        </div>
+                      </div>
+                    )}
+                    {!isRunning && ds.resumable && (
+                      <Badge
+                        className="bg-amber-500/10 text-amber-500 border-amber-500/20"
+                        data-testid={`badge-dataset-resumable-${ds.key}`}
+                      >
+                        Will resume on next run
+                      </Badge>
                     )}
                     {isQueued && !isRunning && (
                       <div className="text-amber-500 flex items-center gap-1">

@@ -48,6 +48,14 @@ export interface DatasetFreshness {
   warningAfterHours: number;
   criticalAfterHours: number;
   dependsOn: string[];
+  /** Live progress for the active refresh, when running. */
+  activeJob: {
+    progressLabel: string | null;
+    itemsTotal: number | null;
+    itemsProcessed: number | null;
+  } | null;
+  /** True when the latest failed run can be resumed from a checkpoint. */
+  resumable: boolean;
 }
 
 /**
@@ -228,6 +236,19 @@ export async function getDatasetFreshness(
     def.staleness.criticalAfterHours,
   );
 
+  const active = jobRegistry
+    .getActive(tenantConnectionId)
+    .find((j) => j.jobType === def.refreshJobType);
+
+  // Resumable indicator is currently only meaningful for sharing-link
+  // discovery (the only job with checkpoint columns). Other datasets
+  // simply report resumable=false.
+  let resumable = false;
+  if (def.refreshJobType === "sharingLinkDiscovery") {
+    const prior = await storage.getResumableSharingLinkDiscoveryRun(tenantConnectionId);
+    resumable = !!prior;
+  }
+
   return {
     key: def.key,
     label: def.label,
@@ -236,10 +257,18 @@ export async function getDatasetFreshness(
     ageHours: ageHours == null ? null : Number(ageHours.toFixed(2)),
     status,
     refreshJobType: def.refreshJobType,
-    isRefreshing: jobRegistry.isRunning(def.refreshJobType, tenantConnectionId),
+    isRefreshing: !!active,
     warningAfterHours: def.staleness.warningAfterHours,
     criticalAfterHours: def.staleness.criticalAfterHours,
     dependsOn: def.dependsOn ?? [],
+    activeJob: active
+      ? {
+          progressLabel: active.progressLabel,
+          itemsTotal: active.itemsTotal,
+          itemsProcessed: active.itemsProcessed,
+        }
+      : null,
+    resumable,
   };
 }
 

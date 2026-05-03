@@ -1365,6 +1365,14 @@ export const sharingLinkDiscoveryRuns = pgTable("sharing_link_discovery_runs", {
   itemsScanned: integer("items_scanned").default(0),
   errors: jsonb("errors").$type<Array<{ context: string; message: string }>>(),
   createdAt: timestamp("created_at").defaultNow(),
+  // Resumability cursor + progress fields
+  phase: text("phase"), // SHAREPOINT | ONEDRIVE | DONE
+  lastProcessedSpoSiteId: varchar("last_processed_spo_site_id"),
+  lastProcessedOneDriveId: varchar("last_processed_onedrive_id"),
+  resumable: boolean("resumable").notNull().default(false),
+  itemsTotal: integer("items_total"),
+  itemsProcessed: integer("items_processed"),
+  progressLabel: text("progress_label"),
 });
 
 export const insertSharingLinkDiscoveryRunSchema = createInsertSchema(sharingLinkDiscoveryRuns).omit({

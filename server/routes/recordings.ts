@@ -8,7 +8,7 @@ import { runTeamsInventoryDiscovery } from "../services/teams-inventory-discover
 import { runOneDriveInventoryDiscovery } from "../services/onedrive-inventory-discovery";
 import { runSharingLinkDiscovery } from "../services/sharing-link-discovery";
 import { trackJobRun, DuplicateJobError } from "../services/job-tracking";
-import { jobRegistry } from "../services/job-registry";
+import { jobRegistry, type ProgressFn } from "../services/job-registry";
 import type { JobType } from "@shared/schema";
 
 /**
@@ -23,7 +23,7 @@ function startDiscoveryJob(
   conn: { id: string; tenantId: string; tenantName?: string | null; organizationId?: string | null },
   triggeredByUserId: string | null,
   startedMessage: string,
-  run: () => Promise<unknown>,
+  run: (signal: AbortSignal, updateProgress: ProgressFn) => Promise<unknown>,
   loggerPrefix: string,
 ): void {
   if (jobRegistry.isRunning(jobType, conn.id)) {
@@ -61,7 +61,7 @@ function startDiscoveryJob(
         triggeredByUserId,
         targetName: conn.tenantName ?? conn.tenantId,
       },
-      () => run(),
+      (signal, updateProgress) => run(signal, updateProgress),
     );
 
     void jobPromise.catch((err) => {
@@ -443,6 +443,7 @@ router.post(
 );
 
 // POST /api/admin/tenants/:id/sharing-links/sync — trigger sharing link discovery
+// Accepts `ignoreCheckpoint` (body or query) for the "Full Rescan" path.
 router.post(
   "/api/admin/tenants/:id/sharing-links/sync",
   requireAuth(),
@@ -462,14 +463,23 @@ router.post(
 
     const clientId = conn.clientId || process.env.AZURE_CLIENT_ID!;
     const clientSecret = getEffectiveClientSecret(conn);
+    const ignoreCheckpoint =
+      req.body?.ignoreCheckpoint === true || req.query.ignoreCheckpoint === "true";
 
     startDiscoveryJob(
       res,
       "sharingLinkDiscovery",
       conn,
       req.user?.id ?? null,
-      "Sharing link discovery started",
-      () => runSharingLinkDiscovery(conn.id, conn.tenantId, clientId, clientSecret),
+      ignoreCheckpoint
+        ? "Full sharing link rescan started"
+        : "Sharing link discovery started",
+      (signal, updateProgress) =>
+        runSharingLinkDiscovery(conn.id, conn.tenantId, clientId, clientSecret, {
+          signal,
+          updateProgress,
+          ignoreCheckpoint,
+        }),
       "[sharing-links] discovery",
     );
   },

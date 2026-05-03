@@ -191,7 +191,7 @@ export async function trackJobRun<T>(
     if (now - lastProgressWrite < progressWriteThrottleMs) return;
     lastProgressWrite = now;
     void storage
-      .updateScheduledJobRun(jobId, {
+      .updateScheduledJobRunProgress(jobId, {
         progressLabel: label ?? null,
         itemsProcessed: active.itemsProcessed ?? null,
         itemsTotal: active.itemsTotal ?? null,

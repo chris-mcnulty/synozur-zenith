@@ -1,7 +1,5 @@
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { SavedViewsBar } from "@/components/saved-views-bar";
-import { useSavedViewController, type ViewState } from "@/lib/saved-views";
 import { queryClient } from "@/lib/queryClient";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -17,8 +15,9 @@ import {
 import {
   ShieldAlert, Users, HardDrive, Link2, ClipboardList,
   AlertTriangle, CheckCircle2, XCircle, Loader2, Search,
-  Trash2, Eye, Clock, RefreshCw,
+  Trash2, Eye, Clock, RefreshCw, RotateCcw, PlayCircle,
 } from "lucide-react";
+import { Progress } from "@/components/ui/progress";
 
 function formatBytes(bytes: number | null | undefined): string {
   if (bytes == null) return "—";
@@ -394,6 +393,12 @@ interface SharingLinkDiscoveryRun {
   usersScanned: number;
   itemsScanned: number;
   errors: Array<{ context: string; message: string }> | null;
+  // Progress / resume fields
+  phase: string | null;
+  resumable: boolean;
+  itemsTotal: number | null;
+  itemsProcessed: number | null;
+  progressLabel: string | null;
 }
 
 interface ResourceSummary {
@@ -415,25 +420,6 @@ export function GovernanceSharingTab({ tenantConnectionId }: { tenantConnectionI
   const [detailPage, setDetailPage] = useState(1);
   const { toast } = useToast();
 
-  const buildViewState = useCallback<() => ViewState>(() => ({
-    filterJson: { linkTypeFilter, resourceTypeFilter, search },
-    sortJson: {},
-    columnsJson: {},
-  }), [linkTypeFilter, resourceTypeFilter, search]);
-  const applyViewState = useCallback((state: ViewState) => {
-    const f = state.filterJson as { linkTypeFilter?: string; resourceTypeFilter?: string; search?: string };
-    if (typeof f.linkTypeFilter === "string") setLinkTypeFilter(f.linkTypeFilter);
-    if (typeof f.resourceTypeFilter === "string") setResourceTypeFilter(f.resourceTypeFilter);
-    if (typeof f.search === "string") setSearch(f.search);
-  }, []);
-  const viewState = useMemo<ViewState>(() => buildViewState(), [buildViewState]);
-  const { activeViewId, applyView, clearActiveView, syncStateToUrl } = useSavedViewController({
-    page: "sharing_links",
-    buildState: buildViewState,
-    applyState: applyViewState,
-  });
-  useEffect(() => { syncStateToUrl(); }, [viewState, syncStateToUrl]);
-
   const { data: latestRun, refetch: refetchRun } = useQuery<SharingLinkDiscoveryRun | null>({
     queryKey: [`/api/admin/tenants/${tenantConnectionId}/sharing-links/latest-run`],
     queryFn: async () => {
@@ -448,11 +434,16 @@ export function GovernanceSharingTab({ tenantConnectionId }: { tenantConnectionI
     },
   });
 
+  // A single mutation drives both Scan and Full Rescan; the
+  // ignoreCheckpoint flag in the body controls whether the saved cursor
+  // is honored. The Full Rescan button passes ignoreCheckpoint=true.
   const scanMutation = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (ignoreCheckpoint: boolean) => {
       const res = await fetch(`/api/admin/tenants/${tenantConnectionId}/sharing-links/sync`, {
         method: "POST",
         credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ignoreCheckpoint }),
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
@@ -460,8 +451,13 @@ export function GovernanceSharingTab({ tenantConnectionId }: { tenantConnectionI
       }
       return res.json();
     },
-    onSuccess: () => {
-      toast({ title: "Sharing link scan started", description: "Scanning SharePoint sites and OneDrive drives for sharing links…" });
+    onSuccess: (_data, ignoreCheckpoint) => {
+      toast({
+        title: ignoreCheckpoint ? "Full rescan started" : "Sharing link scan started",
+        description: ignoreCheckpoint
+          ? "Ignoring saved checkpoint — every site and drive will be re-scanned."
+          : "Scanning SharePoint sites and OneDrive drives for sharing links…",
+      });
       setTimeout(() => refetchRun(), 2000);
     },
     onError: (err: Error) => {
@@ -659,30 +655,42 @@ export function GovernanceSharingTab({ tenantConnectionId }: { tenantConnectionI
     );
   }
 
+  // Derive resume hint + progress percentage from latestRun.
+  const willResume = !!latestRun
+    && latestRun.status === "FAILED"
+    && latestRun.resumable === true;
+  const isRunning = latestRun?.status === "RUNNING";
+  const progressPct = latestRun && latestRun.itemsTotal && latestRun.itemsTotal > 0
+    ? Math.min(100, Math.round(((latestRun.itemsProcessed ?? 0) / latestRun.itemsTotal) * 100))
+    : null;
+
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h3 className="text-lg font-semibold">Sharing Links</h3>
-          <div className="mt-2">
-            <SavedViewsBar
-              page="sharing_links"
-              currentState={viewState}
-              activeViewId={activeViewId}
-              onApplyView={applyView}
-              onClearView={clearActiveView}
-            />
-          </div>
+      <div className="flex items-center justify-between gap-3">
+        <h3 className="text-lg font-semibold">Sharing Links</h3>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            onClick={() => scanMutation.mutate(true)}
+            disabled={scanMutation.isPending || isRunning || !tenantConnectionId}
+            title="Ignore the saved checkpoint and rescan every site and drive from scratch"
+            data-testid="button-full-rescan-sharing-links"
+          >
+            <RotateCcw className="mr-2 h-4 w-4" />
+            Full Rescan
+          </Button>
+          <Button
+            onClick={() => scanMutation.mutate(false)}
+            disabled={scanMutation.isPending || isRunning || !tenantConnectionId}
+            data-testid="button-scan-sharing-links"
+          >
+            {scanMutation.isPending || isRunning
+              ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Scanning…</>
+              : willResume
+                ? <><PlayCircle className="mr-2 h-4 w-4" />Resume Scan</>
+                : <><RefreshCw className="mr-2 h-4 w-4" />Scan Sharing Links</>}
+          </Button>
         </div>
-        <Button
-          onClick={() => scanMutation.mutate()}
-          disabled={scanMutation.isPending || latestRun?.status === "RUNNING" || !tenantConnectionId}
-          data-testid="button-scan-sharing-links"
-        >
-          {scanMutation.isPending || latestRun?.status === "RUNNING"
-            ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Scanning…</>
-            : <><RefreshCw className="mr-2 h-4 w-4" />Scan Sharing Links</>}
-        </Button>
       </div>
 
       {latestRun && (
@@ -705,7 +713,16 @@ export function GovernanceSharingTab({ tenantConnectionId }: { tenantConnectionI
                    latestRun.status === "PARTIAL" ? "Last scan completed with errors" :
                    "Last scan failed"}
                 </span>
-                <span className="text-muted-foreground ml-2">
+                {willResume && (
+                  <Badge
+                    variant="outline"
+                    className="ml-2 text-amber-700 border-amber-300 bg-amber-50 text-[10px]"
+                    data-testid="badge-will-resume"
+                  >
+                    Will resume on next run
+                  </Badge>
+                )}
+                <span className="text-muted-foreground ml-2" data-testid="text-scan-counters">
                   {latestRun.sitesScanned} sites, {latestRun.usersScanned} users, {latestRun.itemsScanned} items scanned
                   {" · "}{latestRun.sharePointLinksFound} SP + {latestRun.oneDriveLinksFound} OD links found
                 </span>
@@ -716,6 +733,17 @@ export function GovernanceSharingTab({ tenantConnectionId }: { tenantConnectionI
                 </span>
               )}
             </div>
+            {(isRunning || (willResume && progressPct !== null)) && progressPct !== null && (
+              <div className="mt-3 space-y-1" data-testid="progress-sharing-scan">
+                <div className="flex justify-between text-xs text-muted-foreground">
+                  <span>{latestRun.progressLabel ?? "Scanning…"}</span>
+                  <span>
+                    {latestRun.itemsProcessed ?? 0} / {latestRun.itemsTotal} ({progressPct}%)
+                  </span>
+                </div>
+                <Progress value={progressPct} className="h-2" />
+              </div>
+            )}
             {latestRun.errors && latestRun.errors.length > 0 && (
               <details className="mt-2">
                 <summary className="text-xs text-muted-foreground cursor-pointer hover:text-foreground">

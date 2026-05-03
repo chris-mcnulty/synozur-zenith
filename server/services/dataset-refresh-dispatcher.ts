@@ -59,8 +59,13 @@ export async function dispatchDatasetRefresh(opts: {
   jobType: JobType;
   tenantConnectionId: string;
   triggeredByUserId: string | null;
+  /**
+   * When true, sharing-link discovery (and any other resumable
+   * job) ignores its saved checkpoint cursor and rescans from scratch.
+   */
+  ignoreCheckpoint?: boolean;
 }): Promise<DispatchOutcome> {
-  const { jobType, tenantConnectionId, triggeredByUserId } = opts;
+  const { jobType, tenantConnectionId, triggeredByUserId, ignoreCheckpoint = false } = opts;
 
   const conn = await storage.getTenantConnection(tenantConnectionId);
   if (!conn) return { ok: false, status: 404, message: "Tenant connection not found" };
@@ -171,7 +176,12 @@ export async function dispatchDatasetRefresh(opts: {
     case "sharingLinkDiscovery": {
       const promise = trackJobRun(
         { ...baseTrackOpts, jobType: "sharingLinkDiscovery" },
-        () => runSharingLinkDiscovery(tenantConnectionId, conn.tenantId, clientId, clientSecret),
+        (signal, updateProgress) =>
+          runSharingLinkDiscovery(tenantConnectionId, conn.tenantId, clientId, clientSecret, {
+            signal,
+            updateProgress,
+            ignoreCheckpoint,
+          }),
       );
       promise.catch((err) => {
         if (err instanceof DuplicateJobError) return;

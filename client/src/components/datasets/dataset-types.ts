@@ -1,5 +1,5 @@
 /**
- * Shared types for the BL-039 dataset freshness components. Mirrors the
+ * Shared types for the dataset freshness components. Mirrors the
  * server's DatasetFreshness shape from server/services/dataset-freshness.ts.
  */
 export type FreshnessStatus = "fresh" | "warning" | "stale" | "never";
@@ -16,4 +16,10 @@ export interface DatasetFreshness {
   warningAfterHours: number;
   criticalAfterHours: number;
   dependsOn: string[];
+  activeJob: {
+    progressLabel: string | null;
+    itemsTotal: number | null;
+    itemsProcessed: number | null;
+  } | null;
+  resumable: boolean;
 }

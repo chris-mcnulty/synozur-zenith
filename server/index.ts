@@ -273,8 +273,29 @@ async function ensureTenantConnectionsSchema() {
         users_scanned integer DEFAULT 0,
         items_scanned integer DEFAULT 0,
         errors jsonb,
-        created_at timestamp DEFAULT now()
+        created_at timestamp DEFAULT now(),
+        phase text,
+        last_processed_spo_site_id varchar,
+        last_processed_onedrive_id varchar,
+        resumable boolean NOT NULL DEFAULT false,
+        items_total integer,
+        items_processed integer,
+        progress_label text
       )
+    `);
+    await client.query(`
+      ALTER TABLE sharing_link_discovery_runs
+        ADD COLUMN IF NOT EXISTS phase text,
+        ADD COLUMN IF NOT EXISTS last_processed_spo_site_id varchar,
+        ADD COLUMN IF NOT EXISTS last_processed_onedrive_id varchar,
+        ADD COLUMN IF NOT EXISTS resumable boolean NOT NULL DEFAULT false,
+        ADD COLUMN IF NOT EXISTS items_total integer,
+        ADD COLUMN IF NOT EXISTS items_processed integer,
+        ADD COLUMN IF NOT EXISTS progress_label text
+    `);
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS sharing_link_discovery_runs_tenant_resumable_idx
+        ON sharing_link_discovery_runs (tenant_connection_id, resumable, started_at DESC)
     `);
 
     await client.query(`
@@ -891,6 +912,9 @@ async function ensureTenantConnectionsSchema() {
       CREATE INDEX IF NOT EXISTS idx_scheduled_job_runs_status                 ON scheduled_job_runs (status);
       CREATE INDEX IF NOT EXISTS idx_scheduled_job_runs_started_desc           ON scheduled_job_runs (started_at DESC);
       CREATE INDEX IF NOT EXISTS idx_scheduled_job_runs_job_type_started_desc  ON scheduled_job_runs (job_type, started_at DESC);
+      ALTER TABLE scheduled_job_runs ADD COLUMN IF NOT EXISTS items_total     INTEGER;
+      ALTER TABLE scheduled_job_runs ADD COLUMN IF NOT EXISTS items_processed INTEGER;
+      ALTER TABLE scheduled_job_runs ADD COLUMN IF NOT EXISTS progress_label  TEXT;
     `);
 
     // ── BL-019: Workspace lifecycle state columns (migration 0019) ──────────
@@ -1062,15 +1086,24 @@ async function backfillOrgMemberships() {
   await seedBuiltInOutcomes();
   await migrateClientSecretsToEncrypted();
 
-  // BL-039: reconcile any scheduled_job_runs rows left in "running" by a
-  // previous process that crashed or was restarted mid-job. Marks anything
-  // older than 1 hour as failed so the concurrency guard doesn't block new
-  // runs forever.
+  // At process startup, any row still marked RUNNING must be
+  // orphaned (this process is just starting, so nothing of ours is
+  // actually running). Use maxAgeMs=0 to unconditionally flip them to
+  // FAILED so the concurrency guard releases and any checkpointed
+  // sharing-link run becomes immediately eligible for resume.
   try {
-    const orphaned = await storage.reconcileOrphanedJobRuns();
+    const orphaned = await storage.reconcileOrphanedJobRuns(0);
     if (orphaned > 0) log(`Reconciled ${orphaned} orphaned scheduled_job_runs rows`);
   } catch (err) {
     console.error('[Startup] Failed to reconcile orphaned job runs:', err);
+  }
+  try {
+    const orphanedSharing = await storage.reconcileOrphanedSharingLinkDiscoveryRuns(0);
+    if (orphanedSharing > 0) {
+      log(`Reconciled ${orphanedSharing} orphaned sharing_link_discovery_runs rows`);
+    }
+  } catch (err) {
+    console.error('[Startup] Failed to reconcile orphaned sharing link runs:', err);
   }
   try {
     await storage.getPlatformSettings();

@@ -284,10 +284,14 @@ router.post(
     const scope = await resolveTenantScope(req, tenantConnectionId);
     if (!scope.ok) return res.status(scope.status).json({ message: scope.message });
 
+    const ignoreCheckpoint =
+      req.body?.ignoreCheckpoint === true || req.query.ignoreCheckpoint === "true";
+
     const outcome = await dispatchDatasetRefresh({
       jobType: def.refreshJobType,
       tenantConnectionId,
       triggeredByUserId: req.user?.id ?? null,
+      ignoreCheckpoint,
     });
 
     if (!outcome.ok) {
