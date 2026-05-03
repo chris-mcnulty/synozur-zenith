@@ -28,7 +28,10 @@ export function requireActiveTenant(opts: { resolveFrom?: "param" | "workspace" 
 
     if (!tenantConnectionId && (mode === "param" || mode === "auto")) {
       const p = req.params || {};
+      // :tenantId is the canonical param name; :id is used by admin tenant routes
+      // e.g. /api/admin/tenants/:id/sync-libraries
       if (p.tenantId) tenantConnectionId = String(p.tenantId);
+      else if (mode === "param" && p.id) tenantConnectionId = String(p.id);
     }
 
     if (!tenantConnectionId && (mode === "workspace" || mode === "auto")) {

@@ -25,6 +25,36 @@ import {
 
 const router = Router();
 
+/**
+ * BL-004 / Spec §4.2 — Tenant Status Lifecycle.
+ *
+ * Inline helper: call AFTER scope has been confirmed (404/403 already returned for
+ * out-of-scope resources) to enforce that the tenant is ACTIVE before mutating.
+ * Returns true → proceed; false → 409 already sent, return early from the handler.
+ */
+async function checkTenantActive(
+  tenantConnectionId: string | null | undefined,
+  res: any,
+): Promise<boolean> {
+  if (!tenantConnectionId) return true;
+  const conn = await storage.getTenantConnection(tenantConnectionId);
+  if (!conn) return true; // let the route surface its own "not found" error
+  if (conn.status === "ACTIVE") return true;
+  res.status(409).json({
+    error: "TENANT_NOT_ACTIVE",
+    message: `Tenant connection is ${conn.status}. ${
+      conn.status === "PENDING"
+        ? "Complete consent before performing governance actions."
+        : conn.status === "SUSPENDED"
+        ? "Reactivate the tenant before performing governance actions."
+        : "This tenant has been revoked and cannot be modified."
+    }`,
+    status: conn.status,
+    statusReason: (conn as any).statusReason ?? null,
+  });
+  return false;
+}
+
 // Validate that sensitivity label rules are not violated by the given combination
 // of fields. Returns an error object describing the violation, or null if valid.
 // Highly Confidential workspaces cannot have external sharing or Copilot Ready enabled.
@@ -166,6 +196,8 @@ router.post("/api/workspaces/:id/telemetry/snapshot", requireRole(ZENITH_ROLES.G
   const workspace = await storage.getWorkspace(req.params.id);
   if (!workspace) return res.status(404).json({ message: "Workspace not found" });
   if (!workspace.tenantConnectionId) return res.status(400).json({ message: "No tenant connection" });
+  // BL-004: scope confirmed above — block if tenant is not ACTIVE
+  if (!(await checkTenantActive(workspace.tenantConnectionId, res))) return;
 
   const tenantConn = await storage.getTenantConnection(workspace.tenantConnectionId);
   if (tenantConn && !tenantConn.telemetryEnabled) {
@@ -216,6 +248,10 @@ router.post("/api/workspaces", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH
       return res.status(403).json({ message: "Tenant connection does not belong to your organization" });
     }
   }
+  // BL-004: always enforce tenant status regardless of role — scope already confirmed above
+  if (parsed.data.tenantConnectionId) {
+    if (!(await checkTenantActive(parsed.data.tenantConnectionId, res))) return;
+  }
   const workspace = await storage.createWorkspace(parsed.data);
   await logAuditEvent(req, {
     action: AUDIT_ACTIONS.WORKSPACE_CREATED,
@@ -239,6 +275,8 @@ router.patch("/api/workspaces/:id", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, Z
   }
   const existing = await storage.getWorkspace(req.params.id);
   if (!existing) return res.status(404).json({ message: "Workspace not found" });
+  // BL-004: scope confirmed above — block if tenant is not ACTIVE
+  if (!(await checkTenantActive(existing.tenantConnectionId, res))) return;
 
   const patchBodySchema = insertWorkspaceSchema.partial().extend({
     sensitivity: z.enum(["PUBLIC", "INTERNAL", "CONFIDENTIAL", "HIGHLY_CONFIDENTIAL"]).optional(),
@@ -601,6 +639,13 @@ router.delete("/api/workspaces/:id", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, 
   const wsId = String(req.params.id);
   const existing = await storage.getWorkspace(wsId);
   const allowedTenantIds = await getOrgTenantConnectionIds(req);
+  // BL-004: pre-check scope before exposing tenant status (close cross-tenant existence leak)
+  if (allowedTenantIds !== null && existing && !allowedTenantIds.includes(existing.tenantConnectionId ?? "")) {
+    await logAccessDenied(req, "workspace", wsId, "Workspace not in caller's tenant scope (delete)");
+    return res.status(404).json({ message: "Workspace not found" });
+  }
+  // BL-004: scope confirmed — block mutation if tenant is not ACTIVE
+  if (!(await checkTenantActive(existing?.tenantConnectionId, res))) return;
   if (allowedTenantIds !== null) {
     const deleted = await storage.deleteWorkspaceScoped(wsId, allowedTenantIds);
     if (!deleted) {
@@ -635,6 +680,8 @@ router.post("/api/workspaces/:id/archive", requireRole(ZENITH_ROLES.GOVERNANCE_A
   if (!workspace) return res.status(404).json({ message: "Workspace not found" });
   if (workspace.isArchived) return res.status(400).json({ message: "Workspace is already archived" });
   if (!workspace.tenantConnectionId) return res.status(400).json({ message: "Workspace has no tenant connection" });
+  // BL-004: scope confirmed above — block if tenant is not ACTIVE
+  if (!(await checkTenantActive(workspace.tenantConnectionId, res))) return;
   if (!workspace.m365ObjectId) return res.status(400).json({ message: "Workspace has no Graph site ID — sync the workspace first" });
 
   const reasonRaw = typeof req.body?.reason === "string" ? req.body.reason.trim() : "";
@@ -714,6 +761,8 @@ router.post("/api/workspaces/:id/unarchive", requireRole(ZENITH_ROLES.GOVERNANCE
   if (!workspace) return res.status(404).json({ message: "Workspace not found" });
   if (!workspace.isArchived) return res.status(400).json({ message: "Workspace is not archived" });
   if (!workspace.tenantConnectionId) return res.status(400).json({ message: "Workspace has no tenant connection" });
+  // BL-004: scope confirmed above — block if tenant is not ACTIVE
+  if (!(await checkTenantActive(workspace.tenantConnectionId, res))) return;
   if (!workspace.m365ObjectId) return res.status(400).json({ message: "Workspace has no Graph site ID — sync the workspace first" });
 
   const reasonRaw = typeof req.body?.reason === "string" ? req.body.reason.trim() : "";
@@ -788,6 +837,8 @@ router.delete("/api/workspaces/:id/m365", requireRole(ZENITH_ROLES.GOVERNANCE_AD
   if (!workspace) return res.status(404).json({ message: "Workspace not found" });
   if (workspace.isDeleted) return res.status(400).json({ message: "Workspace is already deleted" });
   if (!workspace.tenantConnectionId) return res.status(400).json({ message: "Workspace has no tenant connection" });
+  // BL-004: scope confirmed above — block if tenant is not ACTIVE
+  if (!(await checkTenantActive(workspace.tenantConnectionId, res))) return;
   if (!workspace.m365ObjectId) return res.status(400).json({ message: "Workspace has no Graph site ID — sync the workspace first" });
 
   const conn = await storage.getTenantConnection(workspace.tenantConnectionId);
@@ -900,6 +951,8 @@ router.post("/api/workspaces/:id/owners", requireRole(ZENITH_ROLES.GOVERNANCE_AD
   const workspace = await storage.getWorkspace(req.params.id);
   if (!workspace) return res.status(404).json({ message: "Workspace not found" });
   if (!workspace.tenantConnectionId) return res.status(400).json({ message: "Workspace has no tenant connection" });
+  // BL-004: scope confirmed above — block if tenant is not ACTIVE
+  if (!(await checkTenantActive(workspace.tenantConnectionId, res))) return;
   if (!workspace.m365ObjectId) return res.status(400).json({ message: "Workspace has no Graph site ID — sync the workspace first" });
   if (workspace.type === "COMMUNICATION_SITE") {
     return res.status(400).json({ message: "Communication Sites are not group-backed and cannot have their owners managed here." });
@@ -986,6 +1039,8 @@ router.delete("/api/workspaces/:id/owners/:userId", requireRole(ZENITH_ROLES.GOV
   const workspace = await storage.getWorkspace(req.params.id);
   if (!workspace) return res.status(404).json({ message: "Workspace not found" });
   if (!workspace.tenantConnectionId) return res.status(400).json({ message: "Workspace has no tenant connection" });
+  // BL-004: scope confirmed above — block if tenant is not ACTIVE
+  if (!(await checkTenantActive(workspace.tenantConnectionId, res))) return;
   if (!workspace.m365ObjectId) return res.status(400).json({ message: "Workspace has no Graph site ID — sync the workspace first" });
   if (workspace.type === "COMMUNICATION_SITE") {
     return res.status(400).json({ message: "Communication Sites are not group-backed and cannot have their owners managed here." });
@@ -1085,6 +1140,8 @@ router.post("/api/workspaces/:id/members", requireRole(ZENITH_ROLES.GOVERNANCE_A
   const workspace = await storage.getWorkspace(req.params.id);
   if (!workspace) return res.status(404).json({ message: "Workspace not found" });
   if (!workspace.tenantConnectionId) return res.status(400).json({ message: "Workspace has no tenant connection" });
+  // BL-004: scope confirmed above — block if tenant is not ACTIVE
+  if (!(await checkTenantActive(workspace.tenantConnectionId, res))) return;
   if (!workspace.m365ObjectId) return res.status(400).json({ message: "Workspace has no Graph site ID — sync the workspace first" });
   if (workspace.type === "COMMUNICATION_SITE") {
     return res.status(400).json({ message: "Communication Sites are not group-backed and cannot have their members managed here." });
@@ -1170,6 +1227,8 @@ router.delete("/api/workspaces/:id/members/:userId", requireRole(ZENITH_ROLES.GO
   const workspace = await storage.getWorkspace(req.params.id);
   if (!workspace) return res.status(404).json({ message: "Workspace not found" });
   if (!workspace.tenantConnectionId) return res.status(400).json({ message: "Workspace has no tenant connection" });
+  // BL-004: scope confirmed above — block if tenant is not ACTIVE
+  if (!(await checkTenantActive(workspace.tenantConnectionId, res))) return;
   if (!workspace.m365ObjectId) return res.status(400).json({ message: "Workspace has no Graph site ID — sync the workspace first" });
   if (workspace.type === "COMMUNICATION_SITE") {
     return res.status(400).json({ message: "Communication Sites are not group-backed and cannot have their members managed here." });
@@ -1262,6 +1321,8 @@ router.post("/api/workspaces/:id/sync", requireRole(ZENITH_ROLES.OPERATOR, ZENIT
       await failSync('Workspace has no tenant connection');
       return res.status(400).json({ message: "Workspace has no tenant connection" });
     }
+    // BL-004: scope confirmed above — block if tenant is not ACTIVE
+    if (!(await checkTenantActive(workspace.tenantConnectionId, res))) return;
 
     const connection = await storage.getTenantConnection(workspace.tenantConnectionId);
     if (!connection) {
@@ -1616,6 +1677,30 @@ router.patch("/api/workspaces/bulk/update", requireRole(ZENITH_ROLES.GOVERNANCE_
     }
   }
 
+  // BL-004 / Spec §4.2 — block bulk mutations when any involved tenant is not ACTIVE.
+  const involvedTenantIds = new Set<string>(
+    Array.from(workspaceMap.values())
+      .filter(ws => ws?.tenantConnectionId)
+      .map(ws => ws!.tenantConnectionId!),
+  );
+  for (const tid of involvedTenantIds) {
+    const tConn = await storage.getTenantConnection(tid);
+    if (tConn && tConn.status !== "ACTIVE") {
+      return res.status(409).json({
+        error: "TENANT_NOT_ACTIVE",
+        message: `Tenant connection is ${tConn.status}. ${
+          tConn.status === "PENDING"
+            ? "Complete consent before performing governance actions."
+            : tConn.status === "SUSPENDED"
+            ? "Reactivate the tenant before performing governance actions."
+            : "This tenant has been revoked and cannot be modified."
+        }`,
+        status: tConn.status,
+        statusReason: tConn.statusReason ?? null,
+      });
+    }
+  }
+
   // Sensitivity policy validation using pre-fetched workspaces.
   // Skip when the update cannot possibly trigger a violation.
   const couldViolatePolicy =
@@ -1744,6 +1829,29 @@ router.patch("/api/workspaces/bulk/hub-assignment", requireRole(ZENITH_ROLES.GOV
   const outOfScope = workspaceIds.filter((id: string) => !allowedWsIds.has(id));
   if (outOfScope.length > 0) {
     return res.status(403).json({ message: "One or more workspaces are outside your organization scope" });
+  }
+
+  // BL-004 / Spec §4.2 — block hub-assignment mutations when any involved tenant is not ACTIVE.
+  const targetWsForTenantCheck = allWs.filter(ws => workspaceIds.includes(ws.id));
+  const involvedTenantIdsHub = new Set<string>(
+    targetWsForTenantCheck.filter(ws => ws.tenantConnectionId).map(ws => ws.tenantConnectionId!),
+  );
+  for (const tid of involvedTenantIdsHub) {
+    const tConn = await storage.getTenantConnection(tid);
+    if (tConn && tConn.status !== "ACTIVE") {
+      return res.status(409).json({
+        error: "TENANT_NOT_ACTIVE",
+        message: `Tenant connection is ${tConn.status}. ${
+          tConn.status === "PENDING"
+            ? "Complete consent before performing governance actions."
+            : tConn.status === "SUSPENDED"
+            ? "Reactivate the tenant before performing governance actions."
+            : "This tenant has been revoked and cannot be modified."
+        }`,
+        status: tConn.status,
+        statusReason: tConn.statusReason ?? null,
+      });
+    }
   }
 
   if (hubSiteId) {
@@ -1879,8 +1987,10 @@ router.put("/api/workspaces/:id/copilot-rules", requireRole(ZENITH_ROLES.GOVERNA
   if (!Array.isArray(rules)) {
     return res.status(400).json({ message: "rules array is required" });
   }
-  const previousRules = await storage.getCopilotRules(req.params.id);
   const ws = await storage.getWorkspace(req.params.id);
+  // BL-004: scope confirmed above — block if tenant is not ACTIVE
+  if (!(await checkTenantActive(ws?.tenantConnectionId, res))) return;
+  const previousRules = await storage.getCopilotRules(req.params.id);
   const created = await storage.setCopilotRules(req.params.id, rules);
   await logAuditEvent(req, {
     action: AUDIT_ACTIONS.COPILOT_RULES_UPDATED,
@@ -1975,6 +2085,21 @@ router.post("/api/provisioning-requests", requireRole(ZENITH_ROLES.OPERATOR, ZEN
   }
 
   const orgId = req.activeOrganizationId || req.user?.organizationId || null;
+
+  // BL-004: scope guard — verify tenantConnectionId belongs to the caller's org before
+  // exposing tenant status (prevents cross-org existence probing via 409 vs 403/404).
+  if (parsed.data.tenantConnectionId) {
+    const isPlatformOwner = req.user?.role === ZENITH_ROLES.PLATFORM_OWNER;
+    if (!isPlatformOwner) {
+      const allowed = await getOrgTenantConnectionIds(req);
+      if (allowed && !allowed.includes(parsed.data.tenantConnectionId)) {
+        return res.status(403).json({ message: "Tenant connection does not belong to your organization" });
+      }
+    }
+    // Scope confirmed — block if tenant is not ACTIVE
+    if (!(await checkTenantActive(parsed.data.tenantConnectionId, res))) return;
+  }
+
   const request = await storage.createProvisioningRequest({ ...parsed.data, organizationId: orgId });
   await storage.createAuditEntry({
     userId: req.user?.id || null,
@@ -2011,6 +2136,27 @@ router.patch("/api/provisioning-requests/:id/status", requireRole(ZENITH_ROLES.T
     const orgId = req.activeOrganizationId || req.user?.organizationId;
     if (existing.organizationId !== orgId) {
       return res.status(403).json({ message: "Forbidden" });
+    }
+  }
+
+  // BL-004 / Spec §4.2 — block status mutations when the associated tenant is not ACTIVE.
+  // tenantConnectionId may live on the existing request or be supplied in the body.
+  const prTenantId = existing.tenantConnectionId || (req.body.tenantConnectionId as string | undefined);
+  if (prTenantId) {
+    const prConn = await storage.getTenantConnection(prTenantId);
+    if (prConn && prConn.status !== "ACTIVE") {
+      return res.status(409).json({
+        error: "TENANT_NOT_ACTIVE",
+        message: `Tenant connection is ${prConn.status}. ${
+          prConn.status === "PENDING"
+            ? "Complete consent before performing governance actions."
+            : prConn.status === "SUSPENDED"
+            ? "Reactivate the tenant before performing governance actions."
+            : "This tenant has been revoked and cannot be modified."
+        }`,
+        status: prConn.status,
+        statusReason: prConn.statusReason ?? null,
+      });
     }
   }
 
@@ -2327,6 +2473,8 @@ router.post("/api/admin/tenants/:id/sync-libraries", requireRole(ZENITH_ROLES.TE
       });
       return res.status(404).json({ error: "Tenant not found" });
     }
+    // BL-004: scope confirmed above — block if tenant is not ACTIVE
+    if (!(await checkTenantActive(tenantId, res))) return;
 
     await logAuditEvent(req, {
       action: AUDIT_ACTIONS.SYNC_STARTED,
@@ -2535,6 +2683,8 @@ router.post("/api/admin/tenants/:id/sync-ia", requireRole(ZENITH_ROLES.TENANT_AD
     }
     const connection = await storage.getTenantConnection(req.params.id);
     if (!connection) return res.status(404).json({ error: "Tenant not found" });
+    // BL-004: scope confirmed above — block if tenant is not ACTIVE
+    if (!(await checkTenantActive(req.params.id, res))) return;
 
     let token: string | null = null;
     const clientId = connection.clientId;
@@ -3212,6 +3362,8 @@ router.post("/api/admin/tenants/:id/import-csv", requireRole(ZENITH_ROLES.TENANT
     }
     const connection = await storage.getTenantConnection(tenantId);
     if (!connection) return res.status(404).json({ error: "Tenant not found" });
+    // BL-004: scope confirmed above — block if tenant is not ACTIVE
+    if (!(await checkTenantActive(tenantId, res))) return;
     await logAuditEvent(req, {
       action: AUDIT_ACTIONS.CSV_IMPORT_STARTED,
       resource: 'tenant_connection',
@@ -3427,6 +3579,30 @@ async function handleMetadataWriteback(req: AuthenticatedRequest, res: any) {
     }
   }
 
+  // BL-004 / Spec §4.2 — block writeback when any involved tenant is not ACTIVE.
+  const wbTenantIds = new Set<string>();
+  for (const wsId of workspaceIds) {
+    const ws = await storage.getWorkspace(wsId);
+    if (ws?.tenantConnectionId) wbTenantIds.add(ws.tenantConnectionId);
+  }
+  for (const tid of wbTenantIds) {
+    const tConn = await storage.getTenantConnection(tid);
+    if (tConn && tConn.status !== "ACTIVE") {
+      return res.status(409).json({
+        error: "TENANT_NOT_ACTIVE",
+        message: `Tenant connection is ${tConn.status}. ${
+          tConn.status === "PENDING"
+            ? "Complete consent before performing governance actions."
+            : tConn.status === "SUSPENDED"
+            ? "Reactivate the tenant before performing governance actions."
+            : "This tenant has been revoked and cannot be modified."
+        }`,
+        status: tConn.status,
+        statusReason: tConn.statusReason ?? null,
+      });
+    }
+  }
+
   await logAuditEvent(req, {
     action: AUDIT_ACTIONS.METADATA_WRITEBACK_STARTED,
     resource: 'workspace',
@@ -3549,6 +3725,8 @@ router.post("/api/admin/tenants/:id/writeback", requireRole(ZENITH_ROLES.TENANT_
 
   const connection = await storage.getTenantConnection(tenantId);
   if (!connection) return res.status(404).json({ error: "Tenant connection not found" });
+  // BL-004: scope confirmed above — block if tenant is not ACTIVE
+  if (!(await checkTenantActive(tenantId, res))) return;
   await logAuditEvent(req, {
     action: AUDIT_ACTIONS.TENANT_WRITEBACK_STARTED,
     resource: 'tenant_connection',
