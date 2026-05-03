@@ -44,6 +44,9 @@ stages:
           - script: npm run check || true
             displayName: 'TypeScript type check (non-blocking)'
 
+          - script: npm run test:encryption
+            displayName: 'Run encryption unit tests'
+
           - script: npm run build
             displayName: 'Production build (Vite + esbuild)'
 

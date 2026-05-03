@@ -12,7 +12,8 @@
     "db:push": "drizzle-kit push",
     "test:email-report": "tsx --test server/services/email-report-metrics.test.ts",
     "test:m365-overview-report": "tsx --test server/services/m365-overview-report.test.ts",
-    "test:copilot-prompt-analyzer": "tsx --test server/services/__tests__/copilot-prompt-analyzer.test.ts"
+    "test:copilot-prompt-analyzer": "tsx --test server/services/__tests__/copilot-prompt-analyzer.test.ts",
+    "test:encryption": "tsx --test server/utils/encryption.test.ts"
   },
   "dependencies": {
     "@azure/msal-node": "^5.0.4",
