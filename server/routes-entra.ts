@@ -269,9 +269,9 @@ export async function getDelegatedSpoToken(userId: string, spoHost: string): Pro
           userId,
           organizationId: tokenRecord.organizationId,
           service: 'graph',
-          accessToken: tokenRecord.accessToken,
+          accessToken: encryptToken(result.accessToken),
           refreshToken: refreshTokenToStore,
-          expiresAt: tokenRecord.expiresAt,
+          expiresAt: (result as any).expiresOn || tokenRecord.expiresAt,
           scopes: tokenRecord.scopes || SCOPES,
         });
       }
