@@ -47,6 +47,7 @@ import {
   Network,
   Flame,
   Activity,
+  X,
 } from "lucide-react";
 import {
   SharePointIcon,
@@ -312,6 +313,7 @@ export default function AppShell({ children }: AppShellProps) {
   const [mspDialogOpen, setMspDialogOpen] = useState(false);
   const [mspCode, setMspCode] = useState("");
   const [mspError, setMspError] = useState<string | null>(null);
+  const [reauthBannerDismissed, setReauthBannerDismissed] = useState(false);
 
   const redeemMspCodeMutation = useMutation({
     mutationFn: async (code: string) => {
@@ -359,6 +361,13 @@ export default function AppShell({ children }: AppShellProps) {
 
   const currentUser = authData?.user;
   const activeOrg = authData?.organization;
+  const graphTokenStatus = authData?.graphTokenStatus;
+
+  useEffect(() => {
+    if (graphTokenStatus !== 'reauth_required' && reauthBannerDismissed) {
+      setReauthBannerDismissed(false);
+    }
+  }, [graphTokenStatus, reauthBannerDismissed]);
   const userInitials = currentUser?.name
     ? currentUser.name.split(" ").map(n => n[0]).join("").toUpperCase().slice(0, 2)
     : currentUser?.email?.[0]?.toUpperCase() || "?";
@@ -1159,7 +1168,7 @@ export default function AppShell({ children }: AppShellProps) {
 
         {/* Reconnect banner shown when the delegated Graph refresh token has
             been revoked or expired. */}
-        {authData?.graphTokenStatus === 'reauth_required' && (
+        {graphTokenStatus === 'reauth_required' && !reauthBannerDismissed && (
           <div
             className="border-b border-amber-500/40 bg-amber-500/10 px-4 sm:px-6 lg:px-8 py-3 flex items-center justify-between gap-4 flex-wrap"
             data-testid="banner-reauth-required"
@@ -1175,13 +1184,25 @@ export default function AppShell({ children }: AppShellProps) {
                 </p>
               </div>
             </div>
-            <Button
-              size="sm"
-              onClick={() => { window.location.href = '/auth/entra/login'; }}
-              data-testid="button-reconnect-microsoft"
-            >
-              Reconnect Microsoft
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button
+                size="sm"
+                onClick={() => { window.location.href = '/auth/entra/login'; }}
+                data-testid="button-reconnect-microsoft"
+              >
+                Reconnect Microsoft
+              </Button>
+              <Button
+                size="icon"
+                variant="ghost"
+                className="h-8 w-8"
+                onClick={() => setReauthBannerDismissed(true)}
+                aria-label="Dismiss reconnect banner"
+                data-testid="button-dismiss-reauth-banner"
+              >
+                <X className="w-4 h-4" />
+              </Button>
+            </div>
           </div>
         )}
 
