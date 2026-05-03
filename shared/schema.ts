@@ -2238,6 +2238,34 @@ export const savedViews = pgTable("saved_views", {
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
 
+// ── Saved View Subscriptions ──────────────────────────────────────────────────
+// Each user can subscribe to a saved view to receive email digests when new
+// items appear in that view. The scheduler evaluates each subscription and
+// sends a diff/summary email via SendGrid.
+
+export const SAVED_VIEW_DIGEST_FREQUENCIES = ["daily", "weekly"] as const;
+export type SavedViewDigestFrequency = typeof SAVED_VIEW_DIGEST_FREQUENCIES[number];
+
+export const savedViewSubscriptions = pgTable("saved_view_subscriptions", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  savedViewId: varchar("saved_view_id").notNull(),
+  userId: varchar("user_id").notNull(),
+  organizationId: varchar("organization_id").notNull(),
+  frequency: text("frequency").notNull().default("weekly"),
+  lastSnapshotJson: jsonb("last_snapshot_json").$type<{ ids: string[]; count: number }>(),
+  lastSentAt: timestamp("last_sent_at"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+}, (table) => [
+  unique("uq_saved_view_subscriptions_view_user").on(table.savedViewId, table.userId),
+]);
+
+export const insertSavedViewSubscriptionSchema = createInsertSchema(savedViewSubscriptions).omit({
+  id: true,
+  createdAt: true,
+});
+export type InsertSavedViewSubscription = z.infer<typeof insertSavedViewSubscriptionSchema>;
+export type SavedViewSubscription = typeof savedViewSubscriptions.$inferSelect;
+
 // ── BL-013: Governance digest emails & in-app notifications ──────────────────
 //
 // Three tables back the notification system:

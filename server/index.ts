@@ -1016,10 +1016,11 @@ async function ensureTenantConnectionsSchema() {
         owner_user_id varchar NOT NULL,
         page text NOT NULL,
         name text NOT NULL,
+        description text,
+        scope text NOT NULL DEFAULT 'PRIVATE',
         filter_json jsonb NOT NULL DEFAULT '{}'::jsonb,
         sort_json jsonb NOT NULL DEFAULT '{}'::jsonb,
         columns_json jsonb NOT NULL DEFAULT '{}'::jsonb,
-        scope text NOT NULL DEFAULT 'PRIVATE',
         pinned_by_user_ids text[] NOT NULL DEFAULT '{}'::text[],
         is_default boolean NOT NULL DEFAULT false,
         created_at timestamp NOT NULL DEFAULT now(),
@@ -1029,6 +1030,22 @@ async function ensureTenantConnectionsSchema() {
       CREATE INDEX IF NOT EXISTS ix_saved_views_owner ON saved_views (owner_user_id, page);
       CREATE INDEX IF NOT EXISTS ix_saved_views_default ON saved_views (organization_id, page, is_default)
         WHERE is_default = true;
+
+      CREATE TABLE IF NOT EXISTS saved_view_subscriptions (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        saved_view_id varchar NOT NULL,
+        user_id varchar NOT NULL,
+        organization_id varchar NOT NULL,
+        frequency text NOT NULL DEFAULT 'weekly',
+        last_snapshot_json jsonb,
+        last_sent_at timestamp,
+        created_at timestamp NOT NULL DEFAULT now(),
+        CONSTRAINT uq_saved_view_subscriptions_view_user UNIQUE (saved_view_id, user_id)
+      );
+      CREATE INDEX IF NOT EXISTS ix_saved_view_subs_view
+        ON saved_view_subscriptions (saved_view_id);
+      CREATE INDEX IF NOT EXISTS ix_saved_view_subs_user
+        ON saved_view_subscriptions (user_id);
     `);
 
     log('Schema migration ensureTenantConnectionsSchema completed');
@@ -1221,6 +1238,14 @@ async function backfillOrgMemberships() {
     log('Lifecycle compliance scan scheduler started');
   } catch (err) {
     console.error('[Startup] Failed to start lifecycle scan scheduler:', err);
+  }
+
+  try {
+    const { startSavedViewDigestScheduler } = await import('./jobs/saved-view-digest');
+    startSavedViewDigestScheduler();
+    log('Saved view digest scheduler started');
+  } catch (err) {
+    console.error('[Startup] Failed to start saved view digest scheduler:', err);
   }
 
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {

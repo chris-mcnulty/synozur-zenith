@@ -158,10 +158,13 @@ import {
   type JobType,
   type JobStatus,
   savedViews,
+  savedViewSubscriptions,
   type SavedView,
   type InsertSavedView,
   type SavedViewPage,
   type SavedViewScope,
+  type SavedViewSubscription,
+  type InsertSavedViewSubscription,
   workspaceComplianceScores,
   type WorkspaceComplianceScore,
   type InsertWorkspaceComplianceScore,
@@ -710,6 +713,14 @@ export interface IStorage {
   setSavedViewPin(id: string, userId: string, pinned: boolean): Promise<SavedView | undefined>;
   setDefaultSavedView(id: string | null, organizationId: string, page: string): Promise<SavedView | undefined>;
   getDefaultSavedView(organizationId: string, page: string): Promise<SavedView | undefined>;
+
+  // ── Saved View Subscriptions ──
+  getSavedViewSubscription(savedViewId: string, userId: string): Promise<SavedViewSubscription | undefined>;
+  upsertSavedViewSubscription(data: { savedViewId: string; userId: string; organizationId: string; frequency: string }): Promise<SavedViewSubscription>;
+  deleteSavedViewSubscription(savedViewId: string, userId: string): Promise<void>;
+  listAllSavedViewSubscriptions(): Promise<SavedViewSubscription[]>;
+  updateSavedViewSubscriptionSnapshot(id: string, snapshot: { ids: string[]; count: number }, lastSentAt: Date): Promise<void>;
+  getSubscriptionsForUser(userId: string): Promise<SavedViewSubscription[]>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -4896,6 +4907,101 @@ export class DatabaseStorage implements IStorage {
 
   async revokeGalaxyToken(jti: string): Promise<void> {
     await db.update(galaxyTokens).set({ revokedAt: new Date() }).where(eq(galaxyTokens.jti, jti));
+  }
+
+  // ── Saved Views ────────────────────────────────────────────────────────────
+  async listSavedViewsForUser(params: { organizationId: string; userId: string; page: SavedViewPage }): Promise<SavedView[]> {
+    return db.select().from(savedViews)
+      .where(
+        and(
+          eq(savedViews.organizationId, params.organizationId),
+          eq(savedViews.page, params.page),
+          or(
+            eq(savedViews.ownerUserId, params.userId),
+            eq(savedViews.scope, "ORG"),
+          ),
+        ),
+      )
+      .orderBy(desc(savedViews.updatedAt));
+  }
+
+  async getSavedView(id: string): Promise<SavedView | undefined> {
+    const [row] = await db.select().from(savedViews).where(eq(savedViews.id, id)).limit(1);
+    return row;
+  }
+
+  async createSavedView(data: InsertSavedView): Promise<SavedView> {
+    const [row] = await db.insert(savedViews).values(data as any).returning();
+    return row;
+  }
+
+  async updateSavedView(
+    id: string,
+    updates: Partial<Pick<InsertSavedView, "name" | "filterJson" | "sortJson" | "columnsJson" | "scope">>,
+  ): Promise<SavedView | undefined> {
+    const [row] = await db.update(savedViews)
+      .set({ ...updates, updatedAt: new Date() } as any)
+      .where(eq(savedViews.id, id))
+      .returning();
+    return row ?? undefined;
+  }
+
+  async deleteSavedView(id: string): Promise<void> {
+    await db.delete(savedViews).where(eq(savedViews.id, id));
+  }
+
+  async setSavedViewPin(id: string, userId: string, pinned: boolean): Promise<SavedView | undefined> {
+    const existing = await this.getSavedView(id);
+    if (!existing) return undefined;
+    const currentPins = existing.pinnedByUserIds ?? [];
+    const newPins = pinned
+      ? (currentPins.includes(userId) ? currentPins : [...currentPins, userId])
+      : currentPins.filter((uid) => uid !== userId);
+    const [row] = await db.update(savedViews)
+      .set({ pinnedByUserIds: newPins, updatedAt: new Date() } as any)
+      .where(eq(savedViews.id, id))
+      .returning();
+    return row ?? undefined;
+  }
+
+  // ── Saved View Subscriptions ────────────────────────────────────────────────
+  async getSavedViewSubscription(savedViewId: string, userId: string): Promise<SavedViewSubscription | undefined> {
+    const [row] = await db.select().from(savedViewSubscriptions)
+      .where(and(eq(savedViewSubscriptions.savedViewId, savedViewId), eq(savedViewSubscriptions.userId, userId)))
+      .limit(1);
+    return row;
+  }
+
+  async upsertSavedViewSubscription(data: { savedViewId: string; userId: string; organizationId: string; frequency: string }): Promise<SavedViewSubscription> {
+    const existing = await this.getSavedViewSubscription(data.savedViewId, data.userId);
+    if (existing) {
+      const [row] = await db.update(savedViewSubscriptions)
+        .set({ frequency: data.frequency })
+        .where(and(eq(savedViewSubscriptions.savedViewId, data.savedViewId), eq(savedViewSubscriptions.userId, data.userId)))
+        .returning();
+      return row;
+    }
+    const [row] = await db.insert(savedViewSubscriptions).values(data as any).returning();
+    return row;
+  }
+
+  async deleteSavedViewSubscription(savedViewId: string, userId: string): Promise<void> {
+    await db.delete(savedViewSubscriptions)
+      .where(and(eq(savedViewSubscriptions.savedViewId, savedViewId), eq(savedViewSubscriptions.userId, userId)));
+  }
+
+  async listAllSavedViewSubscriptions(): Promise<SavedViewSubscription[]> {
+    return db.select().from(savedViewSubscriptions);
+  }
+
+  async updateSavedViewSubscriptionSnapshot(id: string, snapshot: { ids: string[]; count: number }, lastSentAt: Date): Promise<void> {
+    await db.update(savedViewSubscriptions)
+      .set({ lastSnapshotJson: snapshot, lastSentAt } as any)
+      .where(eq(savedViewSubscriptions.id, id));
+  }
+
+  async getSubscriptionsForUser(userId: string): Promise<SavedViewSubscription[]> {
+    return db.select().from(savedViewSubscriptions).where(eq(savedViewSubscriptions.userId, userId));
   }
 
   async createGalaxyAcknowledgement(data: InsertGalaxyAck): Promise<GalaxyUserAcknowledgement> {

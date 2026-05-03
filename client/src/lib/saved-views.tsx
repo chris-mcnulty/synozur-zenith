@@ -26,6 +26,7 @@ export type SavedViewWire = {
   isDefault: boolean;
   createdAt: string | null;
   updatedAt: string | null;
+  subscription?: { frequency: string } | null;
 };
 
 export type SavedViewsListResponse = {

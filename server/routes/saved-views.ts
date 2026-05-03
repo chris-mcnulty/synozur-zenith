@@ -5,9 +5,11 @@ import {
   ZENITH_ROLES,
   SAVED_VIEW_PAGES,
   SAVED_VIEW_SCOPES,
+  SAVED_VIEW_DIGEST_FREQUENCIES,
   BUILT_IN_SAVED_VIEWS,
   type SavedView,
   type SavedViewPage,
+  type SavedViewSubscription,
 } from "@shared/schema";
 import { storage } from "../storage";
 
@@ -35,13 +37,14 @@ function pageQuery(req: AuthenticatedRequest): SavedViewPage | undefined {
     : undefined;
 }
 
-function viewToWire(view: SavedView, currentUserId: string) {
+function viewToWire(view: SavedView, currentUserId: string, subscription?: SavedViewSubscription | null) {
   return {
     ...view,
     isPinned: (view.pinnedByUserIds ?? []).includes(currentUserId),
     isBuiltIn: false,
     isOwner: view.ownerUserId === currentUserId,
     isDefault: view.isDefault ?? false,
+    subscription: subscription ? { frequency: subscription.frequency } : null,
   };
 }
 
@@ -99,10 +102,14 @@ router.get(
       const orgId = req.activeOrganizationId || req.user?.organizationId;
       if (!userId || !orgId) return res.status(400).json({ error: "Missing user or organization context" });
 
-      const rows = await storage.listSavedViewsForUser({ organizationId: orgId, userId, page });
+      const [rows, userSubs] = await Promise.all([
+        storage.listSavedViewsForUser({ organizationId: orgId, userId, page }),
+        storage.getSubscriptionsForUser(userId),
+      ]);
 
+      const subMap = new Map(userSubs.map((s) => [s.savedViewId, s]));
       const builtIns = BUILT_IN_SAVED_VIEWS.filter((b) => b.page === page).map(builtInToWire);
-      const userViews = rows.map((v) => viewToWire(v, userId));
+      const userViews = rows.map((v) => viewToWire(v, userId, subMap.get(v.id)));
 
       const my = userViews.filter((v) => v.scope === "PRIVATE" && v.ownerUserId === userId);
       const shared = userViews.filter((v) => v.scope === "ORG");
@@ -470,6 +477,100 @@ router.post(
 
       const updated = await storage.setSavedViewPin(id, userId, parsed.data.pinned);
       res.json(updated ? viewToWire(updated, userId) : null);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  },
+);
+
+// ── Subscribe to a view ──
+const subscribeBodySchema = z.object({
+  frequency: z.enum(SAVED_VIEW_DIGEST_FREQUENCIES),
+});
+
+router.post(
+  "/api/saved-views/:id/subscription",
+  requireAuth(),
+  async (req: AuthenticatedRequest, res) => {
+    try {
+      const id = req.params.id as string;
+      if (id.startsWith("builtin:")) {
+        return res.status(400).json({ error: "Built-in views cannot be subscribed to" });
+      }
+      const parsed = subscribeBodySchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+
+      const userId = req.user?.id;
+      const orgId = req.activeOrganizationId || req.user?.organizationId;
+      if (!userId || !orgId) return res.status(400).json({ error: "Missing user or organization context" });
+
+      const existing = await storage.getSavedView(id);
+      if (!existing) return res.status(404).json({ error: "View not found" });
+
+      const isOwner = existing.ownerUserId === userId;
+      const isOrgShared = existing.scope === "ORG" && existing.organizationId === orgId;
+      if (!isOwner && !isOrgShared) {
+        return res.status(403).json({ error: "Not allowed to subscribe to this view" });
+      }
+
+      const sub = await storage.upsertSavedViewSubscription({
+        savedViewId: id,
+        userId,
+        organizationId: orgId,
+        frequency: parsed.data.frequency,
+      });
+
+      res.json({ frequency: sub.frequency, createdAt: sub.createdAt });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  },
+);
+
+// ── Unsubscribe from a view ──
+router.delete(
+  "/api/saved-views/:id/subscription",
+  requireAuth(),
+  async (req: AuthenticatedRequest, res) => {
+    try {
+      const id = req.params.id as string;
+      const userId = req.user?.id;
+      if (!userId) return res.status(400).json({ error: "Missing user context" });
+
+      await storage.deleteSavedViewSubscription(id, userId);
+      res.status(204).end();
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  },
+);
+
+// ── Get current user's subscription for a view ──
+router.get(
+  "/api/saved-views/:id/subscription",
+  requireAuth(),
+  async (req: AuthenticatedRequest, res) => {
+    try {
+      const id = req.params.id as string;
+
+      // Support one-click unsubscribe via link in email (no session auth)
+      const actionParam = req.query.action as string | undefined;
+      const userIdParam = req.query.userId as string | undefined;
+      if (actionParam === "unsubscribe" && userIdParam) {
+        await storage.deleteSavedViewSubscription(id, userIdParam);
+        return res.send(`<html><body style="font-family:sans-serif;padding:40px;text-align:center;">
+          <h2>Unsubscribed</h2>
+          <p>You have been unsubscribed from digest emails for this view.</p>
+          <a href="${process.env.APP_PUBLIC_URL || "https://zenith.synozur.com"}/app">Return to Zenith</a>
+        </body></html>`);
+      }
+
+      const userId = req.user?.id;
+      if (!userId) return res.status(400).json({ error: "Missing user context" });
+
+      const sub = await storage.getSavedViewSubscription(id, userId);
+      if (!sub) return res.json(null);
+      res.json({ frequency: sub.frequency, createdAt: sub.createdAt });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }

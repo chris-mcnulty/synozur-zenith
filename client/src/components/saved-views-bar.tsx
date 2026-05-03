@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import {
   Bookmark,
   BookmarkPlus,
+  BellRing,
+  BellOff,
   Check,
   ChevronDown,
   Copy,
@@ -97,6 +99,7 @@ export function SavedViewsBar({
   const [saveDialogOpen, setSaveDialogOpen] = useState(false);
   const [renameView, setRenameView] = useState<SavedViewWire | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<SavedViewWire | null>(null);
+  const [subscribeView, setSubscribeView] = useState<SavedViewWire | null>(null);
 
   const { data: authData } = useQuery<AuthMe>({
     queryKey: ["/api/auth/me"],
@@ -117,6 +120,40 @@ export function SavedViewsBar({
   const pinnedViews = all.filter((v) => v.isPinned);
 
   const invalidateViews = () => queryClient.invalidateQueries({ queryKey: ["/api/saved-views", page] });
+
+  const subscribeMutation = useMutation({
+    mutationFn: async (vars: { id: string; frequency: string }) => {
+      const res = await fetch(`/api/saved-views/${vars.id}/subscription`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ frequency: vars.frequency }),
+      });
+      if (!res.ok) throw new Error((await res.json()).error || "Failed to subscribe");
+      return res.json();
+    },
+    onSuccess: () => {
+      invalidateViews();
+      setSubscribeView(null);
+      toast({ title: "Subscribed", description: "You'll receive digest emails for this view." });
+    },
+    onError: (err: Error) => toast({ title: "Could not subscribe", description: err.message, variant: "destructive" }),
+  });
+
+  const unsubscribeMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const res = await fetch(`/api/saved-views/${id}/subscription`, {
+        method: "DELETE",
+        credentials: "include",
+      });
+      if (!res.ok && res.status !== 204) throw new Error((await res.json()).error || "Failed to unsubscribe");
+    },
+    onSuccess: () => {
+      invalidateViews();
+      toast({ title: "Unsubscribed", description: "You've been removed from digest emails for this view." });
+    },
+    onError: (err: Error) => toast({ title: "Could not unsubscribe", description: err.message, variant: "destructive" }),
+  });
 
   const pinMutation = useMutation({
     mutationFn: async (vars: { id: string; pinned: boolean }) => {
@@ -262,6 +299,8 @@ export function SavedViewsBar({
                         onRename={() => setRenameView(v)}
                         onDelete={() => setConfirmDelete(v)}
                         onCopyLink={() => handleCopyLink(v.id)}
+                        onSubscribe={() => setSubscribeView(v)}
+                        onUnsubscribe={() => unsubscribeMutation.mutate(v.id)}
                         canEdit={v.isOwner}
                         canShareOrg={canShareOrg}
                       />
@@ -287,6 +326,8 @@ export function SavedViewsBar({
                         onDelete={() => setConfirmDelete(v)}
                         onCopyLink={() => handleCopyLink(v.id)}
                         onSetDefault={canShareOrg ? () => setDefaultMutation.mutate({ id: v.id, isDefault: !v.isDefault }) : undefined}
+                        onSubscribe={() => setSubscribeView(v)}
+                        onUnsubscribe={() => unsubscribeMutation.mutate(v.id)}
                         canEdit={v.isOwner || canShareOrg}
                         canShareOrg={canShareOrg}
                       />
@@ -399,6 +440,16 @@ export function SavedViewsBar({
         isSubmitting={renameMutation.isPending}
       />
 
+      <SubscribeDialog
+        view={subscribeView}
+        onClose={() => setSubscribeView(null)}
+        onSubscribe={(frequency) => {
+          if (!subscribeView) return;
+          subscribeMutation.mutate({ id: subscribeView.id, frequency });
+        }}
+        isSubmitting={subscribeMutation.isPending}
+      />
+
       <Dialog open={!!confirmDelete} onOpenChange={(open) => !open && setConfirmDelete(null)}>
         <DialogContent data-testid="dialog-delete-view">
           <DialogHeader>
@@ -434,6 +485,8 @@ function ViewMenuItem({
   onDelete,
   onCopyLink,
   onSetDefault,
+  onSubscribe,
+  onUnsubscribe,
   canEdit,
   canShareOrg: _canShareOrg,
 }: {
@@ -446,6 +499,8 @@ function ViewMenuItem({
   onDelete?: () => void;
   onCopyLink?: () => void;
   onSetDefault?: () => void;
+  onSubscribe?: () => void;
+  onUnsubscribe?: () => void;
   canEdit: boolean;
   canShareOrg: boolean;
 }) {
@@ -514,6 +569,19 @@ function ViewMenuItem({
               }
             </DropdownMenuItem>
           )}
+          {!view.isBuiltIn && (view.subscription ? (
+            <DropdownMenuItem
+              onClick={onUnsubscribe}
+              data-testid={`menu-unsubscribe-${view.id}`}
+            >
+              <BellOff className="w-3.5 h-3.5 mr-2" />
+              Unsubscribe ({view.subscription.frequency})
+            </DropdownMenuItem>
+          ) : (
+            <DropdownMenuItem onClick={onSubscribe} data-testid={`menu-subscribe-${view.id}`}>
+              <BellRing className="w-3.5 h-3.5 mr-2" /> Subscribe to digest
+            </DropdownMenuItem>
+          ))}
           {onCopyLink && (
             <DropdownMenuItem onClick={onCopyLink} data-testid={`menu-copy-link-${view.id}`}>
               <Link2 className="w-3.5 h-3.5 mr-2" /> Copy link
@@ -643,6 +711,66 @@ function SaveViewDialog({
             data-testid="button-confirm-save-view"
           >
             Save
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function SubscribeDialog({
+  view,
+  onClose,
+  onSubscribe,
+  isSubmitting,
+}: {
+  view: SavedViewWire | null;
+  onClose: () => void;
+  onSubscribe: (frequency: string) => void;
+  isSubmitting: boolean;
+}) {
+  const [frequency, setFrequency] = useState<"daily" | "weekly">(
+    (view?.subscription?.frequency as "daily" | "weekly") ?? "weekly",
+  );
+
+  useEffect(() => {
+    if (view) {
+      setFrequency((view.subscription?.frequency as "daily" | "weekly") ?? "weekly");
+    }
+  }, [view]);
+
+  return (
+    <Dialog open={!!view} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent data-testid="dialog-subscribe-view">
+        <DialogHeader>
+          <DialogTitle>Subscribe to digest</DialogTitle>
+          <DialogDescription>
+            Get an email when new items appear in <strong>{view?.name}</strong>.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3">
+          <div>
+            <Label className="text-xs">Frequency</Label>
+            <Select value={frequency} onValueChange={(v) => setFrequency(v as "daily" | "weekly")}>
+              <SelectTrigger data-testid="select-subscribe-frequency"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="daily">Daily digest</SelectItem>
+                <SelectItem value="weekly">Weekly digest</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <p className="text-[11px] text-muted-foreground">
+            Digests are sent via email and include a summary of new items that have appeared in this view since your last digest.
+          </p>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button
+            onClick={() => onSubscribe(frequency)}
+            disabled={isSubmitting}
+            data-testid="button-confirm-subscribe-view"
+          >
+            Subscribe
           </Button>
         </DialogFooter>
       </DialogContent>
