@@ -493,10 +493,8 @@ router.patch("/api/workspaces/:id", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, Z
   }
 
   if (hasSharingChange) {
-    await storage.createAuditEntry({
-      userId: req.user?.id || null,
-      userEmail: req.user?.email || null,
-      action: 'SHARING_CHANGED',
+    await logAuditEvent(req, {
+      action: AUDIT_ACTIONS.SHARING_CHANGED,
       resource: 'workspace',
       resourceId: req.params.id,
       organizationId: req.user?.organizationId || null,
@@ -505,17 +503,14 @@ router.patch("/api/workspaces/:id", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, Z
         workspaceName: existing.displayName,
         previousValue: existing.externalSharing,
         newValue: body.externalSharing,
+        externalSharing: body.externalSharing,
       },
-      result: 'SUCCESS',
-      ipAddress: req.ip || null,
     });
   }
 
   if (hasArchiveChange) {
-    await storage.createAuditEntry({
-      userId: req.user?.id || null,
-      userEmail: req.user?.email || null,
-      action: 'SITE_ARCHIVED',
+    await logAuditEvent(req, {
+      action: AUDIT_ACTIONS.SITE_ARCHIVED,
       resource: 'workspace',
       resourceId: req.params.id,
       organizationId: req.user?.organizationId || null,
@@ -524,8 +519,6 @@ router.patch("/api/workspaces/:id", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, Z
         workspaceName: existing.displayName,
         siteUrl: existing.siteUrl,
       },
-      result: 'SUCCESS',
-      ipAddress: req.ip || null,
     });
   }
 
@@ -840,17 +833,13 @@ router.delete("/api/workspaces/:id/m365", requireRole(ZENITH_ROLES.GOVERNANCE_AD
 
   await storage.updateWorkspace(workspace.id, { isDeleted: true, isArchived: false } as any);
 
-  await storage.createAuditEntry({
-    userId: req.user?.id || null,
-    userEmail: req.user?.email || null,
-    action: 'SITE_DELETED_M365',
+  await logAuditEvent(req, {
+    action: AUDIT_ACTIONS.SITE_DELETED_M365,
     resource: 'workspace',
     resourceId: workspace.id,
     organizationId: req.user?.organizationId || null,
     tenantConnectionId: workspace.tenantConnectionId,
     details: { workspaceName: workspace.displayName, siteUrl: workspace.siteUrl },
-    result: 'SUCCESS',
-    ipAddress: req.ip || null,
   });
 
   res.json({ success: true, workspaceId: workspace.id });
@@ -2311,14 +2300,8 @@ router.post("/api/admin/tenants/:id/sync", requireRole(ZENITH_ROLES.GOVERNANCE_A
     triggeredByIp: req.ip || null,
   });
   if (!result.success) {
-    await logAuditEvent(req, {
-      action: AUDIT_ACTIONS.TENANT_SYNC_FAILED,
-      resource: 'tenant_connection',
-      resourceId: tenantId,
-      tenantConnectionId: tenantId,
-      details: { stage: 'tenant-sync', error: result.error },
-      result: 'FAILURE',
-    });
+    // TENANT_SYNC_FAILED is already logged by runSharePointTenantSync internally;
+    // do not duplicate it here to avoid double notifications.
     if (result.error === "Tenant connection not found") return res.status(404).json(result);
     if (result.error?.includes("credentials not configured")) return res.status(503).json(result);
     return res.status(500).json(result);
@@ -2602,17 +2585,14 @@ router.post("/api/admin/tenants/:id/sync-ia", requireRole(ZENITH_ROLES.TENANT_AD
   } catch (err: any) {
     console.error(`[ia-sync] Error: ${err.message}`);
     try {
-      await storage.createAuditEntry({
-        userId: req.user?.id || null,
-        userEmail: req.user?.email || null,
-        action: 'IA_SYNC_FAILED',
+      await logAuditEvent(req, {
+        action: AUDIT_ACTIONS.IA_SYNC_FAILED,
         resource: 'tenant_connection',
         resourceId: req.params.id,
         organizationId: req.user?.organizationId || null,
         tenantConnectionId: req.params.id,
         details: { error: err.message },
         result: 'FAILURE',
-        ipAddress: req.ip || null,
       });
     } catch { /* ignore audit write errors */ }
     res.status(500).json({ success: false, error: err.message });

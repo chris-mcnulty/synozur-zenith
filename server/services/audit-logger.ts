@@ -137,6 +137,12 @@ export const AUDIT_ACTIONS = {
   // Retention / housekeeping
   AUDIT_RETENTION_PURGE: "AUDIT_RETENTION_PURGE",
 
+  // Label coverage
+  LABEL_COVERAGE_LOW: "LABEL_COVERAGE_LOW",
+
+  // Orphaned site discovery
+  ORPHANED_SITE_DISCOVERED: "ORPHANED_SITE_DISCOVERED",
+
   // BL-013: Notifications & digest emails
   NOTIFICATION_DIGEST_SENT: "NOTIFICATION_DIGEST_SENT",
   NOTIFICATION_PREFERENCES_UPDATED: "NOTIFICATION_PREFERENCES_UPDATED",
@@ -198,14 +204,31 @@ export async function logAuditEvent(
     });
 
     // BL-013 fan-out: turn applicable audit events into in-app notifications.
-    // Skipped for FAILURE/DENIED so we don't notify about access denials,
-    // and skipped for the notification meta-events themselves to avoid loops.
-    if (
-      (input.result ?? "SUCCESS") === "SUCCESS" &&
+    // Normally skipped for FAILURE/DENIED to avoid notifying about access
+    // denials, but governance sync-failure actions and sensitivity policy
+    // violations are meaningful to admins even when the result is not SUCCESS.
+    // The notification meta-events are excluded to avoid loops.
+    const NOTIFY_ON_FAILURE: ReadonlySet<string> = new Set([
+      "TENANT_SYNC_FAILED",
+      "IA_SYNC_FAILED",
+      "SYNC_FAILED",
+      "CSV_IMPORT_FAILED",
+      "METADATA_WRITEBACK_FAILED",
+      "PROVISIONING_FAILED",
+      "LIFECYCLE_SCAN_FAILED",
+    ]);
+    const NOTIFY_ON_DENIED: ReadonlySet<string> = new Set([
+      "SENSITIVITY_POLICY_VIOLATION",
+    ]);
+    const resultVal = input.result ?? "SUCCESS";
+    const shouldNotify =
+      (resultVal === "SUCCESS" ||
+        ((resultVal === "FAILURE" || resultVal === "PARTIAL") && NOTIFY_ON_FAILURE.has(String(input.action))) ||
+        (resultVal === "DENIED" && NOTIFY_ON_DENIED.has(String(input.action)))) &&
       input.action !== "NOTIFICATION_DIGEST_SENT" &&
       input.action !== "NOTIFICATION_PREFERENCES_UPDATED" &&
-      input.action !== "NOTIFICATION_RULES_UPDATED"
-    ) {
+      input.action !== "NOTIFICATION_RULES_UPDATED";
+    if (shouldNotify) {
       try {
         const { emitNotificationsForAuditEvent } = await import("./notification-events");
         await emitNotificationsForAuditEvent({

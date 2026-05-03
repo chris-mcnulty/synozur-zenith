@@ -40,6 +40,7 @@ import {
   type EvaluationContext,
 } from "./policy-engine";
 import { storage } from "../storage";
+import { logAuditEvent, AUDIT_ACTIONS } from "./audit-logger";
 import { getDelegatedSpoToken, getValidUserGraphToken } from "../routes-entra";
 import type { ServicePlanTier, Workspace } from "@shared/schema";
 
@@ -259,6 +260,17 @@ export async function runSharePointTenantSync(
     result: "SUCCESS",
     ipAddress: triggeredByIp || null,
   });
+
+  // Capture pre-sync label coverage so we can detect a threshold transition
+  // (above-threshold → below-threshold) after the sync completes.
+  let preSyncCoveragePct = 100;
+  try {
+    const preSyncWs = await storage.getWorkspaces(undefined, tenantConnectionId);
+    if (preSyncWs.length > 0) {
+      const preSyncLabeled = preSyncWs.filter((w) => w.sensitivityLabelId).length;
+      preSyncCoveragePct = Math.round((preSyncLabeled / preSyncWs.length) * 100);
+    }
+  } catch { /* non-critical — if it fails, edge-trigger logic falls back to always-above */ }
 
   try {
     const [siteResult, usageResult] = await Promise.all([
@@ -686,6 +698,31 @@ export async function runSharePointTenantSync(
           }
         }
         if (existing.localHash) workspaceData.localHash = existing.localHash;
+
+        // Detect orphaned-site transition: site had owners before this sync,
+        // now has none. Fire a notification so admins can assign ownership.
+        const prevOwners: number = (existing as any).owners ?? 0;
+        const newOwners: number = workspaceData.owners ?? 0;
+        if (prevOwners > 0 && newOwners === 0) {
+          try {
+            await logAuditEvent(null, {
+              userId: triggeredByUserId || null,
+              userEmail: triggeredByEmail || null,
+              action: AUDIT_ACTIONS.ORPHANED_SITE_DISCOVERED,
+              resource: "workspace",
+              resourceId: existing.id,
+              organizationId: triggeredByOrgId || null,
+              tenantConnectionId,
+              details: {
+                workspaceName: workspaceData.displayName || (existing as any).displayName,
+                siteUrl: workspaceData.siteUrl || (existing as any).siteUrl,
+              },
+            });
+          } catch (orphanErr: any) {
+            console.warn(`[sync] Orphaned site notification failed: ${orphanErr.message}`);
+          }
+        }
+
         await storage.updateWorkspace(existing.id, workspaceData);
       } else {
         await storage.createWorkspace(workspaceData as any);
@@ -1216,6 +1253,42 @@ export async function runSharePointTenantSync(
       ipAddress: triggeredByIp || null,
     });
 
+    // Label coverage threshold check (edge-triggered): emit a warning only
+    // when coverage transitions from at-or-above the threshold to below it.
+    // This avoids repeated notifications on every sync when the tenant is
+    // already in a low-coverage state.
+    const LABEL_COVERAGE_THRESHOLD = 80;
+    try {
+      const postSyncWs = await storage.getWorkspaces(undefined, tenantConnectionId);
+      const totalCount = postSyncWs.length;
+      if (totalCount > 0) {
+        const labeledCount = postSyncWs.filter((w) => w.sensitivityLabelId).length;
+        const coveragePct = Math.round((labeledCount / totalCount) * 100);
+        if (preSyncCoveragePct >= LABEL_COVERAGE_THRESHOLD && coveragePct < LABEL_COVERAGE_THRESHOLD) {
+          await logAuditEvent(null, {
+            userId: triggeredByUserId || null,
+            userEmail: triggeredByEmail || null,
+            action: AUDIT_ACTIONS.LABEL_COVERAGE_LOW,
+            resource: "tenant_connection",
+            resourceId: tenantConnectionId,
+            organizationId: triggeredByOrgId || null,
+            tenantConnectionId,
+            details: {
+              tenantName: connection.tenantName,
+              totalCount,
+              labeledCount,
+              unlabeledCount: totalCount - labeledCount,
+              coveragePct,
+              previousCoveragePct: preSyncCoveragePct,
+              threshold: LABEL_COVERAGE_THRESHOLD,
+            },
+          });
+        }
+      }
+    } catch (coverageErr: any) {
+      console.warn(`[sync] Label coverage check failed: ${coverageErr.message}`);
+    }
+
     return {
       success: true,
       sitesFound: siteResult.sites.length,
@@ -1259,23 +1332,22 @@ export async function runSharePointTenantSync(
     }
     await storage.updateTenantConnection(tenantConnectionId, tenantUpdates);
     if (consentRevoked && connection.status === "ACTIVE") {
-      await storage.createAuditEntry({
+      await logAuditEvent(null, {
         userId: triggeredByUserId || null,
         userEmail: triggeredByEmail || null,
-        action: "TENANT_SUSPENDED",
+        action: AUDIT_ACTIONS.TENANT_SUSPENDED,
         resource: "tenant_connection",
         resourceId: tenantConnectionId,
         organizationId: triggeredByOrgId || null,
         tenantConnectionId,
         details: { autoSuspended: true, reason: tenantUpdates.statusReason, error: msg },
-        result: "SUCCESS",
         ipAddress: triggeredByIp || null,
       });
     }
-    await storage.createAuditEntry({
+    await logAuditEvent(null, {
       userId: triggeredByUserId || null,
       userEmail: triggeredByEmail || null,
-      action: "TENANT_SYNC_FAILED",
+      action: AUDIT_ACTIONS.TENANT_SYNC_FAILED,
       resource: "tenant_connection",
       resourceId: tenantConnectionId,
       organizationId: triggeredByOrgId || null,

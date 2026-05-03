@@ -80,6 +80,14 @@ const ACTION_MAP: Record<string, CategoryMapping> = {
     titleTemplate: (i) => `Tenant connected: ${i.details?.tenantName || i.details?.tenantId || "new tenant"}`,
     link: () => "/app/admin/tenants",
   },
+  TENANT_REACTIVATED: {
+    category: "tenant_status",
+    severity: "info",
+    recipientRoles: ADMIN_ROLES,
+    titleTemplate: (i) => `Tenant reactivated: ${i.details?.tenantName || "tenant"}`,
+    bodyTemplate: (i) => i.details?.reason || "The tenant connection was reactivated.",
+    link: () => "/app/admin/tenants",
+  },
   TENANT_SUSPENDED: {
     category: "tenant_status",
     severity: "warning",
@@ -150,6 +158,17 @@ const ACTION_MAP: Record<string, CategoryMapping> = {
   },
 
   // Label coverage
+  LABEL_COVERAGE_LOW: {
+    category: "label_coverage",
+    severity: "warning",
+    recipientRoles: ADMIN_ROLES,
+    titleTemplate: (i) =>
+      `Sensitivity label coverage low: ${i.details?.coveragePct ?? 0}% of workspaces labeled`,
+    bodyTemplate: (i) =>
+      `${i.details?.unlabeledCount ?? "Some"} workspace(s) out of ${i.details?.totalCount ?? "unknown"} are missing a sensitivity label. ` +
+      `Review and apply labels to maintain governance coverage.`,
+    link: () => "/app/governance",
+  },
   SENSITIVITY_LABELS_SYNCED: {
     category: "label_coverage",
     severity: "info",
@@ -187,6 +206,15 @@ const ACTION_MAP: Record<string, CategoryMapping> = {
     recipientRoles: ADMIN_ROLES,
     titleTemplate: (i) => `Policy outcome recorded: ${i.details?.outcome || ""}`.trim(),
     link: () => "/app/governance",
+  },
+  ORPHANED_SITE_DISCOVERED: {
+    category: "orphaned_sites",
+    severity: "warning",
+    recipientRoles: ADMIN_ROLES,
+    titleTemplate: (i) => `Orphaned site discovered: ${i.details?.workspaceName || ""}`.trim(),
+    bodyTemplate: (i) =>
+      `The site "${i.details?.workspaceName || "unknown"}" has no assigned owners. Assign an owner to bring it back under governance.`,
+    link: () => "/app/sites-tracker",
   },
   SITE_ARCHIVED: {
     category: "orphaned_sites",
