@@ -171,6 +171,15 @@ import {
   lifecycleComplianceSettings,
   type LifecycleComplianceSettings,
   type InsertLifecycleComplianceSettings,
+  notifications,
+  notificationPreferences,
+  notificationRules,
+  type Notification,
+  type InsertNotification,
+  type NotificationPreferences,
+  type InsertNotificationPreferences,
+  type NotificationRules,
+  type InsertNotificationRules,
 } from "@shared/schema";
 import {
   decryptRecord,
@@ -273,6 +282,19 @@ export interface IStorage {
   deleteAppTokenCacheEntry(tenantId: string, clientId: string, scope?: string): Promise<void>;
 
   createAuditEntry(entry: InsertAuditLog): Promise<AuditLog>;
+
+  // BL-013: Notifications
+  createNotification(notification: InsertNotification): Promise<Notification>;
+  getNotificationsForUser(userId: string, opts?: { unreadOnly?: boolean; limit?: number; since?: Date }): Promise<Notification[]>;
+  getUnreadNotificationCount(userId: string): Promise<number>;
+  markNotificationRead(id: string, userId: string): Promise<Notification | undefined>;
+  markAllNotificationsRead(userId: string): Promise<number>;
+  getNotificationPreferences(userId: string): Promise<NotificationPreferences | undefined>;
+  getNotificationPreferencesByToken(token: string): Promise<NotificationPreferences | undefined>;
+  upsertNotificationPreferences(userId: string, updates: Partial<InsertNotificationPreferences>): Promise<NotificationPreferences>;
+  getNotificationRules(orgId: string): Promise<NotificationRules | undefined>;
+  upsertNotificationRules(orgId: string, updates: Partial<InsertNotificationRules>): Promise<NotificationRules>;
+  getAllNotificationPreferences(): Promise<NotificationPreferences[]>;
   getAuditLog(filters?: {
     orgId?: string;
     action?: string;
@@ -1528,6 +1550,155 @@ export class DatabaseStorage implements IStorage {
   async createAuditEntry(entry: InsertAuditLog): Promise<AuditLog> {
     const [created] = await db.insert(auditLog).values(entry).returning();
     return created;
+  }
+
+  // ── BL-013: Notifications ──────────────────────────────────────────────
+  async createNotification(notification: InsertNotification): Promise<Notification> {
+    const [created] = await db.insert(notifications).values(notification).returning();
+    return created;
+  }
+
+  async getNotificationsForUser(
+    userId: string,
+    opts: { unreadOnly?: boolean; limit?: number; since?: Date } = {},
+  ): Promise<Notification[]> {
+    const conditions: any[] = [eq(notifications.userId, userId)];
+    if (opts.unreadOnly) conditions.push(isNull(notifications.readAt));
+    if (opts.since) conditions.push(gte(notifications.createdAt, opts.since));
+    return db
+      .select()
+      .from(notifications)
+      .where(and(...conditions))
+      .orderBy(desc(notifications.createdAt))
+      .limit(opts.limit ?? 50);
+  }
+
+  async getUnreadNotificationCount(userId: string): Promise<number> {
+    const [row] = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(notifications)
+      .where(and(eq(notifications.userId, userId), isNull(notifications.readAt)));
+    return row?.count ?? 0;
+  }
+
+  async markNotificationRead(id: string, userId: string): Promise<Notification | undefined> {
+    const [row] = await db
+      .update(notifications)
+      .set({ readAt: new Date() })
+      .where(and(eq(notifications.id, id), eq(notifications.userId, userId)))
+      .returning();
+    return row;
+  }
+
+  async markAllNotificationsRead(userId: string): Promise<number> {
+    const rows = await db
+      .update(notifications)
+      .set({ readAt: new Date() })
+      .where(and(eq(notifications.userId, userId), isNull(notifications.readAt)))
+      .returning({ id: notifications.id });
+    return rows.length;
+  }
+
+  async getNotificationPreferences(userId: string): Promise<NotificationPreferences | undefined> {
+    const [row] = await db
+      .select()
+      .from(notificationPreferences)
+      .where(eq(notificationPreferences.userId, userId))
+      .limit(1);
+    return row;
+  }
+
+  async getNotificationPreferencesByToken(token: string): Promise<NotificationPreferences | undefined> {
+    const [row] = await db
+      .select()
+      .from(notificationPreferences)
+      .where(eq(notificationPreferences.unsubscribeToken, token))
+      .limit(1);
+    return row;
+  }
+
+  async upsertNotificationPreferences(
+    userId: string,
+    updates: Partial<InsertNotificationPreferences>,
+  ): Promise<NotificationPreferences> {
+    const existing = await this.getNotificationPreferences(userId);
+    if (existing) {
+      const [row] = await db
+        .update(notificationPreferences)
+        .set({ ...updates, updatedAt: new Date() })
+        .where(eq(notificationPreferences.userId, userId))
+        .returning();
+      return row;
+    }
+    const token = (await import("crypto")).randomBytes(24).toString("hex");
+    const [row] = await db
+      .insert(notificationPreferences)
+      .values({
+        userId,
+        unsubscribeToken: token,
+        digestCadence: updates.digestCadence ?? "weekly",
+        emailEnabled: updates.emailEnabled ?? true,
+        inAppEnabled: updates.inAppEnabled ?? true,
+        realTimeAlerts: updates.realTimeAlerts ?? false,
+        categories: updates.categories ?? [
+          "external_sharing",
+          "orphaned_sites",
+          "sync_failures",
+          "tenant_status",
+          "label_coverage",
+          "remediation",
+        ],
+        quietHoursStart: updates.quietHoursStart ?? null,
+        quietHoursEnd: updates.quietHoursEnd ?? null,
+      })
+      .returning();
+    return row;
+  }
+
+  async getNotificationRules(orgId: string): Promise<NotificationRules | undefined> {
+    const [row] = await db
+      .select()
+      .from(notificationRules)
+      .where(eq(notificationRules.organizationId, orgId))
+      .limit(1);
+    return row;
+  }
+
+  async upsertNotificationRules(
+    orgId: string,
+    updates: Partial<InsertNotificationRules>,
+  ): Promise<NotificationRules> {
+    const existing = await this.getNotificationRules(orgId);
+    if (existing) {
+      const [row] = await db
+        .update(notificationRules)
+        .set({ ...updates, updatedAt: new Date() })
+        .where(eq(notificationRules.organizationId, orgId))
+        .returning();
+      return row;
+    }
+    const [row] = await db
+      .insert(notificationRules)
+      .values({
+        organizationId: orgId,
+        enabledCategories: updates.enabledCategories ?? [
+          "external_sharing",
+          "orphaned_sites",
+          "sync_failures",
+          "tenant_status",
+          "label_coverage",
+          "remediation",
+        ],
+        severityFloor: updates.severityFloor ?? "info",
+        orgQuietHoursStart: updates.orgQuietHoursStart ?? null,
+        orgQuietHoursEnd: updates.orgQuietHoursEnd ?? null,
+      })
+      .returning();
+    return row;
+  }
+
+  async getAllNotificationPreferences(): Promise<NotificationPreferences[]> {
+    return db.select().from(notificationPreferences);
   }
 
   async getAuditLog(filters: {

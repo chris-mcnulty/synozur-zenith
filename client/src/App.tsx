@@ -55,6 +55,7 @@ import RecordingsPage from "./pages/app/recordings";
 import EmailStorageReportPage from "./pages/app/email-storage-report";
 import M365OverviewReportPage from "./pages/app/m365-overview-report";
 import LicensingPage from "./pages/app/licensing";
+import NotificationsSettingsPage from "./pages/app/settings/notifications";
 import AppShell from "./components/layout/app-shell";
 
 const ROLE_LEVELS: Record<string, number> = {
@@ -249,6 +250,7 @@ function AppRoutes() {
         <Route path="/app/email-storage-report" component={EmailStorageReportPage} />
         <Route path="/app/m365-overview-report" component={M365OverviewReportPage} />
         <Route path="/app/licensing" component={LicensingPage} />
+        <Route path="/app/settings/notifications" component={NotificationsSettingsPage} />
         <Route path="/app/support/:tab" component={SupportPage} />
         <Route path="/app/support" component={SupportPage} />
         <Route component={NotFound} />

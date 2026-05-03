@@ -27,6 +27,7 @@ import copilotPromptIntelligenceRouter from "./routes/copilot-prompt-intelligenc
 import jobsRouter from "./routes/jobs";
 import savedViewsRouter from "./routes/saved-views";
 import lifecycleRouter from "./routes/lifecycle";
+import notificationsRouter from "./routes/notifications";
 
 export async function registerRoutes(
   httpServer: Server,
@@ -70,6 +71,7 @@ export async function registerRoutes(
   app.use(jobsRouter);
   app.use(savedViewsRouter);
   app.use(lifecycleRouter);
+  app.use(notificationsRouter);
 
   return httpServer;
 }

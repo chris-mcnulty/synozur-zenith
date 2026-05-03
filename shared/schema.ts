@@ -2235,6 +2235,79 @@ export const savedViews = pgTable("saved_views", {
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
 
+// ── BL-013: Governance digest emails & in-app notifications ──────────────────
+//
+// Three tables back the notification system:
+//   * `notifications`           – per-user inbox shown in the bell dropdown
+//   * `notification_preferences` – per-user cadence + opted-in categories
+//   * `notification_rules`      – per-org enabled categories + severity floors
+
+export const NOTIFICATION_CATEGORIES = [
+  "external_sharing",
+  "orphaned_sites",
+  "sync_failures",
+  "tenant_status",
+  "label_coverage",
+  "remediation",
+  "policy_violations",
+] as const;
+export type NotificationCategory = (typeof NOTIFICATION_CATEGORIES)[number];
+
+export const NOTIFICATION_CATEGORY_LABELS: Record<NotificationCategory, string> = {
+  external_sharing: "New external-shared sites",
+  orphaned_sites: "Newly orphaned sites",
+  sync_failures: "Tenant sync failures",
+  tenant_status: "Tenant status changes",
+  label_coverage: "Sensitivity label coverage drops",
+  remediation: "Top remediation suggestions",
+  policy_violations: "Policy violations",
+};
+
+export const NOTIFICATION_SEVERITIES = ["info", "warning", "critical"] as const;
+export type NotificationSeverity = (typeof NOTIFICATION_SEVERITIES)[number];
+
+export const DIGEST_CADENCES = ["off", "daily", "weekly"] as const;
+export type DigestCadence = (typeof DIGEST_CADENCES)[number];
+
+export const notifications = pgTable("notifications", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull(),
+  organizationId: varchar("organization_id"),
+  tenantConnectionId: varchar("tenant_connection_id"),
+  category: text("category").notNull(),
+  severity: text("severity").notNull().default("info"),
+  title: text("title").notNull(),
+  body: text("body"),
+  link: text("link"),
+  payload: jsonb("payload").$type<Record<string, unknown>>(),
+  readAt: timestamp("read_at"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+export const insertNotificationSchema = createInsertSchema(notifications).omit({
+  id: true,
+  readAt: true,
+  createdAt: true,
+});
+export type InsertNotification = z.infer<typeof insertNotificationSchema>;
+export type Notification = typeof notifications.$inferSelect;
+
+export const notificationPreferences = pgTable("notification_preferences", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().unique(),
+  digestCadence: text("digest_cadence").notNull().default("weekly"),
+  emailEnabled: boolean("email_enabled").notNull().default(true),
+  inAppEnabled: boolean("in_app_enabled").notNull().default(true),
+  realTimeAlerts: boolean("real_time_alerts").notNull().default(false),
+  categories: text("categories").array().notNull().default(sql`ARRAY[]::text[]`),
+  quietHoursStart: integer("quiet_hours_start"),
+  quietHoursEnd: integer("quiet_hours_end"),
+  unsubscribeToken: varchar("unsubscribe_token").notNull(),
+  lastDigestSentAt: timestamp("last_digest_sent_at"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
 export const insertSavedViewSchema = createInsertSchema(savedViews)
   .omit({ id: true, createdAt: true, updatedAt: true })
   .extend({
@@ -2370,7 +2443,6 @@ export const BUILT_IN_SAVED_VIEWS: BuiltInSavedView[] = [
   },
 ];
 
-
 // ─────────────────────────────────────────────────────────────────────────
 // BL-007 — Site Lifecycle Review Queue
 // ─────────────────────────────────────────────────────────────────────────
@@ -2465,3 +2537,30 @@ export const insertLifecycleComplianceSettingsSchema = createInsertSchema(lifecy
 });
 export type InsertLifecycleComplianceSettings = z.infer<typeof insertLifecycleComplianceSettingsSchema>;
 export type LifecycleComplianceSettings = typeof lifecycleComplianceSettings.$inferSelect;
+
+export const insertNotificationPreferencesSchema = createInsertSchema(notificationPreferences).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+export type InsertNotificationPreferences = z.infer<typeof insertNotificationPreferencesSchema>;
+export type NotificationPreferences = typeof notificationPreferences.$inferSelect;
+
+export const notificationRules = pgTable("notification_rules", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  organizationId: varchar("organization_id").notNull().unique(),
+  enabledCategories: text("enabled_categories").array().notNull().default(sql`ARRAY[]::text[]`),
+  severityFloor: text("severity_floor").notNull().default("info"),
+  orgQuietHoursStart: integer("org_quiet_hours_start"),
+  orgQuietHoursEnd: integer("org_quiet_hours_end"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+export const insertNotificationRulesSchema = createInsertSchema(notificationRules).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+export type InsertNotificationRules = z.infer<typeof insertNotificationRulesSchema>;
+export type NotificationRules = typeof notificationRules.$inferSelect;

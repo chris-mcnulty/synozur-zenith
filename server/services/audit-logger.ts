@@ -136,6 +136,11 @@ export const AUDIT_ACTIONS = {
 
   // Retention / housekeeping
   AUDIT_RETENTION_PURGE: "AUDIT_RETENTION_PURGE",
+
+  // BL-013: Notifications & digest emails
+  NOTIFICATION_DIGEST_SENT: "NOTIFICATION_DIGEST_SENT",
+  NOTIFICATION_PREFERENCES_UPDATED: "NOTIFICATION_PREFERENCES_UPDATED",
+  NOTIFICATION_RULES_UPDATED: "NOTIFICATION_RULES_UPDATED",
 } as const;
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[keyof typeof AUDIT_ACTIONS];
@@ -177,6 +182,35 @@ export async function logAuditEvent(
       result: input.result ?? "SUCCESS",
       ipAddress: input.ipAddress ?? req?.ip ?? null,
     });
+
+    // BL-013 fan-out: turn applicable audit events into in-app notifications.
+    // Skipped for FAILURE/DENIED so we don't notify about access denials,
+    // and skipped for the notification meta-events themselves to avoid loops.
+    if (
+      (input.result ?? "SUCCESS") === "SUCCESS" &&
+      input.action !== "NOTIFICATION_DIGEST_SENT" &&
+      input.action !== "NOTIFICATION_PREFERENCES_UPDATED" &&
+      input.action !== "NOTIFICATION_RULES_UPDATED"
+    ) {
+      try {
+        const { emitNotificationsForAuditEvent } = await import("./notification-events");
+        await emitNotificationsForAuditEvent({
+          action: String(input.action),
+          resource: input.resource,
+          resourceId: input.resourceId ?? null,
+          organizationId: orgIdResolved,
+          tenantConnectionId: input.tenantConnectionId ?? null,
+          userId: input.userId ?? req?.user?.id ?? null,
+          userEmail: input.userEmail ?? req?.user?.email ?? null,
+          details: input.details ?? null,
+        });
+      } catch (notifyErr) {
+        console.error(
+          `[audit] Notification fan-out failed for action ${input.action}:`,
+          notifyErr,
+        );
+      }
+    }
   } catch (err) {
     console.error(
       `[audit] Failed to write audit entry for action ${input.action}:`,

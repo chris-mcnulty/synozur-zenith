@@ -952,6 +952,61 @@ async function ensureTenantConnectionsSchema() {
       CREATE INDEX IF NOT EXISTS idx_graph_app_token_cache_expires_at ON graph_app_token_cache (expires_at);
     `);
 
+    // ── BL-013: Notification system tables ────────────────────────────────
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS notifications (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id varchar NOT NULL,
+        organization_id varchar,
+        tenant_connection_id varchar,
+        category text NOT NULL,
+        severity text NOT NULL DEFAULT 'info',
+        title text NOT NULL,
+        body text,
+        link text,
+        payload jsonb,
+        read_at timestamp,
+        created_at timestamp NOT NULL DEFAULT now()
+      );
+      CREATE INDEX IF NOT EXISTS idx_notifications_user_unread
+        ON notifications (user_id, read_at, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_notifications_org_created
+        ON notifications (organization_id, created_at DESC);
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS notification_preferences (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id varchar NOT NULL UNIQUE,
+        digest_cadence text NOT NULL DEFAULT 'weekly',
+        email_enabled boolean NOT NULL DEFAULT true,
+        in_app_enabled boolean NOT NULL DEFAULT true,
+        real_time_alerts boolean NOT NULL DEFAULT false,
+        categories text[] NOT NULL DEFAULT ARRAY[]::text[],
+        quiet_hours_start integer,
+        quiet_hours_end integer,
+        unsubscribe_token varchar NOT NULL,
+        last_digest_sent_at timestamp,
+        created_at timestamp NOT NULL DEFAULT now(),
+        updated_at timestamp NOT NULL DEFAULT now()
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_notification_prefs_token
+        ON notification_preferences (unsubscribe_token);
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS notification_rules (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        organization_id varchar NOT NULL UNIQUE,
+        enabled_categories text[] NOT NULL DEFAULT ARRAY[]::text[],
+        severity_floor text NOT NULL DEFAULT 'info',
+        org_quiet_hours_start integer,
+        org_quiet_hours_end integer,
+        created_at timestamp NOT NULL DEFAULT now(),
+        updated_at timestamp NOT NULL DEFAULT now()
+      );
+    `);
+
     log('Schema migration ensureTenantConnectionsSchema completed');
   } catch (err) {
     console.error('[Migration] Failed to ensure tenant_connections schema:', err);
@@ -1126,6 +1181,14 @@ async function backfillOrgMemberships() {
     log('Audit streaming worker started');
   } catch (err) {
     console.error('[Startup] Failed to start audit streamer:', err);
+  }
+
+  try {
+    const { startDigestScheduler } = await import('./services/notification-digest');
+    startDigestScheduler();
+    log('Notification digest scheduler started');
+  } catch (err) {
+    console.error('[Startup] Failed to start notification digest scheduler:', err);
   }
 
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {

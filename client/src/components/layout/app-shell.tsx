@@ -4,6 +4,7 @@ import { Aurora } from "@/components/aurora";
 import { Link, useLocation, Redirect } from "wouter";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { CommandPalette, useCommandPaletteShortcut, type PaletteItem } from "@/components/command-palette";
+import { NotificationBell } from "@/components/notification-bell";
 import { 
   LayoutDashboard, 
   FolderPlus, 
@@ -1100,10 +1101,7 @@ export default function AppShell({ children }: AppShellProps) {
               <Search className="w-5 h-5 text-muted-foreground" />
             </Button>
 
-            <Button variant="ghost" size="icon" className="rounded-full relative hover:bg-muted">
-              <Bell className="w-5 h-5 text-muted-foreground" />
-              <span className="absolute top-2 right-2.5 w-2 h-2 bg-primary rounded-full border-2 border-background"></span>
-            </Button>
+            <NotificationBell />
 
             <div className="h-6 w-px bg-border/50 mx-1 hidden sm:block"></div>
 
