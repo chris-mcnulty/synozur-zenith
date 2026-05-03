@@ -409,4 +409,70 @@ router.get(
   },
 );
 
+// ---------------------------------------------------------------------------
+// GET /api/copilot-prompt-intelligence/schedule
+// Returns the current schedule toggle state for a tenant connection.
+// ---------------------------------------------------------------------------
+
+router.get(
+  "/api/copilot-prompt-intelligence/schedule",
+  requireAuth(),
+  requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN),
+  requireFeature("copilotPromptIntelligence"),
+  async (req: AuthenticatedRequest, res) => {
+    const tenantConnectionId =
+      typeof req.query.tenantConnectionId === "string"
+        ? req.query.tenantConnectionId
+        : "";
+
+    if (!tenantConnectionId) {
+      return res.status(400).json({ message: "tenantConnectionId query param required" });
+    }
+
+    const access = await assertTenantAccess(req, tenantConnectionId);
+    if (!access.ok) return res.status(access.status).json({ message: access.message });
+
+    return res.json({
+      tenantConnectionId: access.conn.id,
+      copilotSyncScheduleEnabled: access.conn.copilotSyncScheduleEnabled !== false,
+    });
+  },
+);
+
+// ---------------------------------------------------------------------------
+// PATCH /api/copilot-prompt-intelligence/schedule
+// Toggle automatic daily sync on/off for a tenant connection.
+// ---------------------------------------------------------------------------
+
+router.patch(
+  "/api/copilot-prompt-intelligence/schedule",
+  requireAuth(),
+  requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN),
+  requireFeature("copilotPromptIntelligence"),
+  async (req: AuthenticatedRequest, res) => {
+    const body = z
+      .object({
+        tenantConnectionId: z.string().min(1),
+        enabled: z.boolean(),
+      })
+      .safeParse(req.body);
+
+    if (!body.success) {
+      return res.status(400).json({ message: "tenantConnectionId and enabled (boolean) are required" });
+    }
+
+    const access = await assertTenantAccess(req, body.data.tenantConnectionId);
+    if (!access.ok) return res.status(access.status).json({ message: access.message });
+
+    const updated = await storage.updateTenantConnection(access.conn.id, {
+      copilotSyncScheduleEnabled: body.data.enabled,
+    });
+
+    return res.json({
+      tenantConnectionId: access.conn.id,
+      copilotSyncScheduleEnabled: updated?.copilotSyncScheduleEnabled !== false,
+    });
+  },
+);
+
 export default router;

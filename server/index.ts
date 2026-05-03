@@ -135,6 +135,7 @@ async function ensureTenantConnectionsSchema() {
       "ALTER TABLE tenant_connections ADD COLUMN IF NOT EXISTS content_governance_enabled boolean NOT NULL DEFAULT false",
       "ALTER TABLE tenant_connections ADD COLUMN IF NOT EXISTS licensing_enabled boolean NOT NULL DEFAULT false",
       "ALTER TABLE tenant_connections ADD COLUMN IF NOT EXISTS lifecycle_scan_schedule_enabled boolean NOT NULL DEFAULT true",
+    "ALTER TABLE tenant_connections ADD COLUMN IF NOT EXISTS copilot_sync_schedule_enabled boolean NOT NULL DEFAULT true",
     ];
 
     for (const stmt of alterStatements) {
@@ -1246,6 +1247,14 @@ async function backfillOrgMemberships() {
     log('Saved view digest scheduler started');
   } catch (err) {
     console.error('[Startup] Failed to start saved view digest scheduler:', err);
+  }
+
+  try {
+    const { startCopilotSyncScheduler } = await import('./services/copilot-prompt-intelligence-scheduler');
+    startCopilotSyncScheduler();
+    log('Copilot Prompt Intelligence daily sync scheduler started');
+  } catch (err) {
+    console.error('[Startup] Failed to start Copilot Prompt Intelligence scheduler:', err);
   }
 
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {

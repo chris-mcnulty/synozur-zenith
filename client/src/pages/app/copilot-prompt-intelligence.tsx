@@ -57,7 +57,10 @@ import {
   Database,
   Info,
   Download,
+  CalendarClock,
 } from "lucide-react";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
 import { UpgradeGate } from "@/components/upgrade-gate";
 import { useTenant } from "@/lib/tenant-context";
 import { format, formatDistanceToNow } from "date-fns";
@@ -784,6 +787,43 @@ export default function CopilotPromptIntelligencePage() {
   const [pollingSyncId, setPollingSyncId] = useState<string | null>(null);
   const [selectedAssessmentId, setSelectedAssessmentId] = useState<string | null>(null);
   const [syncMessage, setSyncMessage] = useState<{ text: string; variant: "info" | "success" | "error" } | null>(null);
+  const [scheduleToggling, setScheduleToggling] = useState(false);
+
+  // Schedule setting
+  const { data: scheduleData, refetch: refetchSchedule } = useQuery<{ copilotSyncScheduleEnabled: boolean }>({
+    queryKey: ["/api/copilot-prompt-intelligence/schedule", tenantConnectionId],
+    queryFn: async () => {
+      const res = await fetch(
+        `/api/copilot-prompt-intelligence/schedule?tenantConnectionId=${encodeURIComponent(tenantConnectionId)}`,
+        { credentials: "include" },
+      );
+      if (!res.ok) throw new Error(await res.text());
+      return res.json();
+    },
+    enabled: !!tenantConnectionId,
+    staleTime: 60_000,
+  });
+
+  const scheduleEnabled = scheduleData?.copilotSyncScheduleEnabled !== false;
+
+  const handleScheduleToggle = async (enabled: boolean) => {
+    if (!tenantConnectionId || scheduleToggling) return;
+    setScheduleToggling(true);
+    try {
+      const res = await fetch("/api/copilot-prompt-intelligence/schedule", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ tenantConnectionId, enabled }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      await refetchSchedule();
+    } catch (err) {
+      console.error("Failed to toggle schedule:", err);
+    } finally {
+      setScheduleToggling(false);
+    }
+  };
 
   // Latest completed assessment
   const { data: latestAssessment, isLoading: latestLoading, refetch: refetchLatest } = useQuery<Assessment | null>({
@@ -972,7 +1012,26 @@ export default function CopilotPromptIntelligencePage() {
               Quality and risk analytics for M365 Copilot user-initiated prompts over the last 30 days.
             </p>
           </div>
-          <div className="flex items-center gap-2 flex-shrink-0">
+          <div className="flex items-center gap-3 flex-shrink-0 flex-wrap justify-end">
+            {tenantConnectionId && scheduleData !== undefined && (
+              <div
+                className="flex items-center gap-2 border border-border rounded-md px-3 py-1.5"
+                title={scheduleEnabled ? "Daily automatic sync is enabled — click to disable" : "Daily automatic sync is disabled — click to enable"}
+              >
+                <CalendarClock className="w-3.5 h-3.5 text-muted-foreground" />
+                <Label htmlFor="schedule-toggle" className="text-xs text-muted-foreground cursor-pointer select-none">
+                  Daily auto-sync
+                </Label>
+                <Switch
+                  id="schedule-toggle"
+                  checked={scheduleEnabled}
+                  onCheckedChange={handleScheduleToggle}
+                  disabled={scheduleToggling}
+                  data-testid="switch-copilot-auto-sync"
+                  aria-label={scheduleEnabled ? "Disable daily automatic sync" : "Enable daily automatic sync"}
+                />
+              </div>
+            )}
             <Button
               variant="outline"
               size="sm"

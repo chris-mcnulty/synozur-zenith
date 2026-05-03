@@ -220,6 +220,7 @@ export const tenantConnections = pgTable("tenant_connections", {
   contentGovernanceEnabled: boolean("content_governance_enabled").notNull().default(false),
   licensingEnabled: boolean("licensing_enabled").notNull().default(false),
   lifecycleScanScheduleEnabled: boolean("lifecycle_scan_schedule_enabled").notNull().default(true),
+  copilotSyncScheduleEnabled: boolean("copilot_sync_schedule_enabled").notNull().default(true),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
