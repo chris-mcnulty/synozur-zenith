@@ -418,6 +418,7 @@ export default function WorkspaceDetailsPage() {
     },
   });
 
+  const [memberListSearch, setMemberListSearch] = useState("");
   const [confirmRemoveMember, setConfirmRemoveMember] = useState<{ id: string; displayName: string } | null>(null);
   const removeMemberMutation = useMutation({
     mutationFn: async (member: { id: string; displayName: string }) => {
@@ -1138,6 +1139,14 @@ export default function WorkspaceDetailsPage() {
                       const siteOwners = ((workspace as any).siteOwners || []) as Array<{ id?: string; displayName: string; mail?: string; userPrincipalName?: string }>;
                       const isCommSite = workspace.type === "COMMUNICATION_SITE";
                       const showAdminControls = canManageOwners && ownershipFeatureOn && !isCommSite;
+                      const memberListSearchLower = memberListSearch.trim().toLowerCase();
+                      const filteredMembers = memberListSearchLower
+                        ? siteMembers.filter(m =>
+                            m.displayName?.toLowerCase().includes(memberListSearchLower) ||
+                            m.userPrincipalName?.toLowerCase().includes(memberListSearchLower) ||
+                            m.mail?.toLowerCase().includes(memberListSearchLower)
+                          )
+                        : siteMembers;
                       return (
                         <>
                           <div className="flex items-center justify-between mb-4 gap-2">
@@ -1214,10 +1223,32 @@ export default function WorkspaceDetailsPage() {
                             </div>
                           )}
 
-                          {siteMembers.length > 0 ? (
+                          {siteMembers.length > 0 && (
+                            <div className="relative mb-3">
+                              <SearchIcon className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
+                              <Input
+                                placeholder="Search members..."
+                                value={memberListSearch}
+                                onChange={(e) => setMemberListSearch(e.target.value)}
+                                className="h-8 pl-8 text-sm"
+                                data-testid="input-member-list-search"
+                              />
+                            </div>
+                          )}
+
+                          {siteMembers.length === 0 ? (
+                            <div className="text-sm text-muted-foreground italic" data-testid="text-no-members">
+                              {isCommSite ? "Communication Sites do not have group members." : "No members found. Use Add Member above to grant access."}
+                            </div>
+                          ) : filteredMembers.length === 0 ? (
+                            <div className="text-sm text-muted-foreground italic" data-testid="text-no-members-filtered">
+                              No members match your search.
+                            </div>
+                          ) : (
                             <div className="space-y-2">
-                              {siteMembers.map((member, idx) => {
+                              {filteredMembers.map((member, idx) => {
                                 const initials = member.displayName ? member.displayName.split(" ").map((w: string) => w[0]).join("").toUpperCase().slice(0, 2) : "?";
+                                const principalName = member.userPrincipalName || member.mail;
                                 return (
                                   <div key={member.id || idx} className="flex items-center gap-3 p-2 rounded-lg bg-muted/30" data-testid={`text-member-${idx}`}>
                                     <div className="w-8 h-8 rounded-full bg-primary/20 flex items-center justify-center text-primary text-[10px] font-bold shrink-0">
@@ -1225,7 +1256,7 @@ export default function WorkspaceDetailsPage() {
                                     </div>
                                     <div className="min-w-0 flex-1">
                                       <p className="text-sm font-medium truncate">{member.displayName}</p>
-                                      {member.mail && <p className="text-[10px] text-muted-foreground truncate">{member.mail}</p>}
+                                      {principalName && <p className="text-[10px] text-muted-foreground truncate">{principalName}</p>}
                                     </div>
                                     {showAdminControls && member.id && (
                                       <Button
@@ -1243,10 +1274,6 @@ export default function WorkspaceDetailsPage() {
                                   </div>
                                 );
                               })}
-                            </div>
-                          ) : (
-                            <div className="text-sm text-muted-foreground italic" data-testid="text-no-members">
-                              {isCommSite ? "Communication Sites do not have group members." : "No members yet. Use Add Member above to grant access."}
                             </div>
                           )}
                         </>
