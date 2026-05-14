@@ -578,31 +578,12 @@ router.get('/users/search', requireAuth(), async (req: AuthenticatedRequest, res
       return res.status(403).json({ error: 'Cross-organization user search is restricted to Platform Owners' });
     }
 
-    const q = String(req.query.q || '').trim().toLowerCase();
+    const q = String(req.query.q || '').trim();
     if (q.length < 2) {
       return res.json({ users: [] });
     }
 
-    const all = await storage.getAllUsers();
-    const orgs = await storage.getOrganizations();
-    const orgsById = new Map(orgs.map(o => [o.id, o] as const));
-
-    const matches = all
-      .filter(u =>
-        u.email.toLowerCase().includes(q) ||
-        (u.name || '').toLowerCase().includes(q),
-      )
-      .slice(0, 50)
-      .map(u => {
-        const safe = sanitizeUser(u);
-        const org = u.organizationId ? orgsById.get(u.organizationId) : undefined;
-        return {
-          ...safe,
-          organizationName: org?.name || null,
-          organizationDomain: org?.domain || null,
-        };
-      });
-
+    const matches = await storage.searchUsersAcrossOrgs(q, 50);
     return res.json({ users: matches });
   } catch (error: any) {
     console.error('[Auth] Cross-org user search error:', error);

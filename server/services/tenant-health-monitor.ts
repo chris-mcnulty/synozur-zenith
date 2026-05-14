@@ -32,11 +32,17 @@ export interface HealthCheckOutcome {
   transitionedToHealthy: boolean;
 }
 
+export type PingResult =
+  | { ok: true; latencyMs: number }
+  | { ok: false; latencyMs: number; code: string; message: string };
+
+export type PingFn = (tenantId: string, clientId: string, clientSecret: string) => Promise<PingResult>;
+
 async function pingGraph(
   tenantId: string,
   clientId: string,
   clientSecret: string,
-): Promise<{ ok: true; latencyMs: number } | { ok: false; latencyMs: number; code: string; message: string }> {
+): Promise<PingResult> {
   const started = Date.now();
   try {
     const token = await getAppToken(tenantId, clientId, clientSecret);
@@ -70,6 +76,7 @@ async function pingGraph(
 
 export async function runHealthCheckForTenant(
   conn: TenantConnection,
+  options: { pingFn?: PingFn } = {},
 ): Promise<HealthCheckOutcome | null> {
   if (!conn.clientId || !conn.clientSecret) return null;
   // Only ping tenants that are otherwise active. Suspended/Revoked tenants
@@ -78,7 +85,8 @@ export async function runHealthCheckForTenant(
     return null;
   }
 
-  const result = await pingGraph(conn.tenantId, conn.clientId, conn.clientSecret);
+  const ping = options.pingFn ?? pingGraph;
+  const result = await ping(conn.tenantId, conn.clientId, conn.clientSecret);
   const previousStatus = (conn.healthStatus as TenantHealthStatus | null) ?? "healthy";
   const previousFailures = conn.healthConsecutiveFailures ?? 0;
 
@@ -155,21 +163,39 @@ export async function runHealthCheckForTenant(
   };
 }
 
+// Maximum concurrent Graph pings during a health cycle. Capped low so
+// that even on deployments with hundreds of tenants we stay well under
+// any per-app Graph throttling, while still finishing the cycle in
+// minutes rather than hours.
+const HEALTH_CHECK_CONCURRENCY = 5;
+
 export async function runHealthCheckCycle(): Promise<{ checked: number; degraded: number; recovered: number }> {
   const stats = { checked: 0, degraded: 0, recovered: 0 };
   try {
     const connections = await storage.getTenantConnections();
-    for (const conn of connections) {
-      try {
-        const outcome = await runHealthCheckForTenant(conn);
-        if (!outcome) continue;
-        stats.checked += 1;
-        if (outcome.transitionedToDegraded) stats.degraded += 1;
-        if (outcome.transitionedToHealthy) stats.recovered += 1;
-      } catch (err) {
-        console.error(`[tenant-health] unexpected error for tenant=${conn.id}:`, err);
+    const queue = [...connections];
+
+    const worker = async () => {
+      while (queue.length > 0) {
+        const conn = queue.shift();
+        if (!conn) return;
+        try {
+          const outcome = await runHealthCheckForTenant(conn);
+          if (!outcome) continue;
+          stats.checked += 1;
+          if (outcome.transitionedToDegraded) stats.degraded += 1;
+          if (outcome.transitionedToHealthy) stats.recovered += 1;
+        } catch (err) {
+          console.error(`[tenant-health] unexpected error for tenant=${conn.id}:`, err);
+        }
       }
-    }
+    };
+
+    const workers = Array.from(
+      { length: Math.min(HEALTH_CHECK_CONCURRENCY, connections.length) },
+      () => worker(),
+    );
+    await Promise.all(workers);
   } catch (err) {
     console.error("[tenant-health] cycle failed:", err);
   }

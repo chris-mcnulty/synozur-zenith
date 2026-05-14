@@ -288,6 +288,19 @@ export interface IStorage {
   updateUser(id: string, updates: Partial<InsertUser>): Promise<User | undefined>;
   getUsersByOrganization(orgId: string): Promise<User[]>;
   getAllUsers(): Promise<User[]>;
+  searchUsersAcrossOrgs(query: string, limit?: number): Promise<Array<{
+    id: string;
+    email: string;
+    name: string | null;
+    role: string;
+    emailVerified: boolean;
+    authProvider: string | null;
+    lastLoginAt: Date | null;
+    createdAt: Date | null;
+    organizationId: string | null;
+    organizationName: string | null;
+    organizationDomain: string | null;
+  }>>;
 
   upsertGraphToken(token: InsertGraphToken): Promise<GraphToken>;
   getGraphToken(userId: string, service?: string): Promise<GraphToken | undefined>;
@@ -1226,20 +1239,20 @@ export class DatabaseStorage implements IStorage {
 
   async getLatestTenantHealthChecks(organizationId?: string): Promise<TenantHealthCheck[]> {
     // Returns the single most-recent check per tenant_connection_id.
-    // Implemented via an aggregate subquery so we don't depend on raw SQL
-    // for DISTINCT ON.
+    // The org filter is applied INSIDE the aggregate subquery so the
+    // computed max(checked_at) is scoped to the requested org —
+    // otherwise a row from another org could win the max and then be
+    // filtered out by the outer where, returning nothing for that
+    // tenant connection.
     const latestAt = db
       .select({
         tenantConnectionId: tenantHealthChecks.tenantConnectionId,
         maxCheckedAt: max(tenantHealthChecks.checkedAt).as("maxCheckedAt"),
       })
       .from(tenantHealthChecks)
+      .where(organizationId ? eq(tenantHealthChecks.organizationId, organizationId) : undefined)
       .groupBy(tenantHealthChecks.tenantConnectionId)
       .as("latest");
-
-    const whereOrg = organizationId
-      ? eq(tenantHealthChecks.organizationId, organizationId)
-      : undefined;
 
     return db
       .select({
@@ -1261,7 +1274,7 @@ export class DatabaseStorage implements IStorage {
           eq(tenantHealthChecks.checkedAt, latestAt.maxCheckedAt),
         ),
       )
-      .where(whereOrg);
+      .where(organizationId ? eq(tenantHealthChecks.organizationId, organizationId) : undefined);
   }
 
   async getTenantConnectionDeletionSummary(id: string): Promise<Record<string, number>> {
@@ -1603,6 +1616,34 @@ export class DatabaseStorage implements IStorage {
 
   async getAllUsers(): Promise<User[]> {
     return db.select().from(users).orderBy(users.createdAt);
+  }
+
+  async searchUsersAcrossOrgs(query: string, limit: number = 50) {
+    // BL-045: Platform-Owner-only cross-org user search. Pushes the
+    // ILIKE filter and the row cap into Postgres rather than fetching
+    // every user into memory, and joins organizations for org metadata
+    // in one round-trip. Selects only the columns the API exposes —
+    // password / token columns are never read.
+    const pattern = `%${query}%`;
+    return db
+      .select({
+        id: users.id,
+        email: users.email,
+        name: users.name,
+        role: users.role,
+        emailVerified: users.emailVerified,
+        authProvider: users.authProvider,
+        lastLoginAt: users.lastLoginAt,
+        createdAt: users.createdAt,
+        organizationId: users.organizationId,
+        organizationName: organizations.name,
+        organizationDomain: organizations.domain,
+      })
+      .from(users)
+      .leftJoin(organizations, eq(users.organizationId, organizations.id))
+      .where(or(ilike(users.email, pattern), ilike(users.name, pattern)))
+      .orderBy(users.email)
+      .limit(limit);
   }
 
   async deleteGraphToken(userId: string, service: string = 'graph'): Promise<void> {

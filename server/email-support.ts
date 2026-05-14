@@ -3,6 +3,16 @@ import type { SupportTicket, User, Organization } from "@shared/schema";
 
 const APP_PUBLIC_URL = process.env.APP_PUBLIC_URL || "https://zenith.synozur.com";
 
+function escapeHtml(value: string | null | undefined): string {
+  if (!value) return "";
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 export async function sendVerificationEmail(user: User, verificationToken: string): Promise<void> {
   const { client, fromEmail } = await getUncachableSendGridClient();
   const firstName = user.name ? user.name.split(" ")[0] : user.email;
@@ -139,9 +149,18 @@ export async function sendUserInviteEmail(
   inviteToken: string,
 ): Promise<void> {
   const { client, fromEmail } = await getUncachableSendGridClient();
-  const firstName = user.name ? user.name.split(" ")[0] : user.email;
+  const firstName = escapeHtml(user.name ? user.name.split(" ")[0] : user.email);
+  const safeInvitedByName = escapeHtml(invitedByName);
+  const safeInvitedByEmail = escapeHtml(invitedByEmail);
+  const safeOrganizationName = escapeHtml(organizationName);
+  // The invite landing page (/verify-email) and the post-accept reset
+  // landing page are part of BL-044's frontend deliverable. We follow the
+  // same URL convention as sendVerificationEmail / sendPasswordResetEmail
+  // so wiring up those client routes will fix all three flows at once.
   const acceptUrl = `${APP_PUBLIC_URL}/verify-email?token=${encodeURIComponent(inviteToken)}`;
   const resetUrl = `${APP_PUBLIC_URL}/request-password-reset`;
+  const safeAcceptUrl = escapeHtml(acceptUrl);
+  const safeResetUrl = escapeHtml(resetUrl);
 
   const html = `
 <!DOCTYPE html>
@@ -165,15 +184,15 @@ export async function sendUserInviteEmail(
             <td style="padding:32px 24px 16px;">
               <p style="margin:0 0 12px;color:#111827;font-size:16px;">Hi ${firstName},</p>
               <p style="margin:0 0 20px;color:#374151;font-size:15px;line-height:1.6;">
-                ${invitedByName} (${invitedByEmail}) has invited you to join
-                <strong>${organizationName}</strong> on Zenith — the Microsoft 365 governance platform from Synozur.
+                ${safeInvitedByName} (${safeInvitedByEmail}) has invited you to join
+                <strong>${safeOrganizationName}</strong> on Zenith — the Microsoft 365 governance platform from Synozur.
               </p>
-              <a href="${acceptUrl}" style="display:inline-block;background:#5b0fbc;color:#ffffff;text-decoration:none;padding:12px 24px;border-radius:6px;font-size:15px;font-weight:600;">
+              <a href="${safeAcceptUrl}" style="display:inline-block;background:#5b0fbc;color:#ffffff;text-decoration:none;padding:12px 24px;border-radius:6px;font-size:15px;font-weight:600;">
                 Accept Invitation
               </a>
               <p style="margin:24px 0 0;color:#6b7280;font-size:13px;line-height:1.6;">
                 After accepting, set a password using the
-                <a href="${resetUrl}" style="color:#5b0fbc;">password reset</a> flow,
+                <a href="${safeResetUrl}" style="color:#5b0fbc;">password reset</a> flow,
                 or sign in with your Microsoft Entra account if your organization uses SSO.
               </p>
             </td>
@@ -182,7 +201,7 @@ export async function sendUserInviteEmail(
             <td style="padding:16px 24px;border-top:1px solid #e5e7eb;">
               <p style="margin:0;color:#9ca3af;font-size:12px;">
                 If the button above doesn't work, copy and paste this URL into your browser:<br/>
-                <a href="${acceptUrl}" style="color:#5b0fbc;word-break:break-all;">${acceptUrl}</a>
+                <a href="${safeAcceptUrl}" style="color:#5b0fbc;word-break:break-all;">${safeAcceptUrl}</a>
               </p>
             </td>
           </tr>
