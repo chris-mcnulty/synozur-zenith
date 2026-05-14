@@ -221,6 +221,10 @@ export const tenantConnections = pgTable("tenant_connections", {
   licensingEnabled: boolean("licensing_enabled").notNull().default(false),
   lifecycleScanScheduleEnabled: boolean("lifecycle_scan_schedule_enabled").notNull().default(true),
   copilotSyncScheduleEnabled: boolean("copilot_sync_schedule_enabled").notNull().default(true),
+  // BL-046: Tenant Connection Health Monitor (denormalized summary)
+  healthStatus: text("health_status"),
+  healthLastCheckedAt: timestamp("health_last_checked_at"),
+  healthConsecutiveFailures: integer("health_consecutive_failures").notNull().default(0),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -2168,6 +2172,7 @@ export const JOB_TYPES = {
   licenseSync:          { label: "License Sync",                dataset: "licenses" },
   iaSync:               { label: "IA Column Sync",              dataset: "iaColumns" },
   lifecycleComplianceScan: { label: "Lifecycle Compliance Scan", dataset: "lifecycleCompliance" },
+  tenantHealthCheck: { label: "Tenant Health Check", dataset: "tenantHealth" },
 } as const;
 
 export type JobType = keyof typeof JOB_TYPES;
@@ -2205,6 +2210,33 @@ export const insertScheduledJobRunSchema = createInsertSchema(scheduledJobRuns).
 });
 export type InsertScheduledJobRun = z.infer<typeof insertScheduledJobRunSchema>;
 export type ScheduledJobRun = typeof scheduledJobRuns.$inferSelect;
+
+// ── BL-046: Tenant Connection Health Monitor ──────────────────────────────
+//
+// Per-check rows for each nightly ping of a connected M365 tenant. The
+// current state is also denormalized onto tenant_connections.healthStatus
+// so the dashboard widget doesn't need a per-tenant join.
+export const TENANT_HEALTH_STATUSES = ["healthy", "degraded", "failed"] as const;
+export type TenantHealthStatus = (typeof TENANT_HEALTH_STATUSES)[number];
+
+export const tenantHealthChecks = pgTable("tenant_health_checks", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantConnectionId: varchar("tenant_connection_id").notNull(),
+  organizationId: varchar("organization_id"),
+  checkedAt: timestamp("checked_at").notNull().defaultNow(),
+  latencyMs: integer("latency_ms"),
+  status: text("status").notNull(),
+  errorCode: text("error_code"),
+  errorMessage: text("error_message"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+export const insertTenantHealthCheckSchema = createInsertSchema(tenantHealthChecks).omit({
+  id: true,
+  createdAt: true,
+});
+export type InsertTenantHealthCheck = z.infer<typeof insertTenantHealthCheckSchema>;
+export type TenantHealthCheck = typeof tenantHealthChecks.$inferSelect;
 
 // ── Saved Views ───────────────────────────────────────────────────────────
 // Each inventory page can save its current filter / sort / column state as a
