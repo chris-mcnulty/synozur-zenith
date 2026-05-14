@@ -301,6 +301,18 @@ export async function dispatchDatasetRefresh(opts: {
       }
     }
 
+    case "tenantHealthCheck": {
+      // BL-046: Health checks are driven by the nightly tenant-health
+      // scheduler. They are not per-tenant on-demand "refresh" datasets,
+      // so the dispatcher rejects manual dataset-refresh dispatch — but
+      // the case is enumerated here to keep the exhaustive switch happy.
+      return {
+        ok: false,
+        status: 400,
+        message: "Tenant health checks run on a schedule and cannot be dispatched as a dataset refresh.",
+      };
+    }
+
     default: {
       const _exhaustive: never = jobType;
       return { ok: false, status: 400, message: `Unknown job type: ${String(_exhaustive)}` };

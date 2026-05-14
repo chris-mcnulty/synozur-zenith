@@ -157,6 +157,9 @@ import {
   type InsertScheduledJobRun,
   type JobType,
   type JobStatus,
+  tenantHealthChecks,
+  type TenantHealthCheck,
+  type InsertTenantHealthCheck,
   savedViews,
   savedViewSubscriptions,
   type SavedView,
@@ -264,6 +267,10 @@ export interface IStorage {
   deleteTenantConnection(id: string): Promise<void>;
   getTenantConnectionDeletionSummary(id: string): Promise<Record<string, number>>;
 
+  // BL-046: Tenant Connection Health Monitor
+  recordTenantHealthCheck(check: InsertTenantHealthCheck): Promise<TenantHealthCheck>;
+  getLatestTenantHealthChecks(organizationId?: string): Promise<TenantHealthCheck[]>;
+
   getOrganization(id?: string): Promise<Organization | undefined>;
   getOrganizations(): Promise<Organization[]>;
   createOrganization(org: InsertOrganization): Promise<Organization>;
@@ -280,6 +287,20 @@ export interface IStorage {
   createUser(user: InsertUser): Promise<User>;
   updateUser(id: string, updates: Partial<InsertUser>): Promise<User | undefined>;
   getUsersByOrganization(orgId: string): Promise<User[]>;
+  getAllUsers(): Promise<User[]>;
+  searchUsersAcrossOrgs(query: string, limit?: number): Promise<Array<{
+    id: string;
+    email: string;
+    name: string | null;
+    role: string;
+    emailVerified: boolean;
+    authProvider: string | null;
+    lastLoginAt: Date | null;
+    createdAt: Date | null;
+    organizationId: string | null;
+    organizationName: string | null;
+    organizationDomain: string | null;
+  }>>;
 
   upsertGraphToken(token: InsertGraphToken): Promise<GraphToken>;
   getGraphToken(userId: string, service?: string): Promise<GraphToken | undefined>;
@@ -1211,6 +1232,51 @@ export class DatabaseStorage implements IStorage {
     return updated;
   }
 
+  async recordTenantHealthCheck(check: InsertTenantHealthCheck): Promise<TenantHealthCheck> {
+    const [created] = await db.insert(tenantHealthChecks).values(check).returning();
+    return created;
+  }
+
+  async getLatestTenantHealthChecks(organizationId?: string): Promise<TenantHealthCheck[]> {
+    // Returns the single most-recent check per tenant_connection_id.
+    // The org filter is applied INSIDE the aggregate subquery so the
+    // computed max(checked_at) is scoped to the requested org —
+    // otherwise a row from another org could win the max and then be
+    // filtered out by the outer where, returning nothing for that
+    // tenant connection.
+    const latestAt = db
+      .select({
+        tenantConnectionId: tenantHealthChecks.tenantConnectionId,
+        maxCheckedAt: max(tenantHealthChecks.checkedAt).as("maxCheckedAt"),
+      })
+      .from(tenantHealthChecks)
+      .where(organizationId ? eq(tenantHealthChecks.organizationId, organizationId) : undefined)
+      .groupBy(tenantHealthChecks.tenantConnectionId)
+      .as("latest");
+
+    return db
+      .select({
+        id: tenantHealthChecks.id,
+        tenantConnectionId: tenantHealthChecks.tenantConnectionId,
+        organizationId: tenantHealthChecks.organizationId,
+        checkedAt: tenantHealthChecks.checkedAt,
+        latencyMs: tenantHealthChecks.latencyMs,
+        status: tenantHealthChecks.status,
+        errorCode: tenantHealthChecks.errorCode,
+        errorMessage: tenantHealthChecks.errorMessage,
+        createdAt: tenantHealthChecks.createdAt,
+      })
+      .from(tenantHealthChecks)
+      .innerJoin(
+        latestAt,
+        and(
+          eq(tenantHealthChecks.tenantConnectionId, latestAt.tenantConnectionId),
+          eq(tenantHealthChecks.checkedAt, latestAt.maxCheckedAt),
+        ),
+      )
+      .where(organizationId ? eq(tenantHealthChecks.organizationId, organizationId) : undefined);
+  }
+
   async getTenantConnectionDeletionSummary(id: string): Promise<Record<string, number>> {
     const [conn] = await db.select().from(tenantConnections).where(eq(tenantConnections.id, id));
     if (!conn) return {};
@@ -1546,6 +1612,38 @@ export class DatabaseStorage implements IStorage {
 
   async getUsersByOrganization(orgId: string): Promise<User[]> {
     return db.select().from(users).where(eq(users.organizationId, orgId)).orderBy(users.createdAt);
+  }
+
+  async getAllUsers(): Promise<User[]> {
+    return db.select().from(users).orderBy(users.createdAt);
+  }
+
+  async searchUsersAcrossOrgs(query: string, limit: number = 50) {
+    // BL-045: Platform-Owner-only cross-org user search. Pushes the
+    // ILIKE filter and the row cap into Postgres rather than fetching
+    // every user into memory, and joins organizations for org metadata
+    // in one round-trip. Selects only the columns the API exposes —
+    // password / token columns are never read.
+    const pattern = `%${query}%`;
+    return db
+      .select({
+        id: users.id,
+        email: users.email,
+        name: users.name,
+        role: users.role,
+        emailVerified: users.emailVerified,
+        authProvider: users.authProvider,
+        lastLoginAt: users.lastLoginAt,
+        createdAt: users.createdAt,
+        organizationId: users.organizationId,
+        organizationName: organizations.name,
+        organizationDomain: organizations.domain,
+      })
+      .from(users)
+      .leftJoin(organizations, eq(users.organizationId, organizations.id))
+      .where(or(ilike(users.email, pattern), ilike(users.name, pattern)))
+      .orderBy(users.email)
+      .limit(limit);
   }
 
   async deleteGraphToken(userId: string, service: string = 'graph'): Promise<void> {

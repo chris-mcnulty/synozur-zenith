@@ -137,6 +137,25 @@ const ACTION_MAP: Record<string, CategoryMapping> = {
     bodyTemplate: (i) => i.details?.error || "A scheduled tenant sync did not complete.",
     link: () => "/app/admin/tenants",
   },
+  TENANT_HEALTH_DEGRADED: {
+    category: "tenant_status",
+    severity: "warning",
+    recipientRoles: ADMIN_ROLES,
+    titleTemplate: (i) => `Tenant connection degraded: ${i.details?.tenantName || "tenant"}`,
+    bodyTemplate: (i) =>
+      i.details?.error
+        ? `Two consecutive health checks failed: ${String(i.details.error).slice(0, 200)}`
+        : "Two consecutive health checks failed. Sync may be unreliable until the connection is restored.",
+    link: () => "/app/admin/tenants",
+  },
+  TENANT_HEALTH_RECOVERED: {
+    category: "tenant_status",
+    severity: "info",
+    recipientRoles: ADMIN_ROLES,
+    titleTemplate: (i) => `Tenant connection recovered: ${i.details?.tenantName || "tenant"}`,
+    bodyTemplate: () => "Health checks are passing again.",
+    link: () => "/app/admin/tenants",
+  },
   IA_SYNC_FAILED: {
     category: "sync_failures",
     severity: "warning",

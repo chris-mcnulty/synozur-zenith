@@ -145,6 +145,33 @@ router.get("/api/admin/tenants", requirePermission('inventory:read'), async (req
   res.json(safe);
 });
 
+// BL-046: Tenant Connection Health Monitor — latest health snapshot per
+// tenant in the active org. Returns the denormalized columns on
+// tenant_connections so the dashboard widget can render without joining.
+// Always scoped to the active org — Platform Owners use the regular
+// admin tenants endpoint for cross-org visibility.
+router.get("/api/tenants/health", requireAuth(), async (req: AuthenticatedRequest, res) => {
+  const orgId = req.activeOrganizationId || req.user?.organizationId;
+  if (!orgId) {
+    return res.status(400).json({ error: "No organization context" });
+  }
+  const connections = await storage.getTenantConnections(orgId);
+
+  const payload = connections.map(c => ({
+    tenantConnectionId: c.id,
+    tenantName: c.tenantName,
+    domain: c.domain,
+    organizationId: c.organizationId,
+    status: c.status,
+    healthStatus: c.healthStatus ?? "unknown",
+    healthLastCheckedAt: c.healthLastCheckedAt,
+    healthConsecutiveFailures: c.healthConsecutiveFailures ?? 0,
+    lastSyncAt: c.lastSyncAt,
+    lastSyncStatus: c.lastSyncStatus,
+  }));
+  res.json(payload);
+});
+
 router.get("/api/admin/tenants/consent/initiate", requireRole(ZENITH_ROLES.TENANT_ADMIN), async (req: AuthenticatedRequest, res) => {
   const clientId = process.env.AZURE_CLIENT_ID;
   if (!clientId) {

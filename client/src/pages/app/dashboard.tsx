@@ -21,6 +21,7 @@ import {
   RefreshCw,
   XCircle,
   BarChart3,
+  HeartPulse,
 } from "lucide-react";
 import { Link } from "wouter";
 import { useQuery } from "@tanstack/react-query";
@@ -53,6 +54,15 @@ type TenantStatus = {
   status: string;
   lastSyncAt: string | null;
   lastSyncStatus: string | null;
+};
+
+type TenantHealth = {
+  tenantConnectionId: string;
+  tenantName: string;
+  domain: string;
+  healthStatus: "healthy" | "degraded" | "failed" | "unknown";
+  healthLastCheckedAt: string | null;
+  healthConsecutiveFailures: number;
 };
 
 type DashboardData = {
@@ -278,6 +288,16 @@ export default function DashboardPage() {
 
   const { data: org } = useQuery<Organization>({
     queryKey: ["/api/organization"],
+  });
+
+  const { data: tenantHealth = [], isLoading: isHealthLoading } = useQuery<TenantHealth[]>({
+    queryKey: ["/api/tenants/health"],
+    queryFn: async () => {
+      const res = await fetch("/api/tenants/health", { credentials: "include" });
+      if (!res.ok) return [];
+      return res.json();
+    },
+    staleTime: 60_000,
   });
 
   const { data: freshnessData } = useQuery<{
@@ -553,6 +573,56 @@ export default function DashboardPage() {
                   )}
                 </div>
               ))}
+            </CardContent>
+          </Card>
+
+          {/* BL-046: Tenant Health widget */}
+          <Card className="glass-panel border-border/50" data-testid="card-tenant-health">
+            <CardHeader>
+              <CardTitle className="text-lg flex items-center gap-2">
+                <HeartPulse className="w-5 h-5 text-primary" />
+                Tenant Health
+              </CardTitle>
+              <CardDescription className="text-xs">
+                Nightly Graph connectivity probe per tenant connection.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {isHealthLoading ? (
+                <Skeleton className="h-12 w-full" />
+              ) : tenantHealth.length === 0 ? (
+                <p className="text-sm text-muted-foreground">No tenant connections to check.</p>
+              ) : (
+                tenantHealth.map((t) => {
+                  const status = t.healthStatus;
+                  const chip = status === "healthy"
+                    ? { label: "Healthy", cls: "bg-emerald-500/10 text-emerald-500 border-emerald-500/20" }
+                    : status === "degraded"
+                    ? { label: "Degraded", cls: "bg-amber-500/10 text-amber-600 border-amber-500/20" }
+                    : status === "failed"
+                    ? { label: "Failed", cls: "bg-red-500/10 text-red-500 border-red-500/20" }
+                    : { label: "Unknown", cls: "bg-muted/40 text-muted-foreground border-border/50" };
+                  return (
+                    <div key={t.tenantConnectionId} className="space-y-1" data-testid={`tenant-health-${t.tenantConnectionId}`}>
+                      <div className="flex items-center justify-between p-3 rounded-lg bg-background/50 border border-border/50">
+                        <span className="text-sm font-medium truncate max-w-[55%]">{t.tenantName}</span>
+                        <Badge variant="outline" className={chip.cls + " px-2 py-0.5 text-[10px]"}>
+                          {chip.label}
+                        </Badge>
+                      </div>
+                      <div className="flex items-center justify-between px-3 text-xs text-muted-foreground">
+                        <span>Last check</span>
+                        <span className="font-mono">
+                          {t.healthLastCheckedAt ? relativeTime(t.healthLastCheckedAt) : "never"}
+                          {status === "degraded" && t.healthConsecutiveFailures > 1
+                            ? ` · ${t.healthConsecutiveFailures} fails`
+                            : ""}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
             </CardContent>
           </Card>
 

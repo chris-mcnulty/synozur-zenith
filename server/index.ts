@@ -1245,6 +1245,14 @@ async function backfillOrgMemberships() {
   }
 
   try {
+    const { startTenantHealthScheduler } = await import('./services/tenant-health-scheduler');
+    startTenantHealthScheduler();
+    log('Tenant health monitor scheduler started');
+  } catch (err) {
+    console.error('[Startup] Failed to start tenant health scheduler:', err);
+  }
+
+  try {
     const { startSavedViewDigestScheduler } = await import('./jobs/saved-view-digest');
     startSavedViewDigestScheduler();
     log('Saved view digest scheduler started');

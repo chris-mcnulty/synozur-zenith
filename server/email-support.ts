@@ -3,6 +3,16 @@ import type { SupportTicket, User, Organization } from "@shared/schema";
 
 const APP_PUBLIC_URL = process.env.APP_PUBLIC_URL || "https://zenith.synozur.com";
 
+function escapeHtml(value: string | null | undefined): string {
+  if (!value) return "";
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 export async function sendVerificationEmail(user: User, verificationToken: string): Promise<void> {
   const { client, fromEmail } = await getUncachableSendGridClient();
   const firstName = user.name ? user.name.split(" ")[0] : user.email;
@@ -127,6 +137,85 @@ export async function sendPasswordResetEmail(user: User, resetToken: string): Pr
     to: user.email,
     from: fromEmail,
     subject: "Reset your Zenith password",
+    html,
+  });
+}
+
+export async function sendUserInviteEmail(
+  user: User,
+  invitedByName: string,
+  invitedByEmail: string,
+  organizationName: string,
+  inviteToken: string,
+): Promise<void> {
+  const { client, fromEmail } = await getUncachableSendGridClient();
+  const firstName = escapeHtml(user.name ? user.name.split(" ")[0] : user.email);
+  const safeInvitedByName = escapeHtml(invitedByName);
+  const safeInvitedByEmail = escapeHtml(invitedByEmail);
+  const safeOrganizationName = escapeHtml(organizationName);
+  // The invite landing page (/verify-email) and the post-accept reset
+  // landing page are part of BL-044's frontend deliverable. We follow the
+  // same URL convention as sendVerificationEmail / sendPasswordResetEmail
+  // so wiring up those client routes will fix all three flows at once.
+  const acceptUrl = `${APP_PUBLIC_URL}/verify-email?token=${encodeURIComponent(inviteToken)}`;
+  const resetUrl = `${APP_PUBLIC_URL}/request-password-reset`;
+  const safeAcceptUrl = escapeHtml(acceptUrl);
+  const safeResetUrl = escapeHtml(resetUrl);
+
+  const html = `
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>You've been invited to Zenith</title>
+</head>
+<body style="margin:0;padding:0;background:#f5f5f5;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#f5f5f5;padding:32px 16px;">
+    <tr>
+      <td align="center">
+        <table width="600" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:8px;overflow:hidden;max-width:600px;width:100%;box-shadow:0 1px 3px rgba(0,0,0,0.1);">
+          <tr>
+            <td style="background:#5b0fbc;padding:24px;">
+              <h1 style="margin:0;color:#ffffff;font-size:20px;font-weight:700;">Zenith</h1>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:32px 24px 16px;">
+              <p style="margin:0 0 12px;color:#111827;font-size:16px;">Hi ${firstName},</p>
+              <p style="margin:0 0 20px;color:#374151;font-size:15px;line-height:1.6;">
+                ${safeInvitedByName} (${safeInvitedByEmail}) has invited you to join
+                <strong>${safeOrganizationName}</strong> on Zenith — the Microsoft 365 governance platform from Synozur.
+              </p>
+              <a href="${safeAcceptUrl}" style="display:inline-block;background:#5b0fbc;color:#ffffff;text-decoration:none;padding:12px 24px;border-radius:6px;font-size:15px;font-weight:600;">
+                Accept Invitation
+              </a>
+              <p style="margin:24px 0 0;color:#6b7280;font-size:13px;line-height:1.6;">
+                After accepting, set a password using the
+                <a href="${safeResetUrl}" style="color:#5b0fbc;">password reset</a> flow,
+                or sign in with your Microsoft Entra account if your organization uses SSO.
+              </p>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:16px 24px;border-top:1px solid #e5e7eb;">
+              <p style="margin:0;color:#9ca3af;font-size:12px;">
+                If the button above doesn't work, copy and paste this URL into your browser:<br/>
+                <a href="${safeAcceptUrl}" style="color:#5b0fbc;word-break:break-all;">${safeAcceptUrl}</a>
+              </p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`;
+
+  await client.send({
+    to: user.email,
+    from: fromEmail,
+    subject: `${invitedByName} invited you to ${organizationName} on Zenith`,
     html,
   });
 }
