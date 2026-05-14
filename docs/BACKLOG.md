@@ -121,6 +121,28 @@ Gap analysis performed against the authoritative Zenith Engineering Product Spec
 - All status transitions logged in audit trail
 - API enforcement: all tenant-scoped endpoints check status before processing
 
+### 🔴 BL-040: Tenant Connection Secret Encryption at Rest
+**Status:** Backlog | **Spec Reference:** SPEC_GAPS P0 (plaintext secrets)
+**Description:** Microsoft Entra client secrets and any cached refresh tokens are stored in `tenant_connections` as plaintext. The AES-256-GCM helper in `server/utils/encryption.ts` is already implemented and unit-tested but never wired in. A leak of the database row exposes credentials for every connected tenant.
+**Acceptance Criteria:**
+- Encrypt `tenant_connections.clientSecret`, `refreshToken`, and any other long-lived credential columns using the existing `encrypt()` / `decrypt()` helpers
+- Key material sourced from environment (`ZENITH_ENCRYPTION_KEY`); fail closed if not set in production
+- One-time migration re-encrypts existing rows and verifies decryption before clearing the plaintext column
+- All read paths (`graph.ts`, MSAL flows, sync jobs) updated to decrypt on use rather than storing plaintext in memory longer than needed
+- Audit log entry on key rotation; runbook for rotation procedure
+- No plaintext secret ever returned by any API response (including admin/debug routes)
+
+### 🔴 BL-041: Organization-Scoped Query Isolation Enforcement
+**Status:** Backlog | **Spec Reference:** SPEC_GAPS P0 (data isolation)
+**Description:** Today a logged-in user from Org A can read or mutate workspaces, provisioning requests, audit rows, and saved views belonging to Org B if they call the API directly. The existing `requireActiveTenant` and `workspace-tenant-filter` middleware cover only a narrow slice of routes; org scoping is enforced inconsistently in storage methods.
+**Acceptance Criteria:**
+- Repository-layer wrapper (or Drizzle middleware) injects an `organizationId` predicate into every workspace, provisioning_request, tenant_connection, audit_log, saved_view, and notification query
+- Cross-org reads only permitted for Platform Owner role and only via explicitly tagged endpoints
+- Unit test matrix modeled on `server/middleware/workspace-tenant-filter.test.ts` covering each gated table
+- 403 (not 404) on cross-org write attempts; 404 (zero existence leakage) on cross-org reads — consistent with BL-106
+- Static lint rule or code-review checklist item: any new repository function that accepts no `organizationId` parameter requires explicit annotation
+- Backfill audit: scan and assert every existing storage method either takes `organizationId` or is documented as cross-org-by-design
+
 ---
 
 ## High Priority
@@ -184,6 +206,42 @@ Gap analysis performed against the authoritative Zenith Engineering Product Spec
 - Retention indicator showing how long records will be kept (per service plan)
 - No DELETE/UPDATE operations exposed on audit log records (immutability)
 - RBAC: visible to Platform Owner, Tenant Admin, and Read-Only Auditor roles only
+
+### 🟠 BL-042: Graph API Resilience Layer (Token Refresh + 429 Throttling)
+**Status:** Backlog | **Spec Reference:** SPEC_GAPS P1 (token refresh, throttling)
+**Description:** Graph token refresh is missing — expired access tokens fail silently and the user only sees broken pages. Long-running syncs hit 429s without backoff, occasionally cratering a tenant's entire daily sync window. Centralize this in a single resilient client.
+**Acceptance Criteria:**
+- New `GraphClient` wrapper around the existing fetch/axios calls in `server/services/graph.ts` that:
+  - Auto-refreshes access tokens using the stored refresh token when a 401 with `expired_token` is returned
+  - Honors the `Retry-After` header on 429s with exponential backoff and jitter
+  - Enforces a per-tenant concurrent-request cap (configurable; defaults from a sync-tuning constant)
+  - Surfaces a per-tenant "degraded" signal that feeds the reconnect banner and BL-046 health monitor
+- All Graph callers migrated to the new client; direct fetch usage flagged by a lint rule
+- Unit tests for the refresh path (mocked 401 → 200 retry), the 429 path (mocked Retry-After), and the circuit-break path
+- Structured log line per retry with tenant, endpoint, attempt, status, latency
+- No silent stale-token failures: any path that cannot refresh emits a `TENANT_TOKEN_EXPIRED` notification and audit entry
+
+### 🟠 BL-043: Server-Side Feature Gating Middleware Everywhere
+**Status:** Backlog | **Spec Reference:** SPEC_GAPS P1 (feature gating)
+**Description:** Feature gates are enforced client-side; only one server endpoint actually calls `requireFeature()`. A user on Trial can hit a Professional+ endpoint directly and the call succeeds. Apply the existing middleware to every gated route module and add a test matrix per service plan.
+**Acceptance Criteria:**
+- `requireFeature(<featureKey>)` middleware applied to all routes for: `copilotReadiness`, `copilotPromptIntelligence`, `lifecycleAutomation`, `bulkOperations`, `recordingsDiscovery`, `oneDriveInventory`, `emailStorageReport`, `advancedReporting`, `galaxyPartnerApi`
+- Feature key → service plan mapping centralized in one module (no per-route hardcoding)
+- 403 with structured payload `{ error: "FEATURE_NOT_AVAILABLE", requiredPlan, currentPlan, upgradeUrl }` on denial
+- Audit log entry on denial (joins with BL-001)
+- Route-level test matrix: for each gated module, assert each service plan tier is correctly allowed or denied
+- Client `useFeature()` hook updated to read the same mapping so UI/server agree
+
+### 🟠 BL-044: Transactional Email Delivery (SendGrid Wire-Up)
+**Status:** Backlog | **Spec Reference:** SPEC_GAPS P1 (email delivery)
+**Description:** `@sendgrid/mail` is a project dependency and is invoked for support tickets, but the password-reset flow, email verification, MSP access-grant codes, and saved-view digests (BL-013) do not actually send mail. Several flows therefore appear to work but silently break.
+**Acceptance Criteria:**
+- Single `emailService` module that wraps the SendGrid client with: from-address configuration, per-template rendering, environment-aware sandbox mode (no real sends in dev/test)
+- Templates implemented for: email verification, password reset, MSP access-grant code, saved-view digest, tenant-health alert (BL-046)
+- Send results recorded in a new `email_deliveries` table (or audit log) with status (queued, sent, bounced, failed)
+- Retries with backoff on transient SendGrid errors; permanent failures notify the user via in-app notification (BL-013)
+- Unit tests cover template rendering and the dev-mode short-circuit; integration test (gated by env flag) exercises a real SendGrid sandbox send
+- Runbook entry: rotating the SendGrid API key without downtime
 
 ---
 
@@ -414,6 +472,73 @@ Gap analysis performed against the authoritative Zenith Engineering Product Spec
 - Replace all mock data in existing UI with live data
 - Graph API permissions needed: `FileStorageContainer.Selected` or `FileStorageContainer.ReadWrite.All`
 - Enterprise tier only (SPE requires separate Microsoft licensing)
+
+### 🟡 BL-045: Real User Management API & Admin UI
+**Status:** Backlog | **Spec Reference:** SPEC_GAPS P2 (user management API)
+**Description:** `/app/admin/users` currently renders static mock data. Replace it with a full CRUD surface scoped to the active organization (and tenant where applicable), with role assignment, invite flow paired with BL-044 email delivery, suspend/reactivate, and audit hooks into BL-001. Includes a Platform-Owner-only cross-organization user search.
+**Acceptance Criteria:**
+- `GET /api/admin/users` — list users in active org with filters (role, status, search)
+- `POST /api/admin/users/invite` — invite by email, generates a single-use token, sends invite email via BL-044
+- `PATCH /api/admin/users/:id/role` — assign one of the six RBAC roles
+- `PATCH /api/admin/users/:id/status` — suspend / reactivate; suspended users cannot log in
+- `DELETE /api/admin/users/:id` — soft-delete (sets `deletedAt`); preserves audit history
+- `GET /api/admin/users/search?q=…` — Platform Owner only; cross-org search
+- All mutations emit audit log entries: `USER_INVITED`, `USER_ROLE_CHANGED`, `USER_SUSPENDED`, `USER_REACTIVATED`, `USER_DELETED`
+- RBAC: Platform Owner and Tenant Admin can manage users in their org; only Platform Owner can use cross-org search
+- Frontend at `/app/admin/users` replaces mock data: list view with role/status badges, invite dialog, role-change dropdown, suspend/reactivate toggle, soft-delete confirm
+
+### 🟡 BL-046: Tenant Connection Health Monitor
+**Status:** Backlog | **Depends on:** BL-004 (Tenant Status Lifecycle, ✅ done), BL-013 (Notifications, ✅ done)
+**Description:** Today a tenant's broken state is only discovered when a user opens a page that depends on Graph. Add a nightly job that pings a cheap Graph endpoint per connected tenant, records latency and result, and transitions the tenant to a new `degraded` substate before BL-004's `Suspended`. Surfaces a "Tenant Health" widget on the dashboard and emits notifications via BL-013.
+**Acceptance Criteria:**
+- New `tenant_health_checks` table: `id`, `tenantConnectionId`, `checkedAt`, `latencyMs`, `status` (`healthy` | `degraded` | `failed`), `errorCode`, `errorMessage`
+- Scheduled job (uses the existing `trackJobRun` pattern) that, once per night, makes one inexpensive Graph call (`/organization` or equivalent) per active `tenant_connections` row
+- Two consecutive failures transition the tenant to `degraded`; recovery on next success
+- `degraded` is a non-blocking signal — does not suspend governance actions (that remains BL-004's `Suspended`)
+- `GET /api/tenants/health` returns the latest check per tenant in the active org
+- "Tenant Health" widget on the dashboard: per-tenant chip with last-check timestamp, latency, and status
+- Notification emitted on first transition into `degraded` and on recovery (via BL-013, email via BL-044)
+- Audit log entries: `TENANT_HEALTH_DEGRADED`, `TENANT_HEALTH_RECOVERED`
+- Unit tests cover the two-consecutive-failures rule and the recovery transition
+
+### 🟡 BL-047: Outbound Webhooks for Governance Events
+**Status:** Backlog | **Depends on:** BL-001 (Audit Trail), BL-013 (Notifications, ✅ done)
+**Description:** Let customers subscribe their SIEM, ticketing, or Power Automate flows to Zenith governance events (audit entries, lifecycle alerts, provisioning approvals, sharing-link anomalies). Natural pairing with BL-001 and BL-013 and a likely Enterprise-tier upsell.
+**Acceptance Criteria:**
+- New `webhook_subscriptions` table: `id`, `organizationId`, `url`, `secret`, `events` (string[]), `enabled`, `createdAt`, `createdBy`
+- New `webhook_deliveries` table: `id`, `subscriptionId`, `eventType`, `payloadHash`, `status`, `httpStatus`, `attempt`, `nextRetryAt`, `lastError`
+- HMAC-SHA256 signature header (`X-Zenith-Signature`) on every delivery using the subscription's secret
+- Per-subscription event filter (allow-list); supported events documented (initial set: `audit.*`, `lifecycle.alert`, `provisioning.approved`, `sharing.anomaly`)
+- Retry queue with exponential backoff; disable subscription after N consecutive permanent failures (with notification)
+- Admin UI at `/app/admin/webhooks`: create/edit/disable subscriptions, view delivery log, re-deliver a single event
+- RBAC: Platform Owner and Tenant Admin only
+- Service plan gated (Enterprise)
+
+### 🟡 BL-048: Bulk CSV Import for Metadata, Labels & Retention
+**Status:** Backlog
+**Description:** The existing bulk operations require driving the UI per dialog, which doesn't scale for governance teams making site-by-site corrections across hundreds or thousands of workspaces. Add a CSV/Excel upload that previews changes, validates against existing sensitivity-label and retention rules, then runs through the bulk job queue with the same progress UI used by the recent bulk-label PRs.
+**Acceptance Criteria:**
+- Upload UI at `/app/governance/bulk-import` accepting CSV and XLSX (≤ 10 MB)
+- Required column: `siteUrl` (matched against `workspaces`); optional columns: `sensitivityLabelId`, `retentionLabelId`, `department`, `classification`, plus any custom metadata field defined in the org's data dictionary
+- Validation pass before commit: unknown sites, invalid label IDs, label-combination rule violations (uses `policy_engine.ts`), rows with no recognized columns
+- Preview screen with a row-by-row diff and a per-row "skip" toggle
+- Commit runs through the existing bulk job runner; live progress via SSE; per-row success/failure log downloadable as CSV
+- Audit log entry per mutated workspace (joins with BL-001 and the existing bulk-op audit pattern)
+- RBAC: Governance Admin and above
+- Service plan gated (Standard+)
+
+### 🟡 BL-049: Anomaly Detection for Sharing & Access Patterns
+**Status:** Backlog | **Depends on:** BL-006 (Copilot Readiness), BL-013 (Notifications, ✅ done), BL-038 (Prompt Intelligence rolling window)
+**Description:** Build on the rolling-window analyzer pattern from BL-038 (`server/services/copilot-prompt-analyzer.ts`) to flag statistical outliers in: external sharing-link creation rate, sudden access-grant spikes, unusual Copilot prompt categories, and recording-share velocity. Surfaces actionable signals rather than raw events.
+**Acceptance Criteria:**
+- Reusable `RollingWindowAnomalyDetector` extracted from the prompt analyzer (28-day baseline, z-score > 2.5 default threshold, configurable)
+- Detectors implemented for: external sharing-link creation per workspace per day, access grants per workspace per day, recording shares per user per day, Copilot prompt category drift per org
+- Daily job persists detected anomalies to a new `risk_signals` table with severity, signal type, target, and detector inputs (for explainability)
+- "Risk Signals" panel on the Site Governance page showing the top current signals with click-through to the affected workspace
+- Notification emitted on new high-severity signals via BL-013 (and email via BL-044)
+- Detectors are pure functions with unit tests covering known-anomaly and known-normal fixtures
+- Service plan gated (Professional+); aligns with BL-006 Copilot Readiness gating
+- Non-goal guardrail: signals are at workspace/tenant aggregate level — no per-user behavioral profiling (per spec Section 8)
 
 ---
 
