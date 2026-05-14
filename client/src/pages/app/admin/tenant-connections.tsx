@@ -347,6 +347,42 @@ export default function TenantConnectionsPage() {
 
   const [evaluatingId, setEvaluatingId] = useState<string | null>(null);
 
+  // BL-051: trigger an on-demand health check for one tenant and refresh
+  // the connection list so the health badge updates in place.
+  const [healthCheckingId, setHealthCheckingId] = useState<string | null>(null);
+  const healthCheckMutation = useMutation({
+    mutationFn: async (id: string) => {
+      setHealthCheckingId(id);
+      const res = await apiRequest("POST", `/api/tenants/${id}/health-check`);
+      return res.json() as Promise<{
+        status: "healthy" | "degraded" | "failed";
+        latencyMs: number;
+        errorMessage?: string;
+      }>;
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/tenants"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/tenants/health"] });
+      const label = data.status === "healthy" ? "Healthy" : data.status === "degraded" ? "Degraded" : "Failed";
+      toast({
+        title: `Health Check: ${label}`,
+        description:
+          data.status === "healthy"
+            ? `Tenant responded in ${data.latencyMs}ms.`
+            : data.errorMessage
+              ? `${data.errorMessage} (latency ${data.latencyMs}ms).`
+              : `Tenant did not respond healthy (latency ${data.latencyMs}ms).`,
+        variant: data.status === "healthy" ? "default" : "destructive",
+      });
+    },
+    onError: (err: any) => {
+      toast({ title: "Health Check Failed", description: err.message || "Could not run health check.", variant: "destructive" });
+    },
+    onSettled: () => {
+      setHealthCheckingId(null);
+    },
+  });
+
   const handleEvaluatePolicies = async (id: string) => {
     setEvaluatingId(id);
     try {
@@ -849,6 +885,17 @@ export default function TenantConnectionsPage() {
                             >
                               {syncingId === conn.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCcw className="w-4 h-4" />}
                               {syncingId === conn.id ? "Syncing..." : "Sync Now"}
+                            </DropdownMenuItem>
+                          )}
+                          {!isBlocked && (
+                            <DropdownMenuItem
+                              className="gap-2"
+                              data-testid={`button-health-check-${conn.id}`}
+                              onClick={() => healthCheckMutation.mutate(conn.id)}
+                              disabled={healthCheckingId === conn.id}
+                            >
+                              {healthCheckingId === conn.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Activity className="w-4 h-4" />}
+                              {healthCheckingId === conn.id ? "Checking..." : "Check Health Now"}
                             </DropdownMenuItem>
                           )}
                           {!isBlocked && (

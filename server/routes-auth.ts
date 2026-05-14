@@ -274,6 +274,12 @@ router.post('/logout', (req: AuthenticatedRequest, res) => {
   });
 });
 
+// BL-050: Accepting an invite or self-signup verification link consumes the
+// `verificationToken`, marks the email verified, and mints a short-lived
+// password-set token so the landing page can immediately collect a password
+// without a second email round-trip. The minted token reuses the same
+// `resetToken` / `resetTokenExpiry` columns as `/reset-password`, which means
+// the existing `POST /api/auth/reset-password` endpoint redeems it unchanged.
 router.post('/verify-email', async (req: AuthenticatedRequest, res) => {
   try {
     const { token } = req.body;
@@ -287,12 +293,34 @@ router.post('/verify-email', async (req: AuthenticatedRequest, res) => {
       return res.status(400).json({ error: 'Invalid or expired verification token' });
     }
 
+    const passwordSetToken = generateToken();
+    const passwordSetTokenExpiry = new Date(Date.now() + 60 * 60 * 1000);
+
     await storage.updateUser(user.id, {
       emailVerified: true,
       verificationToken: null,
+      resetToken: passwordSetToken,
+      resetTokenExpiry: passwordSetTokenExpiry,
     });
 
-    return res.json({ success: true });
+    await storage.createAuditEntry({
+      userId: user.id,
+      userEmail: user.email,
+      action: 'EMAIL_VERIFIED',
+      resource: 'user',
+      resourceId: user.id,
+      organizationId: user.organizationId || undefined,
+      details: {},
+      result: 'SUCCESS',
+      ipAddress: req.ip || null,
+    });
+
+    return res.json({
+      success: true,
+      email: user.email,
+      name: user.name,
+      passwordSetToken,
+    });
   } catch (error: any) {
     console.error('[Auth] Verify email error:', error);
     return res.status(500).json({ error: 'Internal server error' });

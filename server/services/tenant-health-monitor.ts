@@ -163,6 +163,86 @@ export async function runHealthCheckForTenant(
   };
 }
 
+// BL-051: Tracks tenants that have an in-flight manual health check so
+// rapid double-clicks (or two admins clicking simultaneously) return 409
+// instead of racing through two Graph pings.
+const manualChecksInFlight = new Set<string>();
+
+export class ManualHealthCheckBusyError extends Error {
+  constructor() {
+    super("A health check is already running for this tenant");
+    this.name = "ManualHealthCheckBusyError";
+  }
+}
+
+export async function runManualHealthCheckForTenant(
+  conn: TenantConnection,
+  triggeredByUserId: string | null,
+): Promise<HealthCheckOutcome | null> {
+  if (manualChecksInFlight.has(conn.id)) {
+    throw new ManualHealthCheckBusyError();
+  }
+  manualChecksInFlight.add(conn.id);
+
+  const startedAt = new Date();
+  let jobRun: { id: string } | null = null;
+  try {
+    jobRun = await storage.createScheduledJobRun({
+      organizationId: conn.organizationId ?? null,
+      tenantConnectionId: conn.id,
+      jobType: "tenantHealthCheck",
+      status: "running",
+      startedAt,
+      triggeredBy: "manual",
+      triggeredByUserId: triggeredByUserId ?? null,
+      targetId: conn.id,
+      targetName: conn.tenantName,
+    });
+  } catch (err) {
+    console.error("[tenant-health] failed to create manual scheduled_job_runs row:", err);
+  }
+
+  try {
+    const outcome = await runHealthCheckForTenant(conn);
+    const completedAt = new Date();
+    if (jobRun?.id) {
+      try {
+        const resultPayload: Record<string, unknown> = outcome
+          ? { ...outcome }
+          : { skipped: true };
+        await storage.updateScheduledJobRun(jobRun.id, {
+          status: outcome ? "completed" : "cancelled",
+          completedAt,
+          durationMs: completedAt.getTime() - startedAt.getTime(),
+          itemsTotal: outcome ? 1 : 0,
+          itemsProcessed: outcome ? 1 : 0,
+          result: resultPayload,
+        });
+      } catch (err) {
+        console.error("[tenant-health] failed to finalize manual scheduled_job_runs row:", err);
+      }
+    }
+    return outcome;
+  } catch (err: any) {
+    const completedAt = new Date();
+    if (jobRun?.id) {
+      try {
+        await storage.updateScheduledJobRun(jobRun.id, {
+          status: "failed",
+          completedAt,
+          durationMs: completedAt.getTime() - startedAt.getTime(),
+          errorMessage: err?.message ?? String(err),
+        });
+      } catch {
+        /* swallow */
+      }
+    }
+    throw err;
+  } finally {
+    manualChecksInFlight.delete(conn.id);
+  }
+}
+
 // Maximum concurrent Graph pings during a health cycle. Capped low so
 // that even on deployments with hundreds of tenants we stay well under
 // any per-app Graph throttling, while still finishing the cycle in
