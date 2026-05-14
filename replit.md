@@ -45,6 +45,18 @@ The frontend uses React, Vite, TanStack Query, shadcn/ui, and wouter, adhering t
 - **AI Connection Status**: `GET /api/ai/connection-status` returns live signals for AI configuration and last sync times.
 - **AI Chat GPT Fallback**: GENERAL intent in chat routes can call `completeForFeature('WORKSPACE_INSIGHT', ...)` with workspace summary context, falling back to static help text if OpenAI is not configured.
 - **Galaxy Partner API**: Curated `/api/galaxy/v1/*` surface for the sibling Galaxy portal. Two-factor auth: OAuth2 client_credentials bearer token (HS256, signed with `GALAXY_TOKEN_SIGNING_SECRET`) + per-request `X-Galaxy-User` RS256 JWT verified against the registered client's public key. Tables: `galaxy_clients`, `galaxy_tokens`, `galaxy_user_acknowledgements`. Scope/feature/org guards, per-client + per-user rate limiting, audit instrumentation with `details.source='galaxy'`. Platform Owner UI at `/app/admin/galaxy-api` for client registration, secret rotation (shown once), enable/disable, and deletion. OpenAPI spec served at `/api/galaxy/v1/openapi.json`. JWT signing uses Node built-in `crypto` (no `jsonwebtoken` dep).
+- **User Invite Flow (BL-045)**: When an admin creates a user via `POST /api/auth/users`, a `sendUserInviteEmail` is dispatched with the verification token as the invite link. `POST /api/auth/users/:id/resend-invite` re-issues the token and resends. Cross-org user search (`searchUsersAcrossOrgs`) is Platform-Owner-only and pushes ILIKE + row-cap into Postgres. Audit actions: `USER_INVITE_SENT`, `USER_INVITE_RESENT`.
+- **Tenant Connection Health Monitor (BL-046)**: Nightly scheduler (`tenant-health-scheduler.ts`) pings `GET /organization` on the Graph API for every active tenant connection. Results stored in `tenant_health_checks`; denormalized `health_status` / `health_last_checked_at` / `health_consecutive_failures` on `tenant_connections` feeds `GET /api/tenants/health` without a join. Transitions to `degraded` after 2 consecutive failures; recovers on next success. Non-blocking — does not affect `Suspended`/`Revoked` status. Notifications and audit events fire only on state transitions.
+
+## External PR Integration Process
+When a PR is merged into the Zenith repo from an external branch (including Claude-authored branches):
+1. Run `git show --stat <merge_commit>` to list all changed files.
+2. Check `shared/schema.ts` for new tables or columns — each must be reflected in `ensureTenantConnectionsSchema()` in `server/index.ts` as `CREATE TABLE IF NOT EXISTS` or `ADD COLUMN IF NOT EXISTS` blocks (the migration SQL files alone are not automatically applied at startup).
+3. Check `server/storage.ts` for new interface methods and verify their implementations are present.
+4. Check `server/index.ts` for new scheduler registrations (`startXxxScheduler`) to confirm they are wired.
+5. Check `server/services/audit-logger.ts` for new `AUDIT_ACTIONS` keys and verify `notification-events.ts` has matching templates.
+6. Update `replit.md` with a bullet for each new feature under Technical Implementations.
+7. Restart the app and confirm the startup log shows `Schema migration ensureTenantConnectionsSchema completed` without errors.
 
 ## External Dependencies
 - **Microsoft 365 / SharePoint**: Core platform for M365 governance.

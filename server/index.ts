@@ -139,6 +139,10 @@ async function ensureTenantConnectionsSchema() {
       "ALTER TABLE tenant_connections ADD COLUMN IF NOT EXISTS status_reason text",
       "ALTER TABLE tenant_connections ADD COLUMN IF NOT EXISTS status_changed_at timestamp",
       "ALTER TABLE tenant_connections ADD COLUMN IF NOT EXISTS status_changed_by text",
+      // BL-046: Tenant Connection Health Monitor
+      "ALTER TABLE tenant_connections ADD COLUMN IF NOT EXISTS health_status text",
+      "ALTER TABLE tenant_connections ADD COLUMN IF NOT EXISTS health_last_checked_at timestamp",
+      "ALTER TABLE tenant_connections ADD COLUMN IF NOT EXISTS health_consecutive_failures integer NOT NULL DEFAULT 0",
     ];
 
     for (const stmt of alterStatements) {
@@ -1050,6 +1054,25 @@ async function ensureTenantConnectionsSchema() {
         ON saved_view_subscriptions (saved_view_id);
       CREATE INDEX IF NOT EXISTS ix_saved_view_subs_user
         ON saved_view_subscriptions (user_id);
+    `);
+
+    // ── BL-046: Tenant Connection Health Monitor ──────────────────────────
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS tenant_health_checks (
+        id                    VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+        tenant_connection_id  VARCHAR NOT NULL REFERENCES tenant_connections(id) ON DELETE CASCADE,
+        organization_id       VARCHAR,
+        checked_at            TIMESTAMP NOT NULL DEFAULT now(),
+        latency_ms            INTEGER,
+        status                TEXT NOT NULL,
+        error_code            TEXT,
+        error_message         TEXT,
+        created_at            TIMESTAMP NOT NULL DEFAULT now()
+      );
+      CREATE INDEX IF NOT EXISTS idx_tenant_health_checks_tenant_checked_desc
+        ON tenant_health_checks (tenant_connection_id, checked_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_tenant_health_checks_org
+        ON tenant_health_checks (organization_id);
     `);
 
     log('Schema migration ensureTenantConnectionsSchema completed');
