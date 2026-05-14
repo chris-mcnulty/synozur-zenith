@@ -540,6 +540,29 @@ Gap analysis performed against the authoritative Zenith Engineering Product Spec
 - Service plan gated (Professional+); aligns with BL-006 Copilot Readiness gating
 - Non-goal guardrail: signals are at workspace/tenant aggregate level — no per-user behavioral profiling (per spec Section 8)
 
+### 🟡 BL-050: Invitation Accept Page (Verify Email)
+**Status:** Backlog | **Depends on:** BL-044 (Transactional Email, ✅ done), BL-045 (User Invite Flow, ✅ done)
+**Description:** The BL-045 invite email sends a link to `/verify-email?token=...` but that frontend route does not yet exist — invited users land on a 404 and cannot activate their account. This item wires up the missing page and the token-redemption API call so the invite flow works end-to-end.
+**Acceptance Criteria:**
+- Public `/verify-email` route registered in `client/src/App.tsx` renders a dedicated page (no auth required)
+- Page reads `?token=` from the query string and calls a server endpoint to validate it, mark `emailVerified = true` on the user, and return a short-lived password-set token
+- On success, the user is redirected into a forced password-set flow (reusing the existing `request-password-reset` / `reset-password` UX pattern)
+- After setting a password the user is automatically signed in and redirected to `/app`
+- Expired or already-used tokens show a clear error with a "Request a new invite" link that triggers `POST /api/auth/users/:id/resend-invite`
+- The existing `POST /api/auth/verify-email` server route handles both self-signup verification and invite-token redemption (single endpoint, same token format)
+- RBAC: no authentication required to land on the page; token provides its own proof of identity
+
+### 🟡 BL-051: On-Demand Tenant Health Check
+**Status:** Backlog | **Depends on:** BL-046 (Tenant Connection Health Monitor, ✅ done)
+**Description:** The health monitor runs nightly. After fixing a broken tenant credential or network issue, admins have no way to immediately confirm the connection is restored without waiting up to 24 hours for the next scheduled cycle. A "Run health check now" action closes that gap.
+**Acceptance Criteria:**
+- New route `POST /api/tenants/:id/health-check` calls `runHealthCheckForTenant` (already in `server/services/tenant-health-monitor.ts`) for the specified tenant connection and returns the outcome synchronously
+- RBAC gated to Tenant Admin and Platform Owner
+- A "Check now" button appears on the tenant connection detail view (or inline on the Tenant Health dashboard widget) — only visible to eligible roles
+- On click the button shows a loading state; on completion it refreshes the health widget in place and shows a toast with the result (`healthy` / `degraded` / `failed` + latency)
+- If a check is already running for that tenant (race guard), the endpoint returns 409 with a descriptive message
+- The manual check is recorded in `tenant_health_checks` (same table as the scheduled checks) with `triggeredBy = 'manual'` metadata in the related `scheduled_job_runs` row
+
 ---
 
 ## UX & Experience Enhancements
