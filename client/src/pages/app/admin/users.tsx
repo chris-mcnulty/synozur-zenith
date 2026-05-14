@@ -17,6 +17,8 @@ import {
   UserCheck,
   UserX,
   Building2,
+  Send,
+  Globe,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -110,6 +112,8 @@ export default function UserManagementPage() {
   const [newUserName, setNewUserName] = useState("");
   const [newUserRole, setNewUserRole] = useState("viewer");
   const [editRole, setEditRole] = useState("");
+  const [crossOrgOpen, setCrossOrgOpen] = useState(false);
+  const [crossOrgQuery, setCrossOrgQuery] = useState("");
   const [entraSearch, setEntraSearch] = useState("");
   const [entraResults, setEntraResults] = useState<EntraUser[]>([]);
   const [entraLoading, setEntraLoading] = useState(false);
@@ -192,15 +196,23 @@ export default function UserManagementPage() {
   const addUserMutation = useMutation({
     mutationFn: async (data: { email: string; name: string; role: string; azureObjectId?: string; azureTenantId?: string }) => {
       const res = await apiRequest("POST", "/api/auth/users/add", data);
-      return res.json();
+      return res.json() as Promise<{ user: OrgUser; inviteEmailSent?: boolean; inviteEmailError?: string }>;
     },
-    onSuccess: () => {
+    onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["/api/auth/users"] });
       setAddUserOpen(false);
       setNewUserEmail("");
       setNewUserName("");
       setNewUserRole("viewer");
-      toast({ title: "User added", description: "The user has been added to your organization." });
+      if (data.inviteEmailSent) {
+        toast({ title: "User invited", description: "An invitation email is on its way." });
+      } else {
+        toast({
+          title: "User added — invite email not delivered",
+          description: data.inviteEmailError || "The invite email could not be sent. Use Resend Invitation from the row menu.",
+          variant: "destructive",
+        });
+      }
     },
     onError: (error: Error) => {
       const msg = error.message.includes(":") ? error.message.split(":").slice(1).join(":").trim() : error.message;
@@ -267,6 +279,35 @@ export default function UserManagementPage() {
     },
   });
 
+  const resendInviteMutation = useMutation({
+    mutationFn: async (userId: string) => {
+      const res = await apiRequest("POST", `/api/auth/users/${userId}/resend-invite`);
+      return res.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Invitation resent", description: "A new invite email is on its way." });
+    },
+    onError: (error: Error) => {
+      const msg = error.message.includes(":") ? error.message.split(":").slice(1).join(":").trim() : error.message;
+      let parsed = msg;
+      try { parsed = JSON.parse(msg).message || JSON.parse(msg).error || msg; } catch {}
+      toast({ title: "Failed to resend invite", description: parsed, variant: "destructive" });
+    },
+  });
+
+  const isPlatformOwner = authData?.user?.role === "platform_owner";
+
+  const crossOrgQueryEnabled = crossOrgOpen && crossOrgQuery.trim().length >= 2 && isPlatformOwner;
+  const crossOrgResults = useQuery<{ users: Array<OrgUser & { organizationName: string | null; organizationDomain: string | null }> }>({
+    queryKey: ["/api/auth/users/search", crossOrgQuery.trim()],
+    queryFn: async () => {
+      const res = await fetch(`/api/auth/users/search?q=${encodeURIComponent(crossOrgQuery.trim())}`, { credentials: "include" });
+      if (!res.ok) return { users: [] };
+      return res.json();
+    },
+    enabled: crossOrgQueryEnabled,
+  });
+
   const filteredUsers = users.filter(u => {
     if (!searchTerm) return true;
     const term = searchTerm.toLowerCase();
@@ -286,6 +327,17 @@ export default function UserManagementPage() {
         </div>
         {canManageUsers && (
           <div className="flex gap-3">
+            {isPlatformOwner && (
+              <Button
+                variant="outline"
+                className="gap-2"
+                onClick={() => setCrossOrgOpen(true)}
+                data-testid="button-cross-org-search"
+              >
+                <Globe className="w-4 h-4" />
+                Cross-Org Search
+              </Button>
+            )}
             <Button
               className="gap-2 shadow-md shadow-primary/20"
               onClick={() => setAddUserOpen(true)}
@@ -420,6 +472,19 @@ export default function UserManagementPage() {
                             Edit Role
                           </DropdownMenuItem>
                           <DropdownMenuSeparator />
+                          {!user.emailVerified && (
+                            <>
+                              <DropdownMenuItem
+                                onClick={() => resendInviteMutation.mutate(user.id)}
+                                disabled={resendInviteMutation.isPending}
+                                data-testid={`button-resend-invite-${user.id}`}
+                              >
+                                <Send className="w-4 h-4 mr-2" />
+                                Resend Invitation
+                              </DropdownMenuItem>
+                              <DropdownMenuSeparator />
+                            </>
+                          )}
                           {user.emailVerified ? (
                             <DropdownMenuItem
                               className="text-destructive"
@@ -687,6 +752,82 @@ export default function UserManagementPage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <Dialog open={crossOrgOpen} onOpenChange={(open) => { setCrossOrgOpen(open); if (!open) setCrossOrgQuery(""); }}>
+        <DialogContent className="sm:max-w-[640px]">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Globe className="w-4 h-4 text-primary" />
+              Cross-Organization User Search
+            </DialogTitle>
+            <DialogDescription>
+              Platform Owner only. Search users across every organization on this Zenith deployment.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4 py-2">
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Input
+                placeholder="Type at least 2 characters of a name or email…"
+                className="pl-9"
+                value={crossOrgQuery}
+                onChange={(e) => setCrossOrgQuery(e.target.value)}
+                autoComplete="off"
+                data-testid="input-cross-org-search"
+              />
+            </div>
+            <div className="border border-border/40 rounded-lg max-h-[360px] overflow-y-auto">
+              {!crossOrgQueryEnabled ? (
+                <div className="p-6 text-center text-sm text-muted-foreground">
+                  Enter at least 2 characters to search.
+                </div>
+              ) : crossOrgResults.isLoading ? (
+                <div className="p-6 flex items-center justify-center">
+                  <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
+                </div>
+              ) : (crossOrgResults.data?.users || []).length === 0 ? (
+                <div className="p-6 text-center text-sm text-muted-foreground">
+                  No users match "{crossOrgQuery.trim()}".
+                </div>
+              ) : (
+                <Table>
+                  <TableHeader className="bg-muted/30">
+                    <TableRow>
+                      <TableHead className="pl-4">User</TableHead>
+                      <TableHead>Role</TableHead>
+                      <TableHead>Organization</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {(crossOrgResults.data?.users || []).map((u) => (
+                      <TableRow key={u.id} data-testid={`cross-org-row-${u.id}`}>
+                        <TableCell className="pl-4">
+                          <div className="font-medium text-sm">{u.name || u.email.split("@")[0]}</div>
+                          <div className="text-xs text-muted-foreground">{u.email}</div>
+                        </TableCell>
+                        <TableCell className="text-xs">
+                          {getRoleDisplay(u.role)}
+                        </TableCell>
+                        <TableCell className="text-xs">
+                          <div className="font-medium">{u.organizationName || "—"}</div>
+                          {u.organizationDomain && (
+                            <div className="text-muted-foreground">{u.organizationDomain}</div>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setCrossOrgOpen(false)} data-testid="button-close-cross-org">
+              Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

@@ -5,7 +5,7 @@ import { AuthenticatedRequest, requireAuth, requirePermission } from './middlewa
 import { type User, ZENITH_ROLES, type ZenithRole } from '@shared/schema';
 import { isPublicEmailDomain } from './utils/publicDomains';
 import { getDefaultSignupPlan } from './utils/platformSettingsCache';
-import { sendVerificationEmail, sendPasswordResetEmail } from './email-support';
+import { sendVerificationEmail, sendPasswordResetEmail, sendUserInviteEmail } from './email-support';
 
 const router = Router();
 
@@ -443,6 +443,7 @@ router.post('/users/add', requireAuth(), requirePermission('users:manage'), asyn
     const isEntraUser = !!azureObjectId;
     const tempPassword = generateToken().slice(0, 16);
     const hashedPassword = await hashPassword(tempPassword);
+    const inviteToken = generateToken();
 
     const newUser = await storage.createUser({
       email: email.toLowerCase(),
@@ -451,7 +452,7 @@ router.post('/users/add', requireAuth(), requirePermission('users:manage'), asyn
       role: assignedRole,
       organizationId: orgId,
       emailVerified: false,
-      verificationToken: generateToken(),
+      verificationToken: inviteToken,
       authProvider: isEntraUser ? 'entra' : 'local',
       azureObjectId: azureObjectId || null,
       azureTenantId: azureTenantId || null,
@@ -469,9 +470,142 @@ router.post('/users/add', requireAuth(), requirePermission('users:manage'), asyn
       ipAddress: req.ip || null,
     });
 
-    return res.status(201).json({ user: sanitizeUser(newUser) });
+    let inviteEmailSent = false;
+    let inviteEmailError: string | undefined;
+    try {
+      const org = await storage.getOrganization(orgId);
+      await sendUserInviteEmail(
+        newUser,
+        adminUser.name || adminUser.email,
+        adminUser.email,
+        org?.name || 'Zenith',
+        inviteToken,
+      );
+      inviteEmailSent = true;
+      await storage.createAuditEntry({
+        userId: adminUser.id,
+        userEmail: adminUser.email,
+        action: 'USER_INVITE_SENT',
+        resource: 'user',
+        resourceId: newUser.id,
+        organizationId: orgId,
+        details: { targetEmail: email, sentBy: adminUser.email },
+        result: 'SUCCESS',
+        ipAddress: req.ip || null,
+      });
+    } catch (emailErr: any) {
+      inviteEmailError = emailErr?.message || 'Email delivery failed';
+      console.warn('[Auth] Failed to send invite email:', inviteEmailError);
+    }
+
+    return res.status(201).json({
+      user: sanitizeUser(newUser),
+      inviteEmailSent,
+      inviteEmailError,
+    });
   } catch (error: any) {
     console.error('[Auth] Add user error:', error);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.post('/users/:id/resend-invite', requireAuth(), requirePermission('users:manage'), async (req: AuthenticatedRequest, res) => {
+  try {
+    const adminUser = req.user!;
+    const orgId = (req.activeOrganizationId || adminUser.organizationId) as string;
+    if (!orgId) {
+      return res.status(400).json({ error: 'No organization context' });
+    }
+
+    const targetUserId = req.params.id as string;
+    const targetUser = await storage.getUser(targetUserId);
+    if (!targetUser) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    if (targetUser.organizationId !== orgId) {
+      return res.status(403).json({ error: 'Cannot resend invite for users outside your organization' });
+    }
+
+    if (targetUser.emailVerified) {
+      return res.status(400).json({ error: 'User already accepted their invitation' });
+    }
+
+    const newToken = generateToken();
+    await storage.updateUser(targetUserId, { verificationToken: newToken });
+    const refreshed = await storage.getUser(targetUserId);
+
+    try {
+      const org = await storage.getOrganization(orgId);
+      await sendUserInviteEmail(
+        refreshed!,
+        adminUser.name || adminUser.email,
+        adminUser.email,
+        org?.name || 'Zenith',
+        newToken,
+      );
+    } catch (emailErr: any) {
+      console.warn('[Auth] Failed to resend invite email:', emailErr?.message);
+      return res.status(503).json({
+        error: 'EMAIL_SERVICE_UNAVAILABLE',
+        message: 'Invite email could not be delivered. Please try again later.',
+      });
+    }
+
+    await storage.createAuditEntry({
+      userId: adminUser.id,
+      userEmail: adminUser.email,
+      action: 'USER_INVITE_RESENT',
+      resource: 'user',
+      resourceId: targetUserId,
+      organizationId: orgId,
+      details: { targetEmail: targetUser.email, resentBy: adminUser.email },
+      result: 'SUCCESS',
+      ipAddress: req.ip || null,
+    });
+
+    return res.json({ success: true });
+  } catch (error: any) {
+    console.error('[Auth] Resend invite error:', error);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.get('/users/search', requireAuth(), async (req: AuthenticatedRequest, res) => {
+  try {
+    const adminUser = req.user!;
+    if (adminUser.role !== 'platform_owner') {
+      return res.status(403).json({ error: 'Cross-organization user search is restricted to Platform Owners' });
+    }
+
+    const q = String(req.query.q || '').trim().toLowerCase();
+    if (q.length < 2) {
+      return res.json({ users: [] });
+    }
+
+    const all = await storage.getAllUsers();
+    const orgs = await storage.getOrganizations();
+    const orgsById = new Map(orgs.map(o => [o.id, o] as const));
+
+    const matches = all
+      .filter(u =>
+        u.email.toLowerCase().includes(q) ||
+        (u.name || '').toLowerCase().includes(q),
+      )
+      .slice(0, 50)
+      .map(u => {
+        const safe = sanitizeUser(u);
+        const org = u.organizationId ? orgsById.get(u.organizationId) : undefined;
+        return {
+          ...safe,
+          organizationName: org?.name || null,
+          organizationDomain: org?.domain || null,
+        };
+      });
+
+    return res.json({ users: matches });
+  } catch (error: any) {
+    console.error('[Auth] Cross-org user search error:', error);
     return res.status(500).json({ error: 'Internal server error' });
   }
 });

@@ -157,6 +157,9 @@ import {
   type InsertScheduledJobRun,
   type JobType,
   type JobStatus,
+  tenantHealthChecks,
+  type TenantHealthCheck,
+  type InsertTenantHealthCheck,
   savedViews,
   savedViewSubscriptions,
   type SavedView,
@@ -264,6 +267,10 @@ export interface IStorage {
   deleteTenantConnection(id: string): Promise<void>;
   getTenantConnectionDeletionSummary(id: string): Promise<Record<string, number>>;
 
+  // BL-046: Tenant Connection Health Monitor
+  recordTenantHealthCheck(check: InsertTenantHealthCheck): Promise<TenantHealthCheck>;
+  getLatestTenantHealthChecks(organizationId?: string): Promise<TenantHealthCheck[]>;
+
   getOrganization(id?: string): Promise<Organization | undefined>;
   getOrganizations(): Promise<Organization[]>;
   createOrganization(org: InsertOrganization): Promise<Organization>;
@@ -280,6 +287,7 @@ export interface IStorage {
   createUser(user: InsertUser): Promise<User>;
   updateUser(id: string, updates: Partial<InsertUser>): Promise<User | undefined>;
   getUsersByOrganization(orgId: string): Promise<User[]>;
+  getAllUsers(): Promise<User[]>;
 
   upsertGraphToken(token: InsertGraphToken): Promise<GraphToken>;
   getGraphToken(userId: string, service?: string): Promise<GraphToken | undefined>;
@@ -1211,6 +1219,51 @@ export class DatabaseStorage implements IStorage {
     return updated;
   }
 
+  async recordTenantHealthCheck(check: InsertTenantHealthCheck): Promise<TenantHealthCheck> {
+    const [created] = await db.insert(tenantHealthChecks).values(check).returning();
+    return created;
+  }
+
+  async getLatestTenantHealthChecks(organizationId?: string): Promise<TenantHealthCheck[]> {
+    // Returns the single most-recent check per tenant_connection_id.
+    // Implemented via an aggregate subquery so we don't depend on raw SQL
+    // for DISTINCT ON.
+    const latestAt = db
+      .select({
+        tenantConnectionId: tenantHealthChecks.tenantConnectionId,
+        maxCheckedAt: max(tenantHealthChecks.checkedAt).as("maxCheckedAt"),
+      })
+      .from(tenantHealthChecks)
+      .groupBy(tenantHealthChecks.tenantConnectionId)
+      .as("latest");
+
+    const whereOrg = organizationId
+      ? eq(tenantHealthChecks.organizationId, organizationId)
+      : undefined;
+
+    return db
+      .select({
+        id: tenantHealthChecks.id,
+        tenantConnectionId: tenantHealthChecks.tenantConnectionId,
+        organizationId: tenantHealthChecks.organizationId,
+        checkedAt: tenantHealthChecks.checkedAt,
+        latencyMs: tenantHealthChecks.latencyMs,
+        status: tenantHealthChecks.status,
+        errorCode: tenantHealthChecks.errorCode,
+        errorMessage: tenantHealthChecks.errorMessage,
+        createdAt: tenantHealthChecks.createdAt,
+      })
+      .from(tenantHealthChecks)
+      .innerJoin(
+        latestAt,
+        and(
+          eq(tenantHealthChecks.tenantConnectionId, latestAt.tenantConnectionId),
+          eq(tenantHealthChecks.checkedAt, latestAt.maxCheckedAt),
+        ),
+      )
+      .where(whereOrg);
+  }
+
   async getTenantConnectionDeletionSummary(id: string): Promise<Record<string, number>> {
     const [conn] = await db.select().from(tenantConnections).where(eq(tenantConnections.id, id));
     if (!conn) return {};
@@ -1546,6 +1599,10 @@ export class DatabaseStorage implements IStorage {
 
   async getUsersByOrganization(orgId: string): Promise<User[]> {
     return db.select().from(users).where(eq(users.organizationId, orgId)).orderBy(users.createdAt);
+  }
+
+  async getAllUsers(): Promise<User[]> {
+    return db.select().from(users).orderBy(users.createdAt);
   }
 
   async deleteGraphToken(userId: string, service: string = 'graph'): Promise<void> {
