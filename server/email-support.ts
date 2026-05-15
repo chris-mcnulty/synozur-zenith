@@ -154,8 +154,11 @@ export async function sendUserInviteEmail(
   const safeInvitedByEmail = escapeHtml(invitedByEmail);
   const safeOrganizationName = escapeHtml(organizationName);
   // BL-050: the /verify-email landing page verifies the token, then collects
-  // a password and signs the user in. No separate reset trip is required.
-  const acceptUrl = `${APP_PUBLIC_URL}/verify-email?token=${encodeURIComponent(inviteToken)}`;
+  // a password and signs the user in. `mode=invite` tells both the page and
+  // the server that this URL belongs to the invite flow (no password chosen
+  // yet) — self-signup verification emails omit it so those users are not
+  // forced through a password-set step.
+  const acceptUrl = `${APP_PUBLIC_URL}/verify-email?token=${encodeURIComponent(inviteToken)}&mode=invite`;
   const safeAcceptUrl = escapeHtml(acceptUrl);
 
   const html = `

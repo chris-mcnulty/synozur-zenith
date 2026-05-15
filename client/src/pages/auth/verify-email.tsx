@@ -14,10 +14,13 @@ type VerifyResponse = {
   success: true;
   email: string;
   name: string | null;
-  passwordSetToken: string;
+  // Only present on the invite flow (`?mode=invite`). For self-signup
+  // verification it's null and we send the user straight to /login with
+  // the password they already chose.
+  passwordSetToken: string | null;
 };
 
-type Stage = "verifying" | "set-password" | "success" | "error";
+type Stage = "verifying" | "set-password" | "verified" | "success" | "error";
 
 async function postJson<T>(url: string, body: unknown): Promise<T> {
   const res = await fetch(url, {
@@ -38,7 +41,9 @@ export default function VerifyEmailPage() {
   usePageTracking("/verify-email");
   const [, setLocation] = useLocation();
 
-  const token = new URLSearchParams(window.location.search).get("token") || "";
+  const params = new URLSearchParams(window.location.search);
+  const token = params.get("token") || "";
+  const mode = params.get("mode") || "";
 
   const [stage, setStage] = useState<Stage>(token ? "verifying" : "error");
   const [error, setError] = useState(token ? "" : "This link is missing a verification token. Please use the link from your invitation email.");
@@ -49,12 +54,16 @@ export default function VerifyEmailPage() {
   const [confirmPassword, setConfirmPassword] = useState("");
 
   const verifyMutation = useMutation({
-    mutationFn: () => postJson<VerifyResponse>("/api/auth/verify-email", { token }),
+    mutationFn: () => postJson<VerifyResponse>("/api/auth/verify-email", { token, mode }),
     onSuccess: (data) => {
       setEmail(data.email);
       setDisplayName(data.name);
-      setPasswordSetToken(data.passwordSetToken);
-      setStage("set-password");
+      if (data.passwordSetToken) {
+        setPasswordSetToken(data.passwordSetToken);
+        setStage("set-password");
+      } else {
+        setStage("verified");
+      }
     },
     onError: (err: any) => {
       setError(err.message || "We couldn't verify this link. It may have expired or already been used.");
@@ -198,6 +207,25 @@ export default function VerifyEmailPage() {
                 </Button>
               </form>
             </CardContent>
+          </>
+        )}
+
+        {stage === "verified" && (
+          <>
+            <CardHeader className="text-center pb-4">
+              <CardTitle className="text-xl flex items-center justify-center gap-2">
+                <MailCheck className="w-5 h-5 text-emerald-500" /> Email verified
+              </CardTitle>
+              <CardDescription>
+                {firstName ? `Thanks, ${firstName}. ` : ""}
+                Your email is confirmed. Sign in with the password you chose to continue.
+              </CardDescription>
+            </CardHeader>
+            <CardFooter className="justify-center pb-6">
+              <Button onClick={() => setLocation("/login")} data-testid="button-verified-sign-in">
+                Sign In
+              </Button>
+            </CardFooter>
           </>
         )}
 
