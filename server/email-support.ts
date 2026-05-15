@@ -153,14 +153,13 @@ export async function sendUserInviteEmail(
   const safeInvitedByName = escapeHtml(invitedByName);
   const safeInvitedByEmail = escapeHtml(invitedByEmail);
   const safeOrganizationName = escapeHtml(organizationName);
-  // The invite landing page (/verify-email) and the post-accept reset
-  // landing page are part of BL-044's frontend deliverable. We follow the
-  // same URL convention as sendVerificationEmail / sendPasswordResetEmail
-  // so wiring up those client routes will fix all three flows at once.
-  const acceptUrl = `${APP_PUBLIC_URL}/verify-email?token=${encodeURIComponent(inviteToken)}`;
-  const resetUrl = `${APP_PUBLIC_URL}/request-password-reset`;
+  // BL-050: the /verify-email landing page verifies the token, then collects
+  // a password and signs the user in. `mode=invite` tells both the page and
+  // the server that this URL belongs to the invite flow (no password chosen
+  // yet) — self-signup verification emails omit it so those users are not
+  // forced through a password-set step.
+  const acceptUrl = `${APP_PUBLIC_URL}/verify-email?token=${encodeURIComponent(inviteToken)}&mode=invite`;
   const safeAcceptUrl = escapeHtml(acceptUrl);
-  const safeResetUrl = escapeHtml(resetUrl);
 
   const html = `
 <!DOCTYPE html>
@@ -191,9 +190,7 @@ export async function sendUserInviteEmail(
                 Accept Invitation
               </a>
               <p style="margin:24px 0 0;color:#6b7280;font-size:13px;line-height:1.6;">
-                After accepting, set a password using the
-                <a href="${safeResetUrl}" style="color:#5b0fbc;">password reset</a> flow,
-                or sign in with your Microsoft Entra account if your organization uses SSO.
+                You'll be asked to set a password and signed in automatically. If your organization uses SSO, you can also sign in with your Microsoft Entra account once your invite is accepted.
               </p>
             </td>
           </tr>

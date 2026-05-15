@@ -274,9 +274,22 @@ router.post('/logout', (req: AuthenticatedRequest, res) => {
   });
 });
 
+// BL-050: Consumes a `verificationToken` and marks the email verified.
+// `/verify-email?token=...` is used by two flows that share the same column:
+//   1. Self-signup verification (user already chose a password at /signup)
+//   2. Invite acceptance (admin created the account with a placeholder
+//      password the invitee doesn't know — they must set one before they
+//      can sign in)
+// Only the invite flow includes `mode=invite` on the URL (set by
+// `sendUserInviteEmail`). When present we mint a short-lived password-set
+// token — reusing `resetToken` / `resetTokenExpiry` so the existing
+// `POST /api/auth/reset-password` endpoint redeems it unchanged — and the
+// landing page collects a password and signs the user in. Without the
+// marker, we just confirm verification and send the user to /login with
+// the password they already chose.
 router.post('/verify-email', async (req: AuthenticatedRequest, res) => {
   try {
-    const { token } = req.body;
+    const { token, mode } = req.body as { token?: string; mode?: string };
 
     if (!token) {
       return res.status(400).json({ error: 'Verification token is required' });
@@ -287,12 +300,43 @@ router.post('/verify-email', async (req: AuthenticatedRequest, res) => {
       return res.status(400).json({ error: 'Invalid or expired verification token' });
     }
 
-    await storage.updateUser(user.id, {
-      emailVerified: true,
-      verificationToken: null,
+    const isInvite = mode === 'invite';
+    let passwordSetToken: string | null = null;
+
+    if (isInvite) {
+      passwordSetToken = generateToken();
+      const passwordSetTokenExpiry = new Date(Date.now() + 60 * 60 * 1000);
+      await storage.updateUser(user.id, {
+        emailVerified: true,
+        verificationToken: null,
+        resetToken: passwordSetToken,
+        resetTokenExpiry: passwordSetTokenExpiry,
+      });
+    } else {
+      await storage.updateUser(user.id, {
+        emailVerified: true,
+        verificationToken: null,
+      });
+    }
+
+    await storage.createAuditEntry({
+      userId: user.id,
+      userEmail: user.email,
+      action: 'EMAIL_VERIFIED',
+      resource: 'user',
+      resourceId: user.id,
+      organizationId: user.organizationId || undefined,
+      details: { flow: isInvite ? 'invite' : 'signup' },
+      result: 'SUCCESS',
+      ipAddress: req.ip || null,
     });
 
-    return res.json({ success: true });
+    return res.json({
+      success: true,
+      email: user.email,
+      name: user.name,
+      passwordSetToken,
+    });
   } catch (error: any) {
     console.error('[Auth] Verify email error:', error);
     return res.status(500).json({ error: 'Internal server error' });

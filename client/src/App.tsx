@@ -14,6 +14,7 @@ import SplashPage from "./pages/splash";
 import PlansPage from "./pages/plans";
 import LoginPage from "./pages/auth/login";
 import EntraCallbackPage from "./pages/auth/callback";
+import VerifyEmailPage from "./pages/auth/verify-email";
 import SelectTenantPage from "./pages/app/select-tenant";
 import AddTenantPage from "./pages/app/add-tenant";
 import DashboardPage from "./pages/app/dashboard";
@@ -153,7 +154,7 @@ const COMING_SOON_CONFIGS = {
   },
 } as const;
 
-const NO_SHELL_ROUTES = ["/", "/plans", "/login", "/auth/entra/callback", "/app/select-tenant", "/app/add-tenant", "/app/admin/plans"];
+const NO_SHELL_ROUTES = ["/", "/plans", "/login", "/verify-email", "/auth/entra/callback", "/app/select-tenant", "/app/add-tenant", "/app/admin/plans"];
 
 function AppShellWrapper({ children }: { children: React.ReactNode }) {
   const [location] = useLocation();
@@ -172,6 +173,7 @@ function AppRoutes() {
         <Route path="/" component={SplashPage} />
         <Route path="/plans" component={PlansPage} />
         <Route path="/login" component={LoginPage} />
+        <Route path="/verify-email" component={VerifyEmailPage} />
         <Route path="/auth/entra/callback" component={EntraCallbackPage} />
         <Route path="/app/select-tenant" component={SelectTenantPage} />
         <Route path="/app/add-tenant" component={AddTenantPage} />

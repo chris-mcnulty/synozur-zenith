@@ -145,6 +145,53 @@ router.get("/api/admin/tenants", requirePermission('inventory:read'), async (req
   res.json(safe);
 });
 
+// BL-051: On-demand tenant health check. Runs `runHealthCheckForTenant`
+// synchronously so the UI can refresh in place after an admin fixes a
+// broken credential, instead of waiting for the next nightly cycle. The
+// service-level race guard returns 409 if a check is already running for
+// the same tenant.
+router.post("/api/tenants/:id/health-check", requireRole(ZENITH_ROLES.TENANT_ADMIN), async (req: AuthenticatedRequest, res) => {
+  try {
+    const conn = await storage.getTenantConnection(req.params.id);
+    if (!conn) return res.status(404).json({ error: "Tenant connection not found" });
+    if (!(await verifyTenantAccess(req, conn))) {
+      await logAccessDenied(req, "tenant_connection", conn.id, "verifyTenantAccess failed (manual health check)");
+      return res.status(403).json({ error: "You do not have access to this tenant connection" });
+    }
+
+    const { runManualHealthCheckForTenant, ManualHealthCheckBusyError } = await import("../services/tenant-health-monitor");
+    let outcome;
+    try {
+      outcome = await runManualHealthCheckForTenant(conn, req.user?.id ?? null);
+    } catch (err) {
+      if (err instanceof ManualHealthCheckBusyError) {
+        return res.status(409).json({ error: err.message });
+      }
+      throw err;
+    }
+
+    if (!outcome) {
+      return res.status(409).json({
+        error: "Tenant is not eligible for a health check. Reactivate the tenant or finish provisioning first.",
+      });
+    }
+
+    res.json({
+      tenantConnectionId: outcome.tenantConnectionId,
+      status: outcome.status,
+      latencyMs: outcome.latencyMs,
+      errorCode: outcome.errorCode,
+      errorMessage: outcome.errorMessage,
+      transitionedToDegraded: outcome.transitionedToDegraded,
+      transitionedToHealthy: outcome.transitionedToHealthy,
+      checkedAt: new Date().toISOString(),
+    });
+  } catch (err: any) {
+    console.error("[tenants] manual health check failed:", err);
+    res.status(500).json({ error: err?.message || "Health check failed" });
+  }
+});
+
 // BL-046: Tenant Connection Health Monitor — latest health snapshot per
 // tenant in the active org. Returns the denormalized columns on
 // tenant_connections so the dashboard widget can render without joining.
