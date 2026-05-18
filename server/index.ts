@@ -1075,6 +1075,31 @@ async function ensureTenantConnectionsSchema() {
         ON tenant_health_checks (organization_id);
     `);
 
+    // ── Lifecycle scan run history ────────────────────────────────────────
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS lifecycle_scan_runs (
+        id                    VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+        organization_id       VARCHAR NOT NULL,
+        tenant_connection_id  VARCHAR,
+        status                TEXT NOT NULL DEFAULT 'running',
+        started_at            TIMESTAMP NOT NULL DEFAULT now(),
+        completed_at          TIMESTAMP,
+        workspaces_scanned    INTEGER NOT NULL DEFAULT 0,
+        average_score         INTEGER NOT NULL DEFAULT 0,
+        compliant_count       INTEGER NOT NULL DEFAULT 0,
+        stale_count           INTEGER NOT NULL DEFAULT 0,
+        orphaned_count        INTEGER NOT NULL DEFAULT 0,
+        missing_label_count   INTEGER NOT NULL DEFAULT 0,
+        externally_shared_count INTEGER NOT NULL DEFAULT 0,
+        error_message         TEXT,
+        triggered_by          TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_lifecycle_scan_runs_org
+        ON lifecycle_scan_runs (organization_id);
+      CREATE INDEX IF NOT EXISTS idx_lifecycle_scan_runs_tenant
+        ON lifecycle_scan_runs (tenant_connection_id);
+    `);
+
     log('Schema migration ensureTenantConnectionsSchema completed');
   } catch (err) {
     console.error('[Migration] Failed to ensure tenant_connections schema:', err);
