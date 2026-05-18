@@ -480,8 +480,22 @@ function DefaultLabelDialog({
     }
   }, [open]);
 
+  const { data: metering, isFetching: meteringLoading } = useQuery<{
+    retroPlanEnabled: boolean;
+    metering: "enabled" | "disabled" | "unknown";
+    meteringDetail?: string;
+    meteringDocUrl: string;
+  }>({
+    queryKey: ["/api/admin/tenants", tenantConnectionId, "libraries", "metering-status"],
+    queryFn: () =>
+      fetch(`/api/admin/tenants/${tenantConnectionId}/libraries/metering-status`, { credentials: "include" }).then((r) => r.json()),
+    enabled: open && retro,
+    staleTime: 60_000,
+  });
+
   const fileLabels = labels.filter((l) => !l.contentFormats || l.contentFormats.length === 0 || l.contentFormats.includes("file"));
   const resolvedLabelId = labelId === NONE ? null : labelId;
+  const retroBlocked = retro && (metering?.retroPlanEnabled === false || metering?.metering === "disabled");
 
   const pollJob = async (jobId: string) => {
     for (;;) {
@@ -593,9 +607,50 @@ function DefaultLabelDialog({
                 <FormLabel htmlFor="retro" className="text-xs cursor-pointer">Also apply to existing files</FormLabel>
                 <p className="text-[11px] text-amber-600 flex items-start gap-1">
                   <ShieldAlert className="w-3.5 h-3.5 shrink-0 mt-0.5" />
-                  Uses a metered Microsoft Graph API — per-file charges may apply and the tenant must have metered Graph APIs enabled.
+                  Uses a metered Microsoft Graph API — per-file charges may apply.
                 </p>
               </div>
+            </div>
+          )}
+
+          {retro && (
+            <div className="rounded-lg border border-border/50 bg-muted/20 p-3 text-xs space-y-2" data-testid="metering-advisory">
+              {meteringLoading && (
+                <p className="text-muted-foreground flex items-center gap-1.5"><Loader2 className="w-3 h-3 animate-spin" /> Checking plan & metering status…</p>
+              )}
+              {metering && (
+                <>
+                  <div className="flex items-center gap-1.5">
+                    {metering.retroPlanEnabled
+                      ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" />
+                      : <AlertCircle className="w-3.5 h-3.5 text-red-500" />}
+                    <span>
+                      Service plan: {metering.retroPlanEnabled
+                        ? "retroactive labelling included"
+                        : "not included — requires the Professional or Enterprise plan"}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    {metering.metering === "enabled"
+                      ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" />
+                      : metering.metering === "disabled"
+                        ? <AlertCircle className="w-3.5 h-3.5 text-red-500" />
+                        : <Info className="w-3.5 h-3.5 text-amber-500" />}
+                    <span>
+                      Metered Graph APIs: {metering.metering === "enabled"
+                        ? "enabled for this tenant"
+                        : metering.metering === "disabled"
+                          ? "not enabled — retroactive labelling will fail until enabled"
+                          : "could not be determined"}
+                    </span>
+                  </div>
+                  {metering.metering !== "enabled" && (
+                    <a href={metering.meteringDocUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-primary underline" data-testid="link-metering-docs">
+                      <ExternalLink className="w-3 h-3" /> How to enable metered Microsoft Graph APIs
+                    </a>
+                  )}
+                </>
+              )}
             </div>
           )}
 
@@ -603,7 +658,7 @@ function DefaultLabelDialog({
             <div className="rounded-lg border border-border/50 bg-muted/20 p-3 text-xs space-y-1" data-testid="dryrun-summary">
               <p><span className="font-semibold">{dryRun.libraries}</span> libraries will be updated.</p>
               {retro && <p><span className="font-semibold">~{dryRun.estimatedItems.toLocaleString()}</span> existing files would be relabelled.</p>}
-              {retro && !dryRun.retroEnabled && <p className="text-red-600">Retroactive labelling is currently disabled on the server.</p>}
+              {retro && !dryRun.retroEnabled && <p className="text-red-600">Retroactive labelling requires the Professional or Enterprise plan.</p>}
               {dryRun.meteredApiWarning && <p className="text-amber-600">{dryRun.meteredApiWarning}</p>}
             </div>
           )}
@@ -625,7 +680,7 @@ function DefaultLabelDialog({
               {busy && !job ? <Loader2 className="w-4 h-4 animate-spin" /> : null} Dry run
             </Button>
           )}
-          <Button onClick={handleApply} disabled={busy || (isBulk && !dryRun)} data-testid="button-apply-default-label">
+          <Button onClick={handleApply} disabled={busy || retroBlocked || (isBulk && !dryRun)} title={retroBlocked ? "Retroactive labelling unavailable — check plan and metering status above" : undefined} data-testid="button-apply-default-label">
             {busy && job ? <Loader2 className="w-4 h-4 animate-spin mr-1" /> : null}
             {isBulk ? "Confirm & apply" : "Apply"}
           </Button>

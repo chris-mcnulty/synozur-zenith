@@ -213,10 +213,57 @@ export async function assignSensitivityLabelToDriveItem(
   }
 }
 
-export const LIBRARY_RETRO_LABELING_ENABLED =
-  process.env.LIBRARY_RETRO_LABELING_ENABLED === "true";
-
 export const METERED_API_WARNING =
   "Retroactive labelling calls the Microsoft Graph beta driveItem:assignSensitivityLabel API, " +
-  "which is a protected and metered API. Per-call charges may apply and the tenant must have " +
-  "metered Microsoft Graph APIs enabled.";
+  "which is a protected and metered API. Per-call charges may apply and the customer tenant must " +
+  "have metered Microsoft Graph APIs enabled.";
+
+export const METERED_API_DOC_URL =
+  "https://learn.microsoft.com/en-us/graph/metered-api-setup";
+
+export type MeteringStatus = "enabled" | "disabled" | "unknown";
+
+/**
+ * Probe whether metered Microsoft Graph APIs are enabled for the tenant.
+ *
+ * There is no Graph endpoint that reports metering status directly. Instead we
+ * issue an assignSensitivityLabel request against a deliberately invalid
+ * driveItem id: the metering/billing authorization check runs *before* the
+ * item is resolved, so the response distinguishes the two cases without ever
+ * performing (or being billed for) a real label assignment:
+ *   - metering OFF → 402 / "metered"/"billing"/"not onboarded" error
+ *   - metering ON  → 404 itemNotFound (metering check passed; item missing)
+ */
+export async function probeMeteringStatus(
+  graphToken: string,
+  driveId: string,
+): Promise<{ status: MeteringStatus; detail?: string }> {
+  try {
+    const res = await fetch(
+      `${GRAPH_BETA}/drives/${driveId}/items/zzz-zenith-metering-probe/assignSensitivityLabel`,
+      {
+        method: "POST",
+        headers: { Authorization: `Bearer ${graphToken}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ sensitivityLabelId: "00000000-0000-0000-0000-000000000000" }),
+      },
+    );
+    if (res.status === 202 || res.status === 404) {
+      return { status: "enabled" };
+    }
+    const text = (await res.text()).slice(0, 500);
+    const lower = text.toLowerCase();
+    if (
+      res.status === 402 ||
+      lower.includes("metered") ||
+      lower.includes("billing") ||
+      lower.includes("not onboarded") ||
+      lower.includes("subscription")
+    ) {
+      return { status: "disabled", detail: `Graph ${res.status}: ${text}` };
+    }
+    if (res.status === 404) return { status: "enabled" };
+    return { status: "unknown", detail: `Graph ${res.status}: ${text}` };
+  } catch (e: any) {
+    return { status: "unknown", detail: e.message };
+  }
+}

@@ -10,8 +10,9 @@ import {
   setLibraryDefaultLabel,
   enumerateDriveFiles,
   assignSensitivityLabelToDriveItem,
-  LIBRARY_RETRO_LABELING_ENABLED,
+  probeMeteringStatus,
   METERED_API_WARNING,
+  METERED_API_DOC_URL,
 } from "../services/library-labels";
 import { getDelegatedSpoToken } from "../routes-entra";
 import { requireAuth, requireRole, requirePermission, type AuthenticatedRequest } from "../middleware/rbac";
@@ -655,8 +656,11 @@ router.get("/api/admin/tenants/:tenantConnectionId/libraries/stats", requirePerm
 // The "default sensitivity label for a document library" is set/read via the
 // SharePoint REST API (not Microsoft Graph). Retroactive application to
 // existing files uses the Graph beta metered driveItem:assignSensitivityLabel
-// API and is gated behind LIBRARY_RETRO_LABELING_ENABLED + the m365WriteBack
-// plan feature.
+// API. Setting the default requires the m365WriteBack plan feature;
+// retroactive application additionally requires the libraryRetroLabeling plan
+// feature (Professional/Enterprise) AND the customer tenant to have metered
+// Microsoft Graph APIs enabled. Gating is per-org service plan — never an
+// environment variable — so it works correctly on the multitenant platform.
 
 interface LibraryLabelContext {
   spoHost: string;
@@ -667,6 +671,7 @@ interface LibraryLabelContext {
   labelName: string | null;
   labelValid: boolean;
   labelError?: string;
+  retroPlanEnabled: boolean;
 }
 
 async function resolveLibraryLabelContext(
@@ -681,12 +686,17 @@ async function resolveLibraryLabelContext(
     ? conn.domain
     : `${conn.domain.replace(/\..*$/, "")}.sharepoint.com`;
 
+  const orgId = conn.organizationId || req.user?.organizationId || undefined;
+  const org = orgId ? await storage.getOrganization(orgId) : null;
+  const plan = (org?.servicePlan || "TRIAL") as ServicePlanTier;
+
   const ctx: LibraryLabelContext = {
     spoHost,
     spoToken: null,
     graphToken: null,
     labelName: null,
     labelValid: false,
+    retroPlanEnabled: getPlanFeatures(plan).libraryRetroLabeling,
   };
 
   if (sensitivityLabelId) {
@@ -732,6 +742,47 @@ async function resolveLibraryLabelContext(
 
   return ctx;
 }
+
+// Report whether retroactive labelling is available for this tenant: the
+// per-plan gate and whether the customer tenant has metered Microsoft Graph
+// APIs enabled (a hard prerequisite for assignSensitivityLabel). Drives the
+// UI advisory + "how to enable metering" guidance.
+router.get(
+  "/api/admin/tenants/:tenantConnectionId/libraries/metering-status",
+  requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN),
+  async (req: AuthenticatedRequest, res) => {
+    const tenantConnectionId = req.params.tenantConnectionId;
+    const allowedTenantIds = await getOrgTenantConnectionIds(req);
+    if (allowedTenantIds !== null && !allowedTenantIds.includes(tenantConnectionId)) {
+      return res.status(403).json({ message: "Tenant connection is outside your organization scope" });
+    }
+
+    const ctx = await resolveLibraryLabelContext(req, tenantConnectionId, null, true);
+    if ("error" in ctx) return res.status(ctx.status).json({ message: ctx.error });
+
+    let metering: { status: "enabled" | "disabled" | "unknown"; detail?: string } = {
+      status: "unknown",
+      detail: ctx.graphTokenError,
+    };
+    if (ctx.graphToken) {
+      const libs = await storage.getDocumentLibrariesByTenant(tenantConnectionId);
+      const probeDriveId = libs.find((l) => l.m365DriveId)?.m365DriveId;
+      if (!probeDriveId) {
+        metering = { status: "unknown", detail: "No document library with a drive available to probe — run a library sync first." };
+      } else {
+        metering = await probeMeteringStatus(ctx.graphToken, probeDriveId);
+      }
+    }
+
+    res.json({
+      retroPlanEnabled: ctx.retroPlanEnabled,
+      metering: metering.status,
+      meteringDetail: metering.detail,
+      meteringDocUrl: METERED_API_DOC_URL,
+      meteredApiWarning: METERED_API_WARNING,
+    });
+  },
+);
 
 // Refresh the stored default sensitivity label for every library in a tenant
 // by reading it from SharePoint (bulk visibility). Read-only against M365.
@@ -953,15 +1004,18 @@ router.post(
         libraries: libs.length,
         estimatedItems,
         applyRetroactively,
-        retroEnabled: LIBRARY_RETRO_LABELING_ENABLED,
+        retroEnabled: ctx.retroPlanEnabled,
         meteredApiWarning: applyRetroactively ? METERED_API_WARNING : undefined,
+        meteringDocUrl: applyRetroactively ? METERED_API_DOC_URL : undefined,
       });
     }
 
-    if (applyRetroactively && !LIBRARY_RETRO_LABELING_ENABLED) {
+    if (applyRetroactively && !ctx.retroPlanEnabled) {
       return res.status(403).json({
+        error: "FEATURE_GATED",
         message:
-          "Retroactive labelling is disabled. Set LIBRARY_RETRO_LABELING_ENABLED=true and ensure metered Microsoft Graph APIs are enabled for this tenant.",
+          "Retroactive library labelling requires the Professional or Enterprise service plan. " +
+          "The library default label can still be set without it.",
       });
     }
     if (!ctx.spoToken) {

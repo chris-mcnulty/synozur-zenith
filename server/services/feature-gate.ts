@@ -23,6 +23,7 @@ export function requireFeature(feature: keyof typeof PLAN_FEATURES.TRIAL) {
     if (!features[feature]) {
       const featureLabels: Record<string, string> = {
         m365WriteBack: "Microsoft 365 write-back",
+        libraryRetroLabeling: "retroactive library labelling",
         ownershipManagement: "site owner management",
         copilotReadiness: "Copilot readiness analysis",
         lifecycleAutomation: "lifecycle automation",
