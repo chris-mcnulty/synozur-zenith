@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -13,6 +13,9 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "@/components/ui/sheet";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Label as FormLabel } from "@/components/ui/label";
 import {
   Search,
   Library,
@@ -51,6 +54,8 @@ import {
   ArrowRight,
   Building2,
   Info,
+  Shield,
+  ShieldAlert,
 } from "lucide-react";
 
 // ─── Shared types ────────────────────────────────────────────────────────────
@@ -59,6 +64,12 @@ type EnrichedLibrary = DocumentLibrary & {
   workspaceName: string;
   workspaceType: string;
   workspaceSiteUrl: string | null;
+};
+
+type SensitivityLabelOption = {
+  labelId: string;
+  name: string;
+  contentFormats: string[] | null;
 };
 
 type LibraryStats = {
@@ -424,6 +435,206 @@ function LibraryDetailPanel({ libraryId, onClose }: { libraryId: string; onClose
   );
 }
 
+// ─── Default sensitivity label dialog ─────────────────────────────────────────
+
+type JobStatus = {
+  status: "running" | "completed" | "cancelled";
+  total: number;
+  processed: number;
+  succeeded: number;
+  failed: number;
+};
+
+function DefaultLabelDialog({
+  open,
+  onClose,
+  tenantConnectionId,
+  targets,
+  labels,
+  onApplied,
+}: {
+  open: boolean;
+  onClose: () => void;
+  tenantConnectionId: string;
+  targets: EnrichedLibrary[];
+  labels: SensitivityLabelOption[];
+  onApplied: () => void;
+}) {
+  const { toast } = useToast();
+  const isBulk = targets.length > 1;
+  const NONE = "__none__";
+  const [labelId, setLabelId] = useState<string>(NONE);
+  const [retro, setRetro] = useState(false);
+  const [dryRun, setDryRun] = useState<{ libraries: number; estimatedItems: number; meteredApiWarning?: string; retroEnabled: boolean } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [job, setJob] = useState<JobStatus | null>(null);
+
+  useEffect(() => {
+    if (open) {
+      const first = targets[0];
+      setLabelId(targets.length === 1 && first?.defaultSensitivityLabelId ? first.defaultSensitivityLabelId : NONE);
+      setRetro(false);
+      setDryRun(null);
+      setJob(null);
+      setBusy(false);
+    }
+  }, [open]);
+
+  const fileLabels = labels.filter((l) => !l.contentFormats || l.contentFormats.length === 0 || l.contentFormats.includes("file"));
+  const resolvedLabelId = labelId === NONE ? null : labelId;
+
+  const pollJob = async (jobId: string) => {
+    for (;;) {
+      await new Promise((r) => setTimeout(r, 2000));
+      const res = await fetch(`/api/workspaces/bulk/jobs/${jobId}`, { credentials: "include" });
+      if (!res.ok) break;
+      const data: JobStatus = await res.json();
+      setJob(data);
+      if (data.status !== "running") break;
+    }
+  };
+
+  const handleDryRun = async () => {
+    setBusy(true);
+    try {
+      const res = await fetch(`/api/admin/tenants/${tenantConnectionId}/libraries/bulk/default-label`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          libraryIds: targets.map((t) => t.id),
+          sensitivityLabelId: resolvedLabelId,
+          applyRetroactively: retro,
+          dryRun: true,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || "Dry run failed");
+      setDryRun(data);
+    } catch (err: any) {
+      toast({ title: "Dry run failed", description: err.message, variant: "destructive" });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleApply = async () => {
+    setBusy(true);
+    try {
+      if (targets.length === 1 && !retro) {
+        const res = await fetch(`/api/admin/libraries/${targets[0].id}/default-label`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({ sensitivityLabelId: resolvedLabelId }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.message || "Failed to set default label");
+        toast({ title: "Default label updated", description: targets[0].displayName });
+        onApplied();
+        onClose();
+        return;
+      }
+      const res = await fetch(`/api/admin/tenants/${tenantConnectionId}/libraries/bulk/default-label`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          libraryIds: targets.map((t) => t.id),
+          sensitivityLabelId: resolvedLabelId,
+          applyRetroactively: retro,
+          dryRun: false,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || "Bulk apply failed");
+      setJob({ status: "running", total: targets.length, processed: 0, succeeded: 0, failed: 0 });
+      await pollJob(data.jobId);
+      onApplied();
+      toast({ title: "Bulk apply finished", description: `${targets.length} libraries processed` });
+    } catch (err: any) {
+      toast({ title: "Apply failed", description: err.message, variant: "destructive" });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => { if (!o && !busy) onClose(); }}>
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Shield className="w-4 h-4 text-primary" />
+            {isBulk ? `Set default label for ${targets.length} libraries` : `Set default label`}
+          </DialogTitle>
+          <DialogDescription>
+            {isBulk ? "Applies to new files added to the selected libraries." : `“${targets[0]?.displayName}” — applies to new files added going forward.`}
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-4 py-2">
+          <div className="space-y-1.5">
+            <FormLabel className="text-xs">Default sensitivity label</FormLabel>
+            <Select value={labelId} onValueChange={(v) => { setLabelId(v); setDryRun(null); }}>
+              <SelectTrigger data-testid="select-default-label"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value={NONE}>No default (clear)</SelectItem>
+                {fileLabels.map((l) => (
+                  <SelectItem key={l.labelId} value={l.labelId}>{l.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          {resolvedLabelId && (
+            <div className="flex items-start gap-2">
+              <Checkbox id="retro" checked={retro} onCheckedChange={(c) => { setRetro(!!c); setDryRun(null); }} data-testid="checkbox-retro" />
+              <div className="space-y-1">
+                <FormLabel htmlFor="retro" className="text-xs cursor-pointer">Also apply to existing files</FormLabel>
+                <p className="text-[11px] text-amber-600 flex items-start gap-1">
+                  <ShieldAlert className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                  Uses a metered Microsoft Graph API — per-file charges may apply and the tenant must have metered Graph APIs enabled.
+                </p>
+              </div>
+            </div>
+          )}
+
+          {dryRun && (
+            <div className="rounded-lg border border-border/50 bg-muted/20 p-3 text-xs space-y-1" data-testid="dryrun-summary">
+              <p><span className="font-semibold">{dryRun.libraries}</span> libraries will be updated.</p>
+              {retro && <p><span className="font-semibold">~{dryRun.estimatedItems.toLocaleString()}</span> existing files would be relabelled.</p>}
+              {retro && !dryRun.retroEnabled && <p className="text-red-600">Retroactive labelling is currently disabled on the server.</p>}
+              {dryRun.meteredApiWarning && <p className="text-amber-600">{dryRun.meteredApiWarning}</p>}
+            </div>
+          )}
+
+          {job && (
+            <div className="space-y-1.5" data-testid="job-progress">
+              <Progress value={job.total ? (job.processed / job.total) * 100 : 0} />
+              <p className="text-xs text-muted-foreground">
+                {job.processed}/{job.total} processed · {job.succeeded} ok · {job.failed} failed
+                {job.status !== "running" ? ` · ${job.status}` : ""}
+              </p>
+            </div>
+          )}
+        </div>
+
+        <DialogFooter className="gap-2">
+          {isBulk && (
+            <Button variant="outline" onClick={handleDryRun} disabled={busy} data-testid="button-dryrun">
+              {busy && !job ? <Loader2 className="w-4 h-4 animate-spin" /> : null} Dry run
+            </Button>
+          )}
+          <Button onClick={handleApply} disabled={busy || (isBulk && !dryRun)} data-testid="button-apply-default-label">
+            {busy && job ? <Loader2 className="w-4 h-4 animate-spin mr-1" /> : null}
+            {isBulk ? "Confirm & apply" : "Apply"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 // ─── Tab: Libraries ───────────────────────────────────────────────────────────
 
 function LibrariesTab({ tenantConnectionId }: { tenantConnectionId: string }) {
@@ -432,6 +643,14 @@ function LibrariesTab({ tenantConnectionId }: { tenantConnectionId: string }) {
   const [sortBy, setSortBy] = useState<string>("name");
   const [showHidden, setShowHidden] = useState(false);
   const [selectedLibraryId, setSelectedLibraryId] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [dialogTargets, setDialogTargets] = useState<EnrichedLibrary[] | null>(null);
+
+  const { data: labelOptions = [] } = useQuery<SensitivityLabelOption[]>({
+    queryKey: ["/api/admin/tenants", tenantConnectionId, "sensitivity-labels"],
+    queryFn: () => fetch(`/api/admin/tenants/${tenantConnectionId}/sensitivity-labels`, { credentials: "include" }).then((r) => (r.ok ? r.json() : [])),
+    enabled: !!tenantConnectionId,
+  });
 
   const { data: libraries = [], isLoading } = useQuery<EnrichedLibrary[]>({
     queryKey: ["/api/admin/tenants", tenantConnectionId, "libraries"],
@@ -459,6 +678,27 @@ function LibrariesTab({ tenantConnectionId }: { tenantConnectionId: string }) {
     onError: (err: any) => toast({ title: "Sync failed", description: err.message, variant: "destructive" }),
   });
 
+  const syncDefaultLabelsMutation = useMutation({
+    mutationFn: async () => {
+      const res = await fetch(`/api/admin/tenants/${tenantConnectionId}/libraries/default-labels/sync`, { method: "POST", credentials: "include" });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).message || "Sync failed");
+      const { jobId } = await res.json();
+      for (;;) {
+        await new Promise((r) => setTimeout(r, 2000));
+        const s = await fetch(`/api/workspaces/bulk/jobs/${jobId}`, { credentials: "include" });
+        if (!s.ok) break;
+        const data = await s.json();
+        if (data.status !== "running") return data;
+      }
+      return null;
+    },
+    onSuccess: (data: any) => {
+      toast({ title: "Default labels synced", description: data ? `${data.succeeded} libraries refreshed, ${data.failed} failed` : "Complete" });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/tenants", tenantConnectionId, "libraries"] });
+    },
+    onError: (err: any) => toast({ title: "Sync failed", description: err.message, variant: "destructive" }),
+  });
+
   const filtered = useMemo(() => {
     let result = libraries.filter((l) => showHidden || !l.hidden);
     if (searchTerm) {
@@ -479,14 +719,41 @@ function LibrariesTab({ tenantConnectionId }: { tenantConnectionId: string }) {
 
   const selectedLib = selectedLibraryId ? libraries.find((l) => l.id === selectedLibraryId) : null;
 
+  const selectedLibs = filtered.filter((l) => selectedIds.has(l.id));
+  const allFilteredSelected = filtered.length > 0 && filtered.every((l) => selectedIds.has(l.id));
+  const toggleAll = () =>
+    setSelectedIds(allFilteredSelected ? new Set() : new Set(filtered.map((l) => l.id)));
+  const toggleOne = (id: string) =>
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+
   return (
     <div className="space-y-4">
-      <div className="flex justify-end">
+      <div className="flex justify-end gap-2">
+        <Button variant="outline" size="sm" className="gap-2" onClick={() => syncDefaultLabelsMutation.mutate()} disabled={syncDefaultLabelsMutation.isPending} data-testid="button-sync-default-labels">
+          {syncDefaultLabelsMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Shield className="w-4 h-4" />}
+          Sync Default Labels
+        </Button>
         <Button variant="outline" size="sm" className="gap-2" onClick={() => syncMutation.mutate()} disabled={syncMutation.isPending} data-testid="button-sync-libraries">
           {syncMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
           Sync Libraries
         </Button>
       </div>
+
+      {selectedIds.size > 0 && (
+        <div className="flex items-center justify-between rounded-lg border border-primary/30 bg-primary/5 px-4 py-2.5" data-testid="bulk-action-bar">
+          <span className="text-sm font-medium">{selectedIds.size} selected</span>
+          <div className="flex items-center gap-2">
+            <Button size="sm" variant="ghost" onClick={() => setSelectedIds(new Set())} data-testid="button-clear-selection">Clear</Button>
+            <Button size="sm" className="gap-2" onClick={() => setDialogTargets(selectedLibs)} data-testid="button-bulk-default-label">
+              <Shield className="w-4 h-4" /> Set Default Label
+            </Button>
+          </div>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <Card className="glass-panel border-border/50">
@@ -580,12 +847,15 @@ function LibrariesTab({ tenantConnectionId }: { tenantConnectionId: string }) {
             <Table>
               <TableHeader className="bg-muted/30">
                 <TableRow>
-                  <TableHead className="pl-6">Library</TableHead>
+                  <TableHead className="w-8 pl-4">
+                    <Checkbox checked={allFilteredSelected} onCheckedChange={toggleAll} aria-label="Select all" data-testid="checkbox-select-all" />
+                  </TableHead>
+                  <TableHead>Library</TableHead>
                   <TableHead>Parent Site</TableHead>
                   <TableHead className="text-right">Items</TableHead>
                   <TableHead className="text-right">Storage</TableHead>
                   <TableHead className="text-center">Depth</TableHead>
-                  <TableHead className="text-center">Views</TableHead>
+                  <TableHead>Default Label</TableHead>
                   <TableHead>Label</TableHead>
                   <TableHead>Last Modified</TableHead>
                   <TableHead className="w-8"></TableHead>
@@ -594,7 +864,10 @@ function LibrariesTab({ tenantConnectionId }: { tenantConnectionId: string }) {
               <TableBody>
                 {filtered.map((lib) => (
                   <TableRow key={lib.id} className={`hover:bg-muted/10 transition-colors cursor-pointer ${lib.hidden ? "opacity-50" : ""} ${selectedLibraryId === lib.id ? "bg-primary/5" : ""}`} onClick={() => setSelectedLibraryId(lib.id)} data-testid={`row-library-${lib.id}`}>
-                    <TableCell className="pl-6">
+                    <TableCell className="pl-4" onClick={(e) => e.stopPropagation()}>
+                      <Checkbox checked={selectedIds.has(lib.id)} onCheckedChange={() => toggleOne(lib.id)} aria-label={`Select ${lib.displayName}`} data-testid={`checkbox-library-${lib.id}`} />
+                    </TableCell>
+                    <TableCell>
                       <div className="flex items-center gap-3">
                         <div className="w-8 h-8 rounded-lg bg-primary/10 border border-primary/20 flex items-center justify-center shrink-0">
                           <Library className="w-4 h-4 text-primary" />
@@ -626,16 +899,20 @@ function LibrariesTab({ tenantConnectionId }: { tenantConnectionId: string }) {
                         </span>
                       ) : <span className="text-xs text-muted-foreground">—</span>}
                     </TableCell>
-                    <TableCell className="text-center">
-                      {lib.totalViewCount != null ? (
-                        <span className="text-xs text-muted-foreground">
-                          {lib.customViewCount ?? 0}/{lib.totalViewCount}
-                        </span>
-                      ) : <span className="text-xs text-muted-foreground">—</span>}
+                    <TableCell onClick={(e) => e.stopPropagation()}>
+                      {lib.defaultSensitivityLabelName ? (
+                        <Badge className="text-[10px] gap-1 bg-primary/15 text-primary border-primary/30"><Shield className="w-2.5 h-2.5" />{lib.defaultSensitivityLabelName}</Badge>
+                      ) : (
+                        <Button variant="ghost" size="sm" className="h-6 px-2 text-[11px] text-muted-foreground" onClick={() => setDialogTargets([lib])} data-testid={`button-set-default-${lib.id}`}>Set default</Button>
+                      )}
                     </TableCell>
                     <TableCell>{lib.sensitivityLabelId ? <Badge variant="secondary" className="text-[10px]">Labeled</Badge> : <span className="text-xs text-muted-foreground">—</span>}</TableCell>
                     <TableCell className="text-xs text-muted-foreground">{lib.lastModifiedAt ? new Date(lib.lastModifiedAt).toLocaleDateString() : "—"}</TableCell>
-                    <TableCell><ChevronRight className="w-4 h-4 text-muted-foreground" /></TableCell>
+                    <TableCell onClick={(e) => e.stopPropagation()}>
+                      {lib.defaultSensitivityLabelName ? (
+                        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setDialogTargets([lib])} title="Change default label" data-testid={`button-edit-default-${lib.id}`}><Shield className="w-3.5 h-3.5 text-muted-foreground" /></Button>
+                      ) : <ChevronRight className="w-4 h-4 text-muted-foreground" />}
+                    </TableCell>
                   </TableRow>
                 ))}
               </TableBody>
@@ -676,6 +953,20 @@ function LibrariesTab({ tenantConnectionId }: { tenantConnectionId: string }) {
           )}
         </SheetContent>
       </Sheet>
+
+      {dialogTargets && (
+        <DefaultLabelDialog
+          open={!!dialogTargets}
+          onClose={() => setDialogTargets(null)}
+          tenantConnectionId={tenantConnectionId}
+          targets={dialogTargets}
+          labels={labelOptions}
+          onApplied={() => {
+            queryClient.invalidateQueries({ queryKey: ["/api/admin/tenants", tenantConnectionId, "libraries"] });
+            setSelectedIds(new Set());
+          }}
+        />
+      )}
     </div>
   );
 }

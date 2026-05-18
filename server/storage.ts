@@ -388,6 +388,7 @@ export interface IStorage {
   getDocumentLibrariesByTenant(tenantConnectionId: string): Promise<DocumentLibrary[]>;
   getDocumentLibrary(id: string): Promise<DocumentLibrary | undefined>;
   upsertDocumentLibrary(data: InsertDocumentLibrary): Promise<DocumentLibrary>;
+  updateDocumentLibrary(id: string, updates: Partial<InsertDocumentLibrary>): Promise<DocumentLibrary | undefined>;
   deleteDocumentLibrariesForWorkspace(workspaceId: string): Promise<void>;
 
   createWorkspaceTelemetry(data: InsertWorkspaceTelemetry): Promise<WorkspaceTelemetry>;
@@ -2337,6 +2338,16 @@ export class DatabaseStorage implements IStorage {
       })
       .returning();
     return result;
+  }
+
+  async updateDocumentLibrary(id: string, updates: Partial<InsertDocumentLibrary>): Promise<DocumentLibrary | undefined> {
+    const [result] = await db.update(documentLibraries)
+      .set(updates)
+      .where(eq(documentLibraries.id, id))
+      .returning();
+    if (!result) return undefined;
+    const [decrypted] = await this.decryptRows([result], "document_libraries");
+    return decrypted as DocumentLibrary;
   }
 
   async deleteDocumentLibrariesForWorkspace(workspaceId: string): Promise<void> {

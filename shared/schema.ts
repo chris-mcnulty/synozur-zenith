@@ -769,6 +769,13 @@ export const documentLibraries = pgTable("document_libraries", {
   itemCount: integer("item_count").default(0),
   storageUsedBytes: bigint("storage_used_bytes", { mode: "number" }),
   sensitivityLabelId: text("sensitivity_label_id"),
+  // Library default sensitivity label ("DefaultSensitivityLabelForLibrary").
+  // Distinct from sensitivityLabelId (the drive-root label): this is the
+  // default applied to *new* files added to the library going forward. Set
+  // via the SharePoint REST API — not exposed through Microsoft Graph.
+  defaultSensitivityLabelId: text("default_sensitivity_label_id"),
+  defaultSensitivityLabelName: text("default_sensitivity_label_name"),
+  defaultSensitivityLabelSyncedAt: timestamp("default_sensitivity_label_synced_at"),
   isDefaultDocLib: boolean("is_default_doc_lib").default(false),
   hidden: boolean("hidden").default(false),
   lastModifiedAt: text("last_modified_at"),
