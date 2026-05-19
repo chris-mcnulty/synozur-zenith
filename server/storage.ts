@@ -2341,8 +2341,13 @@ export class DatabaseStorage implements IStorage {
   }
 
   async updateDocumentLibrary(id: string, updates: Partial<InsertDocumentLibrary>): Promise<DocumentLibrary | undefined> {
+    const [existing] = await db.select({ tenantConnectionId: documentLibraries.tenantConnectionId })
+      .from(documentLibraries).where(eq(documentLibraries.id, id));
+    const encrypted = existing?.tenantConnectionId
+      ? await this.encryptForTenant(updates as Record<string, any>, "document_libraries", existing.tenantConnectionId) as Partial<InsertDocumentLibrary>
+      : updates;
     const [result] = await db.update(documentLibraries)
-      .set(updates)
+      .set(encrypted)
       .where(eq(documentLibraries.id, id))
       .returning();
     if (!result) return undefined;

@@ -122,13 +122,19 @@ export async function enumerateDriveFiles(
   signal?: AbortSignal,
 ): Promise<{ files: DriveFile[]; error?: string }> {
   const files: DriveFile[] = [];
-  const folderStack: string[] = ["root"];
+  // null = the drive root, addressed via the dedicated `/root/children`
+  // endpoint; real folder item ids use `/items/{id}/children`. Graph does not
+  // accept the literal "root" as an item id in the items/{id} path.
+  const folderStack: (string | null)[] = [null];
   try {
     while (folderStack.length > 0) {
       if (signal?.aborted) return { files, error: "aborted" };
       const folderId = folderStack.pop()!;
-      let next: string | null =
-        `${GRAPH_BETA}/drives/${driveId}/items/${folderId}/children?$select=id,name,file,folder&$top=200`;
+      const base =
+        folderId === null
+          ? `${GRAPH_BETA}/drives/${driveId}/root/children`
+          : `${GRAPH_BETA}/drives/${driveId}/items/${folderId}/children`;
+      let next: string | null = `${base}?$select=id,name,file,folder&$top=200`;
       while (next) {
         if (signal?.aborted) return { files, error: "aborted" };
         const res: Response = await fetch(next, { headers: { Authorization: `Bearer ${graphToken}` } });
@@ -166,21 +172,28 @@ export async function assignSensitivityLabelToDriveItem(
   justificationText = "Applied via Zenith library default sensitivity label",
 ): Promise<{ success: boolean; error?: string }> {
   try {
-    const res = await fetch(`${GRAPH_BETA}/drives/${driveId}/items/${itemId}/assignSensitivityLabel`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${graphToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        sensitivityLabelId: labelId,
-        assignmentMethod: "standard",
-        justificationText,
-      }),
-    });
-    if (res.status === 429) {
-      const retry = Number(res.headers.get("Retry-After")) || 10;
-      return { success: false, error: `Throttled (retry after ${retry}s)` };
+    const MAX_THROTTLE_RETRIES = 5;
+    let res: Response;
+    for (let attempt = 0; ; attempt++) {
+      res = await fetch(`${GRAPH_BETA}/drives/${driveId}/items/${itemId}/assignSensitivityLabel`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${graphToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          sensitivityLabelId: labelId,
+          assignmentMethod: "standard",
+          justificationText,
+        }),
+      });
+      if (res.status !== 429) break;
+      if (attempt >= MAX_THROTTLE_RETRIES) {
+        const retry = Number(res.headers.get("Retry-After")) || 10;
+        return { success: false, error: `Throttled — gave up after ${MAX_THROTTLE_RETRIES} retries (last Retry-After ${retry}s)` };
+      }
+      const retry = Number(res.headers.get("Retry-After")) || Math.min(60, 2 ** attempt * 5);
+      await new Promise((r) => setTimeout(r, retry * 1000));
     }
     if (res.status !== 202 && !res.ok) {
       return { success: false, error: `Graph ${res.status}: ${(await res.text()).slice(0, 400)}` };

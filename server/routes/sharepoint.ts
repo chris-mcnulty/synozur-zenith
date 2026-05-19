@@ -891,6 +891,9 @@ router.patch(
       return res.status(404).json({ message: "Library not found" });
     }
 
+    // BL-004: scope confirmed — block mutation if tenant is not ACTIVE
+    if (!(await checkTenantActive(lib.tenantConnectionId, res))) return;
+
     const ws = await storage.getWorkspace(lib.workspaceId);
     if (!ws?.siteUrl) {
       return res.status(400).json({ message: "Parent site URL unavailable — cannot set library label" });
@@ -961,6 +964,9 @@ const bulkDefaultLabelSchema = z.object({
   sensitivityLabelId: z.string().nullable(),
   applyRetroactively: z.boolean().optional().default(false),
   dryRun: z.boolean().optional().default(false),
+  // A dry run must be reviewed before any write-back; the caller acknowledges
+  // it by resubmitting with confirm:true.
+  confirm: z.boolean().optional().default(false),
 });
 
 router.post(
@@ -972,13 +978,16 @@ router.post(
     if (!parsed.success) {
       return res.status(400).json({ message: "Invalid request body", errors: parsed.error.flatten() });
     }
-    const { libraryIds, sensitivityLabelId, applyRetroactively, dryRun } = parsed.data;
+    const { libraryIds, sensitivityLabelId, applyRetroactively, dryRun, confirm } = parsed.data;
     const tenantConnectionId = req.params.tenantConnectionId;
 
     const allowedTenantIds = await getOrgTenantConnectionIds(req);
     if (allowedTenantIds !== null && !allowedTenantIds.includes(tenantConnectionId)) {
       return res.status(403).json({ message: "Tenant connection is outside your organization scope" });
     }
+
+    // BL-004: scope confirmed — block mutation if tenant is not ACTIVE
+    if (!(await checkTenantActive(tenantConnectionId, res))) return;
 
     const allLibs = await storage.getDocumentLibrariesByTenant(tenantConnectionId);
     const idSet = new Set(libraryIds);
@@ -1010,6 +1019,15 @@ router.post(
       });
     }
 
+    // A dry run must be reviewed and acknowledged before any write-back.
+    if (!confirm) {
+      return res.status(409).json({
+        error: "DRY_RUN_REQUIRED",
+        message:
+          "Review the dry-run results, then resubmit with confirm:true to apply.",
+      });
+    }
+
     if (applyRetroactively && !ctx.retroPlanEnabled) {
       return res.status(403).json({
         error: "FEATURE_GATED",
@@ -1025,6 +1043,25 @@ router.post(
       return res.status(400).json({
         message: ctx.graphTokenError || "No Graph app token available for retroactive labelling",
       });
+    }
+
+    // Retroactive relabelling depends on metered Graph APIs. Probe once up
+    // front so we fail fast with a clear error instead of setting library
+    // defaults and then failing every per-file call, leaving a partial state.
+    if (applyRetroactively) {
+      const probeDriveId = libs.find((l) => l.m365DriveId)?.m365DriveId;
+      if (probeDriveId) {
+        const metering = await probeMeteringStatus(ctx.graphToken!, probeDriveId);
+        if (metering.status === "disabled") {
+          return res.status(403).json({
+            error: "METERING_DISABLED",
+            message:
+              "Retroactive labelling requires metered Microsoft Graph APIs, which are not enabled " +
+              "for this tenant. The library default label can still be set without retroactive apply.",
+            meteringDocUrl: METERED_API_DOC_URL,
+          });
+        }
+      }
     }
 
     const job = bulkJobStore.create({
@@ -1145,19 +1182,29 @@ router.post(
             };
           }
 
+          // The library default label was set; if retroactive relabelling ran
+          // and some/all files failed, the library is only partially done.
+          const retroFailed = retroSummary ? retroSummary.failed > 0 : false;
+          const retroAllFailed =
+            retroSummary ? retroSummary.succeeded === 0 && retroSummary.failed > 0 : false;
+          const retroError = retroFailed
+            ? `Default label set, but ${retroSummary!.failed}/${retroSummary!.total} files failed retroactive labelling`
+            : undefined;
+
           await storage.createAuditEntry({
             ...auditBase,
             action: "LABEL_ASSIGNED",
             resource: "library",
             resourceId: lib.id,
             tenantConnectionId: lib.tenantConnectionId,
-            details: { ...baseDetails, bulk: true, pushed: true, retroSummary },
-            result: "SUCCESS",
+            details: { ...baseDetails, bulk: true, pushed: true, retroSummary, error: retroError },
+            result: retroAllFailed ? "FAILURE" : retroFailed ? "PARTIAL" : "SUCCESS",
           });
           bulkJobStore.addResult(job.jobId, {
             workspaceId: lib.id,
             displayName: lib.displayName,
-            success: true,
+            success: !retroFailed,
+            error: retroError,
           });
         }
 

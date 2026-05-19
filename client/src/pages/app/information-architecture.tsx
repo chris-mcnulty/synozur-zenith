@@ -558,6 +558,7 @@ function DefaultLabelDialog({
           sensitivityLabelId: resolvedLabelId,
           applyRetroactively: retro,
           dryRun: false,
+          confirm: true,
         }),
       });
       const data = await res.json();
@@ -675,12 +676,12 @@ function DefaultLabelDialog({
         </div>
 
         <DialogFooter className="gap-2">
-          {isBulk && (
+          {(isBulk || retro) && (
             <Button variant="outline" onClick={handleDryRun} disabled={busy} data-testid="button-dryrun">
               {busy && !job ? <Loader2 className="w-4 h-4 animate-spin" /> : null} Dry run
             </Button>
           )}
-          <Button onClick={handleApply} disabled={busy || retroBlocked || (isBulk && !dryRun)} title={retroBlocked ? "Retroactive labelling unavailable — check plan and metering status above" : undefined} data-testid="button-apply-default-label">
+          <Button onClick={handleApply} disabled={busy || retroBlocked || ((isBulk || retro) && !dryRun)} title={retroBlocked ? "Retroactive labelling unavailable — check plan and metering status above" : undefined} data-testid="button-apply-default-label">
             {busy && job ? <Loader2 className="w-4 h-4 animate-spin mr-1" /> : null}
             {isBulk ? "Confirm & apply" : "Apply"}
           </Button>
