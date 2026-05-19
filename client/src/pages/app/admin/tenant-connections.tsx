@@ -2093,6 +2093,71 @@ const FEATURE_KEYS = [
   { key: "licensing", label: "Licensing Reporting", description: "Track and report on Microsoft 365 license assignments and usage." },
 ] as const;
 
+function LibraryLabellingStatus({ tenantConnectionId }: { tenantConnectionId: string }) {
+  const { data, isLoading } = useQuery<{
+    retroPlanEnabled: boolean;
+    metering: "enabled" | "disabled" | "unknown";
+    meteringDetail?: string;
+    meteringDocUrl: string;
+  }>({
+    queryKey: [`/api/admin/tenants/${tenantConnectionId}/libraries/metering-status`],
+    queryFn: async () => {
+      const res = await fetch(`/api/admin/tenants/${tenantConnectionId}/libraries/metering-status`, { credentials: "include" });
+      if (!res.ok) throw new Error("status unavailable");
+      return res.json();
+    },
+    staleTime: 60_000,
+  });
+
+  return (
+    <div className="space-y-3">
+      <h4 className="text-sm font-medium text-muted-foreground">Library Sensitivity Labelling</h4>
+      <Card className="border-border/50 bg-card/50">
+        <CardContent className="p-4 space-y-3">
+          <p className="text-xs text-muted-foreground">
+            Retroactive labelling of existing library files uses a metered Microsoft Graph API. It requires a
+            qualifying service plan and the customer tenant to have metered Graph APIs enabled. Setting a
+            library default label does not require metering.
+          </p>
+          {isLoading ? (
+            <p className="text-xs text-muted-foreground flex items-center gap-1.5"><Loader2 className="w-3 h-3 animate-spin" /> Checking plan & metering status…</p>
+          ) : data ? (
+            <div className="space-y-2 text-xs">
+              <div className="flex items-center gap-1.5" data-testid="status-retro-plan">
+                {data.retroPlanEnabled
+                  ? <ShieldCheck className="w-3.5 h-3.5 text-emerald-500" />
+                  : <ShieldOff className="w-3.5 h-3.5 text-red-500" />}
+                <span>Service plan: {data.retroPlanEnabled ? "retroactive labelling included" : "not included — requires the Professional or Enterprise plan"}</span>
+              </div>
+              <div className="flex items-center gap-1.5" data-testid="status-metering">
+                {data.metering === "enabled"
+                  ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" />
+                  : data.metering === "disabled"
+                    ? <XCircle className="w-3.5 h-3.5 text-red-500" />
+                    : <Info className="w-3.5 h-3.5 text-amber-500" />}
+                <span>
+                  Metered Graph APIs: {data.metering === "enabled"
+                    ? "enabled for this tenant"
+                    : data.metering === "disabled"
+                      ? "not enabled — retroactive labelling will fail until enabled"
+                      : "could not be determined"}
+                </span>
+              </div>
+              {data.metering !== "enabled" && (
+                <a href={data.meteringDocUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-primary underline" data-testid="link-tenant-metering-docs">
+                  <ExternalLink className="w-3 h-3" /> How to enable metered Microsoft Graph APIs
+                </a>
+              )}
+            </div>
+          ) : (
+            <p className="text-xs text-muted-foreground">Status unavailable. Run a library sync, then reopen this dialog.</p>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
 function FeatureSettingsPanel({ tenantConnectionId }: { tenantConnectionId: string }) {
   const { toast } = useToast();
   const qc = useQueryClient();
@@ -2260,6 +2325,8 @@ function FeatureSettingsPanel({ tenantConnectionId }: { tenantConnectionId: stri
           );
         })}
       </div>
+
+      <LibraryLabellingStatus tenantConnectionId={tenantConnectionId} />
 
       {confirmPurge && (
         <Dialog open={confirmPurge !== null} onOpenChange={(open) => { if (!open) setConfirmPurge(null); }}>

@@ -4,6 +4,16 @@ import { storage } from "../storage";
 import { insertWorkspaceSchema, insertProvisioningRequestSchema, type ServicePlanTier, ZENITH_ROLES } from "@shared/schema";
 import { fetchSharePointSites, fetchSiteUsageReport, fetchSiteDriveOwner, fetchSiteAnalytics, fetchSiteGroupOwners, fetchSiteCollectionAdmins, getAppToken, writeSitePropertyBag, requestSiteReindex, fetchSitePropertyBag, fetchSensitivityLabels, fetchRetentionLabels, fetchHubSites, fetchSiteHubAssociation, fetchHubSitesViaSearch, applySensitivityLabelToSite, removeSensitivityLabelFromSite, joinHubSite, leaveHubSite, fetchSiteLockState, fetchSiteArchiveStatus, batchToggleNoScript, fetchSiteDocumentLibraries, enumerateSiteDocumentLibraries, fetchLibraryDetails, fetchLibraryFolderDepth, fetchLibraryViews, fetchLibraryItemFillRates, fetchSiteTelemetry, fetchContentTypes, createSharePointSite, createM365Group, createTeam, assignSensitivityLabelToGroup, resolveOwnerIds, archiveSite, unarchiveSite, deleteSiteFromGraph, graphFetchWithRetry, addGroupOwner, removeGroupOwner, addGroupMember, removeGroupMember, fetchSiteGroupMembers, searchTenantUsers } from "../services/graph";
 import { getPlanFeatures, requireFeature } from "../services/feature-gate";
+import { bulkJobStore, type BulkJobResult } from "../services/bulk-job-store";
+import {
+  getLibraryDefaultLabel,
+  setLibraryDefaultLabel,
+  enumerateDriveFiles,
+  assignSensitivityLabelToDriveItem,
+  probeMeteringStatus,
+  METERED_API_WARNING,
+  METERED_API_DOC_URL,
+} from "../services/library-labels";
 import { getDelegatedSpoToken } from "../routes-entra";
 import { requireAuth, requireRole, requirePermission, type AuthenticatedRequest } from "../middleware/rbac";
 import { computeWritebackHash, computeSpoSyncHash } from "../services/writeback-hash";
@@ -640,6 +650,596 @@ router.get("/api/admin/tenants/:tenantConnectionId/libraries/stats", requirePerm
     res.status(500).json({ error: err.message });
   }
 });
+
+// ─── Library Default Sensitivity Labels ──────────────────────────────────────
+//
+// The "default sensitivity label for a document library" is set/read via the
+// SharePoint REST API (not Microsoft Graph). Retroactive application to
+// existing files uses the Graph beta metered driveItem:assignSensitivityLabel
+// API. Setting the default requires the m365WriteBack plan feature;
+// retroactive application additionally requires the libraryRetroLabeling plan
+// feature (Professional/Enterprise) AND the customer tenant to have metered
+// Microsoft Graph APIs enabled. Gating is per-org service plan — never an
+// environment variable — so it works correctly on the multitenant platform.
+
+interface LibraryLabelContext {
+  spoHost: string;
+  spoToken: string | null;
+  spoTokenError?: string;
+  graphToken: string | null;
+  graphTokenError?: string;
+  labelName: string | null;
+  labelValid: boolean;
+  labelError?: string;
+  retroPlanEnabled: boolean;
+}
+
+async function resolveLibraryLabelContext(
+  req: AuthenticatedRequest,
+  tenantConnectionId: string,
+  sensitivityLabelId: string | null,
+  needGraphToken: boolean,
+): Promise<LibraryLabelContext | { error: string; status: number }> {
+  const conn = await storage.getTenantConnection(tenantConnectionId);
+  if (!conn) return { error: "Tenant connection not found", status: 404 };
+  const spoHost = conn.domain.includes(".sharepoint.com")
+    ? conn.domain
+    : `${conn.domain.replace(/\..*$/, "")}.sharepoint.com`;
+
+  const orgId = conn.organizationId || req.user?.organizationId || undefined;
+  const org = orgId ? await storage.getOrganization(orgId) : null;
+  const plan = (org?.servicePlan || "TRIAL") as ServicePlanTier;
+
+  const ctx: LibraryLabelContext = {
+    spoHost,
+    spoToken: null,
+    graphToken: null,
+    labelName: null,
+    labelValid: false,
+    retroPlanEnabled: getPlanFeatures(plan).libraryRetroLabeling,
+  };
+
+  if (sensitivityLabelId) {
+    const labels = await storage.getSensitivityLabelsByTenantId(conn.tenantId);
+    const target = labels.find((l) => l.labelId === sensitivityLabelId);
+    if (!target) {
+      ctx.labelError = "Sensitivity label not found in synced labels for this tenant";
+    } else {
+      const formats = (target.contentFormats as string[] | null) || null;
+      if (formats && formats.length > 0 && !formats.includes("file")) {
+        ctx.labelError = `Label "${target.name}" does not apply to files. Choose a label scoped to files.`;
+      } else {
+        ctx.labelValid = true;
+        ctx.labelName = target.name;
+      }
+    }
+  } else {
+    // null = clear the default label
+    ctx.labelValid = true;
+  }
+
+  if (req.user?.id) {
+    try {
+      ctx.spoToken = await getDelegatedSpoToken(req.user.id, spoHost);
+      if (!ctx.spoToken) {
+        ctx.spoTokenError =
+          "No delegated SharePoint token available — sign in via SSO with a SharePoint admin account.";
+      }
+    } catch (err: any) {
+      ctx.spoTokenError = `Failed to acquire SharePoint token: ${err.message}`;
+    }
+  }
+
+  if (needGraphToken) {
+    try {
+      const clientId = conn.clientId || process.env.AZURE_CLIENT_ID!;
+      const clientSecret = getEffectiveClientSecret(conn);
+      ctx.graphToken = await getAppToken(conn.tenantId, clientId, clientSecret);
+    } catch (err: any) {
+      ctx.graphTokenError = `Failed to acquire Graph app token: ${err.message}`;
+    }
+  }
+
+  return ctx;
+}
+
+// Report whether retroactive labelling is available for this tenant: the
+// per-plan gate and whether the customer tenant has metered Microsoft Graph
+// APIs enabled (a hard prerequisite for assignSensitivityLabel). Drives the
+// UI advisory + "how to enable metering" guidance.
+router.get(
+  "/api/admin/tenants/:tenantConnectionId/libraries/metering-status",
+  requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN),
+  async (req: AuthenticatedRequest, res) => {
+    const tenantConnectionId = req.params.tenantConnectionId;
+    const allowedTenantIds = await getOrgTenantConnectionIds(req);
+    if (allowedTenantIds !== null && !allowedTenantIds.includes(tenantConnectionId)) {
+      return res.status(403).json({ message: "Tenant connection is outside your organization scope" });
+    }
+
+    const ctx = await resolveLibraryLabelContext(req, tenantConnectionId, null, true);
+    if ("error" in ctx) return res.status(ctx.status).json({ message: ctx.error });
+
+    let metering: { status: "enabled" | "disabled" | "unknown"; detail?: string } = {
+      status: "unknown",
+      detail: ctx.graphTokenError,
+    };
+    if (ctx.graphToken) {
+      const libs = await storage.getDocumentLibrariesByTenant(tenantConnectionId);
+      const probeDriveId = libs.find((l) => l.m365DriveId)?.m365DriveId;
+      if (!probeDriveId) {
+        metering = { status: "unknown", detail: "No document library with a drive available to probe — run a library sync first." };
+      } else {
+        metering = await probeMeteringStatus(ctx.graphToken, probeDriveId);
+      }
+    }
+
+    res.json({
+      retroPlanEnabled: ctx.retroPlanEnabled,
+      metering: metering.status,
+      meteringDetail: metering.detail,
+      meteringDocUrl: METERED_API_DOC_URL,
+      meteredApiWarning: METERED_API_WARNING,
+    });
+  },
+);
+
+// Refresh the stored default sensitivity label for every library in a tenant
+// by reading it from SharePoint (bulk visibility). Read-only against M365.
+router.post(
+  "/api/admin/tenants/:tenantConnectionId/libraries/default-labels/sync",
+  requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN),
+  async (req: AuthenticatedRequest, res) => {
+    const tenantConnectionId = req.params.tenantConnectionId;
+    const allowedTenantIds = await getOrgTenantConnectionIds(req);
+    if (allowedTenantIds !== null && !allowedTenantIds.includes(tenantConnectionId)) {
+      return res.status(403).json({ message: "Tenant connection is outside your organization scope" });
+    }
+    const conn = await storage.getTenantConnection(tenantConnectionId);
+    if (!conn) return res.status(404).json({ message: "Tenant connection not found" });
+
+    const ctx = await resolveLibraryLabelContext(req, tenantConnectionId, null, false);
+    if ("error" in ctx) return res.status(ctx.status).json({ message: ctx.error });
+    if (!ctx.spoToken) {
+      return res.status(400).json({ message: ctx.spoTokenError || "No SharePoint token available" });
+    }
+
+    const libraries = await storage.getDocumentLibrariesByTenant(tenantConnectionId);
+    const labelRows = await storage.getSensitivityLabelsByTenantId(conn.tenantId);
+    const labelNameById = new Map(labelRows.map((l) => [l.labelId, l.name]));
+
+    const job = bulkJobStore.create({
+      action: "sync_library_default_labels",
+      total: libraries.length,
+      userId: req.user?.id || null,
+      organizationId: req.user?.organizationId || null,
+    });
+    res.status(202).json({ jobId: job.jobId });
+
+    void (async () => {
+      const siteUrlByWorkspace = new Map<string, string | null>();
+      try {
+        for (const lib of libraries) {
+          if (job.abortController.signal.aborted) break;
+          let siteUrl = siteUrlByWorkspace.get(lib.workspaceId);
+          if (siteUrl === undefined) {
+            const ws = await storage.getWorkspace(lib.workspaceId);
+            siteUrl = ws?.siteUrl || null;
+            siteUrlByWorkspace.set(lib.workspaceId, siteUrl);
+          }
+          if (!siteUrl) {
+            bulkJobStore.addResult(job.jobId, {
+              workspaceId: lib.id,
+              displayName: lib.displayName,
+              success: false,
+              error: "Workspace has no site URL",
+            });
+            continue;
+          }
+          const result = await getLibraryDefaultLabel(ctx.spoToken!, siteUrl, lib.m365ListId);
+          if (result.error) {
+            bulkJobStore.addResult(job.jobId, {
+              workspaceId: lib.id,
+              displayName: lib.displayName,
+              success: false,
+              error: result.error,
+            });
+            continue;
+          }
+          await storage.updateDocumentLibrary(lib.id, {
+            defaultSensitivityLabelId: result.labelId,
+            defaultSensitivityLabelName: result.labelId
+              ? labelNameById.get(result.labelId) || null
+              : null,
+            defaultSensitivityLabelSyncedAt: new Date(),
+          });
+          bulkJobStore.addResult(job.jobId, {
+            workspaceId: lib.id,
+            displayName: lib.displayName,
+            success: true,
+          });
+        }
+        bulkJobStore.complete(job.jobId, null);
+      } catch (err: any) {
+        console.error(`[library-default-label-sync] job ${job.jobId} error: ${err.message}`);
+        bulkJobStore.complete(job.jobId, null);
+      }
+    })();
+  },
+);
+
+const singleDefaultLabelSchema = z.object({
+  sensitivityLabelId: z.string().nullable(),
+});
+
+router.patch(
+  "/api/admin/libraries/:libraryId/default-label",
+  requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN),
+  requireFeature("m365WriteBack"),
+  async (req: AuthenticatedRequest, res) => {
+    const parsed = singleDefaultLabelSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ message: "Invalid request body", errors: parsed.error.flatten() });
+    }
+    const { sensitivityLabelId } = parsed.data;
+
+    const lib = await storage.getDocumentLibrary(req.params.libraryId);
+    if (!lib) return res.status(404).json({ message: "Library not found" });
+
+    const allowedTenantIds = await getOrgTenantConnectionIds(req);
+    if (allowedTenantIds !== null && !allowedTenantIds.includes(lib.tenantConnectionId)) {
+      return res.status(404).json({ message: "Library not found" });
+    }
+
+    // BL-004: scope confirmed — block mutation if tenant is not ACTIVE
+    if (!(await checkTenantActive(lib.tenantConnectionId, res))) return;
+
+    const ws = await storage.getWorkspace(lib.workspaceId);
+    if (!ws?.siteUrl) {
+      return res.status(400).json({ message: "Parent site URL unavailable — cannot set library label" });
+    }
+
+    const ctx = await resolveLibraryLabelContext(req, lib.tenantConnectionId, sensitivityLabelId, false);
+    if ("error" in ctx) return res.status(ctx.status).json({ message: ctx.error });
+    if (!ctx.labelValid) return res.status(400).json({ message: ctx.labelError });
+    if (!ctx.spoToken) {
+      return res.status(400).json({ message: ctx.spoTokenError || "No SharePoint token available" });
+    }
+
+    const result = await setLibraryDefaultLabel(ctx.spoToken, ws.siteUrl, lib.m365ListId, sensitivityLabelId);
+    if (!result.success) {
+      await storage.createAuditEntry({
+        userId: req.user?.id || null,
+        userEmail: req.user?.email || null,
+        action: "LABEL_ASSIGNED",
+        resource: "library",
+        resourceId: lib.id,
+        organizationId: req.user?.organizationId || null,
+        tenantConnectionId: lib.tenantConnectionId,
+        details: {
+          libraryName: lib.displayName,
+          previousLabelId: lib.defaultSensitivityLabelId,
+          newLabelId: sensitivityLabelId,
+          scope: "library_default",
+          pushed: false,
+          error: result.error,
+        },
+        result: "FAILURE",
+        ipAddress: req.ip || null,
+      });
+      return res.status(502).json({ message: `Failed to set library default label: ${result.error}` });
+    }
+
+    const updated = await storage.updateDocumentLibrary(lib.id, {
+      defaultSensitivityLabelId: sensitivityLabelId,
+      defaultSensitivityLabelName: ctx.labelName,
+      defaultSensitivityLabelSyncedAt: new Date(),
+    });
+
+    await storage.createAuditEntry({
+      userId: req.user?.id || null,
+      userEmail: req.user?.email || null,
+      action: "LABEL_ASSIGNED",
+      resource: "library",
+      resourceId: lib.id,
+      organizationId: req.user?.organizationId || null,
+      tenantConnectionId: lib.tenantConnectionId,
+      details: {
+        libraryName: lib.displayName,
+        previousLabelId: lib.defaultSensitivityLabelId,
+        newLabelId: sensitivityLabelId,
+        scope: "library_default",
+        pushed: true,
+      },
+      result: "SUCCESS",
+      ipAddress: req.ip || null,
+    });
+
+    res.json({ success: true, library: updated });
+  },
+);
+
+const bulkDefaultLabelSchema = z.object({
+  libraryIds: z.array(z.string()).min(1).max(2000),
+  sensitivityLabelId: z.string().nullable(),
+  applyRetroactively: z.boolean().optional().default(false),
+  dryRun: z.boolean().optional().default(false),
+  // A dry run must be reviewed before any write-back; the caller acknowledges
+  // it by resubmitting with confirm:true.
+  confirm: z.boolean().optional().default(false),
+});
+
+router.post(
+  "/api/admin/tenants/:tenantConnectionId/libraries/bulk/default-label",
+  requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN),
+  requireFeature("m365WriteBack"),
+  async (req: AuthenticatedRequest, res) => {
+    const parsed = bulkDefaultLabelSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ message: "Invalid request body", errors: parsed.error.flatten() });
+    }
+    const { libraryIds, sensitivityLabelId, applyRetroactively, dryRun, confirm } = parsed.data;
+    const tenantConnectionId = req.params.tenantConnectionId;
+
+    const allowedTenantIds = await getOrgTenantConnectionIds(req);
+    if (allowedTenantIds !== null && !allowedTenantIds.includes(tenantConnectionId)) {
+      return res.status(403).json({ message: "Tenant connection is outside your organization scope" });
+    }
+
+    // BL-004: scope confirmed — block mutation if tenant is not ACTIVE
+    if (!(await checkTenantActive(tenantConnectionId, res))) return;
+
+    const allLibs = await storage.getDocumentLibrariesByTenant(tenantConnectionId);
+    const idSet = new Set(libraryIds);
+    const libs = allLibs.filter((l) => idSet.has(l.id));
+    if (libs.length === 0) {
+      return res.status(404).json({ message: "No matching libraries in this tenant" });
+    }
+
+    const ctx = await resolveLibraryLabelContext(
+      req,
+      tenantConnectionId,
+      sensitivityLabelId,
+      applyRetroactively,
+    );
+    if ("error" in ctx) return res.status(ctx.status).json({ message: ctx.error });
+    if (!ctx.labelValid) return res.status(400).json({ message: ctx.labelError });
+
+    const estimatedItems = libs.reduce((sum, l) => sum + (l.itemCount || 0), 0);
+
+    if (dryRun) {
+      return res.json({
+        dryRun: true,
+        libraries: libs.length,
+        estimatedItems,
+        applyRetroactively,
+        retroEnabled: ctx.retroPlanEnabled,
+        meteredApiWarning: applyRetroactively ? METERED_API_WARNING : undefined,
+        meteringDocUrl: applyRetroactively ? METERED_API_DOC_URL : undefined,
+      });
+    }
+
+    // A dry run must be reviewed and acknowledged before any write-back.
+    if (!confirm) {
+      return res.status(409).json({
+        error: "DRY_RUN_REQUIRED",
+        message:
+          "Review the dry-run results, then resubmit with confirm:true to apply.",
+      });
+    }
+
+    if (applyRetroactively && !ctx.retroPlanEnabled) {
+      return res.status(403).json({
+        error: "FEATURE_GATED",
+        message:
+          "Retroactive library labelling requires the Professional or Enterprise service plan. " +
+          "The library default label can still be set without it.",
+      });
+    }
+    if (!ctx.spoToken) {
+      return res.status(400).json({ message: ctx.spoTokenError || "No SharePoint token available" });
+    }
+    if (applyRetroactively && !ctx.graphToken) {
+      return res.status(400).json({
+        message: ctx.graphTokenError || "No Graph app token available for retroactive labelling",
+      });
+    }
+
+    // Retroactive relabelling depends on metered Graph APIs. Probe once up
+    // front so we fail fast with a clear error instead of setting library
+    // defaults and then failing every per-file call, leaving a partial state.
+    if (applyRetroactively) {
+      const probeDriveId = libs.find((l) => l.m365DriveId)?.m365DriveId;
+      if (probeDriveId) {
+        const metering = await probeMeteringStatus(ctx.graphToken!, probeDriveId);
+        if (metering.status === "disabled") {
+          return res.status(403).json({
+            error: "METERING_DISABLED",
+            message:
+              "Retroactive labelling requires metered Microsoft Graph APIs, which are not enabled " +
+              "for this tenant. The library default label can still be set without retroactive apply.",
+            meteringDocUrl: METERED_API_DOC_URL,
+          });
+        }
+      }
+    }
+
+    const job = bulkJobStore.create({
+      action: applyRetroactively ? "apply_library_default_label_retro" : "apply_library_default_label",
+      total: libs.length,
+      userId: req.user?.id || null,
+      organizationId: req.user?.organizationId || null,
+    });
+    res.status(202).json({ jobId: job.jobId });
+
+    const auditBase = {
+      userId: req.user?.id || null,
+      userEmail: req.user?.email || null,
+      organizationId: req.user?.organizationId || null,
+      ipAddress: req.ip || null,
+    };
+
+    void (async () => {
+      const siteUrlByWorkspace = new Map<string, string | null>();
+      try {
+        for (const lib of libs) {
+          if (job.abortController.signal.aborted) break;
+
+          let siteUrl = siteUrlByWorkspace.get(lib.workspaceId);
+          if (siteUrl === undefined) {
+            const ws = await storage.getWorkspace(lib.workspaceId);
+            siteUrl = ws?.siteUrl || null;
+            siteUrlByWorkspace.set(lib.workspaceId, siteUrl);
+          }
+
+          const baseDetails = {
+            libraryName: lib.displayName,
+            previousLabelId: lib.defaultSensitivityLabelId,
+            newLabelId: sensitivityLabelId,
+            scope: "library_default",
+            retroactive: applyRetroactively,
+          };
+
+          if (!siteUrl) {
+            await storage.createAuditEntry({
+              ...auditBase,
+              action: "LABEL_ASSIGNED",
+              resource: "library",
+              resourceId: lib.id,
+              tenantConnectionId: lib.tenantConnectionId,
+              details: { ...baseDetails, bulk: true, error: "No site URL" },
+              result: "FAILURE",
+            });
+            bulkJobStore.addResult(job.jobId, {
+              workspaceId: lib.id,
+              displayName: lib.displayName,
+              success: false,
+              error: "Workspace has no site URL",
+            });
+            continue;
+          }
+
+          const setResult = await setLibraryDefaultLabel(
+            ctx.spoToken!,
+            siteUrl,
+            lib.m365ListId,
+            sensitivityLabelId,
+          );
+          if (!setResult.success) {
+            await storage.createAuditEntry({
+              ...auditBase,
+              action: "LABEL_ASSIGNED",
+              resource: "library",
+              resourceId: lib.id,
+              tenantConnectionId: lib.tenantConnectionId,
+              details: { ...baseDetails, bulk: true, pushed: false, error: setResult.error },
+              result: "FAILURE",
+            });
+            bulkJobStore.addResult(job.jobId, {
+              workspaceId: lib.id,
+              displayName: lib.displayName,
+              success: false,
+              error: setResult.error,
+            });
+            continue;
+          }
+
+          await storage.updateDocumentLibrary(lib.id, {
+            defaultSensitivityLabelId: sensitivityLabelId,
+            defaultSensitivityLabelName: ctx.labelName,
+            defaultSensitivityLabelSyncedAt: new Date(),
+          });
+
+          let retroSummary: { total: number; succeeded: number; failed: number } | undefined;
+          if (applyRetroactively && sensitivityLabelId && lib.m365DriveId && ctx.graphToken) {
+            const { files, error: enumError } = await enumerateDriveFiles(
+              ctx.graphToken,
+              lib.m365DriveId,
+              job.abortController.signal,
+            );
+            let succeeded = 0;
+            let failed = 0;
+            const CONCURRENCY = 3;
+            for (let i = 0; i < files.length; i += CONCURRENCY) {
+              if (job.abortController.signal.aborted) break;
+              const batch = files.slice(i, i + CONCURRENCY);
+              const outcomes = await Promise.all(
+                batch.map((f) =>
+                  assignSensitivityLabelToDriveItem(
+                    ctx.graphToken!,
+                    lib.m365DriveId!,
+                    f.id,
+                    sensitivityLabelId,
+                  ),
+                ),
+              );
+              for (const o of outcomes) o.success ? succeeded++ : failed++;
+            }
+            retroSummary = {
+              total: files.length,
+              succeeded,
+              failed: failed + (enumError && enumError !== "aborted" ? 1 : 0),
+            };
+          }
+
+          // The library default label was set; if retroactive relabelling ran
+          // and some/all files failed, the library is only partially done.
+          const retroFailed = retroSummary ? retroSummary.failed > 0 : false;
+          const retroAllFailed =
+            retroSummary ? retroSummary.succeeded === 0 && retroSummary.failed > 0 : false;
+          const retroError = retroFailed
+            ? `Default label set, but ${retroSummary!.failed}/${retroSummary!.total} files failed retroactive labelling`
+            : undefined;
+
+          await storage.createAuditEntry({
+            ...auditBase,
+            action: "LABEL_ASSIGNED",
+            resource: "library",
+            resourceId: lib.id,
+            tenantConnectionId: lib.tenantConnectionId,
+            details: { ...baseDetails, bulk: true, pushed: true, retroSummary, error: retroError },
+            result: retroAllFailed ? "FAILURE" : retroFailed ? "PARTIAL" : "SUCCESS",
+          });
+          bulkJobStore.addResult(job.jobId, {
+            workspaceId: lib.id,
+            displayName: lib.displayName,
+            success: !retroFailed,
+            error: retroError,
+          });
+        }
+
+        const results: BulkJobResult[] = job.results;
+        const succeeded = results.filter((r) => r.success).length;
+        const rollup = await storage.createAuditEntry({
+          ...auditBase,
+          action: "BULK_ACTION_APPLIED",
+          resource: "library",
+          resourceId: null,
+          tenantConnectionId,
+          details: {
+            bulkAction: job.action,
+            count: results.length,
+            succeeded,
+            failed: results.length - succeeded,
+            newLabelId: sensitivityLabelId,
+            applyRetroactively,
+            libraryIds: results.map((r) => r.workspaceId),
+          },
+          result:
+            results.length - succeeded === 0
+              ? "SUCCESS"
+              : succeeded === 0
+                ? "FAILURE"
+                : "PARTIAL",
+        });
+        bulkJobStore.complete(job.jobId, rollup?.id || null);
+      } catch (err: any) {
+        console.error(`[bulk-library-default-label] job ${job.jobId} error: ${err.message}`);
+        bulkJobStore.complete(job.jobId, null);
+      }
+    })();
+  },
+);
 
 router.delete("/api/workspaces/:id", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, ZENITH_ROLES.TENANT_ADMIN), async (req: AuthenticatedRequest, res) => {
   const wsId = String(req.params.id);
