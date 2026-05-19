@@ -285,6 +285,50 @@ export async function getDelegatedSpoToken(userId: string, spoHost: string): Pro
   return null;
 }
 
+/**
+ * Acquire a delegated Microsoft Graph token for the given user using their
+ * stored refresh token. Required for protected/metered Graph APIs such as
+ * driveItem:assignSensitivityLabel that do not accept application tokens.
+ */
+export async function getDelegatedGraphToken(userId: string): Promise<string | null> {
+  const client = getMsalClient();
+  if (!client) return null;
+
+  const tokenRecord = await storage.getGraphToken(userId, 'graph');
+  if (!tokenRecord?.refreshToken) return null;
+
+  try {
+    const { decryptToken } = await import('./utils/encryption');
+    const refreshToken = decryptToken(tokenRecord.refreshToken);
+
+    const result = await (client as any).acquireTokenByRefreshToken({
+      refreshToken,
+      scopes: ['https://graph.microsoft.com/.default'],
+    });
+
+    if (result?.accessToken) {
+      if ((result as any).refreshToken) {
+        const refreshTokenToStore = encryptToken((result as any).refreshToken);
+        await storage.upsertGraphToken({
+          userId,
+          organizationId: tokenRecord.organizationId,
+          service: 'graph',
+          accessToken: encryptToken(result.accessToken),
+          refreshToken: refreshTokenToStore,
+          expiresAt: (result as any).expiresOn || tokenRecord.expiresAt,
+          scopes: tokenRecord.scopes || SCOPES,
+        });
+      }
+      console.log(`[Entra] Acquired delegated Graph token for user ${userId}`);
+      return result.accessToken;
+    }
+  } catch (err: any) {
+    console.warn(`[Entra] Delegated Graph token acquisition failed for user ${userId}: ${err.message}`);
+  }
+
+  return null;
+}
+
 // Public endpoint — no auth required so the login page can show the SSO button
 router.get('/status', (_req: AuthenticatedRequest, res: Response) => {
   const configured = !!(process.env.AZURE_CLIENT_ID && process.env.AZURE_CLIENT_SECRET);

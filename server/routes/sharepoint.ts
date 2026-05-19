@@ -14,7 +14,7 @@ import {
   METERED_API_WARNING,
   METERED_API_DOC_URL,
 } from "../services/library-labels";
-import { getDelegatedSpoToken } from "../routes-entra";
+import { getDelegatedSpoToken, getDelegatedGraphToken } from "../routes-entra";
 import { requireAuth, requireRole, requirePermission, type AuthenticatedRequest } from "../middleware/rbac";
 import { computeWritebackHash, computeSpoSyncHash } from "../services/writeback-hash";
 import { evaluatePolicy, evaluationResultsToCopilotRules, formatPolicyBagValue, DEFAULT_COPILOT_READINESS_RULES, type EvaluationContext } from "../services/policy-engine";
@@ -668,6 +668,8 @@ interface LibraryLabelContext {
   spoTokenError?: string;
   graphToken: string | null;
   graphTokenError?: string;
+  delegatedGraphToken: string | null;
+  delegatedGraphTokenError?: string;
   labelName: string | null;
   labelValid: boolean;
   labelError?: string;
@@ -694,6 +696,7 @@ async function resolveLibraryLabelContext(
     spoHost,
     spoToken: null,
     graphToken: null,
+    delegatedGraphToken: null,
     labelName: null,
     labelValid: false,
     retroPlanEnabled: getPlanFeatures(plan).libraryRetroLabeling,
@@ -737,6 +740,18 @@ async function resolveLibraryLabelContext(
       ctx.graphToken = await getAppToken(conn.tenantId, clientId, clientSecret);
     } catch (err: any) {
       ctx.graphTokenError = `Failed to acquire Graph app token: ${err.message}`;
+    }
+
+    if (req.user?.id) {
+      try {
+        ctx.delegatedGraphToken = await getDelegatedGraphToken(req.user.id);
+        if (!ctx.delegatedGraphToken) {
+          ctx.delegatedGraphTokenError =
+            "No delegated Graph token available — sign in via SSO with a licensed account before applying retroactive labels.";
+        }
+      } catch (err: any) {
+        ctx.delegatedGraphTokenError = `Failed to acquire delegated Graph token: ${err.message}`;
+      }
     }
   }
 
@@ -1039,9 +1054,9 @@ router.post(
     if (!ctx.spoToken) {
       return res.status(400).json({ message: ctx.spoTokenError || "No SharePoint token available" });
     }
-    if (applyRetroactively && !ctx.graphToken) {
+    if (applyRetroactively && !ctx.delegatedGraphToken) {
       return res.status(400).json({
-        message: ctx.graphTokenError || "No Graph app token available for retroactive labelling",
+        message: ctx.delegatedGraphTokenError || "No delegated Graph token available for retroactive labelling — sign in via SSO first",
       });
     }
 
@@ -1151,9 +1166,9 @@ router.post(
           });
 
           let retroSummary: { total: number; succeeded: number; failed: number } | undefined;
-          if (applyRetroactively && sensitivityLabelId && lib.m365DriveId && ctx.graphToken) {
+          if (applyRetroactively && sensitivityLabelId && lib.m365DriveId && ctx.delegatedGraphToken) {
             const { files, error: enumError } = await enumerateDriveFiles(
-              ctx.graphToken,
+              ctx.graphToken ?? ctx.delegatedGraphToken,
               lib.m365DriveId,
               job.abortController.signal,
             );
@@ -1166,14 +1181,23 @@ router.post(
               const outcomes = await Promise.all(
                 batch.map((f) =>
                   assignSensitivityLabelToDriveItem(
-                    ctx.graphToken!,
+                    ctx.delegatedGraphToken!,
                     lib.m365DriveId!,
                     f.id,
                     sensitivityLabelId,
                   ),
                 ),
               );
-              for (const o of outcomes) o.success ? succeeded++ : failed++;
+              for (const o of outcomes) {
+                if (o.success) {
+                  succeeded++;
+                } else {
+                  failed++;
+                  console.error(
+                    `[library-labels] assignSensitivityLabel failed for driveItem in drive ${lib.m365DriveId}: ${o.error}`,
+                  );
+                }
+              }
             }
             retroSummary = {
               total: files.length,
