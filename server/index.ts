@@ -584,6 +584,13 @@ async function ensureTenantConnectionsSchema() {
       ALTER TABLE library_columns ADD COLUMN IF NOT EXISTS last_sync_at timestamp DEFAULT now();
     `);
 
+    // ── PR46: Library default sensitivity label columns (migration 0023) ──
+    await client.query(`
+      ALTER TABLE document_libraries ADD COLUMN IF NOT EXISTS default_sensitivity_label_id        text;
+      ALTER TABLE document_libraries ADD COLUMN IF NOT EXISTS default_sensitivity_label_name      text;
+      ALTER TABLE document_libraries ADD COLUMN IF NOT EXISTS default_sensitivity_label_synced_at timestamp;
+    `);
+
     // Backfill sharing_links_inventory columns added for per-item link tracking
     await client.query(`
       ALTER TABLE sharing_links_inventory ADD COLUMN IF NOT EXISTS item_id text;
