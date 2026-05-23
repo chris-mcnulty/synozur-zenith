@@ -619,13 +619,18 @@ router.get("/api/admin/tenants/:tenantConnectionId/libraries", requirePermission
     }
     const libraries = await storage.getDocumentLibrariesByTenant(req.params.tenantConnectionId);
     const workspaces = await storage.getWorkspaces(undefined, req.params.tenantConnectionId);
+    // getWorkspaces already excludes isArchived=true and isDeleted=true, so any
+    // library whose workspaceId is absent from wsMap belongs to an archived or
+    // deleted site and should not appear in the inventory.
     const wsMap = new Map(workspaces.map(w => [w.id, w]));
-    const enriched = libraries.map(lib => ({
-      ...lib,
-      workspaceName: wsMap.get(lib.workspaceId)?.displayName || "Unknown",
-      workspaceType: wsMap.get(lib.workspaceId)?.type || "Unknown",
-      workspaceSiteUrl: wsMap.get(lib.workspaceId)?.siteUrl || null,
-    }));
+    const enriched = libraries
+      .filter(lib => wsMap.has(lib.workspaceId))
+      .map(lib => ({
+        ...lib,
+        workspaceName: wsMap.get(lib.workspaceId)?.displayName || "Unknown",
+        workspaceType: wsMap.get(lib.workspaceId)?.type || "Unknown",
+        workspaceSiteUrl: wsMap.get(lib.workspaceId)?.siteUrl || null,
+      }));
     res.json(enriched);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -638,13 +643,18 @@ router.get("/api/admin/tenants/:tenantConnectionId/libraries/stats", requirePerm
     if (allowedTenantIds !== null && !allowedTenantIds.includes(req.params.tenantConnectionId)) {
       return res.status(403).json({ message: "Tenant connection is outside your organization scope" });
     }
-    const libraries = await storage.getDocumentLibrariesByTenant(req.params.tenantConnectionId);
-    const totalLibraries = libraries.length;
-    const totalItems = libraries.reduce((sum, l) => sum + (l.itemCount || 0), 0);
-    const totalStorageBytes = libraries.reduce((sum, l) => sum + (l.storageUsedBytes || 0), 0);
-    const withSensitivityLabel = libraries.filter(l => l.sensitivityLabelId).length;
-    const hiddenCount = libraries.filter(l => l.hidden).length;
-    const workspaceCount = new Set(libraries.map(l => l.workspaceId)).size;
+    const [libraries, workspaces] = await Promise.all([
+      storage.getDocumentLibrariesByTenant(req.params.tenantConnectionId),
+      storage.getWorkspaces(undefined, req.params.tenantConnectionId),
+    ]);
+    const activeWsIds = new Set(workspaces.map(w => w.id));
+    const active = libraries.filter(l => activeWsIds.has(l.workspaceId));
+    const totalLibraries = active.length;
+    const totalItems = active.reduce((sum, l) => sum + (l.itemCount || 0), 0);
+    const totalStorageBytes = active.reduce((sum, l) => sum + (l.storageUsedBytes || 0), 0);
+    const withSensitivityLabel = active.filter(l => l.sensitivityLabelId).length;
+    const hiddenCount = active.filter(l => l.hidden).length;
+    const workspaceCount = new Set(active.map(l => l.workspaceId)).size;
     res.json({ totalLibraries, totalItems, totalStorageBytes, withSensitivityLabel, hiddenCount, workspaceCount });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
