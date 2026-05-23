@@ -56,6 +56,7 @@ import {
   Info,
   Shield,
   ShieldAlert,
+  X,
 } from "lucide-react";
 
 // ─── Shared types ────────────────────────────────────────────────────────────
@@ -701,6 +702,7 @@ function LibrariesTab({ tenantConnectionId }: { tenantConnectionId: string }) {
   const [selectedLibraryId, setSelectedLibraryId] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [dialogTargets, setDialogTargets] = useState<EnrichedLibrary[] | null>(null);
+  const [labelFilter, setLabelFilter] = useState<string>("all");
 
   const { data: labelOptions = [] } = useQuery<SensitivityLabelOption[]>({
     queryKey: ["/api/admin/tenants", tenantConnectionId, "sensitivity-labels"],
@@ -755,8 +757,34 @@ function LibrariesTab({ tenantConnectionId }: { tenantConnectionId: string }) {
     onError: (err: any) => toast({ title: "Sync failed", description: err.message, variant: "destructive" }),
   });
 
+  const clearLabelsMutation = useMutation({
+    mutationFn: async (ids: string[]) => {
+      const res = await fetch(`/api/admin/tenants/${tenantConnectionId}/libraries/bulk/default-label`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ libraryIds: ids, sensitivityLabelId: null, applyRetroactively: false }),
+      });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).message || "Clear failed");
+      return res.json();
+    },
+    onSuccess: (_data, ids) => {
+      toast({ title: "Default labels cleared", description: `${ids.length} ${ids.length === 1 ? "library" : "libraries"} updated` });
+      setSelectedIds(new Set());
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/tenants", tenantConnectionId, "libraries"] });
+    },
+    onError: (err: any) => toast({ title: "Clear failed", description: err.message, variant: "destructive" }),
+  });
+
   const filtered = useMemo(() => {
     let result = libraries.filter((l) => showHidden || !l.hidden);
+    if (labelFilter === "labeled") {
+      result = result.filter((l) => !!l.defaultSensitivityLabelId);
+    } else if (labelFilter === "unlabeled") {
+      result = result.filter((l) => !l.defaultSensitivityLabelId);
+    } else if (labelFilter !== "all") {
+      result = result.filter((l) => l.defaultSensitivityLabelId === labelFilter);
+    }
     if (searchTerm) {
       const term = searchTerm.toLowerCase();
       result = result.filter((l) => l.displayName.toLowerCase().includes(term) || l.workspaceName.toLowerCase().includes(term));
@@ -771,7 +799,7 @@ function LibrariesTab({ tenantConnectionId }: { tenantConnectionId: string }) {
       }
     });
     return result;
-  }, [libraries, searchTerm, sortBy, showHidden]);
+  }, [libraries, searchTerm, sortBy, showHidden, labelFilter]);
 
   const selectedLib = selectedLibraryId ? libraries.find((l) => l.id === selectedLibraryId) : null;
 
@@ -804,6 +832,17 @@ function LibrariesTab({ tenantConnectionId }: { tenantConnectionId: string }) {
           <span className="text-sm font-medium">{selectedIds.size} selected</span>
           <div className="flex items-center gap-2">
             <Button size="sm" variant="ghost" onClick={() => setSelectedIds(new Set())} data-testid="button-clear-selection">Clear</Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="gap-2 text-destructive border-destructive/40 hover:bg-destructive/10"
+              onClick={() => clearLabelsMutation.mutate(Array.from(selectedIds))}
+              disabled={clearLabelsMutation.isPending}
+              data-testid="button-clear-default-labels"
+            >
+              {clearLabelsMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <X className="w-4 h-4" />}
+              Clear Default Labels
+            </Button>
             <Button size="sm" className="gap-2" onClick={() => setDialogTargets(selectedLibs)} data-testid="button-bulk-default-label">
               <Shield className="w-4 h-4" /> Set Default Label
             </Button>
@@ -870,6 +909,25 @@ function LibrariesTab({ tenantConnectionId }: { tenantConnectionId: string }) {
                 {showHidden ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
                 {showHidden ? "Hide Hidden" : "Show Hidden"}
               </Button>
+              <Select value={labelFilter} onValueChange={(v) => { setLabelFilter(v); setSelectedIds(new Set()); }}>
+                <SelectTrigger className="w-[150px] h-8 text-xs" data-testid="select-label-filter">
+                  <Shield className="w-3 h-3 mr-1 text-muted-foreground" />
+                  <SelectValue placeholder="All labels" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All labels</SelectItem>
+                  <SelectItem value="labeled">Has default label</SelectItem>
+                  <SelectItem value="unlabeled">No default label</SelectItem>
+                  {labelOptions.length > 0 && (
+                    <>
+                      <div className="px-2 py-1 text-[10px] text-muted-foreground uppercase tracking-wide">By label</div>
+                      {labelOptions.map((l) => (
+                        <SelectItem key={l.id} value={l.id}>{l.displayName}</SelectItem>
+                      ))}
+                    </>
+                  )}
+                </SelectContent>
+              </Select>
               <Select value={sortBy} onValueChange={setSortBy}>
                 <SelectTrigger className="w-[140px] h-8 text-xs" data-testid="select-sort">
                   <ArrowUpDown className="w-3 h-3 mr-1" />
