@@ -763,7 +763,7 @@ function LibrariesTab({ tenantConnectionId }: { tenantConnectionId: string }) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ libraryIds: ids, sensitivityLabelId: null, applyRetroactively: false }),
+        body: JSON.stringify({ libraryIds: ids, sensitivityLabelId: null, applyRetroactively: false, confirm: true }),
       });
       if (!res.ok) throw new Error((await res.json().catch(() => ({}))).message || "Clear failed");
       return res.json();
