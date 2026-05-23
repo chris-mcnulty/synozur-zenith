@@ -141,7 +141,9 @@ export default function WorkspaceDetailsPage() {
     queryFn: () => {
       const params = new URLSearchParams();
       if (tenantConnectionId) params.set("tenantConnectionId", tenantConnectionId);
-      return fetch(`/api/workspaces?${params.toString()}`).then(r => r.json());
+      return fetch(`/api/workspaces?${params.toString()}`)
+        .then(r => r.json())
+        .then(d => Array.isArray(d) ? d : (d?.items ?? []));
     },
     enabled: !!tenantConnectionId,
   });
