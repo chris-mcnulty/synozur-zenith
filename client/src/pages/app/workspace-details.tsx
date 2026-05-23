@@ -1,5 +1,6 @@
-import { useState, useEffect } from "react";
+import React, { useState, useEffect } from "react";
 import { Link, useParams } from "wouter";
+import { ErrorBoundary } from "@/components/ui/error-boundary";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -67,7 +68,7 @@ type DataDictEntry = { id: string; tenantId: string; category: string; value: st
 type SensitivityLabelEntry = { id: string; tenantId: string; labelId: string; name: string; description: string | null; color: string | null; tooltip: string | null; sensitivity: number | null; isActive: boolean; contentFormats: string[] | null; hasProtection: boolean; parentLabelId: string | null; appliesToGroupsSites: boolean; syncedAt: string | null };
 type RetentionLabelEntry = { id: string; tenantId: string; labelId: string; name: string; description: string | null; isInUse: boolean; retentionDuration: string | null; actionAfterRetention: string | null; syncedAt: string | null };
 
-export default function WorkspaceDetailsPage() {
+function WorkspaceDetailsInner() {
   const { id } = useParams<{ id: string }>();
   const { toast } = useToast();
   const { canWriteBack } = useServicePlan();
@@ -1985,7 +1986,7 @@ export default function WorkspaceDetailsPage() {
                         {scoringResult
                           ? copilotEligible
                             ? `All ${scoringResult.totalCount} readiness criteria met`
-                            : `${scoringResult.blockers.length} criteria failing — resolve to enable`
+                            : `${scoringResult.blockers?.length ?? 0} criteria failing — resolve to enable`
                           : copilotEligible
                             ? "All governance rules passed"
                             : `${failCount} rule${failCount > 1 ? 's' : ''} failed — resolve to enable`
@@ -1993,9 +1994,9 @@ export default function WorkspaceDetailsPage() {
                       </p>
                     </div>
                   </div>
-                  {scoringResult && scoringResult.blockers.length > 0 && (
+                  {scoringResult && (scoringResult.blockers?.length ?? 0) > 0 && (
                     <div className="space-y-2 mb-4">
-                      {scoringResult.blockers.map(b => (
+                      {(scoringResult.blockers ?? []).map(b => (
                         <div key={b.key} className="flex items-start gap-2 text-xs p-2 rounded-lg bg-destructive/5" data-testid={`scoring-blocker-${b.key}`}>
                           <ShieldAlert className="w-3.5 h-3.5 text-destructive shrink-0 mt-0.5" />
                           <div>
@@ -2114,5 +2115,13 @@ export default function WorkspaceDetailsPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+export default function WorkspaceDetailsPage() {
+  return (
+    <ErrorBoundary backHref="/app/governance" backLabel="Back to SharePoint Sites">
+      <WorkspaceDetailsInner />
+    </ErrorBoundary>
   );
 }

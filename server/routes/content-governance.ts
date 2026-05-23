@@ -215,8 +215,6 @@ router.get("/api/content-governance/sharing/links", requireAuth(), async (req: A
 router.delete("/api/content-governance/sharing/links/:id", requireAuth(), async (req: AuthenticatedRequest, res) => {
   try {
     const id = req.params.id as string;
-    const tenantConnectionId = (req.body?.tenantConnectionId ?? req.query.tenantConnectionId) as string;
-    if (!tenantConnectionId) return res.status(400).json({ error: "tenantConnectionId is required" });
 
     const [link] = await db
       .select()
