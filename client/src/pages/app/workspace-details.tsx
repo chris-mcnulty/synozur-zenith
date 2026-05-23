@@ -546,7 +546,9 @@ export default function WorkspaceDetailsPage() {
     }
   };
 
-  const sensitivityLabel = workspace.sensitivity.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase()).replace(/\B\w+/g, c => c.toLowerCase());
+  const sensitivityLabel = workspace.sensitivity
+    ? workspace.sensitivity.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase()).replace(/\B\w+/g, c => c.toLowerCase())
+    : null;
   const sensitivityVariant = workspace.sensitivity === "HIGHLY_CONFIDENTIAL" ? "destructive" : "secondary";
 
   const resolvedPurviewLabel = workspace.sensitivityLabelId
@@ -597,7 +599,9 @@ export default function WorkspaceDetailsPage() {
               <h1 className="text-2xl font-bold tracking-tight" data-testid="text-workspace-name">
                 {workspace.displayName}
               </h1>
-              <Badge variant={sensitivityVariant} className={`${sensitivityVariant === "destructive" ? "bg-destructive/10 text-destructive border-destructive/20" : ""}`} data-testid="badge-sensitivity">{sensitivityLabel}</Badge>
+              {sensitivityLabel && (
+                <Badge variant={sensitivityVariant} className={`${sensitivityVariant === "destructive" ? "bg-destructive/10 text-destructive border-destructive/20" : ""}`} data-testid="badge-sensitivity">{sensitivityLabel}</Badge>
+              )}
               {workspace.teamsConnected && (
                 <Badge variant="outline" className="text-[10px] font-semibold text-blue-500 bg-blue-500/10 border-blue-500/20">Teams Connected</Badge>
               )}
