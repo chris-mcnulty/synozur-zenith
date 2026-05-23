@@ -68,6 +68,14 @@ type DataDictEntry = { id: string; tenantId: string; category: string; value: st
 type SensitivityLabelEntry = { id: string; tenantId: string; labelId: string; name: string; description: string | null; color: string | null; tooltip: string | null; sensitivity: number | null; isActive: boolean; contentFormats: string[] | null; hasProtection: boolean; parentLabelId: string | null; appliesToGroupsSites: boolean; syncedAt: string | null };
 type RetentionLabelEntry = { id: string; tenantId: string; labelId: string; name: string; description: string | null; isInUse: boolean; retentionDuration: string | null; actionAfterRetention: string | null; syncedAt: string | null };
 
+// Stable module-level empty array used as the default for the customFieldDefs query.
+// React compares useEffect deps by reference (Object.is). An inline `= []` default
+// allocates a new array every render, so while the query is loading (data === undefined)
+// the dep "changes" each render → effect fires → setState → re-render → repeat →
+// React error #185 (maximum update depth exceeded, limit 50).
+// Using a single module-level reference keeps the dep stable until real data arrives.
+const STABLE_EMPTY_CUSTOM_FIELD_DEFS: CustomFieldDefinition[] = [];
+
 function WorkspaceDetailsInner() {
   const { id } = useParams<{ id: string }>();
   const { toast } = useToast();
@@ -125,7 +133,7 @@ function WorkspaceDetailsInner() {
     enabled: !!tenantConnectionId,
   });
 
-  const { data: customFieldDefs = [] } = useQuery<CustomFieldDefinition[]>({
+  const { data: customFieldDefs = STABLE_EMPTY_CUSTOM_FIELD_DEFS } = useQuery<CustomFieldDefinition[]>({
     queryKey: ["/api/admin/tenants", tenantConnectionId, "custom-fields"],
     queryFn: () => fetch(`/api/admin/tenants/${tenantConnectionId}/custom-fields`).then(r => r.json()),
     enabled: !!tenantConnectionId,
