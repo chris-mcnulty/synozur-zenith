@@ -588,8 +588,14 @@ export async function runSharePointTenantSync(
         // don't clobber the SPO REST fallback with a null usage value.
         workspaceData.isDeleted = usage.isDeleted;
         workspaceData.reportRefreshDate = usage.reportRefreshDate || null;
-        workspaceData.sensitivityLabelId = usage.sensitivityLabelId || null;
+        // Usage report has up to 48h lag — prefer its label when present,
+        // but fall back to the real-time assignedLabels on the M365 Group.
+        workspaceData.sensitivityLabelId =
+          usage.sensitivityLabelId || enriched.groupOwners?.groupLabelId || null;
         workspaceData.sharingCapability = usage.externalSharing || null;
+      } else if (enriched.groupOwners?.groupLabelId) {
+        // Site has no usage-report row — still capture the real-time group label.
+        workspaceData.sensitivityLabelId = enriched.groupOwners.groupLabelId;
       }
 
       const archiveStatus = site.siteCollection?.archivalDetails?.archiveStatus || null;

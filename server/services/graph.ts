@@ -828,10 +828,16 @@ export async function fetchSiteGroupOwners(
       return { owners: [], error: "No M365 Group associated with this site" };
     }
 
-    const ownersRes = await fetch(
-      `https://graph.microsoft.com/v1.0/groups/${groupId}/owners?$select=id,displayName,mail,userPrincipalName`,
-      { headers: { Authorization: `Bearer ${token}` } }
-    );
+    const [ownersRes, groupRes] = await Promise.all([
+      fetch(
+        `https://graph.microsoft.com/v1.0/groups/${groupId}/owners?$select=id,displayName,mail,userPrincipalName`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      ),
+      fetch(
+        `https://graph.microsoft.com/v1.0/groups/${groupId}?$select=id,assignedLabels`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      ),
+    ]);
 
     if (!ownersRes.ok) {
       const errText = await ownersRes.text();
@@ -846,7 +852,13 @@ export async function fetchSiteGroupOwners(
       userPrincipalName: o.userPrincipalName,
     }));
 
-    return { owners, groupId };
+    let groupLabelId: string | null = null;
+    if (groupRes.ok) {
+      const groupData = await groupRes.json();
+      groupLabelId = groupData.assignedLabels?.[0]?.labelId ?? null;
+    }
+
+    return { owners, groupId, groupLabelId };
   } catch (err: any) {
     return { owners: [], error: err.message };
   }
