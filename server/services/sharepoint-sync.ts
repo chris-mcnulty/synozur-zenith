@@ -588,10 +588,12 @@ export async function runSharePointTenantSync(
         // don't clobber the SPO REST fallback with a null usage value.
         workspaceData.isDeleted = usage.isDeleted;
         workspaceData.reportRefreshDate = usage.reportRefreshDate || null;
-        // Usage report has up to 48h lag — prefer its label when present,
-        // but fall back to the real-time assignedLabels on the M365 Group.
-        workspaceData.sensitivityLabelId =
-          usage.sensitivityLabelId || enriched.groupOwners?.groupLabelId || null;
+        // Usage report is the authoritative source for label state when a row
+        // exists — even if it is null (label explicitly removed).  Do NOT fall
+        // back to the M365 Group's assignedLabels here: the Group can still
+        // carry a stale label after the user has deliberately cleared it,
+        // which would cause the label to be silently re-applied on every sync.
+        workspaceData.sensitivityLabelId = usage.sensitivityLabelId || null;
         workspaceData.sharingCapability = usage.externalSharing || null;
       } else if (enriched.groupOwners?.groupLabelId) {
         // Site has no usage-report row — still capture the real-time group label.
