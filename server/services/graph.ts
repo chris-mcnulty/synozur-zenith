@@ -4537,15 +4537,20 @@ export async function revokeSharingLink(
   token: string,
   siteId: string,
   permissionId: string,
+  itemId?: string | null,
 ): Promise<{ success: boolean; error?: string }> {
   try {
-    const res = await fetch(
-      `https://graph.microsoft.com/v1.0/sites/${siteId}/drive/root/permissions/${permissionId}`,
-      {
-        method: "DELETE",
-        headers: { Authorization: `Bearer ${token}` },
-      },
-    );
+    // Item-scoped permission path when a specific driveItem is known (the common case
+    // for file-level sharing links).  Falling back to the root drive path would only
+    // succeed for root-level permissions and silently fail for everything else.
+    const path = itemId
+      ? `https://graph.microsoft.com/v1.0/sites/${siteId}/drive/items/${itemId}/permissions/${permissionId}`
+      : `https://graph.microsoft.com/v1.0/sites/${siteId}/drive/root/permissions/${permissionId}`;
+
+    const res = await fetch(path, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${token}` },
+    });
 
     if (res.ok || res.status === 204) {
       return { success: true };

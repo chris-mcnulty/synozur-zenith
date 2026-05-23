@@ -16,6 +16,8 @@ import { trackJobRun, DuplicateJobError } from "../services/job-tracking";
 import { getOrgTenantConnectionIds, getActiveOrgId, assertTenantInScope } from "./scope-helpers";
 import { logAuditEvent, logAccessDenied, AUDIT_ACTIONS } from "../services/audit-logger";
 import { storage } from "../storage";
+import { revokeSharingLink, getAppToken } from "../services/graph";
+import { getEffectiveClientSecret } from "../services/sharepoint-sync";
 
 const router = Router();
 
@@ -224,11 +226,48 @@ router.delete("/api/content-governance/sharing/links/:id", requireAuth(), async 
 
     if (!link) return res.status(404).json({ error: "Sharing link not found" });
 
-    return res.status(501).json({
-      error: "Remote sharing-link revocation is not implemented for this endpoint.",
-      message: "This route must revoke the permission in Microsoft 365 before updating local inventory state.",
-      id,
+    // Scope check — link must belong to a tenant the calling org can access.
+    const allowedIds = await getOrgTenantConnectionIds(req);
+    if (allowedIds !== null && !allowedIds.includes(link.tenantConnectionId)) {
+      logAccessDenied(req, "revoke sharing link", "tenant not in scope");
+      return res.status(403).json({ error: "Forbidden" });
+    }
+
+    const conn = await storage.getTenantConnection(link.tenantConnectionId);
+    if (!conn) return res.status(400).json({ error: "Tenant connection not found" });
+
+    const clientId = conn.clientId || process.env.AZURE_CLIENT_ID!;
+    const clientSecret = getEffectiveClientSecret(conn);
+    const token = await getAppToken(conn.tenantId, clientId, clientSecret);
+
+    const result = await revokeSharingLink(token, link.resourceId, link.linkId, link.itemId);
+
+    if (!result.success) {
+      console.error(`[content-governance] revoke sharing link failed for link ${id}:`, result.error);
+      return res.status(502).json({ error: result.error || "Failed to revoke sharing link in Microsoft 365" });
+    }
+
+    // Mark as inactive in local inventory.
+    await db
+      .update(sharingLinksInventory)
+      .set({ isActive: false })
+      .where(eq(sharingLinksInventory.id, id));
+
+    await logAuditEvent({
+      action: "SHARING_LINK_REVOKED",
+      userId: req.user!.id,
+      organizationId: getActiveOrgId(req),
+      details: {
+        linkId: id,
+        itemName: link.itemName,
+        itemPath: link.itemPath,
+        linkType: link.linkType,
+        resourceId: link.resourceId,
+        tenantConnectionId: link.tenantConnectionId,
+      },
     });
+
+    return res.json({ success: true, id });
   } catch (err: any) {
     console.error("[content-governance] delete sharing link error:", err);
     res.status(500).json({ error: err.message });
