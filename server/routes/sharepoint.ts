@@ -2,7 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { storage } from "../storage";
 import { insertWorkspaceSchema, insertProvisioningRequestSchema, type ServicePlanTier, ZENITH_ROLES } from "@shared/schema";
-import { fetchSharePointSites, fetchSiteUsageReport, fetchSiteDriveOwner, fetchSiteAnalytics, fetchSiteGroupOwners, fetchSiteCollectionAdmins, getAppToken, writeSitePropertyBag, requestSiteReindex, fetchSitePropertyBag, fetchSensitivityLabels, fetchRetentionLabels, fetchHubSites, fetchSiteHubAssociation, fetchHubSitesViaSearch, applySensitivityLabelToSite, removeSensitivityLabelFromSite, joinHubSite, leaveHubSite, fetchSiteLockState, fetchSiteArchiveStatus, batchToggleNoScript, fetchSiteDocumentLibraries, enumerateSiteDocumentLibraries, fetchLibraryDetails, fetchLibraryFolderDepth, fetchLibraryViews, fetchLibraryItemFillRates, fetchSiteTelemetry, fetchContentTypes, createSharePointSite, createM365Group, createTeam, assignSensitivityLabelToGroup, resolveOwnerIds, archiveSite, unarchiveSite, deleteSiteFromGraph, graphFetchWithRetry, addGroupOwner, removeGroupOwner, addGroupMember, removeGroupMember, fetchSiteGroupMembers, searchTenantUsers } from "../services/graph";
+import { fetchSharePointSites, fetchSiteUsageReport, fetchSiteDriveOwner, fetchSiteAnalytics, fetchSiteGroupOwners, fetchSiteCollectionAdmins, getAppToken, writeSitePropertyBag, requestSiteReindex, fetchSitePropertyBag, fetchSensitivityLabels, fetchRetentionLabels, fetchHubSites, fetchSiteHubAssociation, fetchHubSitesViaSearch, applySensitivityLabelToSite, removeSensitivityLabelFromSite, applySensitivityLabelToGroup, removeSensitivityLabelFromGroup, joinHubSite, leaveHubSite, fetchSiteLockState, fetchSiteArchiveStatus, batchToggleNoScript, fetchSiteDocumentLibraries, enumerateSiteDocumentLibraries, fetchLibraryDetails, fetchLibraryFolderDepth, fetchLibraryViews, fetchLibraryItemFillRates, fetchSiteTelemetry, fetchContentTypes, createSharePointSite, createM365Group, createTeam, assignSensitivityLabelToGroup, resolveOwnerIds, archiveSite, unarchiveSite, deleteSiteFromGraph, graphFetchWithRetry, addGroupOwner, removeGroupOwner, addGroupMember, removeGroupMember, fetchSiteGroupMembers, searchTenantUsers } from "../services/graph";
 import { getPlanFeatures, requireFeature } from "../services/feature-gate";
 import { bulkJobStore, type BulkJobResult } from "../services/bulk-job-store";
 import {
@@ -374,6 +374,25 @@ router.patch("/api/workspaces/:id", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, Z
             labelSyncResult = { pushed: result.success, error: result.error };
             if (result.success) {
               console.log(`[label-push] Applied sensitivity label ${body.sensitivityLabelId} to ${existing.siteUrl} via CSOM for workspace ${existing.displayName}`);
+              // For group-connected sites the label also lives on the M365 Group's
+              // assignedLabels.  CSOM alone only sets the SPO site property; without
+              // patching the Group, the label may not surface in M365 Admin / Teams.
+              const groupId = (existing.propertyBag as Record<string, string> | null)?.GroupId;
+              if (groupId && labelConn) {
+                try {
+                  const gcClientId = labelConn.clientId || process.env.AZURE_CLIENT_ID!;
+                  const gcSecret = getEffectiveClientSecret(labelConn);
+                  const gcToken = await getAppToken(labelConn.tenantId, gcClientId, gcSecret);
+                  const gcResult = await applySensitivityLabelToGroup(gcToken, groupId, body.sensitivityLabelId);
+                  if (gcResult.success) {
+                    console.log(`[label-push] Also updated M365 Group ${groupId} assignedLabels for ${existing.displayName}`);
+                  } else {
+                    console.warn(`[label-push] CSOM succeeded but Group label update failed for ${existing.displayName} (groupId=${groupId}): ${gcResult.error}`);
+                  }
+                } catch (err: any) {
+                  console.warn(`[label-push] Could not update M365 Group label for ${existing.displayName}: ${err.message}`);
+                }
+              }
             } else {
               console.error(`[label-push] Failed to apply label to ${existing.siteUrl}: ${result.error}`);
               return res.status(502).json({ message: `Failed to apply label to site: ${result.error}`, labelSyncResult });
@@ -383,6 +402,25 @@ router.patch("/api/workspaces/:id", requireRole(ZENITH_ROLES.GOVERNANCE_ADMIN, Z
             labelSyncResult = { pushed: result.success, error: result.error };
             if (result.success) {
               console.log(`[label-push] Removed sensitivity label from ${existing.siteUrl} via CSOM for workspace ${existing.displayName}`);
+              // For group-connected sites, also clear the M365 Group's assignedLabels.
+              // Without this, the Group retains the label and M365 continues to show
+              // the site as labeled — and the next sync re-applies it from the Group.
+              const groupId = (existing.propertyBag as Record<string, string> | null)?.GroupId;
+              if (groupId && labelConn) {
+                try {
+                  const gcClientId = labelConn.clientId || process.env.AZURE_CLIENT_ID!;
+                  const gcSecret = getEffectiveClientSecret(labelConn);
+                  const gcToken = await getAppToken(labelConn.tenantId, gcClientId, gcSecret);
+                  const gcResult = await removeSensitivityLabelFromGroup(gcToken, groupId);
+                  if (gcResult.success) {
+                    console.log(`[label-push] Also cleared M365 Group ${groupId} assignedLabels for ${existing.displayName}`);
+                  } else {
+                    console.warn(`[label-push] CSOM succeeded but Group label removal failed for ${existing.displayName} (groupId=${groupId}): ${gcResult.error}`);
+                  }
+                } catch (err: any) {
+                  console.warn(`[label-push] Could not clear M365 Group label for ${existing.displayName}: ${err.message}`);
+                }
+              }
             } else {
               console.error(`[label-push] Failed to remove label from ${existing.siteUrl}: ${result.error}`);
               return res.status(502).json({ message: `Failed to remove label from site: ${result.error}`, labelSyncResult });
