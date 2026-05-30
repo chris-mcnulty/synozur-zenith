@@ -221,6 +221,14 @@ export const tenantConnections = pgTable("tenant_connections", {
   licensingEnabled: boolean("licensing_enabled").notNull().default(false),
   lifecycleScanScheduleEnabled: boolean("lifecycle_scan_schedule_enabled").notNull().default(true),
   copilotSyncScheduleEnabled: boolean("copilot_sync_schedule_enabled").notNull().default(true),
+  // Nightly Data Refresh & Health Report (premium / Enterprise). Three
+  // independent admin toggles, all on by default: the nightly site+library
+  // data refresh, the health report generation, and the report email delivery.
+  // An admin can turn report generation and/or email off while still keeping
+  // the nightly data refresh running.
+  nightlyRefreshScheduleEnabled: boolean("nightly_refresh_schedule_enabled").notNull().default(true),
+  nightlyHealthReportEnabled: boolean("nightly_health_report_enabled").notNull().default(true),
+  nightlyHealthReportEmailEnabled: boolean("nightly_health_report_email_enabled").notNull().default(true),
   // BL-046: Tenant Connection Health Monitor (denormalized summary)
   healthStatus: text("health_status"),
   healthLastCheckedAt: timestamp("health_last_checked_at"),
@@ -406,6 +414,7 @@ export const PLAN_FEATURES = {
     contentIntensityHeatmap: false,
     copilotPromptIntelligence: false,
     m365OverviewReport: false,
+    scheduledHealthReports: false,
     auditStreaming: false,
     trendRetentionDays: 0,
     maxUsers: 25,
@@ -438,6 +447,7 @@ export const PLAN_FEATURES = {
     contentIntensityHeatmap: false,
     copilotPromptIntelligence: false,
     m365OverviewReport: false,
+    scheduledHealthReports: false,
     auditStreaming: false,
     trendRetentionDays: 0,
     maxUsers: 500,
@@ -470,6 +480,7 @@ export const PLAN_FEATURES = {
     contentIntensityHeatmap: false,
     copilotPromptIntelligence: true,
     m365OverviewReport: false,
+    scheduledHealthReports: false,
     auditStreaming: true,
     trendRetentionDays: 30,
     maxUsers: 5000,
@@ -502,6 +513,7 @@ export const PLAN_FEATURES = {
     contentIntensityHeatmap: true,
     copilotPromptIntelligence: true,
     m365OverviewReport: true,
+    scheduledHealthReports: true,
     auditStreaming: true,
     trendRetentionDays: -1,
     maxUsers: -1,
@@ -1943,6 +1955,89 @@ export const insertM365OverviewReportSchema = createInsertSchema(m365OverviewRep
 export type InsertM365OverviewReport = z.infer<typeof insertM365OverviewReportSchema>;
 export type M365OverviewReport = typeof m365OverviewReports.$inferSelect;
 
+// ─── Nightly Health Report (premium / Enterprise) ──────────────────────────
+// Generated nightly after the scheduled data refresh of workspaces (sites) and
+// document libraries. Flags sites over 75% and over 90% of their storage quota
+// plus other governance health issues across the suite. Available in-product
+// and emailed to Tenant/Governance admins.
+
+export interface NightlyHealthStorageSite {
+  workspaceId: string;
+  displayName: string;
+  siteUrl: string | null;
+  storageUsedBytes: number;
+  storageAllocatedBytes: number;
+  percentUsed: number; // 0–100, rounded to 1 decimal
+  severity: "warning" | "critical"; // warning ≥75% & <90%, critical ≥90%
+}
+
+export interface NightlyHealthIssue {
+  category: "STORAGE" | "LABELS" | "OWNERSHIP" | "SHARING" | "LIFECYCLE" | "CONNECTION";
+  severity: "info" | "warning" | "critical";
+  count: number;
+  title: string;
+  detail: string;
+}
+
+export interface NightlyHealthSnapshot {
+  generatedAt: string;
+  refreshedAt: string | null; // when the nightly data refresh completed, if it ran
+  totals: {
+    sitesEvaluated: number;
+    sitesWithQuota: number;
+    librariesEvaluated: number;
+  };
+  storage: {
+    sitesOver75: number; // includes sites also over 90%
+    sitesOver90: number;
+    topSites: NightlyHealthStorageSite[]; // sites ≥75%, sorted by percent desc
+  };
+  governance: {
+    orphanedSites: number;
+    sitesMissingLabels: number;
+    librariesMissingLabels: number;
+    externalSharingSites: number;
+    staleWorkspaces: number; // no activity in 90+ days
+    degradedConnections: number;
+  };
+  issues: NightlyHealthIssue[];
+  dataCaveats: string[];
+}
+
+export const nightlyHealthReports = pgTable("nightly_health_reports", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  organizationId: varchar("organization_id").notNull(),
+  tenantConnectionId: varchar("tenant_connection_id").notNull(),
+
+  status: text("status").notNull().default("RUNNING"), // RUNNING | COMPLETED | FAILED
+  reportDate: text("report_date").notNull(), // YYYY-MM-DD (tenant-local server date)
+
+  snapshot: jsonb("snapshot").$type<NightlyHealthSnapshot>(),
+  sitesOver75: integer("sites_over_75"),
+  sitesOver90: integer("sites_over_90"),
+  issueCount: integer("issue_count"),
+
+  emailedAt: timestamp("emailed_at"),
+  emailRecipientCount: integer("email_recipient_count"),
+
+  triggeredBy: text("triggered_by").notNull().default("scheduled"), // scheduled | manual
+  triggeredByUserId: varchar("triggered_by_user_id"),
+
+  startedAt: timestamp("started_at").defaultNow().notNull(),
+  completedAt: timestamp("completed_at"),
+  error: text("error"),
+
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertNightlyHealthReportSchema = createInsertSchema(nightlyHealthReports).omit({
+  id: true,
+  createdAt: true,
+  startedAt: true,
+});
+export type InsertNightlyHealthReport = z.infer<typeof insertNightlyHealthReportSchema>;
+export type NightlyHealthReport = typeof nightlyHealthReports.$inferSelect;
+
 export const aiAgentSkills = pgTable("ai_agent_skills", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   organizationId: varchar("organization_id").notNull(),
@@ -2184,6 +2279,7 @@ export const JOB_TYPES = {
   iaSync:               { label: "IA Column Sync",              dataset: "iaColumns" },
   lifecycleComplianceScan: { label: "Lifecycle Compliance Scan", dataset: "lifecycleCompliance" },
   tenantHealthCheck: { label: "Tenant Health Check", dataset: "tenantHealth" },
+  nightlyHealthReport: { label: "Nightly Data Refresh & Health Report", dataset: "nightlyHealthReport" },
 } as const;
 
 export type JobType = keyof typeof JOB_TYPES;

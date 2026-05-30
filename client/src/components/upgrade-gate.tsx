@@ -26,6 +26,7 @@ const FEATURE_LABELS: Record<string, { label: string; minPlan: string }> = {
   contentIntensityHeatmap: { label: "Content Intensity Heat Map", minPlan: "Enterprise" },
   copilotPromptIntelligence: { label: "Copilot Prompt Intelligence", minPlan: "Professional" },
   m365OverviewReport: { label: "M365 30-Day Overview Report", minPlan: "Enterprise" },
+  scheduledHealthReports: { label: "Nightly Data Refresh & Health Reports", minPlan: "Enterprise" },
 };
 
 export function UpgradeGate({ feature, children, fallback, inline }: UpgradeGateProps) {

@@ -11,7 +11,8 @@ import {
   ShieldCheck, 
   Fingerprint, 
   Clock, 
-  BarChart3, 
+  BarChart3,
+  HeartPulse,
   Settings,
   HelpCircle,
   BookOpen,
@@ -210,6 +211,7 @@ const navGroups: NavGroup[] = [
       { name: "Content Intensity Heat Map", href: "/app/content-intensity-heatmap", icon: Flame, badge: "Ent+" },
       { name: "AI Assistant", href: "/app/ai-copilot", icon: BrainCircuit },
       { name: "License Overview", href: "/app/licensing", icon: CreditCard, featureToggle: "licensing", minRole: "operator" },
+      { name: "Nightly Health Report", href: "/app/nightly-health-report", icon: HeartPulse, badge: "Ent+", minRole: "operator" },
       { name: "Reports", href: "/app/reports", icon: BarChart3, isMock: true },
     ]
   }

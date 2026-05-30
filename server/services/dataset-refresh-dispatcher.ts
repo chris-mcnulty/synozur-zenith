@@ -313,6 +313,18 @@ export async function dispatchDatasetRefresh(opts: {
       };
     }
 
+    case "nightlyHealthReport": {
+      // The nightly data refresh & health report runs on a schedule and has a
+      // dedicated on-demand endpoint (POST /api/nightly-health-reports). It is
+      // not a per-tenant dataset-refresh dispatch — enumerated here to keep the
+      // exhaustive switch happy.
+      return {
+        ok: false,
+        status: 400,
+        message: "The nightly health report runs on a schedule; use POST /api/nightly-health-reports to generate one on demand.",
+      };
+    }
+
     default: {
       const _exhaustive: never = jobType;
       return { ok: false, status: 400, message: `Unknown job type: ${String(_exhaustive)}` };

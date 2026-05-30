@@ -56,6 +56,7 @@ import OneDriveInventoryPage from "./pages/app/onedrive-inventory";
 import RecordingsPage from "./pages/app/recordings";
 import EmailStorageReportPage from "./pages/app/email-storage-report";
 import M365OverviewReportPage from "./pages/app/m365-overview-report";
+import NightlyHealthReportPage from "./pages/app/nightly-health-report";
 import LicensingPage from "./pages/app/licensing";
 import NotificationsSettingsPage from "./pages/app/settings/notifications";
 import AppShell from "./components/layout/app-shell";
@@ -255,6 +256,7 @@ function AppRoutes() {
         <Route path="/app/recordings" component={RecordingsPage} />
         <Route path="/app/email-storage-report" component={EmailStorageReportPage} />
         <Route path="/app/m365-overview-report" component={M365OverviewReportPage} />
+        <Route path="/app/nightly-health-report" component={NightlyHealthReportPage} />
         <Route path="/app/licensing" component={LicensingPage} />
         <Route path="/app/settings/notifications" component={NotificationsSettingsPage} />
         <Route path="/app/support/:tab" component={SupportPage} />
