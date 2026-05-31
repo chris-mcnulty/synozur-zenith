@@ -20,6 +20,7 @@ import contentGovernanceRouter from "./routes/content-governance";
 import licensingRouter from "./routes/licensing";
 import emailStorageReportRouter from "./routes/email-storage-report";
 import m365OverviewReportRouter from "./routes/m365-overview-report";
+import nightlyHealthReportRouter from "./routes/nightly-health-report";
 import adminAiRouter from "./routes/admin-ai";
 import iaAssessmentRouter from "./routes/ia-assessment";
 import contentIntensityHeatmapRouter from "./routes/content-intensity-heatmap";
@@ -66,6 +67,7 @@ export async function registerRoutes(
   app.use(licensingRouter);
   app.use(emailStorageReportRouter);
   app.use(m365OverviewReportRouter);
+  app.use(nightlyHealthReportRouter);
   app.use(adminAiRouter);
   app.use(iaAssessmentRouter);
   app.use(contentIntensityHeatmapRouter);

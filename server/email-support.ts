@@ -1,5 +1,10 @@
 import { getUncachableSendGridClient } from "./services/sendgrid-client";
-import type { SupportTicket, User, Organization } from "@shared/schema";
+import type {
+  SupportTicket,
+  User,
+  Organization,
+  NightlyHealthSnapshot,
+} from "@shared/schema";
 
 const APP_PUBLIC_URL = process.env.APP_PUBLIC_URL || "https://zenith.synozur.com";
 
@@ -492,6 +497,202 @@ export async function sendTenantAutoSuspendedEmail(
     to: recipientEmail,
     from: fromEmail,
     subject: `[Action Required] Tenant "${tenantName}" suspended — consent lost`,
+    html,
+  });
+}
+
+function formatBytesEmail(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let n = bytes;
+  let i = 0;
+  while (n >= 1024 && i < units.length - 1) {
+    n /= 1024;
+    i += 1;
+  }
+  return `${n.toFixed(n >= 10 || i === 0 ? 0 : 1)} ${units[i]}`;
+}
+
+function severityColor(severity: "info" | "warning" | "critical"): string {
+  if (severity === "critical") return "#b91c1c";
+  if (severity === "warning") return "#d97706";
+  return "#5b0fbc";
+}
+
+export interface NightlyHealthReportEmailOptions {
+  recipientEmail: string;
+  recipientName: string;
+  tenantName: string;
+  reportDate: string;
+  snapshot: NightlyHealthSnapshot;
+  reportUrl: string;
+}
+
+export async function sendNightlyHealthReportEmail(
+  opts: NightlyHealthReportEmailOptions,
+): Promise<void> {
+  const { client, fromEmail } = await getUncachableSendGridClient();
+  const { recipientEmail, recipientName, tenantName, reportDate, snapshot, reportUrl } = opts;
+
+  const firstName = escapeHtml(recipientName.split(" ")[0] || recipientEmail);
+  const safeTenant = escapeHtml(tenantName);
+  // Base the header color on the highest issue severity so info-only reports
+  // don't render with an elevated (amber) header.
+  const maxSeverity = snapshot.issues.some((i) => i.severity === "critical")
+    ? "critical"
+    : snapshot.issues.some((i) => i.severity === "warning")
+      ? "warning"
+      : "info";
+  const headerColor = maxSeverity === "critical" ? "#b91c1c" : maxSeverity === "warning" ? "#d97706" : "#5b0fbc";
+  const totalIssues = snapshot.issues.reduce((sum, i) => sum + i.count, 0);
+
+  // sitesOver75 is inclusive of sitesOver90; show the 75–90% band explicitly
+  // so the figures don't read as double-counting.
+  const between75And90 = snapshot.storage.sitesOver75 - snapshot.storage.sitesOver90;
+  const summaryLine =
+    totalIssues > 0
+      ? `${snapshot.storage.sitesOver90} site(s) over 90% and ${between75And90} between 75–90% of storage quota, with ${snapshot.issues.length} governance issue type(s) needing attention.`
+      : `No governance health issues were detected in tonight's scan.`;
+
+  const issueRows =
+    snapshot.issues.length === 0
+      ? `<tr><td colspan="2" style="padding:10px 16px;color:#6b7280;font-size:13px;">No issues flagged — all clear.</td></tr>`
+      : snapshot.issues
+          .map(
+            (i) => `
+            <tr>
+              <td style="padding:10px 16px;border-bottom:1px solid #e5e7eb;color:#111827;font-size:13px;">
+                <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${severityColor(
+                  i.severity,
+                )};margin-right:8px;"></span>
+                <strong>${escapeHtml(i.title)}</strong><br/>
+                <span style="color:#6b7280;font-size:12px;">${escapeHtml(i.detail)}</span>
+              </td>
+              <td style="padding:10px 16px;border-bottom:1px solid #e5e7eb;color:#111827;font-size:14px;font-weight:700;text-align:right;white-space:nowrap;">${i.count}</td>
+            </tr>`,
+          )
+          .join("");
+
+  const topSites = snapshot.storage.topSites.slice(0, 10);
+  const siteRows =
+    topSites.length === 0
+      ? ""
+      : `
+        <p style="margin:24px 0 8px;color:#111827;font-size:14px;font-weight:600;">Sites over storage quota threshold</p>
+        <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;border:1px solid #e5e7eb;border-radius:6px;overflow:hidden;">
+          <tr style="background:#f9fafb;">
+            <td style="padding:8px 16px;border-bottom:1px solid #e5e7eb;color:#6b7280;font-size:12px;font-weight:600;">Site</td>
+            <td style="padding:8px 16px;border-bottom:1px solid #e5e7eb;color:#6b7280;font-size:12px;font-weight:600;text-align:right;">Used / Quota</td>
+            <td style="padding:8px 16px;border-bottom:1px solid #e5e7eb;color:#6b7280;font-size:12px;font-weight:600;text-align:right;">%</td>
+          </tr>
+          ${topSites
+            .map(
+              (s) => `
+            <tr>
+              <td style="padding:8px 16px;border-bottom:1px solid #f0f0f0;color:#111827;font-size:13px;">${escapeHtml(
+                s.displayName,
+              )}</td>
+              <td style="padding:8px 16px;border-bottom:1px solid #f0f0f0;color:#374151;font-size:12px;text-align:right;white-space:nowrap;">${formatBytesEmail(
+                s.storageUsedBytes,
+              )} / ${formatBytesEmail(s.storageAllocatedBytes)}</td>
+              <td style="padding:8px 16px;border-bottom:1px solid #f0f0f0;font-size:13px;font-weight:700;text-align:right;color:${
+                s.severity === "critical" ? "#b91c1c" : "#d97706"
+              };">${s.percentUsed}%</td>
+            </tr>`,
+            )
+            .join("")}
+        </table>`;
+
+  const html = `
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Nightly Health Report</title>
+</head>
+<body style="margin:0;padding:0;background:#f5f5f5;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#f5f5f5;padding:32px 16px;">
+    <tr>
+      <td align="center">
+        <table width="600" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:8px;overflow:hidden;max-width:600px;width:100%;box-shadow:0 1px 3px rgba(0,0,0,0.1);">
+          <tr>
+            <td style="background:${headerColor};padding:24px;">
+              <h1 style="margin:0;color:#ffffff;font-size:20px;font-weight:700;">Zenith &mdash; Nightly Health Report</h1>
+              <p style="margin:4px 0 0;color:rgba(255,255,255,0.85);font-size:13px;">${safeTenant} &middot; ${escapeHtml(
+                reportDate,
+              )}</p>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:28px 24px 8px;">
+              <p style="margin:0 0 12px;color:#111827;font-size:16px;">Hi ${firstName},</p>
+              <p style="margin:0 0 16px;color:#374151;font-size:15px;line-height:1.6;">${escapeHtml(
+                summaryLine,
+              )}</p>
+            </td>
+          </tr>
+          <!-- Storage KPIs -->
+          <tr>
+            <td style="padding:0 24px 8px;">
+              <table width="100%" cellpadding="0" cellspacing="0">
+                <tr>
+                  <td style="padding:12px;background:#fef2f2;border:1px solid #fecaca;border-radius:6px;text-align:center;width:50%;">
+                    <div style="font-size:24px;font-weight:700;color:#b91c1c;">${snapshot.storage.sitesOver90}</div>
+                    <div style="font-size:12px;color:#991b1b;">sites over 90% quota</div>
+                  </td>
+                  <td style="width:8px;"></td>
+                  <td style="padding:12px;background:#fffbeb;border:1px solid #fde68a;border-radius:6px;text-align:center;width:50%;">
+                    <div style="font-size:24px;font-weight:700;color:#d97706;">${snapshot.storage.sitesOver75}</div>
+                    <div style="font-size:12px;color:#92400e;">sites over 75% quota</div>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+          <!-- Issues -->
+          <tr>
+            <td style="padding:16px 24px 0;">
+              <p style="margin:0 0 8px;color:#111827;font-size:14px;font-weight:600;">Governance health issues</p>
+              <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;border:1px solid #e5e7eb;border-radius:6px;overflow:hidden;">
+                ${issueRows}
+              </table>
+              ${siteRows}
+            </td>
+          </tr>
+          <!-- CTA -->
+          <tr>
+            <td style="padding:24px;">
+              <a href="${escapeHtml(reportUrl)}" style="display:inline-block;background:#5b0fbc;color:#ffffff;text-decoration:none;padding:12px 24px;border-radius:6px;font-size:15px;font-weight:600;">
+                View full report in Zenith &rarr;
+              </a>
+            </td>
+          </tr>
+          ${
+            snapshot.dataCaveats.length > 0
+              ? `<tr><td style="padding:0 24px 16px;"><p style="margin:0;color:#9ca3af;font-size:12px;line-height:1.5;">${snapshot.dataCaveats
+                  .map((c) => `&bull; ${escapeHtml(c)}`)
+                  .join("<br/>")}</p></td></tr>`
+              : ""
+          }
+          <tr>
+            <td style="padding:16px 24px;border-top:1px solid #e5e7eb;">
+              <p style="margin:0;color:#9ca3af;font-size:12px;">
+                This is an automated nightly governance report from Zenith. Manage delivery from your tenant connection settings.
+              </p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`;
+
+  await client.send({
+    to: recipientEmail,
+    from: fromEmail,
+    subject: `[Zenith] Nightly health report — ${tenantName} (${reportDate})`,
     html,
   });
 }

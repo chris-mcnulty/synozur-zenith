@@ -136,6 +136,10 @@ async function ensureTenantConnectionsSchema() {
       "ALTER TABLE tenant_connections ADD COLUMN IF NOT EXISTS licensing_enabled boolean NOT NULL DEFAULT false",
       "ALTER TABLE tenant_connections ADD COLUMN IF NOT EXISTS lifecycle_scan_schedule_enabled boolean NOT NULL DEFAULT true",
       "ALTER TABLE tenant_connections ADD COLUMN IF NOT EXISTS copilot_sync_schedule_enabled boolean NOT NULL DEFAULT true",
+      // Nightly Data Refresh & Health Report (premium / Enterprise) toggles
+      "ALTER TABLE tenant_connections ADD COLUMN IF NOT EXISTS nightly_refresh_schedule_enabled boolean NOT NULL DEFAULT true",
+      "ALTER TABLE tenant_connections ADD COLUMN IF NOT EXISTS nightly_health_report_enabled boolean NOT NULL DEFAULT true",
+      "ALTER TABLE tenant_connections ADD COLUMN IF NOT EXISTS nightly_health_report_email_enabled boolean NOT NULL DEFAULT true",
       "ALTER TABLE tenant_connections ADD COLUMN IF NOT EXISTS status_reason text",
       "ALTER TABLE tenant_connections ADD COLUMN IF NOT EXISTS status_changed_at timestamp",
       "ALTER TABLE tenant_connections ADD COLUMN IF NOT EXISTS status_changed_by text",
@@ -933,6 +937,32 @@ async function ensureTenantConnectionsSchema() {
       ALTER TABLE scheduled_job_runs ADD COLUMN IF NOT EXISTS progress_label  TEXT;
     `);
 
+    // ── Nightly Health Report (premium / Enterprise, migration 0024) ─────────
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS nightly_health_reports (
+        id                     VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+        organization_id        VARCHAR NOT NULL,
+        tenant_connection_id   VARCHAR NOT NULL,
+        status                 TEXT NOT NULL DEFAULT 'RUNNING',
+        report_date            TEXT NOT NULL,
+        snapshot               JSONB,
+        sites_over_75          INTEGER,
+        sites_over_90          INTEGER,
+        issue_count            INTEGER,
+        emailed_at             TIMESTAMP,
+        email_recipient_count  INTEGER,
+        triggered_by           TEXT NOT NULL DEFAULT 'scheduled',
+        triggered_by_user_id   VARCHAR,
+        started_at             TIMESTAMP NOT NULL DEFAULT now(),
+        completed_at           TIMESTAMP,
+        error                  TEXT,
+        created_at             TIMESTAMP DEFAULT now()
+      );
+      CREATE INDEX IF NOT EXISTS idx_nightly_health_reports_tenant_started ON nightly_health_reports (tenant_connection_id, started_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_nightly_health_reports_org_started    ON nightly_health_reports (organization_id, started_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_nightly_health_reports_status         ON nightly_health_reports (status);
+    `);
+
     // ── BL-019: Workspace lifecycle state columns (migration 0019) ──────────
     await client.query(`
       ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS lifecycle_state text DEFAULT 'Active';
@@ -1321,6 +1351,14 @@ async function backfillOrgMemberships() {
     log('Copilot Prompt Intelligence daily sync scheduler started');
   } catch (err) {
     console.error('[Startup] Failed to start Copilot Prompt Intelligence scheduler:', err);
+  }
+
+  try {
+    const { startNightlyHealthReportScheduler } = await import('./services/nightly-health-report-scheduler');
+    startNightlyHealthReportScheduler();
+    log('Nightly data refresh & health report scheduler started');
+  } catch (err) {
+    console.error('[Startup] Failed to start nightly health report scheduler:', err);
   }
 
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {

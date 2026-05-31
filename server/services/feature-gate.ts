@@ -37,6 +37,7 @@ export function requireFeature(feature: keyof typeof PLAN_FEATURES.TRIAL) {
         contentIntensityHeatmap: "Content Intensity Heat Map",
         copilotPromptIntelligence: "Copilot Prompt Intelligence",
         m365OverviewReport: "M365 30-Day Overview Report",
+        scheduledHealthReports: "Nightly Data Refresh & Health Reports",
         lifecycleReview: "Site Lifecycle Review Queue",
         auditStreaming: "Audit Streaming to SIEM",
       };
