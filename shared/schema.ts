@@ -2010,7 +2010,7 @@ export const nightlyHealthReports = pgTable("nightly_health_reports", {
   tenantConnectionId: varchar("tenant_connection_id").notNull(),
 
   status: text("status").notNull().default("RUNNING"), // RUNNING | COMPLETED | FAILED
-  reportDate: text("report_date").notNull(), // YYYY-MM-DD (tenant-local server date)
+  reportDate: text("report_date").notNull(), // YYYY-MM-DD (UTC date of generation)
 
   snapshot: jsonb("snapshot").$type<NightlyHealthSnapshot>(),
   sitesOver75: integer("sites_over_75"),
@@ -2421,6 +2421,7 @@ export const NOTIFICATION_CATEGORIES = [
   "label_coverage",
   "remediation",
   "policy_violations",
+  "governance_report",
 ] as const;
 export type NotificationCategory = (typeof NOTIFICATION_CATEGORIES)[number];
 
@@ -2432,6 +2433,7 @@ export const NOTIFICATION_CATEGORY_LABELS: Record<NotificationCategory, string> 
   label_coverage: "Sensitivity label coverage drops",
   remediation: "Top remediation suggestions",
   policy_violations: "Policy violations",
+  governance_report: "Nightly health reports",
 };
 
 export const NOTIFICATION_SEVERITIES = ["info", "warning", "critical"] as const;

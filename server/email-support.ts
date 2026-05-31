@@ -536,13 +536,22 @@ export async function sendNightlyHealthReportEmail(
 
   const firstName = escapeHtml(recipientName.split(" ")[0] || recipientEmail);
   const safeTenant = escapeHtml(tenantName);
-  const hasCritical = snapshot.issues.some((i) => i.severity === "critical");
-  const headerColor = hasCritical ? "#b91c1c" : snapshot.issues.length > 0 ? "#d97706" : "#5b0fbc";
+  // Base the header color on the highest issue severity so info-only reports
+  // don't render with an elevated (amber) header.
+  const maxSeverity = snapshot.issues.some((i) => i.severity === "critical")
+    ? "critical"
+    : snapshot.issues.some((i) => i.severity === "warning")
+      ? "warning"
+      : "info";
+  const headerColor = maxSeverity === "critical" ? "#b91c1c" : maxSeverity === "warning" ? "#d97706" : "#5b0fbc";
   const totalIssues = snapshot.issues.reduce((sum, i) => sum + i.count, 0);
 
+  // sitesOver75 is inclusive of sitesOver90; show the 75–90% band explicitly
+  // so the figures don't read as double-counting.
+  const between75And90 = snapshot.storage.sitesOver75 - snapshot.storage.sitesOver90;
   const summaryLine =
     totalIssues > 0
-      ? `${snapshot.storage.sitesOver90} site(s) over 90% and ${snapshot.storage.sitesOver75} over 75% of storage quota, with ${snapshot.issues.length} governance issue type(s) needing attention.`
+      ? `${snapshot.storage.sitesOver90} site(s) over 90% and ${between75And90} between 75–90% of storage quota, with ${snapshot.issues.length} governance issue type(s) needing attention.`
       : `No governance health issues were detected in tonight's scan.`;
 
   const issueRows =

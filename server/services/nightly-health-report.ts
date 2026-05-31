@@ -31,6 +31,8 @@ import {
 import { storage } from "../storage";
 import { isMaskedValue } from "./data-masking";
 import { sendNightlyHealthReportEmail } from "../email-support";
+import { passesOrgRules, passesUserPreferences } from "./notification-events";
+import { ssePublish } from "./notification-sse";
 
 const WARN_THRESHOLD = 0.75;
 const CRIT_THRESHOLD = 0.9;
@@ -58,6 +60,15 @@ function safePlainOrNull(value: string | null | undefined): string | null {
 
 function todayStr(): string {
   return new Date().toISOString().slice(0, 10);
+}
+
+/** Highest severity present across the issue list (info if none). */
+function maxIssueSeverity(
+  issues: NightlyHealthIssue[],
+): "info" | "warning" | "critical" {
+  if (issues.some((i) => i.severity === "critical")) return "critical";
+  if (issues.some((i) => i.severity === "warning")) return "warning";
+  return "info";
 }
 
 // ─── Snapshot assembly ──────────────────────────────────────────────────────
@@ -90,7 +101,7 @@ export async function collectHealthSnapshot(
     );
   const overRows = await storage.decryptRows(overRowsRaw, "workspaces");
 
-  const topSites: NightlyHealthStorageSite[] = overRows
+  const overSites: NightlyHealthStorageSite[] = overRows
     .map((site) => {
       const used = Number(site.storageUsedBytes ?? 0);
       const allocated = Number(site.storageAllocatedBytes ?? 0);
@@ -106,11 +117,13 @@ export async function collectHealthSnapshot(
         severity: ratio >= CRIT_THRESHOLD ? ("critical" as const) : ("warning" as const),
       };
     })
-    .sort((a, b) => b.percentUsed - a.percentUsed)
-    .slice(0, MAX_TOP_SITES);
+    .sort((a, b) => b.percentUsed - a.percentUsed);
 
-  const sitesOver90 = topSites.filter((s) => s.severity === "critical").length;
-  const sitesOver75 = topSites.length;
+  // Counts come from the full over-threshold set; only the displayed list is
+  // capped at MAX_TOP_SITES so we don't undercount large estates.
+  const sitesOver90 = overSites.filter((s) => s.severity === "critical").length;
+  const sitesOver75 = overSites.length;
+  const topSites = overSites.slice(0, MAX_TOP_SITES);
 
   // ── Governance aggregates over all (non-deleted) sites in one round-trip ──
   const [agg] = await db
@@ -264,8 +277,9 @@ async function deliverReport(
   const snapshot = report.snapshot;
   if (!snapshot) return 0;
 
-  const hasCritical = snapshot.issues.some((i) => i.severity === "critical");
-  const severity = hasCritical ? "critical" : snapshot.issues.length > 0 ? "warning" : "info";
+  // Derive notification severity from the highest issue severity so that
+  // info-only reports stay "info" rather than being elevated to "warning".
+  const severity = maxIssueSeverity(snapshot.issues);
   const issueCount = snapshot.issues.reduce((sum, i) => sum + i.count, 0);
   const reportUrl = `${APP_PUBLIC_URL}${REPORT_PATH}`;
 
@@ -274,30 +288,43 @@ async function deliverReport(
     (u) => REPORT_RECIPIENT_ROLES.has(u.role) && typeof u.email === "string" && u.email.length > 0,
   );
 
+  // sitesOver75 is inclusive of sitesOver90; surface the 75–90% band
+  // explicitly so the counts don't read as double-counting.
+  const between75And90 = snapshot.storage.sitesOver75 - snapshot.storage.sitesOver90;
   const body =
     issueCount > 0
-      ? `${tenantName}: ${snapshot.storage.sitesOver90} site(s) over 90% and ${snapshot.storage.sitesOver75} over 75% of storage quota; ${snapshot.issues.length} governance issue type(s) flagged.`
+      ? `${tenantName}: ${snapshot.storage.sitesOver90} site(s) over 90% and ${between75And90} between 75–90% of storage quota; ${snapshot.issues.length} governance issue type(s) flagged.`
       : `${tenantName}: no governance health issues detected in tonight's scan.`;
+
+  // Respect org notification rules once for this category/severity.
+  const orgRules = await storage.getNotificationRules(report.organizationId);
+  const orgAllows = passesOrgRules("governance_report", severity, orgRules);
 
   for (const user of recipients) {
     try {
-      await storage.createNotification({
-        userId: user.id,
-        organizationId: report.organizationId,
-        tenantConnectionId: report.tenantConnectionId,
-        category: "governance_report",
-        severity,
-        title: `Nightly health report ready — ${tenantName}`,
-        body,
-        link: REPORT_PATH,
-        payload: {
-          reportId: report.id,
-          reportDate: report.reportDate,
-          sitesOver75: snapshot.storage.sitesOver75,
-          sitesOver90: snapshot.storage.sitesOver90,
-          issueCount,
-        },
-      });
+      // Respect each recipient's in-app notification preferences.
+      const prefs = await storage.getNotificationPreferences(user.id);
+      if (orgAllows && passesUserPreferences("governance_report", prefs)) {
+        const created = await storage.createNotification({
+          userId: user.id,
+          organizationId: report.organizationId,
+          tenantConnectionId: report.tenantConnectionId,
+          category: "governance_report",
+          severity,
+          title: `Nightly health report ready — ${tenantName}`,
+          body,
+          link: REPORT_PATH,
+          payload: {
+            reportId: report.id,
+            reportDate: report.reportDate,
+            sitesOver75: snapshot.storage.sitesOver75,
+            sitesOver90: snapshot.storage.sitesOver90,
+            issueCount,
+          },
+        });
+        // SSE push so the bell badge updates live in open tabs.
+        ssePublish(user.id, "notification", { notification: created });
+      }
     } catch (err) {
       console.error(`[nightly-health-report] failed to notify user ${user.id}:`, err);
     }
