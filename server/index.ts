@@ -963,6 +963,19 @@ async function ensureTenantConnectionsSchema() {
       CREATE INDEX IF NOT EXISTS idx_nightly_health_reports_status         ON nightly_health_reports (status);
     `);
 
+    // ── PR47: backfill governance_report into existing orgs' enabledCategories ─
+    // Orgs created before PR47 may have a non-empty enabledCategories list that
+    // pre-dates the governance_report category. Add it retroactively so they
+    // receive nightly health-report in-app notifications without requiring an
+    // admin to manually edit their notification preferences.
+    // The array_length guard skips orgs whose list is empty (empty = all allowed).
+    await client.query(`
+      UPDATE notification_rules
+      SET enabled_categories = array_append(enabled_categories, 'governance_report')
+      WHERE NOT ('governance_report' = ANY(enabled_categories))
+        AND array_length(enabled_categories, 1) IS NOT NULL;
+    `);
+
     // ── BL-019: Workspace lifecycle state columns (migration 0019) ──────────
     await client.query(`
       ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS lifecycle_state text DEFAULT 'Active';

@@ -1910,6 +1910,7 @@ export class DatabaseStorage implements IStorage {
           "tenant_status",
           "label_coverage",
           "remediation",
+          "governance_report",
         ],
         severityFloor: updates.severityFloor ?? "info",
         orgQuietHoursStart: updates.orgQuietHoursStart ?? null,
