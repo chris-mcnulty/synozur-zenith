@@ -95,8 +95,8 @@ export async function collectHealthSnapshot(
         eq(workspaces.tenantConnectionId, tenantConnectionId),
         notDeleted,
         notArchived,
-        sql`${workspaces.storageAllocatedBytes} > 0`,
-        sql`${workspaces.storageUsedBytes} >= ${workspaces.storageAllocatedBytes} * ${WARN_THRESHOLD}`,
+        sql`${workspaces.storageAllocatedBytes}::numeric > 0`,
+        sql`${workspaces.storageUsedBytes}::numeric >= ${workspaces.storageAllocatedBytes}::numeric * ${WARN_THRESHOLD}`,
       ),
     );
   const overRows = await storage.decryptRows(overRowsRaw, "workspaces");
