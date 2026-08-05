@@ -71,6 +71,28 @@ function maxIssueSeverity(
   return "info";
 }
 
+// ─── Query helpers ───────────────────────────────────────────────────────────
+
+/**
+ * Builds the Drizzle WHERE condition that selects workspaces at or above the
+ * 75 % storage-quota warn threshold for a given tenant.
+ *
+ * Exported so that tests can call `.toSQL()` on the result and assert the
+ * `::numeric` casts are present, catching a bigint × float type-mismatch
+ * regression before it reaches production.
+ */
+export function overQuotaWhereClause(tenantConnectionId: string) {
+  const notDeleted = sql`coalesce(${workspaces.isDeleted}, false) = false`;
+  const notArchived = sql`coalesce(${workspaces.isArchived}, false) = false`;
+  return and(
+    eq(workspaces.tenantConnectionId, tenantConnectionId),
+    notDeleted,
+    notArchived,
+    sql`${workspaces.storageAllocatedBytes}::numeric > 0`,
+    sql`${workspaces.storageUsedBytes}::numeric >= ${workspaces.storageAllocatedBytes}::numeric * ${WARN_THRESHOLD}`,
+  );
+}
+
 // ─── Snapshot assembly ──────────────────────────────────────────────────────
 
 export async function collectHealthSnapshot(
@@ -84,21 +106,10 @@ export async function collectHealthSnapshot(
   const ninetyDaysAgoStr = ninetyDaysAgo.toISOString().slice(0, 10);
 
   // ── Over-quota sites (≥75%) — small result set, decrypt names safely ──────
-  const notDeleted = sql`coalesce(${workspaces.isDeleted}, false) = false`;
-  const notArchived = sql`coalesce(${workspaces.isArchived}, false) = false`;
-
   const overRowsRaw = await db
     .select()
     .from(workspaces)
-    .where(
-      and(
-        eq(workspaces.tenantConnectionId, tenantConnectionId),
-        notDeleted,
-        notArchived,
-        sql`${workspaces.storageAllocatedBytes}::numeric > 0`,
-        sql`${workspaces.storageUsedBytes}::numeric >= ${workspaces.storageAllocatedBytes}::numeric * ${WARN_THRESHOLD}`,
-      ),
-    );
+    .where(overQuotaWhereClause(tenantConnectionId));
   const overRows = await storage.decryptRows(overRowsRaw, "workspaces");
 
   const overSites: NightlyHealthStorageSite[] = overRows

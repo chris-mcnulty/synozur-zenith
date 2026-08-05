@@ -14,7 +14,8 @@
     "test:m365-overview-report": "tsx --test server/services/m365-overview-report.test.ts",
     "test:copilot-prompt-analyzer": "tsx --test server/services/__tests__/copilot-prompt-analyzer.test.ts",
     "test:encryption": "tsx --test server/utils/encryption.test.ts",
-    "test:tenant-health": "tsx --test server/services/tenant-health-monitor.test.ts"
+    "test:tenant-health": "tsx --test server/services/tenant-health-monitor.test.ts",
+    "test:nightly-health-report": "tsx --test server/services/nightly-health-report.test.ts"
   },
   "dependencies": {
     "@azure/msal-node": "^5.0.4",
